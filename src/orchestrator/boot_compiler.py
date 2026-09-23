@@ -1,21 +1,21 @@
-"""THE BOOT COMPILER (thread 4951d818, task #53) — standing orders as a COMPILED
-artifact, not hand-written prose. Four typed sources — house law, a role template
-derived STRUCTURALLY (never a stored field to drift), live seat facts, and a capped,
-curated slice of standing Practices (fa41acfc) — assemble into a MANAGED SECTION inside
-CLAUDE.md, bounded by machine-readable markers.
+"""THE BOOT COMPILER: standing orders as a compiled artifact, not hand-written prose.
+Four typed sources: house law, a role template derived structurally (never a stored
+field that could drift), live seat facts, and a capped, curated slice of standing
+practices, assemble into a managed section inside CLAUDE.md, bounded by machine-
+readable markers.
 
 THE NEVER-CLOBBER BOUNDARY: only the bytes between `<!-- osiris:compiled:begin -->` and
-`<!-- osiris:compiled:end -->` are ever regenerated. Everything outside those markers —
-a seat's own hand-composed founding narrative, a hand-added fact, charter.md always —
+`<!-- osiris:compiled:end -->` are ever regenerated. Everything outside those markers,
+a seat's own hand-composed founding narrative, a hand-added fact, charter.md always,
 survives a reissue untouched. Real seat offices already carry exactly this kind of
-irreplaceable content post-mint (Khnum's "WHY YOU EXIST" narrative; both Khnum's and
-Seshat's own CLAUDE.md hand-naming their manager) — a naive whole-file regenerate would
-be actively destructive, not merely careless.
+irreplaceable content post-mint (a founding "why you exist" narrative, a hand-naming of
+a manager in CLAUDE.md): a naive whole-file regenerate would be actively destructive,
+not merely careless.
 
-THE REFUSAL IS THE BOUNDARY'S REAL TEETH (Thoth's added requirement, msg 1819): a
-hand-edit that deletes, duplicates, or mangles a marker makes `reissue_office` REFUSE
-LOUDLY, naming the seat — never guess which span was meant, never re-wrap, never
-append a second section beside a first that's merely damaged.
+THE REFUSAL IS THE BOUNDARY'S REAL TEETH: a hand-edit that deletes, duplicates, or
+mangles a marker makes `reissue_office` refuse loudly, naming the seat, never guess
+which span was meant, never re-wrap, never append a second section beside a first
+that's merely damaged.
 """
 from __future__ import annotations
 
@@ -41,20 +41,18 @@ _MARKER_END_RE = re.compile(r"<!-- osiris:compiled:end -->")
 
 
 def _office_header_re(handle: str) -> re.Pattern[str]:
-    """The compiler's OWN header line (`house_law.md`'s own line 1) — used only by
-    `reissue_office`'s `adopt` path (thread 49169c2f, nebbercracker/jenny's live
-    specimens) to tell a genuinely FOREIGN hand-written office (never seen this
-    template, e.g. "# AdoptWorker's hand-written orders") from an office that predates
-    the MARKER convention but was already written IN this shape — by a hand-copy, an
-    older compiler revision, or a prior `adopt` call whose markers were later stripped
-    by hand. Anchored on the exact handle so an unrelated line elsewhere in a hand-
-    written office (a different seat quoted in prose) can never false-match.
+    """The compiler's own header line (`house_law.md`'s own line 1), used only by
+    `reissue_office`'s `adopt` path to tell a genuinely foreign hand-written office
+    (one that never used this template) from an office that predates the marker
+    convention but was already written in this shape, by a hand-copy, an older
+    compiler revision, or a prior `adopt` call whose markers were later stripped by
+    hand. Anchored on the exact handle so an unrelated line elsewhere in a
+    hand-written office (a different seat quoted in prose) can never false-match.
 
-    CASE-INSENSITIVE (Thoth's own catch, msg 8113): the live specimens' own hand-
-    written header capitalizes the handle ("# Nebbercracker — seat office") while the
-    compiled one below it uses the seat's own lowercase handle property — the same
-    string, cosmetically different, and a case-sensitive match would miss the very
-    header this exists to find."""
+    CASE-INSENSITIVE: observed hand-written office headers capitalize the handle (e.g.
+    "# SeatName - seat office") while the compiled header below it uses the seat's own
+    lowercase handle property, the same string, cosmetically different, and a
+    case-sensitive match would miss the very header this exists to find."""
     return re.compile(rf"^# {re.escape(handle)} — seat office\s*$",
                       re.MULTILINE | re.IGNORECASE)
 
@@ -63,7 +61,7 @@ _PRACTICE_LIMIT = 5
 
 
 class MarkerError(Exception):
-    """A malformed, duplicated, or missing managed-section marker — `reissue_office`
+    """A malformed, duplicated, or missing managed-section marker. `reissue_office`
     catches this and refuses loudly rather than guessing which span was meant."""
 
 
@@ -72,10 +70,10 @@ def _read_template(name: str) -> str:
 
 
 def template_version() -> str:
-    """A content hash of the STATIC template sources only (house law + both role
-    templates) — never live seat facts or practices, which refresh every compile
+    """A content hash of the static template sources only (house law and both role
+    templates), never live seat facts or practices, which refresh every compile
     regardless of whether the templates themselves changed. A compiled file's own
-    stamp is compared against this to detect template drift (thread 4951d818 piece 3)."""
+    stamp is compared against this to detect template drift."""
     house = _read_template("house_law.md")
     worker = _read_template("role_worker.md")
     coordinator = _read_template("role_coordinator.md")
@@ -84,7 +82,7 @@ def template_version() -> str:
 
 async def derive_role(pool: asyncpg.Pool, seat_id: str) -> str:
     """'coordinator' when the seat carries no active `managed_by` edge out (the head of
-    its own chain), else 'worker' — the SAME single-hop topology check derive_house()
+    its own chain), else 'worker', the same single-hop topology check derive_house()
     already walks (seats.manager_of_seat), never a stored `role` property that could
     drift from it. Seat has no `role` column in schema.py by design."""
     from src.orchestrator.seats import manager_of_seat
@@ -94,7 +92,7 @@ async def derive_role(pool: asyncpg.Pool, seat_id: str) -> str:
 
 
 async def _manager_block(pool: asyncpg.Pool, manager_seat_id: str | None) -> tuple[str, str]:
-    """(the role template's `{manager_block}` prose, the manager's display handle) — a
+    """(the role template's `{manager_block}` prose, the manager's display handle): a
     worker with no manager on record yet (should not happen post mint_seat, but a
     compile must never crash on a data gap) gets an honest placeholder instead of a
     fabricated name."""
@@ -112,16 +110,15 @@ async def _manager_block(pool: asyncpg.Pool, manager_seat_id: str | None) -> tup
 
 
 async def _team_block(pool: asyncpg.Pool, manager_seat_id: str) -> str:
-    """The "## Your team" section (thread 613cda0a, nebbercracker 8046 item C): promote
-    writes the bond DOWN (a worker's own office names its manager, `_manager_block`
-    above) but never UP — a coordinator cold-booting could not tell who it manages
-    without calling `team()`. Every seat with an active `managed_by` edge INTO
-    `manager_seat_id` (`seats_managed_by`'s own reverse-of-`manager_of_seat` query, not
-    a second copy), by handle, with its own governed repos (`charter_of` — the same
-    live source the charter section above already trusts, never a stored/cached
-    roster). Empty string — never a hollow heading — for a coordinator with no team
-    yet; a freshly promoted seat with zero workers bonded is not a bug worth a section
-    that says nothing."""
+    """The "## Your team" section: promote writes the bond down (a worker's own office
+    names its manager, `_manager_block` above) but never up, a coordinator cold-booting
+    could not tell who it manages without calling `team()`. Every seat with an active
+    `managed_by` edge into `manager_seat_id` (`seats_managed_by`'s own reverse-of-
+    `manager_of_seat` query, not a second copy), by handle, with its own governed repos
+    (`charter_of`, the same live source the charter section above already trusts, never
+    a stored/cached roster). Empty string, never a hollow heading, for a coordinator
+    with no team yet; a freshly promoted seat with zero workers bonded is not a bug
+    worth a section that says nothing."""
     from src.orchestrator.charter import charter_of
     from src.orchestrator.project_identity import charter_display_labels
     from src.orchestrator.seats import seats_managed_by
@@ -147,29 +144,29 @@ _AMENDMENT_RENDER_CAP = 200
 async def _armed_practices(
     pool: asyncpg.Pool, role: str, *, limit: int = _PRACTICE_LIMIT,
 ) -> list[dict[str, Any]]:
-    """Top-N by confirmed witness count, refuted EXCLUDED (dead law never boot-arms —
-    unlike practices()'s own on-demand listing, which still shows a refuted Practice,
-    flagged). Role-scoping REUSES record_practice's existing `surface` free-text field
-    rather than a new classifier or a new schema field (Stage C's two false positives
-    this session are exactly why no auto-inference is built here): a Practice is only
-    EXCLUDED for a role when its surface is LITERALLY 'worker' or 'coordinator' and
-    doesn't match — any other surface value (a domain tag like 'deploy'/'search', or
-    none at all) arms for every role, since that vocabulary is BlindSpot's domain
-    space, not a role space, and this function must not conflate the two.
+    """Top-N by confirmed witness count, refuted excluded (dead law never boot-arms,
+    unlike practices()'s own on-demand listing, which still shows a refuted practice,
+    flagged). Role-scoping reuses record_practice's existing `surface` free-text field
+    rather than a new classifier or a new schema field (an earlier attempt at
+    auto-inference produced false positives, which is why none is built here): a
+    practice is only excluded for a role when its surface is literally 'worker' or
+    'coordinator' and doesn't match; any other surface value (a domain tag like
+    'deploy'/'search', or none at all) arms for every role, since that vocabulary is a
+    domain space, not a role space, and this function must not conflate the two.
 
-    `latest_amendment` (thread bd28a41f, Thoth's own measurement dispatch, 2026-09-01):
-    a practice's `statement` is deliberately immutable (amend_practice's own idempotency-
-    key law) — a correction lives ONLY in the append-only `amendment:<hex>` property
-    family `practice_amendments()` already reads. Before this, that family was invisible
-    here: a self-corrected practice compiled its original, now-wrong `statement` forever,
-    and ranking by raw witness count actively favored the stale one (measured live:
-    1637763e sat at confirmed=7 with a correcting amendment on file, while the newer
-    practice that superseded it in prose sat at confirmed=0 and would rarely if ever be
-    chosen). This does not re-rank anything — `ORDER BY confirmed DESC` is unchanged, and
-    inventing a Practice-to-Practice "corrects" edge is a separate, bigger question this
-    piece deliberately leaves alone — it only makes a practice's OWN latest amendment
-    visible wherever that practice is already shown, the smallest fix that stops a reader
-    from being taught a self-corrected lesson's stale half."""
+    `latest_amendment`: a practice's `statement` is deliberately immutable
+    (amend_practice's own idempotency-key law), a correction lives only in the
+    append-only `amendment:<hex>` property family `practice_amendments()` already
+    reads. Before this, that family was invisible here: a self-corrected practice
+    compiled its original, now-wrong `statement` forever, and ranking by raw witness
+    count actively favored the stale one (measured live: one practice sat at
+    confirmed=7 with a correcting amendment on file, while the newer practice that
+    superseded it in prose sat at confirmed=0 and would rarely if ever be chosen). This
+    does not re-rank anything, `ORDER BY confirmed DESC` is unchanged, and inventing a
+    practice-to-practice "corrects" edge is a separate, bigger question left alone here;
+    it only makes a practice's own latest amendment visible wherever that practice is
+    already shown, the smallest fix that stops a reader from being taught a
+    self-corrected lesson's stale half."""
     rows = await pool.fetch(
         "SELECT o.id, "
         " (SELECT a.value #>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -206,7 +203,7 @@ async def _armed_practices(
 
 def _render_amendment(amendment: str) -> str:
     """Same truncate-with-ellipsis convention orient()'s terse mode already uses for a
-    capped summary — a reader who wants the whole thing has `practices()`."""
+    capped summary; a reader who wants the whole thing has `practices()`."""
     amendment = " ".join(amendment.split())
     if len(amendment) <= _AMENDMENT_RENDER_CAP:
         return amendment
@@ -235,14 +232,14 @@ async def compile_managed_body(
     seat_line: str, charter_block: str, peer_block: str,
     role: str | None = None, manager_seat_id: str | None = None,
 ) -> str:
-    """Assemble the managed section's CONTENT (no markers yet) from all four sources.
+    """Assemble the managed section's content (no markers yet) from all four sources.
     `role`/`manager_seat_id` let a caller who already knows them (mint_seat, at scaffold
-    time — BEFORE its own managed_by link exists yet) skip a live derive that would
+    time, before its own managed_by link exists yet) skip a live derive that would
     otherwise race the graph and read a brand-new worker as a manager-less
     'coordinator'. Omit both for a live derive (establish_office, reissue_office, where
     the seat is already fully linked). `seat_id=None` is the rare not-yet-seated case
     (a claimed handle with no bound Seat object yet, establish_office's own "on-ramp"
-    branch) — no role can be derived without a seat, so the role section is skipped
+    branch): no role can be derived without a seat, so the role section is skipped
     entirely rather than guessed, and practices arm unfiltered (no role to scope by)."""
     if role is not None:
         resolved_role: str | None = role
@@ -265,9 +262,9 @@ async def compile_managed_body(
         team_block = await _team_block(actions.pool, seat_id)
         role_body = _read_template("role_coordinator.md").format(
             handle=handle, office=office, team_block=team_block)
-    # A HOUSE IS OPTIONAL (ruling 860b0306): a seat governing a single repo carries none —
-    # the clause disappears entirely rather than rendering an empty "house **`**", which
-    # would misread as a graph defect rather than the deliberate unset state it now is.
+    # A house is optional: a seat governing a single repo carries none, so the clause
+    # disappears entirely rather than rendering an empty "house **`**", which would
+    # misread as a graph defect rather than the deliberate unset state it now is.
     house_clause = f", house **{house}**" if house else ""
     house_body = _read_template("house_law.md").format(
         handle=handle, office=office, house_clause=house_clause, seat_line=seat_line,
@@ -282,34 +279,34 @@ def wrap_managed(body: str, version: str) -> str:
             f"<!-- osiris:compiled:end -->\n")
 
 
-# ═══════════ VENDOR-NEUTRAL OUTPUT (thread f37aaf1b, v1.1 follow-up piece 2) ═══════════
-# Every compile point above wrote ONLY CLAUDE.md — Claude Code's own convention, never
+# ═══════════ VENDOR-NEUTRAL OUTPUT ═══════════
+# Every compile point above wrote only CLAUDE.md, Claude Code's own convention, never
 # read by any other harness. Crush v0.85.0's own documentation (Charm's repo, README.md
 # at the exact v0.85.0 tag, https://raw.githubusercontent.com/charmbracelet/crush/
 # v0.85.0/README.md, "### Initialization" section) names the equivalent directly: "When
 # you initialize a project, Crush analyzes your codebase and creates a context file...
 # By default, this file is named AGENTS.md." That same README's own "### Global context
-# files" section frames AGENTS.md explicitly as the CROSS-TOOL convention — "generic
-# instructions that other coding tools might read" — as opposed to Crush's own
+# files" section frames AGENTS.md explicitly as the cross-tool convention, "generic
+# instructions that other coding tools might read", as opposed to Crush's own
 # CRUSH.md-named files, which it explicitly scopes to "rules that would confuse other
 # agentic coding tools." AGENTS.md is therefore the correct vendor-neutral mirror: the
-# same per-office, per-project scope CLAUDE.md already has (not the separate `~/.config/
-# crush/CRUSH.md` / `~/.config/AGENTS.md` pair, which are Crush's own USER-HOME-scoped
-# cross-project config, a different concept entirely). Not a confess-and-close case —
-# the docs name a real target, so this piece builds it.
+# same per-office, per-project scope CLAUDE.md already has (not the separate
+# `~/.config/crush/CRUSH.md` / `~/.config/AGENTS.md` pair, which are Crush's own
+# user-home-scoped cross-project config, a different concept entirely). The docs name a
+# real target worth building against.
 
 
 def scaffold_boot_file(
     path: Path, wrapped: str, *, label: str, existing_note: str | None = None,
 ) -> str:
-    """'written' or a 'left in place' note — the same two states every first-compile
+    """'written' or a 'left in place' note, the same two states every first-compile
     scaffold site already tracked locally for CLAUDE.md alone, generalized so AGENTS.md's
     own vendor-neutral mirror can reuse the identical discipline: existence checked
-    INDEPENDENTLY per file, a hand-grown file (a real `crush init` run's own AGENTS.md,
+    independently per file, a hand-grown file (a real `crush init` run's own AGENTS.md,
     say) never overwritten just because its CLAUDE.md sibling needed writing.
 
-    `existing_note` overrides the default "left in place — the office already has
-    {label}" wording verbatim — `mint_seat`'s own scaffold predates this helper and its
+    `existing_note` overrides the default "left in place, the office already has
+    {label}" wording verbatim. `mint_seat`'s own scaffold predates this helper and its
     existing tests assert on the bare "left in place" string for CLAUDE.md; passing it
     here keeps that exact string rather than silently changing tested caller-facing
     text as a side effect of sharing this helper."""
@@ -323,14 +320,14 @@ def scaffold_boot_file(
 async def _mirror_agents_md(
     office: Path, wrapped: str, *, adopt: bool, handle: str,
 ) -> dict[str, Any]:
-    """AGENTS.md's own recompile — the vendor-neutral mirror of whatever `reissue_office`
+    """AGENTS.md's own recompile: the vendor-neutral mirror of whatever `reissue_office`
     just did to CLAUDE.md, same wrapped content, same marker-safety/adopt discipline
-    (deliberately RE-IMPLEMENTED here rather than sharing `reissue_office`'s own inline
-    logic: that logic's exact refusal wording is load-bearing prose other callers may
-    already depend on, and this mirror's own failures must never risk changing it by
+    (deliberately re-implemented here rather than sharing `reissue_office`'s own inline
+    logic, since that logic's exact refusal wording is load-bearing prose other callers
+    may already depend on, and this mirror's own failures must never risk changing it by
     sharing a helper mid-refactor).
 
-    NEVER RAISES, NEVER BLOCKS THE CALLER'S OWN CLAUDE.md REISSUE — the same "one bad
+    Never raises, never blocks the caller's own CLAUDE.md reissue, the same "one bad
     row must not sink a correct batch" discipline `sweep_stacked_office_headers` already
     uses. A problem here (a malformed AGENTS.md, or one already marker-shaped with no
     leading duplicate under adopt) is reported inline, softly, in the returned dict's own
@@ -381,8 +378,8 @@ def _has_any_markers(text: str) -> bool:
 
 def locate_managed_section(text: str) -> tuple[int, int, int, int, str]:
     """(begin-match start, begin-match end, end-match start, end-match end, version) for
-    EXACTLY one well-formed marker pair. Raises MarkerError naming precisely what's
-    wrong otherwise — none found, more than one of either marker, an END with no
+    exactly one well-formed marker pair. Raises MarkerError naming precisely what's
+    wrong otherwise: none found, more than one of either marker, an END with no
     matching BEGIN (or vice versa), or an END that precedes its own BEGIN."""
     begins = list(_MARKER_BEGIN_RE.finditer(text))
     ends = list(_MARKER_END_RE.finditer(text))
@@ -408,19 +405,20 @@ def locate_managed_section(text: str) -> tuple[int, int, int, int, str]:
     return b.start(), b.end(), e.start(), e.end(), b.group(1)
 
 
-# ═══════════ THE IDENTITY MIGRATION (task #141, Thoth's ruling on thread bee66b3f) ═══════════
-# THE BUG: for a TREE-BOUND seat (`tree_cwd` set and distinct from `anchor_cwd`), the
-# harness reads CLAUDE.md from the LAUNCH cwd — the tree, never the office — so the
+# ═══════════ THE IDENTITY MIGRATION ═══════════
+# THE BUG: for a tree-bound seat (`tree_cwd` set and distinct from `anchor_cwd`), the
+# harness reads CLAUDE.md from the launch cwd, the tree, never the office, so the
 # office's own hand-written CLAUDE.md (everything above the compiled markers: the
 # founding "who you are" narrative) is never read by that seat's live sessions.
 # handshake.py's `identity_anchor` already points every boot at `charter_file`
-# (charter.md when it exists, else CLAUDE.md) — a POINTER only, by deliberate design
-# (74fad683's injection-ledger law). Since charter.md already exists for every tree-
-# bound seat (offices.py's `_CHARTER_TEMPLATE`, scaffolded at mint time), that pointer
-# already resolves — but charter.md never carried the founding identity prose, only the
-# live-state scratchpad. This is the other half: MOVE the hand-written span (not copy —
-# CLAUDE.md keeps a pointer note, never a stale duplicate) into charter.md, so the thing
-# `identity_anchor` already points at actually carries the identity.
+# (charter.md when it exists, else CLAUDE.md), a pointer only, by deliberate design (an
+# injection-ledger law limiting what gets written where). Since charter.md already
+# exists for every tree-bound seat (offices.py's `_CHARTER_TEMPLATE`, scaffolded at
+# mint time), that pointer already resolves, but charter.md never carried the founding
+# identity prose, only the live-state scratchpad. This is the other half: move the
+# hand-written span (not copy, CLAUDE.md keeps a pointer note, never a stale duplicate)
+# into charter.md, so the thing `identity_anchor` already points at actually carries the
+# identity.
 _IDENTITY_MIGRATION_MARKER = "<!-- osiris:identity-migrated:v1 -->"
 _IDENTITY_MIGRATION_HEADER = "## Identity (migrated from CLAUDE.md, task #141)"
 _IDENTITY_POINTER_NOTE = (
@@ -432,25 +430,24 @@ async def migrate_identity_to_charter(
     actions: Actions, *, seat_id: str, because: str, actor: str, dry_run: bool = False,
 ) -> dict[str, Any]:
     """Move a tree-bound seat's hand-written CLAUDE.md span (everything above the
-    compiled markers — `locate_managed_section`'s own boundary, never a second
-    hand-rolled regex) into charter.md, PREPENDED above whatever charter.md already
+    compiled markers, `locate_managed_section`'s own boundary, never a second
+    hand-rolled regex) into charter.md, prepended above whatever charter.md already
     holds, wrapped with `_IDENTITY_MIGRATION_MARKER` for idempotency. CLAUDE.md's
-    hand-written span is then REPLACED (never left duplicated, never deleted silently)
+    hand-written span is then replaced (never left duplicated, never deleted silently)
     with a short pointer note; the compiled section below is untouched by this call.
 
-    A TRUE NO-OP for anything that isn't the exact bug this fixes: a seat whose
-    `tree_cwd` is unset or equals `anchor_cwd` (not tree-bound — CLAUDE.md is read
+    A true no-op for anything that isn't the exact bug this fixes: a seat whose
+    `tree_cwd` is unset or equals `anchor_cwd` (not tree-bound, CLAUDE.md is read
     directly, nothing is stranded), a seat with no compiled managed section yet
-    (nothing this call's boundary can trust — some OTHER path, adopt, handles that), a
+    (nothing this call's boundary can trust, some other path, adopt, handles that), a
     hand-written span that's empty/whitespace-only (nothing worth moving), or a seat
-    already carrying the idempotency marker in charter.md — every one of these returns
+    already carrying the idempotency marker in charter.md, every one of these returns
     `migrated: False` with a `reason`, never an `error` (they are not failures, they are
     "there was nothing to do").
 
     `dry_run=True` computes and returns the exact same preview (`prepended_to_charter`,
-    `claude_md_pointer`) WITHOUT writing to disk or the graph — required before this
-    ever runs against a real seat's live office files (task #141's own safety
-    condition)."""
+    `claude_md_pointer`) without writing to disk or the graph, required before this ever
+    runs against a real seat's live office files."""
     if not because.strip():
         return {"error": "because is required — a migration is testimony, same as a "
                          "reissue"}
@@ -529,48 +526,46 @@ async def migrate_identity_to_charter(
 async def reissue_office(
     actions: Actions, *, seat_id: str, because: str, actor: str, adopt: bool = False,
 ) -> dict[str, Any]:
-    """Recompile a seat's managed section — the fourth compile point, fired on demand
+    """Recompile a seat's managed section, the fourth compile point, fired on demand
     when law changes or a live fact (a peer bond, a manager reassignment) needs to
     reach an already-occupied office that establish_office/mint_seat's fill-missing-
     only scaffold will never revisit. `because` is required (a reissue is testimony,
     the same discipline rename_seat already runs).
 
-    NEVER A SILENT REGENERATE: a malformed managed section REFUSES LOUDLY, naming the
-    seat, rather than guessing which span to replace (Thoth's added requirement, msg
-    1819) — the marker boundary's promise that a hand-edit OUTSIDE it is safe forever
-    only holds if a hand-edit that damages the markers THEMSELVES is never silently
-    repaired, re-wrapped, or ignored.
+    Never a silent regenerate: a malformed managed section refuses loudly, naming the
+    seat, rather than guessing which span to replace. The marker boundary's promise
+    that a hand-edit outside it is safe forever only holds if a hand-edit that damages
+    the markers themselves is never silently repaired, re-wrapped, or ignored.
 
     `adopt=True` is the on-ramp for an office that predates the compiler (zero markers
     on disk). Without it, a file with zero markers refuses too (a missing section is
-    never silently assumed to mean 'append one'); WITH it, a file that already carries
-    marker-shaped text refuses UNLESS a leading duplicate header sits before the
-    marker span (the self-heal case below) — naming the seat either way, since adopt
+    never silently assumed to mean 'append one'); with it, a file that already carries
+    marker-shaped text refuses unless a leading duplicate header sits before the
+    marker span (the self-heal case below), naming the seat either way, since adopt
     is never a guess.
 
-    ONE HEADER, EVER (thread 49169c2f, nebbercracker 116 lines / jenny 137, both with a
-    duplicated "# handle — seat office" header): a naive adopt that always APPENDS
-    silently duplicates the header the instant the pre-existing file was already
-    shaped like an office — house_law.md's own line 1 IS that header, so any
-    hand-written or previously-adopted-then-demarkered office already carries one.
-    Before touching anything, adopt now searches `text` for that exact header line
-    (`_office_header_re`, anchored on `handle`, case-insensitive — Thoth's own catch,
-    msg 8113: the live specimens' hand-written header capitalizes the handle where the
-    compiled one below it doesn't). Found BEFORE any existing marker span (or no
-    markers exist at all yet): everything from that header to end-of-file — the old
-    unmarked managed section, and any already-duplicated markers it wraps — IS
-    REPLACED by the fresh `wrapped` body, not appended after (leading text ahead of
-    the header, if any, is preserved untouched, same as outside-the-markers text
-    always is). SELF-HEALS AN ALREADY-DUPLICATED OFFICE IN ONE CALL (nebbercracker's
-    own live shape: a hand header, then a prior adopt's own compiled section already
-    sitting behind real markers) — the leading duplicate is what adopt=True is FOR
-    here, not a second refusal reason, precisely because it is provably redundant
-    with what the (possibly already-marked) section below it already contains.
-    Marker-shaped text exists with NO leading duplicate found before it: refuses as
-    always — nothing here is provably safe to replace, so adopt does not guess.
-    Genuinely foreign content, no office-shaped header anywhere, no markers at all:
-    the old append behavior stands — nothing resembles a managed section, so nothing
-    is safe to replace, and the whole file is preserved with the fresh section
+    ONE HEADER, EVER: two observed offices were each found carrying a duplicated
+    "# handle - seat office" header. A naive adopt that always appends silently
+    duplicates the header the instant the pre-existing file was already shaped like an
+    office; house_law.md's own line 1 is that header, so any hand-written or
+    previously-adopted-then-demarkered office already carries one. Before touching
+    anything, adopt now searches `text` for that exact header line (`_office_header_re`,
+    anchored on `handle`, case-insensitive, since observed hand-written headers
+    capitalize the handle where the compiled one below it doesn't). Found before any
+    existing marker span (or no markers exist at all yet): everything from that header
+    to end-of-file, the old unmarked managed section, and any already-duplicated
+    markers it wraps, is replaced by the fresh `wrapped` body, not appended after
+    (leading text ahead of the header, if any, is preserved untouched, same as
+    outside-the-markers text always is). This self-heals an already-duplicated office
+    in one call (the observed live shape: a hand header, then a prior adopt's own
+    compiled section already sitting behind real markers); the leading duplicate is
+    what adopt=True is for here, not a second refusal reason, precisely because it is
+    provably redundant with what the (possibly already-marked) section below it
+    already contains. Marker-shaped text exists with no leading duplicate found before
+    it: refuses as always, nothing here is provably safe to replace, so adopt does not
+    guess. Genuinely foreign content, no office-shaped header anywhere, no markers at
+    all: the old append behavior stands, nothing resembles a managed section, so
+    nothing is safe to replace, and the whole file is preserved with the fresh section
     appended at the end."""
     if not because.strip():
         return {"error": "because is required — a reissue is testimony, same as a rename"}
@@ -598,10 +593,10 @@ async def reissue_office(
                          "first one; reissue only recompiles an existing managed "
                          "section"}
 
-    # THE IDENTITY MIGRATION RIDES ALONG (task #141): fired here, BEFORE the compiled-
-    # section text is read below, so a migration that fires (tree-bound, unmigrated,
-    # real hand-written content) is picked up by the rest of THIS SAME call rather than
-    # needing a second reissue — its own write only ever touches the span ABOVE the
+    # THE IDENTITY MIGRATION RIDES ALONG: fired here, before the compiled-section text
+    # is read below, so a migration that fires (tree-bound, unmigrated, real
+    # hand-written content) is picked up by the rest of this same call rather than
+    # needing a second reissue. Its own write only ever touches the span above the
     # compiled markers, so it can never race or conflict with the compiled-section
     # rewrite that follows. A true no-op (non-tree-bound, already migrated, nothing to
     # move) writes nothing and changes nothing about what follows.
@@ -610,14 +605,14 @@ async def reissue_office(
     text = orders_path.read_text()
 
     if adopt and _has_any_markers(text):
-        # SELF-HEAL EXCEPTION (thread 49169c2f, Thoth's ruling msg 8113): markers
-        # already existing is normally adopt's own refusal reason — except when a
-        # leading duplicate of this office's own header sits BEFORE the marker span,
-        # which is exactly the nebbercracker/jenny shape (a hand header, then a prior
-        # adopt's own compiled section, already marked). That duplicate is provably
-        # redundant with what the marked section already contains, so it is safe to
-        # absorb rather than refuse. A header found only INSIDE/AFTER the marker span
-        # (the compiled section's own legitimate header) never counts.
+        # SELF-HEAL EXCEPTION: markers already existing is normally adopt's own
+        # refusal reason, except when a leading duplicate of this office's own header
+        # sits before the marker span, which is exactly the shape observed in practice
+        # (a hand header, then a prior adopt's own compiled section, already marked).
+        # That duplicate is provably redundant with what the marked section already
+        # contains, so it is safe to absorb rather than refuse. A header found only
+        # inside/after the marker span (the compiled section's own legitimate header)
+        # never counts.
         header_match = _office_header_re(handle).search(text)
         leading_duplicate = False
         if header_match is not None:
@@ -640,12 +635,12 @@ async def reissue_office(
                              "the marker by hand, or pass adopt=True if this office "
                              "genuinely predates the compiler"}
 
-    # THE CHARTER IS THE SEAT'S (ruling 1db1ff41): `seat_id` is already this call's own
-    # parameter — no occupant lookup needed at all, and no lineage-string walk either.
+    # THE CHARTER IS THE SEAT'S: `seat_id` is already this call's own parameter, no
+    # occupant lookup needed at all, and no lineage-string walk either.
     repos: list[str] = await charter_of(actions.pool, seat_id)
-    # PRESENTATION, NEVER THE GRAPH (Thoth/Deckard, mail 8788): charter_of's own
-    # canonical-only contract is correct forever (5031a74) — a human reading an office
-    # reads the project's live NAME, resolved at render time, canonical alongside it.
+    # PRESENTATION, NEVER THE GRAPH: charter_of's own canonical-only contract is
+    # correct, a human reading an office reads the project's live name, resolved at
+    # render time, canonical alongside it.
     display_repos = await charter_display_labels(actions.pool, repos)
     charter_block = (
         "You govern: " + ", ".join(f"`{r}`" for r in display_repos) + "." if repos else
@@ -672,11 +667,11 @@ async def reissue_office(
     if adopt:
         header_match = _office_header_re(handle).search(text)
         if header_match is not None:
-            # ONE HEADER, EVER (thread 49169c2f): the old file already carries this
-            # exact office's own header line somewhere — everything from there to EOF
-            # is the pre-marker managed section, replaced wholesale rather than
-            # duplicated below. Leading text ahead of the header (rare, but possible)
-            # is preserved untouched.
+            # ONE HEADER, EVER: the old file already carries this exact office's own
+            # header line somewhere, everything from there to EOF is the pre-marker
+            # managed section, replaced wholesale rather than duplicated below.
+            # Leading text ahead of the header (rare, but possible) is preserved
+            # untouched.
             lead = text[:header_match.start()].rstrip("\n")
             new_text = (lead + "\n\n" if lead else "") + wrapped
         else:
@@ -685,11 +680,11 @@ async def reissue_office(
         b_start, _b_end, _e_start, e_end, _old_version = locate_managed_section(text)
         new_text = text[:b_start] + wrapped + text[e_end:]
 
-    # AGENTS.md, VENDOR-NEUTRAL (thread f37aaf1b piece 2, see this module's own section
-    # above `_mirror_agents_md`): mirrored regardless of whether CLAUDE.md itself changed
-    # this call — an office whose CLAUDE.md already matched but whose AGENTS.md has never
-    # been written (every pre-existing office in this fleet, at the moment this piece
-    # ships) still needs it written the first time a reissue happens to pass through.
+    # AGENTS.md, VENDOR-NEUTRAL (see this module's own section above
+    # `_mirror_agents_md`): mirrored regardless of whether CLAUDE.md itself changed this
+    # call. An office whose CLAUDE.md already matched but whose AGENTS.md has never been
+    # written (every pre-existing office in this fleet, at the moment this piece
+    # shipped) still needs it written the first time a reissue happens to pass through.
     agents_md = await _mirror_agents_md(office, wrapped, adopt=adopt, handle=handle)
 
     if new_text == text:
@@ -699,8 +694,8 @@ async def reissue_office(
                 "identity_migration": identity_migration, "agents_md": agents_md}
     orders_path.write_text(new_text)
     # TESTIMONY, DURABLE (a reissue is testimony, per this verb's own docstring): the
-    # version + why land on the Seat object itself, not just in this call's receipt —
-    # a janitor or a future drift-check reads this instead of re-parsing the file.
+    # version and why land on the Seat object itself, not just in this call's receipt,
+    # so a janitor or a future drift-check reads this instead of re-parsing the file.
     await actions.assert_property(row["id"], "boot_compiled_version", version, actor,
                                   datetime.now(UTC), _CONF, evidence_class=_EC)
     return {"seat": seat_id, "handle": handle, "version": version, "because": because,
@@ -710,38 +705,38 @@ async def reissue_office(
             "identity_migration": identity_migration, "agents_md": agents_md}
 
 
-# ═══════════ THE ROLLOUT CHECK (thread 0e5bae06, #84) ═══════════
-# "the machinery exists and passes its test" is not "the machinery is in effect" — the
-# Boot Compiler shipped whole and reached 2 of 27 offices because nothing checked the
-# ROLLOUT, only the acceptance test (the disease Thoth LXIV named across seven separate
-# instances this reign). c72e206 is the cure's shape, copied here: NAME every gap, never
-# just count — a >= comparison can't fail in the direction it exists to detect once other,
-# unrelated rows (here, seats with no office at all) share the same table.
+# ═══════════ THE ROLLOUT CHECK ═══════════
+# "the machinery exists and passes its test" is not "the machinery is in effect": the
+# boot compiler shipped whole and reached 2 of 27 offices because nothing checked the
+# rollout, only the acceptance test, a recurring failure mode worth guarding against
+# explicitly. The cure's shape, copied here: name every gap, never just count. A >=
+# comparison can't fail in the direction it exists to detect once other, unrelated
+# rows (here, seats with no office at all) share the same table.
 #
-# FIVE reasons a seat is not "rolled out", kept DISTINCT rather than folded into one
+# Five reasons a seat is not "rolled out", kept distinct rather than folded into one
 # count, because only one of them is what adopt=True can fix:
-#   never_compiled — has a handle, an office, a CLAUDE.md, zero markers. adopt-ready.
-#   malformed      — has markers, but they're damaged. reissue refuses; needs a hand fix,
+#   never_compiled - has a handle, an office, a CLAUDE.md, zero markers. adopt-ready.
+#   malformed      - has markers, but they're damaged. reissue refuses; needs a hand fix,
 #                    never a second adopt (reissue_office's own refusal already covers
-#                    this at write time — named here too so the check surfaces it BEFORE
+#                    this at write time, named here too so the check surfaces it before
 #                    an operator tries and gets refused).
-#   no_claude_md   — has a handle and an anchor_cwd, but no CLAUDE.md file on disk yet.
-#                    establish_office/mint_seat's job, not adopt's — reissue_office
+#   no_claude_md   - has a handle and an anchor_cwd, but no CLAUDE.md file on disk yet.
+#                    establish_office/mint_seat's job, not adopt's; reissue_office
 #                    refuses this case outright (no file to append to).
-#   no_office      — no handle or no anchor_cwd on record at all. A DIFFERENT, already-
-#                    tracked bug (thread 7a9c3c46) that adopt cannot touch because
-#                    reissue_office has no office to find. Reported so it is never
-#                    silently folded into "needs rollout" and miscounted as fixed by a
-#                    sweep that cannot reach it.
-#   no_agents_md   — CLAUDE.md itself is fine (compiled, well-formed); AGENTS.md (thread
-#                    f37aaf1b piece 2's vendor-neutral mirror) has never been written —
-#                    every office established/reissued before that piece shipped. A plain
-#                    `reissue_office` call fixes it (adopt not required — CLAUDE.md's own
-#                    managed section already exists).
+#   no_office      - no handle or no anchor_cwd on record at all. A different, already-
+#                    tracked bug that adopt cannot touch because reissue_office has no
+#                    office to find. Reported so it is never silently folded into
+#                    "needs rollout" and miscounted as fixed by a sweep that cannot
+#                    reach it.
+#   no_agents_md   - CLAUDE.md itself is fine (compiled, well-formed); AGENTS.md (the
+#                    vendor-neutral mirror described above) has never been written,
+#                    true of every office established/reissued before that mirror
+#                    shipped. A plain `reissue_office` call fixes it (adopt not
+#                    required, CLAUDE.md's own managed section already exists).
 async def boot_rollout_gaps(pool: asyncpg.Pool) -> list[dict[str, str]]:
-    """Every active Seat NOT carrying a compiled managed section, OR missing its
+    """Every active Seat not carrying a compiled managed section, or missing its
     vendor-neutral AGENTS.md mirror, one dict per seat, classified by `reason` (see the
-    five kinds above) — never a bare count. Read-only: opens each office's CLAUDE.md (and
+    five kinds above), never a bare count. Read-only: opens each office's CLAUDE.md (and
     checks for AGENTS.md's existence) to inspect it, writes nothing."""
     from src.orchestrator.seats import seat_facts
 
@@ -769,15 +764,14 @@ async def boot_rollout_gaps(pool: asyncpg.Pool) -> list[dict[str, str]]:
             gaps.append({"seat_id": seat_id, "handle": handle, "house": house or "",
                         "anchor_cwd": anchor, "reason": reason, "detail": str(exc)})
             continue
-        # AGENTS.md AWARENESS (thread f37aaf1b piece 2's own follow-up, wave 21): a FIFTH
-        # reason, checked only once CLAUDE.md itself is confirmed compiled and well-formed
-        # — every office established or last reissued BEFORE this mirror shipped has a
-        # perfectly good CLAUDE.md and no AGENTS.md at all, a real rollout gap (a Crush
-        # session there gets no compiled standing orders) distinct from every CLAUDE.md-
-        # side reason above, never folded into one of them. Fixed by any reissue_office
-        # call — `_mirror_agents_md` writes it unconditionally, adopt not required here
-        # since CLAUDE.md's own managed section already exists and reissue_office never
-        # refuses on that path.
+        # AGENTS.md AWARENESS: a fifth reason, checked only once CLAUDE.md itself is
+        # confirmed compiled and well-formed. Every office established or last
+        # reissued before this mirror shipped has a perfectly good CLAUDE.md and no
+        # AGENTS.md at all, a real rollout gap (a Crush session there gets no compiled
+        # standing orders) distinct from every CLAUDE.md-side reason above, never
+        # folded into one of them. Fixed by any reissue_office call: `_mirror_agents_md`
+        # writes it unconditionally, adopt not required here since CLAUDE.md's own
+        # managed section already exists and reissue_office never refuses on that path.
         if not (Path(anchor) / "AGENTS.md").exists():
             gaps.append({"seat_id": seat_id, "handle": handle, "house": house or "",
                         "anchor_cwd": anchor, "reason": "no_agents_md"})
@@ -785,9 +779,9 @@ async def boot_rollout_gaps(pool: asyncpg.Pool) -> list[dict[str, str]]:
 
 
 def boot_rollout_gap_notes(gaps: list[dict[str, str]]) -> list[str]:
-    """One printable, actionable line per gap — `cmd_boot_status` prints these and a
+    """One printable, actionable line per gap, `cmd_boot_status` prints these and a
     caller-facing exit code follows from whether this list is empty, same contract as
-    `composition_gap_notes`. Each line names the seat AND says what fixes it, because a
+    `composition_gap_notes`. Each line names the seat and says what fixes it, because a
     gap that only says "N offices missing a section" is the exact miscount this check
     exists to replace."""
     fixes = {
@@ -800,8 +794,8 @@ def boot_rollout_gap_notes(gaps: list[dict[str, str]]) -> list[str]:
     lines = []
     for g in sorted(gaps, key=lambda g: (g["reason"], g["handle"] or g["seat_id"])):
         if g["reason"] == "no_agents_md":
-            # DISTINCT WORDING (not "has no compiled section" — CLAUDE.md's own section
-            # is fine here; only its vendor-neutral mirror is missing, a narrower claim
+            # DISTINCT WORDING (not "has no compiled section"; CLAUDE.md's own section
+            # is fine here, only its vendor-neutral mirror is missing, a narrower claim
             # that would be false if folded into the generic phrasing above).
             lines.append(f"boot: {g['handle'] or g['seat_id']} ({g.get('house') or 'no house'}) "
                         f"has no AGENTS.md — {fixes['no_agents_md']}")
@@ -811,22 +805,21 @@ def boot_rollout_gap_notes(gaps: list[dict[str, str]]) -> list[str]:
     return lines
 
 
-# ═══════════ THE DRIFT CHECK (thread f37aaf1b, v1.1 follow-up piece 1) ═══════════
-# boot_rollout_gaps above finds a seat with NO compiled section; this finds the OTHER
-# gap v1.1 shipped without — a seat that HAS one, compiled against an OLDER
+# ═══════════ THE DRIFT CHECK ═══════════
+# boot_rollout_gaps above finds a seat with no compiled section; this finds the other
+# gap left unaddressed by that check: a seat that has one, compiled against an older
 # template_version() than the one live today, that nothing proactively surfaces
-# ("nothing reads it proactively yet, a stale seat only gets recompiled on an explicit
-# reissue_office call" — the thread's own words). reissue_office's own testimony write
-# (line ~604 above: `boot_compiled_version` on the Seat object) is exactly the durable
-# read-back that comment already anticipated — never a re-parse of the file's own marker.
+# (a stale seat only gets recompiled on an explicit reissue_office call).
+# reissue_office's own testimony write (`boot_compiled_version` on the Seat object) is
+# exactly the durable read-back this needs, never a re-parse of the file's own marker.
 
 
 async def boot_drift_gaps(pool: asyncpg.Pool) -> list[dict[str, str]]:
     """Every active Seat whose durable `boot_compiled_version` testimony (asserted by
-    reissue_office, never re-derived from the file) names an OLDER template_version()
-    than the one live right now. A seat with NO testimony yet (never reissued since this
+    reissue_office, never re-derived from the file) names an older template_version()
+    than the one live right now. A seat with no testimony yet (never reissued since this
     property started being written, or still mid-rollout per boot_rollout_gaps above) is
-    NOT a drift gap — that population is boot_rollout_gaps' own, kept distinct rather than
+    not a drift gap, that population is boot_rollout_gaps' own, kept distinct rather than
     folded in, same "only count what a fix actually addresses" discipline that function's
     own docstring already states. Read-only."""
     from src.orchestrator.seats import seat_facts
@@ -853,18 +846,18 @@ async def boot_drift_gaps(pool: asyncpg.Pool) -> list[dict[str, str]]:
 
 
 async def apply_boot_drift_nudge_sweep(actions: Actions, *, actor: str) -> dict[str, Any]:
-    """Nudges each drifted seat's own holder with an `open_thread(kind='obligation')` —
+    """Nudges each drifted seat's own holder with an `open_thread(kind='obligation')`,
     naming reissue_office(adopt=True) as the fix, same as boot_rollout_gap_notes' own
-    never_compiled line above. Deliberately a NUDGE, never an auto-reissue: reissue_office
+    never_compiled line above. Deliberately a nudge, never an auto-reissue: reissue_office
     is a deliberate act with its own `because` testimony and its own refusal law for a
-    damaged marker span (msg 1819) — a cron silently recompiling every stale office on a
-    schedule would fire that refusal unattended, and would remint every reissue's own
-    `because` under a synthetic cron reason no future reader could trust the way a real
-    seat's own hand-typed `because` reads. `open_thread` is idempotent on its own summary
-    hash (docstring, capture.py), so a call with the SAME (stamped, current) pair every
-    900s mints nothing new after the first — the natural dedup, no separate 'already
-    nudged' marker to invent or go stale itself; a fresh template bump or a seat's own
-    reissue changes the pair, which is exactly when a FRESH nudge is correct."""
+    damaged marker span. A cron silently recompiling every stale office on a schedule
+    would fire that refusal unattended, and would remint every reissue's own `because`
+    under a synthetic cron reason no future reader could trust the way a real seat's
+    own hand-typed `because` reads. `open_thread` is idempotent on its own summary hash
+    (docstring, capture.py), so a call with the same (stamped, current) pair every 900s
+    mints nothing new after the first, the natural dedup, no separate 'already nudged'
+    marker to invent or go stale itself; a fresh template bump or a seat's own reissue
+    changes the pair, which is exactly when a fresh nudge is correct."""
     from src.orchestrator.capture import open_thread
 
     gaps = await boot_drift_gaps(actions.pool)
@@ -876,13 +869,12 @@ async def apply_boot_drift_nudge_sweep(actions: Actions, *, actor: str) -> dict[
             f"v{g['stamped_version']}, current is v{g['current_version']}. "
             "reissue_office(adopt=True) would refresh the managed section.")
         try:
-            # OWNER IS THE SEAT'S OWN CANONICAL, NEVER ITS BARE HANDLE (thread b5ae6773's
-            # owner law, capture.py's own open_thread comment ~3264: "an owner is a seat
-            # id or 'operator', never a bare handle" — the stored value must already
-            # satisfy the law itself, not just look plausible; a bare handle would only
-            # get canonicalized LATER by migration_0060's own normalization pass, so
-            # stamping the canonical directly here is correct on the first write, not a
-            # style choice).
+            # OWNER IS THE SEAT'S OWN CANONICAL, NEVER ITS BARE HANDLE (capture.py's own
+            # open_thread comment: "an owner is a seat id or 'operator', never a bare
+            # handle"). The stored value must already satisfy the law itself, not just
+            # look plausible; a bare handle would only get canonicalized later by
+            # migration_0060's own normalization pass, so stamping the canonical
+            # directly here is correct on the first write, not a style choice.
             await open_thread(
                 actions, summary, kind="obligation", owner=g["seat_id"],
                 arc="Fleet-Hygiene", source=actor)
@@ -897,24 +889,25 @@ async def sweep_stacked_office_headers(
     because: str = "classification_laws_heartbeat: stacked-header office self-heal "
                    "sub-sweep (thread 658c2152, folded into wave 8's 07ca68ca)",
 ) -> dict[str, Any]:
-    """THE STACKED-HEADER SUB-SWEEP (thread 658c2152 — 21 of 30 offices found with a
-    leading duplicate header before their own compiled marker span; nebbercracker/jenny
-    were healed by hand through the fixed `reissue_office(adopt=True)` call, thread
-    07ca68ca folds the REMAINDER into this heartbeat so a stranger's install, or any
-    seat that develops the same shape later, heals mechanically). Every active seat's
-    own office is checked for EXACTLY the condition `reissue_office`'s own self-heal
-    already recognizes (its docstring, msg 8113's ruling): a match of that seat's own
-    `_office_header_re` sitting BEFORE the marker span located by `locate_managed_
-    section`. A match sends the seat through `reissue_office(adopt=True)` — the same
-    sanctioned call, never a second copy of its healing logic.
+    """THE STACKED-HEADER SUB-SWEEP: 21 of 30 offices were found with a leading
+    duplicate header before their own compiled marker span. Two of them were healed by
+    hand through the fixed `reissue_office(adopt=True)` call; this folds the remainder
+    into a routine heartbeat so a fresh install, or any seat that develops the same
+    shape later, heals mechanically. Every active seat's own office is checked for
+    exactly the condition `reissue_office`'s own self-heal already recognizes (see its
+    docstring): a match of that seat's own `_office_header_re` sitting before the
+    marker span located by `locate_managed_section`. A match sends the seat through
+    `reissue_office(adopt=True)`, the same sanctioned call, never a second copy of its
+    healing logic.
 
-    Read-only for every seat that ISN'T stacked: no markers at all, a header only inside
-    or after the marker span (the compiled section's own legitimate header), or markers
-    too malformed for `locate_managed_section` to even answer (left for a human via
-    `boot_rollout_gaps`, never guessed at here) all pass through untouched, counted but
-    not written. One seat's own I/O or reissue failure is caught and reported inline —
-    the same "one bad row must not sink a correct batch" discipline `fleet_reconcile.
-    reconcile_execute` already proves — never aborting the sweep for its siblings."""
+    Read-only for every seat that isn't stacked: no markers at all, a header only
+    inside or after the marker span (the compiled section's own legitimate header), or
+    markers too malformed for `locate_managed_section` to even answer (left for a human
+    via `boot_rollout_gaps`, never guessed at here), all pass through untouched, counted
+    but not written. One seat's own I/O or reissue failure is caught and reported
+    inline, the same "one bad row must not sink a correct batch" discipline
+    `fleet_reconcile.reconcile_execute` already proves, never aborting the sweep for its
+    siblings."""
     from src.orchestrator.seats import seat_facts
 
     rows = await actions.pool.fetch(

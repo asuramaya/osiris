@@ -1,25 +1,25 @@
-"""THE STUB CULL (msg 1675, Thoth's dispatch) — a sanctioned verb to retire a dead
-SoftwareProject, shaped after seats.py's retire_seat/vacate_holder: a single self-contained
-function that gathers its own refusal evidence and, only once every check clears, performs
-the write. Unlike vacate_dead_seat's seat-liveness check, every signal a project needs
-(commits, open threads, a recent mount) is already a graph/table read — no external process
-or transcript evidence to gather, so this needed no trigger.py-style split.
+"""A sanctioned verb to retire a dead SoftwareProject stub, shaped after seats.py's
+retire_seat/vacate_holder: a single self-contained function that gathers its own refusal
+evidence and, only once every check clears, performs the write. Unlike vacate_dead_seat's
+seat-liveness check, every signal a project needs (commits, open threads, a recent mount)
+is already a graph/table read, no external process or transcript evidence to gather, so
+this needed no trigger.py-style split.
 
 THE STATUS FLIP IS A COMPENSATING EVENT, not a bare property assertion: `Actions.set_status`
 writes an append-only `object_events` row (event_type='status_change') alongside the
 `objects.status` column flip, so a retirement is auditable and reversible (re-`set_status`
-back to 'active') exactly like every other lifecycle transition in this codebase — never a
+back to 'active') exactly like every other lifecycle transition in this codebase, never a
 DELETE.
 
 REFUSES LOUDLY on: a blank `because`; a `project` ref that doesn't resolve to a
-SoftwareProject (scoped to that type ONLY — never resolves through to a Seat or Agent of the
-same name, the exact ambiguity Thoth flagged for 'seshat'/'ra', which are stub PROJECTS
+SoftwareProject (scoped to that type ONLY, never resolves through to a Seat or Agent of the
+same name; stub PROJECTS named the same as a seat are a real ambiguity and must be kept
 distinct from the seats of the same names); a project already non-active; any commit
 recorded against it (`in_repo` from a Commit); any open Thread pointing in (`in_repo`,
 status='active'); or a mount seen against it within the live window (15 minutes, the same
-threshold `mounts.agent_liveness` already uses for a mind). The receipt always names the
-project by its CANONICAL (`repo:<name>`), never a bare name, so it can never be misread as a
-seat's receipt."""
+threshold `mounts.agent_liveness` already uses for a live session). The receipt always names
+the project by its CANONICAL (`repo:<name>`), never a bare name, so it can never be misread
+as a seat's receipt."""
 from __future__ import annotations
 
 import re
@@ -41,14 +41,14 @@ _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 
 class AmbiguousProjectRef(Exception):
     """Raised by `_resolve_software_project` when a bare label resolves to MORE THAN ONE
-    active SoftwareProject (#110, decision 1db1ff41 — the ballgem/sutra shape: two live
-    objects, one canonicaled by its bare name and one by its full disk path, each still
-    answering to the same `name` assertion). The old fallback was `LIMIT 1` with no
-    `ORDER BY` — whichever row postgres felt like, silently, for every caller including
-    retire_project and fold_project. A PERMANENT correctness property, not a workaround
-    for today's specific duplicates: a verb that mutates the graph must never guess which
-    of two live objects a bare label meant, this month or the next time a pair collides.
-    `candidates` names every match so the caller reports, never guesses."""
+    active SoftwareProject (a real shape seen in production: two live objects, one
+    canonicaled by its bare name and one by its full disk path, each still answering to
+    the same `name` assertion). The old fallback was `LIMIT 1` with no `ORDER BY`,
+    whichever row postgres felt like, silently, for every caller including retire_project
+    and fold_project. A PERMANENT correctness property, not a workaround for today's
+    specific duplicates: a verb that mutates the graph must never guess which of two live
+    objects a bare label meant, this month or the next time a pair collides. `candidates`
+    names every match so the caller reports, never guesses."""
 
     def __init__(self, ref: str, candidates: list[str]) -> None:
         self.ref = ref
@@ -58,13 +58,13 @@ class AmbiguousProjectRef(Exception):
 
 
 async def _resolve_software_project(pool: asyncpg.Pool, ref: str) -> asyncpg.Record | None:
-    """A SoftwareProject ONLY — a full UUID, an 8-char short id, an exact canonical
+    """A SoftwareProject ONLY: a full UUID, an 8-char short id, an exact canonical
     (`repo:<name>` accepted with or without the prefix), or its `name` property. Never
-    widens to another object type: this is the structural half of the seshat/ra
-    disambiguation, not just wording in the receipt.
+    widens to another object type: this is the structural half of keeping a stub project
+    distinct from a seat/agent of the same name, not just wording in the receipt.
 
     Raises `AmbiguousProjectRef` (never silently picks) when the `name`-property fallback
-    matches more than one distinct active object — the UUID/short-id/canonical paths above
+    matches more than one distinct active object, the UUID/short-id/canonical paths above
     stay exact-key lookups and can never collide."""
     ref = ref.strip()
     try:
@@ -76,16 +76,16 @@ async def _resolve_software_project(pool: asyncpg.Pool, ref: str) -> asyncpg.Rec
             "SELECT id, canonical, status FROM objects WHERE id=$1 AND type='SoftwareProject'",
             oid)
         if row is not None:
-            return row  # an exact object id — never ambiguous by construction
+            return row  # an exact object id, never ambiguous by construction
     short = ref.lower()
     if re.fullmatch(r"[0-9a-f]{8}[0-9a-f-]*", short):
         row = await pool.fetchrow(
             "SELECT id, canonical, status FROM objects "
             "WHERE type='SoftwareProject' AND id::text LIKE $1 || '%' LIMIT 1", short)
         if row is not None:
-            return row  # a short id prefix — practically unique, same convention elsewhere
+            return row  # a short id prefix, practically unique, same convention elsewhere
 
-    # From here `ref` denotes a LABEL, not an object id — canonical-string match and
+    # From here `ref` denotes a LABEL, not an object id: canonical-string match and
     # `name`-property match are BOTH label lookups and must be checked for a collision
     # TOGETHER, or an object findable only by canonical (repo:ballgem) would hide a
     # sibling findable only by its own `name` property (a differently-canonicaled twin
@@ -103,9 +103,9 @@ async def _resolve_software_project(pool: asyncpg.Pool, ref: str) -> asyncpg.Rec
         raise AmbiguousProjectRef(ref, sorted(str(r["canonical"]) for r in rows))
     if rows:
         return rows[0]
-    # A RETIRED CANONICAL (object_aliases — a rename migrated the canonical, Thoth DM
-    # 12786) names the SAME object: found, and flagged `resolved_via_alias` so no caller
-    # is surprised that the label it typed is no longer the object's own canonical.
+    # A RETIRED CANONICAL (object_aliases: a rename migrated the canonical) still names
+    # the SAME object: found, and flagged `resolved_via_alias` so no caller is surprised
+    # that the label it typed is no longer the object's own canonical.
     aliased = await pool.fetchrow(
         "SELECT o.id, o.canonical, o.status, al.alias AS resolved_via_alias "
         "FROM object_aliases al JOIN objects o ON o.id=al.object_id "
@@ -113,7 +113,7 @@ async def _resolve_software_project(pool: asyncpg.Pool, ref: str) -> asyncpg.Rec
         canon)
     if aliased is not None:
         return aliased
-    # a non-active (retired/merged) object is reachable only by its exact canonical — a
+    # a non-active (retired/merged) object is reachable only by its exact canonical: a
     # caller resolving a KNOWN-dead label (retire_project's own "already retired" message)
     # must still find it, just never through the ambiguity-checked label path above
     return await pool.fetchrow(
@@ -125,7 +125,7 @@ async def _resolve_project_ref(
     pool: asyncpg.Pool, ref: str, *, verb: str,
 ) -> tuple[asyncpg.Record | None, dict[str, Any] | None]:
     """Shared refusal wrapper over `_resolve_software_project`: (row, None) on a clean
-    resolution, (None, error_dict) on an ambiguous ref — every verb below reports that
+    resolution, (None, error_dict) on an ambiguous ref: every verb below reports that
     shape identically rather than re-writing the same try/except each time. A `None` row
     with no error still means "not found," exactly as `_resolve_software_project` itself
     signals it; callers keep their own "no such SoftwareProject" message."""
@@ -142,10 +142,10 @@ async def _resolve_project_ref(
 async def retire_project(
     actions: Actions, *, project: str, actor: str, because: str,
 ) -> dict[str, Any]:
-    """Retire a dead SoftwareProject stub — status flip to 'retired' via a compensating
+    """Retire a dead SoftwareProject stub: status flip to 'retired' via a compensating
     event (`Actions.set_status`). Refuses on: blank `because`; an unresolved or non-active
     project; any commit, any open thread pointing in, or any mount seen within the last 15
-    minutes against it (live signal — this verb never evicts a project that's actually in
+    minutes against it (live signal, this verb never evicts a project that's actually in
     use)."""
     because = (because or "").strip()
     if not because:
@@ -189,23 +189,23 @@ async def retire_project(
 async def assert_project_property(
     actions: Actions, *, project: str, name: str, value: str, actor: str,
 ) -> dict[str, Any]:
-    """The sanctioned write for a SINGLE project-scoped property — task #74's own gap:
-    the reap (msg 1675/1689) had no verb for anything beyond a status flip, forcing
-    in-process scripts for every other lifecycle stamp. Resolves `project` exactly like
-    retire_project (UUID/short-id/canonical/name, SoftwareProject ONLY — the same
-    seshat/ra disambiguation). NOT self-scoped, and OPEN BY DESIGN, not merely
-    unenforced (census a5e53ed8/3f97f9c7 found "any authorized caller" a vacuous claim —
-    no authorization concept was ever checked here; corrected 2026-08-02 to say what is
-    actually true): any mounted caller may stamp any named project's property; `actor` is
-    attribution, never an authority gate (same reasoning as correct_agent_house). A
-    property write is reversible (a fresh assert supersedes cleanly) and fully visible in
-    the record — if a manager-only restriction is ever wanted, it belongs here as a real
-    check, not as prose a reader has to trust.
+    """The sanctioned write for a SINGLE project-scoped property. The status-flip verb
+    alone had no way to record anything beyond a status change, forcing in-process
+    scripts for every other lifecycle stamp. Resolves `project` exactly like
+    retire_project (UUID/short-id/canonical/name, SoftwareProject ONLY, the same
+    disambiguation that keeps a stub project distinct from a same-named seat/agent).
+    NOT self-scoped, and OPEN BY DESIGN, not merely unenforced (an earlier review found
+    "any authorized caller" a vacuous claim: no authorization concept was ever checked
+    here; corrected to say what is actually true): any mounted caller may stamp any named
+    project's property; `actor` is attribution, never an authority gate (same reasoning as
+    correct_agent_house). A property write is reversible (a fresh assert supersedes
+    cleanly) and fully visible in the record; if a manager-only restriction is ever
+    wanted, it belongs here as a real check, not as prose a reader has to trust.
 
     Refuses LOUDLY on: blank project/name/value; an unresolved project; `name=='status'`
-    — status has its OWN compensating-event path (retire_project -> Actions.set_status,
+    (status has its OWN compensating-event path, retire_project -> Actions.set_status,
     the object_events audit trail); a bare assertion here would silently reopen the exact
-    STATUS GAP class already fixed once for seats (retire_seat, commit 122d642)."""
+    status-tracking gap already fixed once for seats (retire_seat)."""
     project = (project or "").strip()
     name = (name or "").strip()
     value = (value or "").strip()
@@ -229,7 +229,7 @@ async def assert_project_property(
     return {"project": row["canonical"], "name": name, "value": value, "id": str(row["id"])}
 
 
-# --- set_project_window_tag (window-tag-gets-an-owner, decision 26f4f825's corollary) -----
+# --- set_project_window_tag (giving the window tag an explicit owner, not just a derivation) ---
 
 _WINDOW_TAG_RE = re.compile(r"[A-Z]{1,4}")
 
@@ -238,23 +238,23 @@ async def set_project_window_tag(
     actions: Actions, *, project: str, tag: str, actor: str, because: str,
 ) -> dict[str, Any]:
     """THE PERSISTED OVERRIDE for the window's `[TAG]` prefix (trigger.py's `_house_tag`/
-    `_window_name`, ~line 2732 pre-this-task): today that prefix is a PURE DERIVATION — the
-    first two letters of `house`, else of the governed project, else nothing — recomputed
-    fresh at every launch/resume with no way to declare a different one. `set_tag` closes
-    that gap: an explicit code (e.g. "MH" for monsterhouse instead of the derived "MO")
-    that `_house_tag` now checks FIRST, before ever deriving.
+    `_window_name`): today that prefix is a PURE DERIVATION, the first two letters of
+    `house`, else of the governed project, else nothing, recomputed fresh at every
+    launch/resume with no way to declare a different one. `set_tag` closes that gap: an
+    explicit code (e.g. "MH" for monsterhouse instead of the derived "MO") that
+    `_house_tag` now checks FIRST, before ever deriving.
 
-    Anchored on the SoftwareProject `project` resolves to, via `_resolve_project_ref` — the
+    Anchored on the SoftwareProject `project` resolves to, via `_resolve_project_ref`, the
     same ambiguity-refusing resolver `assert_project_property`/`rename_project` already
     share (there is no House object type; the project is the only thing an assertion can
     hang off). Written as `_project_impl`'s own house discipline: a single-property write,
     same shape as `assert_project_property`, but with a NAMED, non-bypassable shape check
     that verb deliberately does not carry (assert_property accepts any value under any
-    name; a tag is not "any value" — it renders literally in front of the operator).
+    name; a tag is not "any value", it renders literally in the UI).
 
     WRITTEN AS `window_tag`, NEVER `tag`: `tag` already names a totally different,
     additive/multi-valued property on arbitrary objects (frontier.py's/dossier.py's
-    case-subject marking, stored as `{"tag": "subject"}`) — reusing that name here would
+    case-subject marking, stored as `{"tag": "subject"}`); reusing that name here would
     silently collide two unrelated meanings under one property name. `_house_tag` (trigger.
     py) reads `window_tag` specifically, never the bare `tag` property, for exactly this
     reason.
@@ -262,7 +262,7 @@ async def set_project_window_tag(
     STRICT SHAPE, NEVER SILENTLY COERCED (refuse-don't-guess): 1-4 uppercase letters
     (A-Z), exactly as given. "mh", "MHouse", "M-H", or a blank string all refuse by name
     rather than being quietly lowercased/truncated/uppercased into something the caller
-    never asked for — the same discipline `_validate_repo_name` holds for a project name
+    never asked for, the same discipline `_validate_repo_name` holds for a project name
     shaped like a path."""
     project = (project or "").strip()
     tag = (tag or "").strip()
@@ -290,45 +290,41 @@ async def set_project_window_tag(
     return {"project": row["canonical"], "window_tag": tag}
 
 
-# --- fold_project (task #102's LANE 2, Thoth's dispatch DM 2302/2310) --------------------
+# --- fold_project (the deliberate merge primitive for two SoftwareProject twins) ---------
 
 async def _contradicting_properties(
     pool: asyncpg.Pool, a_id: uuid.UUID, b_id: uuid.UUID,
 ) -> list[str]:
-    """Task #102's mark-not-resolve primitive (dossier.py's `agreement` field,
-    compositions.py's `contradicted` triage bucket), reused here as a REFUSAL SIGNAL
-    instead of a display marker: for every property name either object currently
-    carries, does each object's own BELIEF (its winning value — the same
-    `confidence DESC, observed_at DESC` resolution every other belief-read site in this
-    codebase already uses, e.g. `trace_evidence`'s `believes`) disagree between the two
-    objects? `name`/`tag` are excluded — a label difference is a fold's own PREMISE (two
-    tags for one referent is exactly the operator's "SAME data, DIFFERENT tags -> merge
-    is correct" case), never a sign these are two different things; every OTHER property
-    disagreeing is the opposite case ("SAME tag, DIFFERENT data") the operator named as
-    the one merge must never cross.
+    """A mark-not-resolve primitive (dossier.py's `agreement` field, compositions.py's
+    `contradicted` triage bucket), reused here as a REFUSAL SIGNAL instead of a display
+    marker: for every property name either object currently carries, does each object's
+    own BELIEF (its winning value, the same `confidence DESC, observed_at DESC`
+    resolution every other belief-read site in this codebase already uses, e.g.
+    `trace_evidence`'s `believes`) disagree between the two objects? `name`/`tag` are
+    excluded: a label difference is a fold's own PREMISE (two tags for one referent is
+    exactly the "same data, different tags means merge is correct" case), never a sign
+    these are two different things; every OTHER property disagreeing is the opposite case
+    ("same tag, different data") that a merge must never cross.
 
-    BELIEF-RESOLVED, NOT RAW (Sekhmet's ramstein trace, decision 9ae4feee; obligation
-    114f7ac9's sibling fork, resolved (B)): `current_assertions` is every un-superseded
-    assertion — and `assert_property` only supersedes WITHIN the same source
-    (actions/core.py's own advisory lock is keyed on object+name+SOURCE), so a stale
-    assertion from a DIFFERENT source than the one that later corrected it stays live in
-    that view forever. The old raw `GROUP BY name HAVING count(DISTINCT value) > 1`
-    query saw that stale cross-source row as a second "current" value even on a SINGLE
-    object with no real disagreement at all — merge()'s gate was comparing "has anyone
-    ever asserted something different" (raw), not "do these two objects currently
-    disagree" (belief). A corrector (assert_project_property, etc.) that WINS on
-    confidence/recency must be able to unblock a fold without a second, unexposed act
-    (retiring the loser assertion by row id — no read verb surfaces one) just to make the
-    old row stop counting.
+    BELIEF-RESOLVED, NOT RAW: `current_assertions` is every un-superseded assertion, and
+    `assert_property` only supersedes WITHIN the same source (actions/core.py's own
+    advisory lock is keyed on object+name+SOURCE), so a stale assertion from a DIFFERENT
+    source than the one that later corrected it stays live in that view forever. The old
+    raw `GROUP BY name HAVING count(DISTINCT value) > 1` query saw that stale cross-source
+    row as a second "current" value even on a SINGLE object with no real disagreement at
+    all: merge()'s gate was comparing "has anyone ever asserted something different"
+    (raw), not "do these two objects currently disagree" (belief). A corrector
+    (assert_project_property, etc.) that WINS on confidence/recency must be able to
+    unblock a fold without a second, unexposed act (retiring the loser assertion by row
+    id, no read verb surfaces one) just to make the old row stop counting.
 
-    LAYOUT/CRON-OWNED PROPERTIES EXCLUDED TOO (operator ruling b5663511, PROJECT
-    IDENTITY DRIFT, Thoth mail 12453 item b): `graph_x`/`graph_y`/`graph_layout_v`
+    LAYOUT/CRON-OWNED PROPERTIES EXCLUDED TOO: `graph_x`/`graph_y`/`graph_layout_v`
     (graph_layout.py's own placement cron) are a RENDERING COORDINATE, never an
-    identity fact — two distinct objects always carry independently-placed positions,
+    identity fact: two distinct objects always carry independently-placed positions,
     by construction, whether or not they are the same real-world referent. Counting
     them as identity evidence meant a genuine twin (the exact live specimen: a stub
     SoftwareProject minted mid-rename, one edge, its own layout position assigned on
-    the very next cron tick) could NEVER fold — the gate would report "contradicting"
+    the very next cron tick) could NEVER fold, the gate would report "contradicting"
     on the layout properties forever, the same false-positive shape `name`/`tag`
     were already excluded for, just from a different direction (those two are
     IDENTICAL-by-construction across a real twin; these three are DIFFERENT-by-
@@ -348,7 +344,7 @@ async def _contradicting_properties(
 
 
 # every live link type link_repo/works_in/governs/informs can put ON a SoftwareProject
-# (src/ontology/schema.py) — re-pointed FROM `dupe` TO `into` before the kernel merge,
+# (src/ontology/schema.py) is re-pointed FROM `dupe` TO `into` before the kernel merge,
 # since Actions.merge_objects never touches a pre-existing `links` row itself (see its
 # own docstring: "assertions are never rewritten"; the same is true of links).
 _PROJECT_ESTATE_LINK_TYPES = ("in_repo", "works_in", "governs", "informs")
@@ -358,13 +354,13 @@ async def _live_third_party_on_project(
     pool: asyncpg.Pool, project_canonical: str, actor: str | None,
     *, agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> str | None:
-    """THE LIVENESS GUARD'S OWN CHECK (decision 7fe20cc5, obligation 53424b07): does
-    `project_canonical` currently have a harness-confirmed live agent_mounts row whose
-    agent is a DIFFERENT lineage than `actor`? Returns that agent's canonical (the first
-    one found) or None. One `registry_census` call, reused across every candidate row —
-    `is_occupied_by_a_live_body` is a subprocess + bounded /proc walk, not free, and this
-    is never a hot loop, but N separate calls for N rows on one project is still waste
-    the single shared census avoids."""
+    """THE LIVENESS GUARD'S OWN CHECK: does `project_canonical` currently have a
+    harness-confirmed live agent_mounts row whose agent is a DIFFERENT lineage than
+    `actor`? Returns that agent's canonical (the first one found) or None. One
+    `registry_census` call, reused across every candidate row: the liveness check is a
+    subprocess plus a bounded /proc walk, not free, and this is never a hot loop, but N
+    separate calls for N rows on one project is still waste the single shared census
+    avoids."""
     from src.orchestrator.agents import _generation
     from src.orchestrator.mounts import registry_census
 
@@ -389,42 +385,41 @@ async def fold_project(
     force: bool = False, because: str | None = None,
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
-    """Fold SoftwareProject `dupe` into `into` — the deliberate, evidence-gated cure for a
-    TWIN (two SoftwareProject objects that are really one project under two labels; #107's
-    own path-shaped mint and a basename collision are tonight's live cases, not a merge
-    machine built ahead of need).
+    """Fold SoftwareProject `dupe` into `into`: the deliberate, evidence-gated cure for a
+    TWIN (two SoftwareProject objects that are really one project under two labels; a
+    path-shaped mint colliding with a basename are real live cases, not a merge machine
+    built ahead of need).
 
-    BOTH ENDPOINTS MUST ALREADY EXIST (Thoth's correction, DM 2310, from redmonth's own
-    counterexample: a project whose graph presence is real — hundreds of edges, a seat, a
-    succession chain — while its code identity has moved on needs a RENAME-WITH-SUCCESSION
-    primitive, a different verb, not this one; `into` not existing means the caller wants
-    that verb). fold_project never find-or-CREATEs `into` — that would be #107's own
-    disease reborn inside a merge verb. The refusal on a missing target NAMES the right
-    tool rather than silently minting one.
+    BOTH ENDPOINTS MUST ALREADY EXIST (from a counterexample found in practice: a project
+    whose graph presence is real, hundreds of edges, a seat, a succession chain, while its
+    code identity has moved on needs a RENAME-WITH-SUCCESSION primitive, a different verb,
+    not this one; `into` not existing means the caller wants that verb). fold_project
+    never find-or-CREATEs `into`, that would reintroduce the exact path-shaped-mint
+    disease inside a merge verb. The refusal on a missing target NAMES the right tool
+    rather than silently minting one.
 
-    THE GUARD IS THE DESIGN (the operator's own categorical rule, via Thoth's dispatch
-    DM 2279, task #102): SAME data, DIFFERENT tags -> one referent, merge is correct. SAME
-    tag, DIFFERENT data -> two things, or one thing with contested facts -> merge is
-    WRONG. `_contradicting_properties` checks every property OTHER than name/tag (a label
-    difference is this fold's own premise, not a conflict) for genuine cross-object
-    disagreement between `dupe` and `into` — a hit refuses loudly and names exactly what
-    conflicts, because a wrong merge does not just lose a duplicate, it DESTROYS a
-    recorded disagreement, which was data.
+    THE GUARD IS THE DESIGN (a categorical rule): SAME data, DIFFERENT tags means one
+    referent, merge is correct. SAME tag, DIFFERENT data means two things, or one thing
+    with contested facts, so merge is WRONG. `_contradicting_properties` checks every
+    property OTHER than name/tag (a label difference is this fold's own premise, not a
+    conflict) for genuine cross-object disagreement between `dupe` and `into`: a hit
+    refuses loudly and names exactly what conflicts, because a wrong merge does not just
+    lose a duplicate, it DESTROYS a recorded disagreement, which was data.
 
-    Never gates on commits, or the lack of them (unlike retire_project's stub-cull guard)
-    — a project's graph presence can be real while its code presence is zero, and this
-    verb must fit that shape even though redmonth itself is not its case.
+    Never gates on commits, or the lack of them (unlike retire_project's stub-cull guard):
+    a project's graph presence can be real while its code presence is zero, and this verb
+    must fit that shape.
 
     ESTATE moved BEFORE the kernel call: every live edge of `_PROJECT_ESTATE_LINK_TYPES`
-    pointing FROM another object INTO `dupe` re-points to `into` (idempotent — a link
+    pointing FROM another object INTO `dupe` re-points to `into` (idempotent, a link
     already live to `into` is never duplicated), then `agent_mounts.project` (a loose
-    string match, never a FK — same shape fold_agent's raw `agent_mounts.agent_id` UPDATE)
+    string match, never a FK, same shape fold_agent's raw `agent_mounts.agent_id` UPDATE)
     is re-addressed the same way. Only then does `Actions.merge_objects` run.
 
     REVERSIBLE, never a delete: the kernel stamps `merged_into` + `status='merged'` on
     `dupe`; `unmerge_objects` restores that projection. The re-pointed estate is NOT
     automatically restored by an unmerge (the same `estate_unreturnable` class
-    `unfold_agent` already reports) — the receipt names every edge moved so a reversal by
+    `unfold_agent` already reports); the receipt names every edge moved so a reversal by
     hand has the list.
 
     Refuses LOUDLY, nothing written, on: empty evidence (an auto-merge wearing a
@@ -432,12 +427,12 @@ async def fold_project(
     SoftwareProject (missing, wrong type, or already merged); a genuine cross-object
     contradiction on any non-name/tag property.
 
-    THE LIVENESS GUARD (decision 7fe20cc5, obligation 53424b07): self (the caller's own
-    lineage currently holds `dupe`) stays fully open — no change. A DIFFERENT lineage's
-    harness-confirmed live session currently mounted on `dupe` refuses the fold by
-    default; `force=True` (requires a non-empty `because`) is the deliberate override,
-    and the receipt then carries `live_session_repointed` — the exception's price is
-    always a visible signal, never a silent one."""
+    THE LIVENESS GUARD: self (the caller's own lineage currently holds `dupe`) stays
+    fully open, no change. A DIFFERENT lineage's harness-confirmed live session currently
+    mounted on `dupe` refuses the fold by default; `force=True` (requires a non-empty
+    `because`) is the deliberate override, and the receipt then carries
+    `live_session_repointed`, the exception's price is always a visible signal, never a
+    silent one."""
     dupe, into = (dupe or "").strip(), (into or "").strip()
     if not (evidence or "").strip():
         return {"error": "a fold without evidence is an auto-merge wearing a signature — "
@@ -494,17 +489,17 @@ async def fold_project(
 
     out = {"folded": dupe_row["canonical"], "into": into_row["canonical"],
           "edges_moved": moved, "mounts_moved": mounts_moved,
-          # A FOLD NOW NAMES WHO IT LEFT BEHIND (Seshat, dispatch 6484/6493): the
-          # self-service reconcilers already worked — nothing NAMED which seats went
-          # stale, so nobody knew to call them. Detection only; writes nothing.
+          # A FOLD NOW NAMES WHO IT LEFT BEHIND: the self-service reconcilers already
+          # worked, but nothing NAMED which seats went stale, so nobody knew to call
+          # them. Detection only; writes nothing.
           "possibly_stale_seats": await detect_possibly_stale_seats(
               actions.pool, dupe_row["canonical"])}
     if live_third_party:
-        # THE EXCEPTION'S PRICE (decision 7fe20cc5): force=True bypassed the guard above,
-        # never the report — a live session's own agent_mounts.project row just got
-        # re-pointed out from under it, and that stays MANDATORY, visible output, not a
-        # silent side effect the exception buys away. KEPT ACROSS Seshat's merge: her
-        # branch predated this block and her version dropped it; both belong.
+        # THE EXCEPTION'S PRICE: force=True bypassed the guard above, never the report.
+        # A live session's own agent_mounts.project row just got re-pointed out from
+        # under it, and that stays MANDATORY, visible output, not a silent side effect
+        # the exception buys away. This block must survive any future merge of this
+        # function with a parallel branch that dropped it; both belong.
         out["live_session_repointed"] = live_third_party
     return out
 
@@ -512,23 +507,22 @@ async def fold_project(
 async def unfold_project(
     actions: Actions, *, dupe: str, because: str, actor: str, execute: bool = False,
 ) -> dict[str, Any]:
-    """Reverse a wrongful fold_project — the Project sibling of `folds.unfold_agent`, built
-    for PARITY (ruling 31c02dca: fold_project shipped with NO reversal at all, so a fold
-    here was permanent and unrepairable — task #127's own named case). DRY RUN IS THE
-    DEFAULT (`execute=False`): returns the plan without writing.
+    """Reverse a wrongful fold_project: the Project sibling of `folds.unfold_agent`, built
+    for PARITY (fold_project shipped with NO reversal at all, so a fold here was
+    permanent and unrepairable until this verb existed). DRY RUN IS THE DEFAULT
+    (`execute=False`): returns the plan without writing.
 
     Refuses LOUDLY on: blank `because`; `dupe` not resolving to a SoftwareProject (the SAME
-    flexible resolution `fold_project` itself uses — UUID, short id, canonical, or bare
-    name — an already-merged object is reachable only by its exact canonical, exactly as
+    flexible resolution `fold_project` itself uses: UUID, short id, canonical, or bare
+    name; an already-merged object is reachable only by its exact canonical, exactly as
     `_resolve_software_project` already documents); `dupe.status != 'merged'`; the original
-    fold's own justification citing the operator's word when `because` doesn't carry a
-    fresh one.
+    fold's own justification when `because` doesn't carry a fresh one.
 
     ESTATE: every `_PROJECT_ESTATE_LINK_TYPES` edge `fold_project` moved is event-sourced
     and restored automatically WHEN AND ONLY WHEN nothing has re-pointed it since
-    (`folds._reversible_moved_links` — the same 'unchanged since the fold' proof
+    (`folds._reversible_moved_links`, the same 'unchanged since the fold' proof
     `unfold_agent`'s own thread reversal uses, generalized to links). `agent_mounts.project`
-    was moved by a raw UPDATE — reported as `estate_unreturnable`, never guessed back,
+    was moved by a raw UPDATE, reported as `estate_unreturnable`, never guessed back,
     exactly like `fold_agent`'s own mount rows."""
     from src.orchestrator.folds import (
         _reversible_moved_links,
@@ -628,24 +622,24 @@ async def _move_project_estate(
     actions: Actions, dupe_oid: uuid.UUID, into_oid: uuid.UUID, dupe_canonical: str,
     into_canonical: str, actor: str, now: datetime,
 ) -> tuple[dict[str, int], int]:
-    """The estate-move itself, factored out of fold_project so reconcile_project_fold
-    (#127) can run the EXACT same repair on an already-merged pair rather than a second
+    """The estate-move itself, factored out of fold_project so reconcile_project_fold can
+    run the EXACT same repair on an already-merged pair rather than a second
     implementation that could drift from what a normal fold already does. Every live
-    _PROJECT_ESTATE_LINK_TYPES edge on `dupe_oid` re-points to `into_oid` (idempotent —
-    a link already live to `into_oid` is never duplicated); `agent_mounts.project` is
-    re-addressed the same way. Never calls merge_objects — that stays each caller's own
+    _PROJECT_ESTATE_LINK_TYPES edge on `dupe_oid` re-points to `into_oid` (idempotent, a
+    link already live to `into_oid` is never duplicated); `agent_mounts.project` is
+    re-addressed the same way. Never calls merge_objects: that stays each caller's own
     decision about whether a merge should happen at all.
 
-    A MOVE, NOT A DECLARATION (decision 540007ca — the ramstein write-attribution
-    specimen): the re-pointed edge carries over the ORIGINAL edge's own `source_id`,
-    `confidence`, and `evidence_class` rather than being stamped as a fresh SELF_DECLARED
-    assertion by whoever ran the fold. The prior version passed `actor`/`_CONF`/`_EC`
-    into `create_link`, which silently reattributed every moved edge to the fold's own
-    actor — a MOVE was being written as a DECLARATION, and every reader keyed on
-    `source_id` (write-attribution's own lineage filter chief among them) lost the
-    original writer permanently, with no way for any read-side fix to recover it after
-    the fact. `actor` is passed to `invalidate_link` only, where it correctly records WHO
-    performed the fold — that act really is the fold's own, unlike the edge's authorship."""
+    A MOVE, NOT A DECLARATION (found by tracing a real write-attribution bug): the
+    re-pointed edge carries over the ORIGINAL edge's own `source_id`, `confidence`, and
+    `evidence_class` rather than being stamped as a fresh SELF_DECLARED assertion by
+    whoever ran the fold. The prior version passed `actor`/`_CONF`/`_EC` into
+    `create_link`, which silently reattributed every moved edge to the fold's own actor: a
+    MOVE was being written as a DECLARATION, and every reader keyed on `source_id`
+    (write-attribution's own lineage filter chief among them) lost the original writer
+    permanently, with no way for any read-side fix to recover it after the fact. `actor`
+    is passed to `invalidate_link` only, where it correctly records WHO performed the
+    fold, that act really is the fold's own, unlike the edge's authorship."""
     moved: dict[str, int] = {}
     for link_type in _PROJECT_ESTATE_LINK_TYPES:
         rows = await actions.pool.fetch(
@@ -662,8 +656,8 @@ async def _move_project_estate(
             if not exists:
                 # source_id/confidence/evidence_class carry the ORIGINAL writer's belief
                 # attribution forward; `actor` (the fold's own executor) is passed
-                # separately so the audit trail still records who performed THIS write —
-                # the two are different questions and this is the only line where the
+                # separately so the audit trail still records who performed THIS write.
+                # The two are different questions and this is the only line where the
                 # fold's actor belongs at all.
                 await actions.create_link(
                     r["oid"], into_oid, link_type, r["source_id"], now, r["confidence"],
@@ -678,34 +672,33 @@ async def _move_project_estate(
     return moved, int(mount_tag.rsplit(" ", 1)[-1])
 
 
-# --- reconcile_project_fold (#127, P0 — the repair path fold_project never had) ----------
+# --- reconcile_project_fold (the repair path fold_project never had) ---------------------
 
 async def reconcile_project_fold(
     actions: Actions, *, dupe: str, into: str, actor: str,
 ) -> dict[str, Any]:
-    """THE REPAIR PATH fold_project never had (Thoth's own framing, DM 2487): folds are
-    idempotent-by-REFUSAL when they need to be idempotent-by-REPAIR — the refusal that
-    makes a SECOND fold safe (`dupe.status=='merged'` -> "already folded, nothing to
-    do") is exactly what makes a PARTIAL first fold permanent, because nothing can ever
-    revisit it. This is that revisit: re-points any live _PROJECT_ESTATE_LINK_TYPES
-    edge still aimed at an ALREADY-merged dupe, using the SAME `_move_project_estate`
-    fold_project itself calls — not a second implementation that could drift from what
-    a normal fold already does.
+    """THE REPAIR PATH fold_project never had: folds are idempotent-by-REFUSAL when they
+    need to be idempotent-by-REPAIR. The refusal that makes a SECOND fold safe
+    (`dupe.status=='merged'` -> "already folded, nothing to do") is exactly what makes a
+    PARTIAL first fold permanent, because nothing can ever revisit it. This is that
+    revisit: re-points any live _PROJECT_ESTATE_LINK_TYPES edge still aimed at an
+    ALREADY-merged dupe, using the SAME `_move_project_estate` fold_project itself calls,
+    not a second implementation that could drift from what a normal fold already does.
 
     THE INVERSE PRECONDITION of fold_project, on purpose, so the two verbs' refusal
     conditions never overlap and a caller can never reach the merge event through this
     entry point: fold_project REQUIRES status=='active' on both sides and refuses a merged
     dupe; reconcile REQUIRES dupe.status=='merged' AND dupe's own `merged_into`
     pointing at exactly `into` (refuses to redirect a dupe merged into some OTHER
-    object — never guesses which pair a caller means).
+    object, never guesses which pair a caller means).
 
     NEVER re-performs the merge: no `merge_objects` call, no `_contradicting_properties`
     gate (that gate decides whether a merge SHOULD happen; this object already IS
     merged, so the question this asks is only "was the estate-move complete").
 
     NEGATIVE CONTROL BY CONSTRUCTION: a dupe whose estate was already fully re-pointed
-    (a clean prior fold, or a reconcile that already ran) has nothing live left to find
-    — reports every count as zero and writes nothing. Safe to run on a healthy fold;
+    (a clean prior fold, or a reconcile that already ran) has nothing live left to find,
+    so it reports every count as zero and writes nothing. Safe to run on a healthy fold;
     safe to run twice.
 
     Refuses LOUDLY on: blank dupe/into; dupe==into; dupe not resolving to a
@@ -757,27 +750,27 @@ async def reconcile_project_fold(
            "edges_moved": moved, "mounts_moved": mounts_moved}
 
 
-# --- restore_attribution (thread 3f7969a3, operator ruling — self-healing, not a --------
-# --- one-off osiris-applied bandaid) -----------------------------------------------------
+# --- restore_attribution (self-healing repair for historical edge attribution, not a ----
+# --- one-off manually-applied bandaid) ----------------------------------------------------
 
 async def restore_attribution(
     actions: Actions, *, project: str, actor: str, dry_run: bool = True,
     because: str | None = None,
 ) -> dict[str, Any]:
     """Repair the HISTORICAL damage the old `_move_project_estate` left before its own
-    write-time bug was fixed (decision 540007ca, commit 383d548): every fold performed
-    with that code stamped a moved works_in/governs/informs/in_repo edge with the fold's
+    write-time bug was fixed: every fold performed with that code stamped a moved
+    works_in/governs/informs/in_repo edge with the fold's
     OWN actor as `source_id` and a fresh SELF_DECLARED `evidence_class`, discarding the
-    original writer — a MOVE recorded as a fresh DECLARATION. `invalidate_link` only
+    original writer, a MOVE recorded as a fresh DECLARATION. `invalidate_link` only
     stamps `valid_until`, never touches a row's own data, so the pre-fold row still
-    carries the correct `source_id`/`confidence`/`evidence_class` untouched — no
+    carries the correct `source_id`/`confidence`/`evidence_class` untouched, no
     object_events archaeology needed, this is a straightforward re-derivation from
     evidence already on the record.
 
     SELF-SERVICE SCOPE: resolves every SoftwareProject whose `merged_into` points at
-    `project` (its own merged-in dupes) and repairs damage from THOSE folds only — never
+    `project` (its own merged-in dupes) and repairs damage from THOSE folds only, never
     reaches into an unrelated project's history uninvited. A third party repairing
-    ANOTHER project's history on the operator's behalf uses the same verb; `because` is
+    ANOTHER project's history on someone else's behalf uses the same verb; `because` is
     the audit trail either way once `dry_run=False`, same gate `reconcile_seat_identity_
     third_party` uses for an unrequested correction.
 
@@ -786,13 +779,13 @@ async def restore_attribution(
     `valid_until IS NULL`): a live row whose `source_id` equals the fold's OWN recorded
     actor (read off the `merge` object_event, never guessed) rather than the pre-fold
     row's original `source_id` is exactly the buggy code's signature. A live row already
-    carrying the pre-fold `source_id` is left alone — already correct, or already
+    carrying the pre-fold `source_id` is left alone, already correct, or already
     repaired; safe to run twice. A pre-fold row with nothing live to match (moved
     elsewhere, or dropped by `_move_project_estate`'s own de-dup) is skipped, never
     guessed at.
 
     DRY RUN IS THE DEFAULT: returns the plan (what would be invalidated + recreated, per
-    edge) without writing. `dry_run=False` refuses a blank `because` — mutating
+    edge) without writing. `dry_run=False` refuses a blank `because`, mutating
     historical edge attribution is a deliberate act on the record, never silent.
 
     Refuses LOUDLY on: blank `project`; an ambiguous bare label (never guesses which);
@@ -873,19 +866,19 @@ async def restore_attribution(
     return report
 
 
-# --- correct_project_name (#110, decision 1db1ff41 — the delegated exception) ------------
+# --- correct_project_name (the delegated exception for case/whitespace-only corrections) --
 
 async def find_case_variant_projects(pool: asyncpg.Pool) -> dict[str, Any]:
     """SURVEY, never writes: every active SoftwareProject carrying more than one
     distinct `name` value, classified by the EXACT same proof correct_project_name
-    itself runs before writing — a caller of this function never gets a different
+    itself runs before writing, so a caller of this function never gets a different
     verdict from the settle step than this survey promised. `proven` entries reduce to
-    one `strip().casefold()` form (bytebye's OWN 'ByeByte' would NOT qualify — it is a
+    one `strip().casefold()` form (bytebye's OWN 'ByeByte' would NOT qualify, it is a
     genuine transposition, not a case variant, and belongs in `genuine` beside every
-    other real rename). Built for the operator's own widened rule (2026-07-31: "the
-    capitalization merging should be automatic not bottlenecked by me") — this is the
-    "find every pair first" half; correct_project_name itself is the "settle it" half,
-    called separately, per project, only after a caller has seen this report."""
+    other real rename). Built because capitalization merging is meant to be automatic
+    rather than requiring a human to bottleneck every case, this is the "find every
+    pair first" half; correct_project_name itself is the "settle it" half, called
+    separately, per project, only after a caller has seen this report."""
     projects = await pool.fetch(
         "SELECT id, canonical FROM objects WHERE type='SoftwareProject' AND status='active'")
     proven: list[dict[str, Any]] = []
@@ -907,40 +900,39 @@ async def find_case_variant_projects(pool: asyncpg.Pool) -> dict[str, Any]:
 async def correct_project_name(
     actions: Actions, *, project: str, actor: str, because: str | None = None,
 ) -> dict[str, Any]:
-    """THE DELEGATED EXCEPTION (operator ruling 1db1ff41, verbatim: case/whitespace
-    normalization "where identity is provably unchanged... is a CORRECTION, not a
-    rename, and is agent-safe"). Mirrors correct_house/correct_agent_house's own naming
-    and self-authorizing shape: no operator citation required — BECAUSE this function
+    """THE DELEGATED EXCEPTION: case/whitespace normalization, where identity is
+    provably unchanged, is a correction, not a rename, and is safe for an agent to
+    perform unattended. Mirrors correct_house/correct_agent_house's own naming and
+    self-authorizing shape: no external sign-off required, BECAUSE this function
     re-proves the identity-unchanged claim itself before writing, rather than trusting
     the caller's word for it. `because` is accepted for the record but never required;
     the proof below is what authorizes the write, not a stated reason.
 
     PROOF, not assumption: every current `name` value this project's own assertion
-    history carries (not just the winning one — bytebye's own case has 20, 12 lowercase
+    history carries (not just the winning one, bytebye's own case has 20, 12 lowercase
     and 8 mixed-case, all at the SAME confidence, so "current" has been flip-flopping
     for two weeks depending only on which was asserted last) must reduce to exactly ONE
     normalized form (`strip().casefold()`). A single genuinely different name anywhere
-    in that set — redmonth vs ballgem, not bytebye vs ByeByte — REFUSES loudly and names
+    in that set, redmonth vs ballgem, not bytebye vs ByeByte, REFUSES loudly and names
     rename_project as the right tool instead; that refusal IS the negative control that
-    keeps this delegation safe (ruling 1db1ff41's own bar: "prove a genuine rename
-    refuses without an explicit declaration").
+    keeps this delegation safe: a genuine rename must refuse here without an explicit
+    declaration.
 
     SETTLES TO THE MAJORITY, not the most recent: most-recent-wins is the exact
-    mechanism that let bytebye's name genuinely oscillate for two weeks — majority vote
+    mechanism that let bytebye's name genuinely oscillate for two weeks. Majority vote
     among the raw historical assertions picks whichever casing this object's own history
     actually favors, using that casing's own most-recent instance to break nothing extra.
     A TIE refuses rather than guess; the caller settles it by hand
     (assert_project_property) with a stated reason on the record.
 
-    PRIOR-ART SURFACED, NEVER REFUSED (obligation e4612853's sibling, ruling 38c71544's
-    family — the bytebye/byebyte incident: this verb's own majority-vote CAN legitimately
-    re-settle onto a casing a standing operator ruling specifically rejected, since
-    "provably identity-unchanged" says nothing about WHICH equivalent form was ordered).
-    The receipt's own `prior_art`/`prior_art_flag` keys, when present, name a standing
-    Decision that may already cover this exact name — the same search()-based guard
-    record_decision runs on itself, generalized here. Cannot distinguish a deliberate
-    correction from an uninformed one; only ensures the write does not land silently
-    unread."""
+    PRIOR-ART SURFACED, NEVER REFUSED (from the bytebye/byebyte incident): this verb's
+    own majority-vote CAN legitimately re-settle onto a casing a standing decision
+    specifically rejected, since "provably identity-unchanged" says nothing about WHICH
+    equivalent form was ordered. The receipt's own `prior_art`/`prior_art_flag` keys,
+    when present, name a standing Decision that may already cover this exact name, the
+    same search()-based guard record_decision runs on itself, generalized here. Cannot
+    distinguish a deliberate correction from an uninformed one; only ensures the write
+    does not land silently unread."""
     row, err = await _resolve_project_ref(actions.pool, project, verb="correct_project_name")
     if err:
         return err
@@ -981,10 +973,11 @@ async def correct_project_name(
                          "stated reason.",
                 "vote": dict(counts)}
     settled = ranked[0][0]
-    # task #107's choke point (capture.py's `_validate_repo_name`), reused verbatim: this
+    # the same choke point a path-shaped-canonical bug once slipped through
+    # (capture.py's `_validate_repo_name`), reused verbatim: this
     # verb mints no NEW SoftwareProject (it only re-asserts a value already present in
     # `row`'s own assertion history), but the value it's about to bless as CANONICAL still
-    # needs to be well-formed — a caller could otherwise settle onto a garbage historical
+    # needs to be well-formed, a caller could otherwise settle onto a garbage historical
     # value (e.g. a path or placeholder some earlier bypass let through) and this verb's
     # own "self-proving" authority would entrench it rather than catch it.
     from src.orchestrator.capture import _validate_repo_name
@@ -1009,14 +1002,14 @@ async def correct_project_name(
            **prior_art_bits}
 
 
-# --- normalize_project_casing (operator ruling d02f2cdd, thread 3ed5b3d2) ----------------
+# --- normalize_project_casing (the composed case-twin-collapse primitive) ----------------
 
 def _peek_pin_value(path: str, key: str) -> dict[str, Any]:
-    """Read-only preflight for ONE seat's `.osiris` pin — same TOML parsing
+    """Read-only preflight for ONE seat's `.osiris` pin, same TOML parsing
     `correct_pin_value` itself uses, never writes, never advances any state. Returns
     `{"ok": True, "value": <current>}` when the file is valid TOML and carries `key`,
     or `{"ok": False, "error": ...}` naming EXACTLY what's wrong (missing file, invalid
-    TOML, missing key) — `normalize_project_casing`'s own precondition check calls this
+    TOML, missing key), `normalize_project_casing`'s own precondition check calls this
     for every named seat BEFORE writing anything anywhere, so a bad path is refused
     up front rather than discovered mid-write with the graph side already moved."""
     import tomllib
@@ -1038,56 +1031,55 @@ async def normalize_project_casing(
     actor: str, seat_pin_paths: tuple[str, ...] = (), pin_key: str = "project",
     execute: bool = True,
 ) -> dict[str, Any]:
-    """THE COMPOSITION operator ruling d02f2cdd asked for (thread 3ed5b3d2) — the
+    """THE COMPOSITION a standing ruling on case-only project duplicates asked for: the
     TWIN-COLLAPSE shape specifically: two SoftwareProject objects already exist under
     case-variant canonicals (RAMstein/ramstein, bytebye/byebyte), one populated, one an
     empty phantom (agent_count 0). NOT A SIXTH WRITE PATH: every real write here is
-    `fold_project` (already moves the exact edge set Alfred enumerated —
+    `fold_project` (already moves the exact edge set this codebase already enumerates as
     `_PROJECT_ESTATE_LINK_TYPES` = in_repo/works_in/governs/informs, read from its own
     code, not assumed from its docstring), `rename_project` (the display-name fix, same
-    object, same id — never re-derived here either), and `correct_pin_value` (the one
-    piece no graph verb reaches, by design — a seat's `.osiris` pin is a local file, not
+    object, same id, never re-derived here either), and `correct_pin_value` (the one
+    piece no graph verb reaches, by design, a seat's `.osiris` pin is a local file, not
     a graph object). This function is the hallway between three existing rooms, not a
     fourth room.
 
-    DIRECTION MATTERS, AND GETTING IT WRONG SILENTLY DESTROYS DATA — the finding that
+    DIRECTION MATTERS, AND GETTING IT WRONG SILENTLY DESTROYS DATA. the finding that
     changed this function's own first draft: `Actions.merge_objects` NEVER copies
     property assertions from the retired object onto the survivor (its own docstring:
     "assertions are never rewritten... leave assertions in place"), and
     `current_assertions` is scoped strictly by `object_id`, never following
-    `merged_into` — confirmed by reading both, not assumed. So folding the POPULATED
+    `merged_into`, confirmed by reading both, not assumed. So folding the POPULATED
     object (real `on_disk_path`/`remote_url`/etc.) INTO the empty PHANTOM would silently
     discard every one of the populated object's own properties, keeping only what
     `_PROJECT_ESTATE_LINK_TYPES` moves (links, never properties). This function always
-    folds the OTHER way — `phantom` is retired INTO `populated` (which has nothing to
+    folds the OTHER way: `phantom` is retired INTO `populated` (which has nothing to
     lose; it was empty), and ONLY THEN does `rename_project` fix `populated`'s own
     `name` to `correct_case` IN PLACE, same object, same id, every property untouched
     throughout. `populated`'s uuid never changes; its CANONICAL now migrates too
-    (operator ruling "A RENAME MIGRATES THE CANONICAL TOO", grounds 488ae750/b5663511)
-    when `correct_case` differs in case from its own — the case fix lands on the
-    canonical as well as the name, and the pre-fix spelling becomes a resolvable alias.
+    (a rename migrates the canonical too, by standing rule) when `correct_case` differs
+    in case from its own: the case fix lands on the canonical as well as the name, and
+    the pre-fix spelling becomes a resolvable alias.
 
-    ATOMIC OR REFUSED — THE INVERTED RULE (577988ed inverts here, per the operator's own
-    standing line and Thoth's explicit instruction: a partial rename is strictly WORSE
-    than none, because it destroys the one signal — agent_count 0 — that currently tells
-    the populated project apart from its phantom twin). EVERY precondition for EVERY
+    ATOMIC OR REFUSED, THE INVERTED RULE (a partial rename is strictly WORSE than none,
+    because it destroys the one signal, agent_count 0, that currently tells the
+    populated project apart from its phantom twin). EVERY precondition for EVERY
     step is checked BEFORE any write happens anywhere: `fold_project`'s own guards
     (both active, neither already merged, no contradicting non-name property) via the
-    SAME `_resolve_project_ref`/`_contradicting_properties` fold_project itself uses —
+    SAME `_resolve_project_ref`/`_contradicting_properties` fold_project itself uses,
     never re-derived, so this can never drift from what a bare fold_project call would
-    decide — AND every named seat pin (`_peek_pin_value`, read-only) must exist, parse
+    decide, AND every named seat pin (`_peek_pin_value`, read-only) must exist, parse
     as valid TOML, and already declare `pin_key`. A pin already correct (its OWN current
-    value equals `correct_case`) is not a failure — nothing to write for that seat,
+    value equals `correct_case`) is not a failure, nothing to write for that seat,
     named in the receipt's `pins_already_correct`. ANY OTHER precondition failure
-    anywhere — the fold's own guards OR a single unreadable/missing/keyless pin —
+    anywhere, the fold's own guards OR a single unreadable/missing/keyless pin,
     REFUSES THE WHOLE OPERATION before a single write, naming exactly what failed.
 
-    CROSS-DOMAIN HONESTY: the graph writes (fold, then rename — two separate
+    CROSS-DOMAIN HONESTY: the graph writes (fold, then rename, two separate
     transactions, since each verb owns its own) and each pin file (a separate local
-    filesystem write) cannot share one atomic commit — no verb in this codebase can
+    filesystem write) cannot share one atomic commit. No verb in this codebase can
     promise that, and this one does not pretend to. What it DOES promise: every
     precondition is proven BEFORE the first write, so the only way a partial state can
-    occur is a genuine race between the preflight check and the write itself —
+    occur is a genuine race between the preflight check and the write itself,
     vanishingly unlikely for a one-seat-at-a-time correction, but reported LOUDLY rather
     than silently if it happens: the receipt's `rename_failed`/`pin_write_failed` keys
     name exactly what's left inconsistent, and `unfold_project` is named as the recovery
@@ -1095,27 +1087,26 @@ async def normalize_project_casing(
     same law ack_handoff/every other reversal in this codebase already holds).
 
     SEAT-PIN REACH IS LOCAL-BOX ONLY, named not hidden (the same limit `push_guard`'s
-    own reach question surfaced two lanes ago): `seat_pin_paths` must be filesystem
-    paths reachable from wherever this call runs. This function does not discover which
-    seats need correcting — that is a separate, harder question (which seats exist,
+    own reach question already surfaced): `seat_pin_paths` must be filesystem paths
+    reachable from wherever this call runs. This function does not discover which
+    seats need correcting; that is a separate, harder question (which seats exist,
     which box each one's `.osiris` actually lives on) deliberately left to the caller,
     matching correct_pin_value's own existing calling convention rather than inventing
     auto-discovery this pass.
 
-    NAMED, NOT CLOSED, RESIDUAL (Sekhmet's own trace, thread 4710): `on_disk_path`/
-    `remote_url` are real SoftwareProject properties (census_trees/Rule 2), never in
-    Alfred's own five-thing enumeration, and this function's DIRECTION CHOICE is what
-    keeps them safe (the populated survivor's own properties are simply never touched)
-    — but that is a consequence of the direction, not a property this function proves.
-    A caller who accidentally names the EMPTY object as `populated` would not be caught
-    here; the property-preservation guarantee rests on the caller correctly identifying
-    which side is actually populated, same trust boundary `fold_project` itself already
-    carries for dupe/into.
+    NAMED, NOT CLOSED, RESIDUAL: `on_disk_path`/`remote_url` are real SoftwareProject
+    properties, never in the original enumeration of moved link types, and this
+    function's DIRECTION CHOICE is what keeps them safe (the populated survivor's own
+    properties are simply never touched), but that is a consequence of the direction,
+    not a property this function proves. A caller who accidentally names the EMPTY
+    object as `populated` would not be caught here; the property-preservation guarantee
+    rests on the caller correctly identifying which side is actually populated, same
+    trust boundary `fold_project` itself already carries for dupe/into.
 
-    `execute=False` (obligation 5f7dfebb piece 2, casefold auto-merge's own dry-run
-    requirement — Thoth's instruction: "build it as a verb + dry-run first"): runs EVERY
-    precondition above unchanged — every check is already read-only, proven before any
-    write — and returns `{"plan": {...}}` naming exactly what WOULD happen, without
+    `execute=False` (the casefold auto-merge's own dry-run requirement, built as a verb
+    plus a dry-run mode from the start): runs EVERY precondition above unchanged, every
+    check is already read-only, proven before any write, and returns `{"plan": {...}}`
+    naming exactly what WOULD happen, without
     calling fold_project/rename_project/correct_pin_value at all. Same refusal shape
     either way: a precondition failure returns the identical `{"error": ...}` whether
     executing or previewing, since nothing has been written yet in either case. Default
@@ -1200,21 +1191,21 @@ async def normalize_project_casing(
             "would_write_pins": pins_ok, "pins_already_correct": pins_already_correct,
         }}
 
-    # THE NAMED EXCEPTION (decision 7fe20cc5): normalize_project_casing has exactly one
-    # caller anywhere (casefold_auto_merge_candidates, wired unconditionally into `osiris
-    # deploy` under operator ruling 22d47acb — "automatic, not bottlenecked by me") and
-    # this fold_project call is baked to force=True PERMANENTLY here, not exposed as a
-    # param, so the deploy path can never be silently re-bottlenecked by this guard. The
-    # phantom side is, by this function's own precondition, an empty twin (agent_count 0)
-    # — the guard should almost never actually have anything to bypass — but force=True
-    # still buys the mandatory `live_session_repointed` signal in fold_result if it does.
+    # THE NAMED EXCEPTION: normalize_project_casing has exactly one caller anywhere
+    # (casefold_auto_merge_candidates, wired unconditionally into deploy so
+    # capitalization merges never need to bottleneck on a human) and this fold_project
+    # call is baked to force=True PERMANENTLY here, not exposed as a param, so the
+    # deploy path can never be silently re-bottlenecked by this guard. The phantom side
+    # is, by this function's own precondition, an empty twin (agent_count 0), so the
+    # guard should almost never actually have anything to bypass, but force=True still
+    # buys the mandatory `live_session_repointed` signal in fold_result if it does.
     fold_result = await fold_project(
         actions, dupe=phantom_row["canonical"], into=populated_row["canonical"],
         evidence=evidence, actor=actor, force=True,
         because="casefold_auto_merge_candidates: operator ruling 22d47acb, automatic "
                 "case-twin merge on deploy, never bottlenecked on a human")
     if fold_result.get("error"):
-        # every precondition above was proven immediately before this call — a refusal
+        # every precondition above was proven immediately before this call, a refusal
         # here would mean the graph changed between the check and the write (a real
         # race, not a bug in the check), and NOTHING has been written anywhere yet, so
         # the operation is still cleanly all-nothing.
@@ -1225,14 +1216,14 @@ async def normalize_project_casing(
     rename_result = await rename_project(
         actions, project=populated_row["canonical"], new_name=correct_case,
         because=evidence, actor=actor, dry_run=False,
-        # merge_into=True: the fold just above is WHY new_name collides — phantom_row
+        # merge_into=True: the fold just above is WHY new_name collides. phantom_row
         # (the object correct_case's OWN canonical was minted under) was just folded
         # into populated_row a few lines up, so a collision here is the deliberate
-        # point of this function, never a mistake to refuse (#93af8ced: the old
-        # active-only collision check never caught this because fold_project had
-        # already flipped the phantom's status to 'merged' by the time rename ran;
-        # widening the check to any status, correctly, made this call newly refuse
-        # without this flag).
+        # point of this function, never a mistake to refuse (found by tracing a real
+        # gap: the old active-only collision check never caught this because
+        # fold_project had already flipped the phantom's status to 'merged' by the time
+        # rename ran; widening the check to any status, correctly, made this call newly
+        # refuse without this flag).
         merge_into=True)
     if rename_result.get("error"):
         return {"error": rename_result["error"], "folded": fold_result["folded"],
@@ -1263,8 +1254,8 @@ async def normalize_project_casing(
         "pins_written": pin_writes, "pins_already_correct": pins_already_correct,
     }
     if "live_session_repointed" in fold_result:
-        # THE EXCEPTION'S PRICE, carried through (decision 7fe20cc5) — force=True on the
-        # fold above must never make this signal silently vanish a layer up.
+        # THE EXCEPTION'S PRICE, carried through: force=True on the fold above must
+        # never make this signal silently vanish a layer up.
         out["live_session_repointed"] = fold_result["live_session_repointed"]
     if pin_write_failed:
         out["pin_write_failed"] = pin_write_failed
@@ -1280,51 +1271,49 @@ async def normalize_project_casing(
 async def casefold_auto_merge_candidates(
     actions: Actions, *, evidence: str, actor: str, execute: bool = False,
 ) -> dict[str, Any]:
-    """#108 PIECE 2 (obligation 5f7dfebb, operator ruling d02f2cdd — "LOWERCASE IS LAW"
-    — and the standing instruction "capitalization merging should be automatic not
-    bottlenecked by me"): the cheap, deterministic, no-model-arbitration blocking signal
-    graph1000x §IV.D calls for, ahead of piece 3's model layer. NOT A NEW MERGE
-    MECHANISM — this is entirely a CANDIDATE FINDER that composes with
-    `normalize_project_casing` (thread 3ed5b3d2's own primitive, already ships the
-    reversible atomic-or-refused five-thing move); every write this function can ever
-    cause is `normalize_project_casing`'s, never a re-derivation of fold/rename/pin logic
-    here.
+    """The cheap, deterministic, no-model-arbitration blocking signal for case-only
+    duplicates, "lowercase is law" and capitalization merging is meant to be automatic
+    rather than bottlenecked on a human, ahead of any future model-arbitration layer.
+    NOT A NEW MERGE MECHANISM: this is entirely a CANDIDATE FINDER that composes with
+    `normalize_project_casing` (an existing primitive that already ships the reversible
+    atomic-or-refused five-thing move); every write this function can ever cause is
+    `normalize_project_casing`'s, never a re-derivation of fold/rename/pin logic here.
 
-    THE DISCRIMINATION THOTH NAMED EXPLICITLY (msg 4815): "coldspot/kast/rotten-apple may
-    NOT be case twins; do not fold those." Measured live tonight (triage buckets,
-    SoftwareProject/active, 58 objects): those three ARE `duplicate_suspect`, but each
+    THE DISCRIMINATION THAT MUST BE MADE EXPLICITLY: "coldspot/kast/rotten-apple may NOT
+    be case twins; do not fold those." Measured live against the triage buckets
+    (SoftwareProject/active, 58 objects): those three ARE `duplicate_suspect`, but each
     pair is a PATH-SHAPED canonical colliding with a BARE one on basename alone
-    (`repo:/home/x/code/REPOS/coldspot` vs `repo:coldspot`) — the #107 disease, a
-    DIFFERENT gap this function must never touch. Grouping by the FULL case-folded
-    `canonical` (not triage's own basename grouping) is what keeps this structurally
-    correct: two canonicals differing ONLY in letter case group together; a path-shaped
-    canonical never case-folds equal to a bare one no matter how their basenames match.
-    Confirmed empirically the same way: the live population today groups into ZERO
-    genuine case-twin pairs (ramstein's own twin was folded earlier tonight, by hand,
-    before this verb existed) — this is reported honestly as `candidates: []`, never
-    padded or assumed stale.
+    (`repo:/home/x/code/REPOS/coldspot` vs `repo:coldspot`), the same path-shaped-mint
+    disease guarded against elsewhere, a DIFFERENT gap this function must never touch.
+    Grouping by the FULL case-folded `canonical` (not a basename grouping) is what keeps
+    this structurally correct: two canonicals differing ONLY in letter case group
+    together; a path-shaped canonical never case-folds equal to a bare one no matter how
+    their basenames match. Confirmed empirically the same way: the live population at
+    the time of writing groups into ZERO genuine case-twin pairs (ramstein's own twin was
+    already folded by hand before this verb existed), reported honestly as
+    `candidates: []`, never padded or assumed stale.
 
-    THREE WAYS A GROUP IS SKIPPED, ALL NAMED LOUDLY IN `skipped`, NEVER A SILENT DROP
-    (Thoth's own constraint, item (d)): more than 2 members sharing one case-folded
-    canonical (an N-way collision, not a clean pair — a human question); BOTH sides
-    carrying live links (both populated — a genuine two-different-things possibility,
-    exactly the case fold_project's own contradiction gate exists to catch one layer
-    down, never guessed here); NEITHER side matching a fully-lowercase spelling (no clear
-    LOWERCASE-IS-LAW winner between two mixed-case spellings — a human call). Only a
-    pair with EXACTLY one populated (nonzero live link count) side, one phantom (zero)
-    side, and exactly one of the two spelled fully lowercase becomes a candidate.
+    THREE WAYS A GROUP IS SKIPPED, ALL NAMED LOUDLY IN `skipped`, NEVER A SILENT DROP:
+    more than 2 members sharing one case-folded canonical (an N-way collision, not a
+    clean pair, a human question); BOTH sides carrying live links (both populated, a
+    genuine two-different-things possibility, exactly the case fold_project's own
+    contradiction gate exists to catch one layer down, never guessed here); NEITHER side
+    matching a fully-lowercase spelling (no clear lowercase-is-law winner between two
+    mixed-case spellings, a human call). Only a pair with EXACTLY one populated (nonzero
+    live link count) side, one phantom (zero) side, and exactly one of the two spelled
+    fully lowercase becomes a candidate.
 
-    `execute=False` IS THE DEFAULT (unlike `normalize_project_casing`'s own default) —
-    THIS function's whole purpose is the dry-run-first population survey Thoth asked
-    for; a caller wanting the live auto-merge must pass `execute=True` explicitly, an
-    intentional asymmetry from its underlying primitive. Every candidate is still run
-    through `normalize_project_casing` even in preview mode (its own `execute=False`
-    proves every real precondition — contradiction, pin preflight — the SAME way the
-    live path would, so a dry-run report is never optimistic about a merge that would
-    actually refuse).
+    `execute=False` IS THE DEFAULT (unlike `normalize_project_casing`'s own default):
+    THIS function's whole purpose is a dry-run-first population survey; a caller wanting
+    the live auto-merge must pass `execute=True` explicitly, an intentional asymmetry
+    from its underlying primitive. Every candidate is still run through
+    `normalize_project_casing` even in preview mode (its own `execute=False` proves
+    every real precondition, contradiction, pin preflight, the SAME way the live path
+    would, so a dry-run report is never optimistic about a merge that would actually
+    refuse).
 
-    NO TRIGGER SITE WIRED (Thoth's own item (c) — his call, not this build's): this is
-    the verb only. Nothing calls it yet."""
+    NO TRIGGER SITE WIRED YET, by deliberate choice, not an oversight: this is the verb
+    only. Nothing calls it yet."""
     rows = await actions.pool.fetch(
         "SELECT lower(canonical) AS key, array_agg(id) AS ids, "
         "array_agg(canonical) AS canonicals FROM objects "
@@ -1378,21 +1367,21 @@ async def casefold_auto_merge_candidates(
 async def remote_url_duplicate_candidates(
     actions: Actions, *, evidence: str, actor: str, execute: bool = False,
 ) -> dict[str, Any]:
-    """#108 PIECE 3, CONSERVATIVE FIRST CUT (scope: decision 2ee34a9d, per Thoth's ask
-    msg 4973/4975): the population duplicate_suspect leaves after piece 2's casefold pass
-    — SAME-BASENAME SoftwareProject pairs that are NOT case-fold twins (piece 2's own
-    full-canonical grouping already excludes them). Measured live 2026-08-17: exactly 3
-    SoftwareProject groups (rotten-apple 3-way, coldspot 2-way, kast 2-way), all a
-    path-shaped local clone sharing a basename with a bare, heavily-linked canonical — the
-    #107 disease, structurally distinct from #108's case-fold question.
+    """CONSERVATIVE FIRST CUT: the population `duplicate_suspect` leaves after the
+    casefold pass, SAME-BASENAME SoftwareProject pairs that are NOT case-fold twins (the
+    casefold pass's own full-canonical grouping already excludes them). Measured live:
+    exactly 3 SoftwareProject groups (rotten-apple 3-way, coldspot 2-way, kast 2-way),
+    all a path-shaped local clone sharing a basename with a bare, heavily-linked
+    canonical, the same path-shaped-mint disease guarded against elsewhere, structurally
+    distinct from the case-fold question.
 
-    THE BAR (deliberately narrow, per the scope memo): auto-merge ONLY when both sides of
-    a clean PAIR (never an N-way group — same skip discipline as piece 2) carry an
-    IDENTICAL, non-empty `remote_url` assertion — the #144 Rule 2 signal, matching
-    basename alone is never sufficient (that trap is exactly what piece 2's own
+    THE BAR (deliberately narrow, per the scope this function was built to): auto-merge
+    ONLY when both sides of a clean PAIR (never an N-way group, same skip discipline as
+    the casefold pass) carry an IDENTICAL, non-empty `remote_url` assertion; matching
+    basename alone is never sufficient (that trap is exactly what the casefold pass's own
     full-canonical grouping, one layer down, was built to dodge). On today's real
     population every group has remote_url on only ONE side (the bare canonical) and None
-    on the path-shaped side — so the honest result is UNCERTAIN for all three, not a
+    on the path-shaped side, so the honest result is UNCERTAIN for all three, not a
     false positive; a future census run that lands a remote_url on the path-shaped clone
     too is what would make one a genuine candidate.
 
@@ -1400,13 +1389,13 @@ async def remote_url_duplicate_candidates(
     other folds as `dupe`. Equal counts (no clear survivor) skips loudly, a human
     question, same as an N-way group.
 
-    NOT A NEW MERGE MECHANISM, same law as piece 2: composes with `fold_project` (the
-    reversible, contradiction-gated primitive already built for exactly this) and never
-    re-derives its guard — but fold_project itself has no dry-run mode, so this preflights
-    with the SAME `_contradicting_properties` check fold_project runs internally (the
-    identical pattern normalize_project_casing's own dry-run preview already uses), so a
-    dry-run report is never optimistic about a merge that would actually refuse.
-    `execute=False` is the default, same asymmetry as piece 2's own primitive."""
+    NOT A NEW MERGE MECHANISM, same law as the casefold pass: composes with
+    `fold_project` (the reversible, contradiction-gated primitive already built for
+    exactly this) and never re-derives its guard, but fold_project itself has no dry-run
+    mode, so this preflights with the SAME `_contradicting_properties` check fold_project
+    runs internally (the identical pattern normalize_project_casing's own dry-run preview
+    already uses), so a dry-run report is never optimistic about a merge that would
+    actually refuse. `execute=False` is the default, same asymmetry as its sibling."""
     rows = await actions.pool.fetch(
         "SELECT lower(CASE "
         "  WHEN canonical LIKE '%/%' THEN regexp_replace(canonical, '^.*/', '') "
@@ -1471,41 +1460,40 @@ async def remote_url_duplicate_candidates(
 async def name_alias_duplicate_candidates(
     actions: Actions, *, evidence: str, actor: str, execute: bool = False,
 ) -> dict[str, Any]:
-    """#108 PIECE 4 (Thoth dispatch 6547, addendum to 118a98da): the SECOND grounding
-    signal remote_url_duplicate_candidates' own scope memo (2ee34a9d) left for later — a
-    SURVIVOR whose own graph already asserts a rename ("I am also called X") is stronger
-    evidence than remote_url matching, which the house already trusts unattended; it is
-    also stronger than the casefold lane's own bar (a spelling coincidence), which already
-    executes on nothing but string shape.
+    """The SECOND grounding signal remote_url_duplicate_candidates' own scope left for
+    later: a SURVIVOR whose own graph already asserts a rename ("I am also called X") is
+    stronger evidence than remote_url matching, which the house already trusts
+    unattended; it is also stronger than the casefold lane's own bar (a spelling
+    coincidence), which already executes on nothing but string shape.
 
-    THE OPERATOR'S OWN SPECIMEN, MEASURED, PROVED THE OPPOSITE OF WHAT IT LOOKED LIKE:
-    repo:dtfb carries `name`='dealer-to-fb' as a CURRENT alias alongside its own 'dtfb',
-    and repo:dealer-to-fb has no remote_url and no on_disk_path — exactly this clause's
-    shape. But repo:dealer-to-fb was ALREADY status='merged' (2026-08-21, self-service,
-    ruling 31e5bae1's own standing procedure working as intended) by the time this was
-    scoped — a fully self-healed pair, not a live candidate. Checked ALL TEN live multi-
-    current-name SoftwareProjects the same night: every alias that resolves to a
-    DIFFERENT object resolves to one already merged; the rest are self-declared aliases
-    on one object with no separate duplicate at all. ZERO LIVE TARGETS IN THIS FLEET
-    TODAY — built anyway, per the operator's own forward-looking complaint ("repos change
-    name all the time") and Thoth's explicit instruction, tested against synthetic
-    fixtures the same way the Crush timestamp lane was. Only a REAL future rename whose
-    husk carries no disk evidence will ever populate `candidates` here.
+    A REAL SPECIMEN, MEASURED, PROVED THE OPPOSITE OF WHAT IT LOOKED LIKE: repo:dtfb
+    carries `name`='dealer-to-fb' as a CURRENT alias alongside its own 'dtfb', and
+    repo:dealer-to-fb has no remote_url and no on_disk_path, exactly this clause's
+    shape. But repo:dealer-to-fb was ALREADY status='merged' (self-service, a standing
+    procedure working as intended) by the time this was scoped, a fully self-healed
+    pair, not a live candidate. Checked ALL TEN live multi-current-name SoftwareProjects
+    at the same time: every alias that resolves to a DIFFERENT object resolves to one
+    already merged; the rest are self-declared aliases on one object with no separate
+    duplicate at all. ZERO LIVE TARGETS IN THIS FLEET TODAY, built anyway because repos
+    change name over time and a future rename needs this coverage, tested against
+    synthetic fixtures the same way a comparable timestamp lane was tested. Only a REAL
+    future rename whose husk carries no disk evidence will ever populate `candidates`
+    here.
 
     THE BAR: a SURVIVOR (active) carries some OTHER active SoftwareProject's bare
     canonical or current `name` as one of its OWN current `name` aliases (never its own
-    primary spelling) — that is the husk. The husk must carry NO current `remote_url` AND
-    NO current `on_disk_path` of its own (Thoth's constraint 2: any disk evidence on the
-    husk CONTRADICTS the alias rather than confirming it — a human question, never
-    guessed). Both sides must be `status='active'` (Thoth's constraint 1, his own
-    dtfb/dealer-to-fb correction: a clause proposing to fold an already-merged object is
-    worse than no clause) — the husk-lookup itself already excludes non-active objects,
-    so this can never even construct a stale candidate. An alias matching MORE THAN ONE
-    other active object skips loudly as ambiguous, never guessed.
+    primary spelling), that is the husk. The husk must carry NO current `remote_url` AND
+    NO current `on_disk_path` of its own: any disk evidence on the husk CONTRADICTS the
+    alias rather than confirming it, a human question, never guessed. Both sides must be
+    `status='active'` (from the dtfb/dealer-to-fb correction: a clause proposing to fold
+    an already-merged object is worse than no clause), the husk-lookup itself already
+    excludes non-active objects, so this can never even construct a stale candidate. An
+    alias matching MORE THAN ONE other active object skips loudly as ambiguous, never
+    guessed.
 
     NOT A NEW MERGE MECHANISM: composes with `fold_project` exactly like pieces 2/3,
     including its own `_contradicting_properties` preflight (a genuine disagreement on
-    any OTHER property still refuses, same as every other lane) — `execute=False` is the
+    any OTHER property still refuses, same as every other lane), `execute=False` is the
     default, same asymmetry as its siblings."""
     rows = await actions.pool.fetch(
         "SELECT o.id AS survivor_id, o.canonical AS survivor_canonical, "
@@ -1528,7 +1516,7 @@ async def name_alias_duplicate_candidates(
                 "  AND ca.name='name' AND ca.value #>> '{}' = $3))",
                 survivor_id, f"repo:{alias}", alias)
             if not husks:
-                continue  # a self-declared alias matching no other active object — nothing to fold
+                continue  # a self-declared alias matching no other active object, nothing to fold
             if len(husks) > 1:
                 skipped.append({"survivor": survivor_can, "alias": alias,
                                 "reason": f"{len(husks)} active projects answer to alias "

@@ -1,14 +1,13 @@
-"""THE OFFICE CEREMONY — one act moves a seat into its Osiris-owned office.
+"""THE OFFICE CEREMONY: one act moves a seat into its Osiris-owned office.
 
-The seat-offices ruling (ed5f5ce2): agents sit at ~/.osiris/seats/<handle>/, code stays in
-the repos they GOVERN — the sit-place is Osiris's, stable forever, and the fragile-gitignore
-class (agent state inside code repos) ends seat by seat. alfred's office, the first, was
-hand-assembled across four separate acts (mkdir, .osiris, CLAUDE.md, rebind-extract); the
-rollout to his chartered children must be ONE CALL with one receipt, or every transition
-re-derives the ceremony from a transcript.
+Agents sit at ~/.osiris/seats/<handle>/; code stays in the repos they govern. The sit-place
+is Osiris's, stable forever, so agent state no longer lives inside code repos behind a
+fragile gitignore. Earlier offices were hand-assembled across several separate acts (mkdir,
+.osiris, CLAUDE.md, rebind-extract); rolling this out to every seat needs to be ONE CALL
+with one receipt, or every transition has to be re-derived by hand from a transcript.
 
 The primitive composes what already exists rather than re-owning any of it: the standing
-orders are written here (the one genuinely new artifact — a per-seat boot sector), then
+orders are written here (the one genuinely new artifact, a per-seat boot sector), then
 `rebind_seat(extract=True)` carries everything else (the .osiris pin, the lineage's mount
 rows, the transcripts with their re-addressing, the Seat object's anchor).
 """
@@ -29,25 +28,25 @@ _OFFICE_ROOT_ENV = "OSIRIS_OFFICE_ROOT"
 
 
 def _default_office_root() -> Path:
-    """THE OFFICE-SCAFFOLDING ROOT, RE-READ ON EVERY CALL — never frozen at import time
-    (Thoth's wave 9 lane, msg 6089): a bare module-level constant is captured once, by
-    whichever call site imported it first, and stays that value for the life of the
-    process — a test-only monkeypatch of one module's own attribute never reaches a
-    SIBLING module that did `from offices import _DEFAULT_OFFICE_ROOT` at its own
-    top level (mintseat.py, agents.py both did exactly this) and is holding its own
-    separate, already-frozen copy of the same name.
+    """THE OFFICE-SCAFFOLDING ROOT, RE-READ ON EVERY CALL: never frozen at import time. A
+    bare module-level constant would be captured once, by whichever call site imported it
+    first, and stay that value for the life of the process. A test-only monkeypatch of one
+    module's own attribute never reaches a sibling module that did
+    `from offices import _DEFAULT_OFFICE_ROOT` at its own top level (mintseat.py and
+    agents.py both did exactly this) and holds its own separate, already-frozen copy of
+    the same name.
 
     Reading `OSIRIS_OFFICE_ROOT` fresh here instead closes that gap for every caller in
     this tree, present or future, without each one remembering to thread `office_root`
     through by hand: tests/conftest.py sets this env var once, before any test runs, and
-    every scaffold/sweep call in the whole process — no matter which module resolved it,
+    every scaffold/sweep call in the whole process, no matter which module resolved it,
     no matter whether that call site passed its own explicit `office_root` (which still
-    takes precedence; this is only the FALLBACK) — lands in the same throwaway directory
-    instead of the real `~/.osiris/seats/` (the climintworker1/inferredworker1 shape,
-    decision 5d97b750/f642a1e6: two real office directories scaffolded onto the real disk
-    by unmocked test runs, the second one recreated DURING a live authorised deletion).
+    takes precedence; this is only the fallback), lands in the same throwaway directory
+    instead of the real `~/.osiris/seats/`. This guards against a shape seen in practice:
+    two real office directories scaffolded onto the real disk by unmocked test runs, one
+    of them recreated during a live, authorized deletion.
 
-    Unset (the real launch path — cli.py, mcp_server.py, a live agent's own mount — never
+    Unset (the real launch path: cli.py, mcp_server.py, a live agent's own mount never
     sets this) falls through to the real seats root, exactly as before; establish_office's
     production write is untouched."""
     override = os.environ.get(_OFFICE_ROOT_ENV)
@@ -57,16 +56,16 @@ def _default_office_root() -> Path:
 async def seat_office_target(
     pool: asyncpg.Pool, seat_id: str, *, office_root: Path | None = None,
 ) -> str | None:
-    """THE ANCHOR INVARIANT'S OWN ADDRESS (ruling 23771416, msg 6584): `<office_root>/
-    <handle>` — DERIVED, never observed, never read off a row that might drift again.
-    `heal_seat_anchor` (identity_heal.py) computes this to know what a seat's `anchor_cwd`
-    SHOULD read; a resume materializer needing a target slug to emit into (thread d161a156,
-    the operator's own "materialize, don't hunt" ruling) needs the identical derivation —
-    one function, not two independently-typed copies that could disagree the way
-    `anchor_cwd` and `tree_cwd` themselves once did.
+    """THE ANCHOR INVARIANT'S OWN ADDRESS: `<office_root>/<handle>`, derived, never
+    observed, never read off a row that might drift again. `heal_seat_anchor`
+    (identity_heal.py) computes this to know what a seat's `anchor_cwd` should read; a
+    resume materializer that needs a target slug to emit into (following the rule
+    "materialize, don't hunt") needs the identical derivation: one function, not two
+    independently-typed copies that could disagree the way `anchor_cwd` and `tree_cwd`
+    themselves once did.
 
-    Returns None when the seat has no handle on record — nothing to derive an office path
-    from; a caller decides for itself what "no target" means (heal_seat_anchor refuses,
+    Returns None when the seat has no handle on record; nothing to derive an office path
+    from. A caller decides for itself what "no target" means (heal_seat_anchor refuses,
     a materializer should refuse the same way rather than guess a slug)."""
     handle = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id="
@@ -80,16 +79,16 @@ async def seat_office_target(
 
 
 def is_bare_office_root(cwd: str | Path | None) -> bool:
-    """True only for the exact seat-office CONTAINER (~/.osiris/seats) — the parent of every
-    seat, never a project of its own (ruling 577988ed). ONE shared check so every cwd→project
-    fold (agents.resolve_identity, census.live_bodies) applies the SAME guard instead of
-    drifting copies (msg 1888: census.live_bodies was missing this and minted a phantom
-    "seats" project row from a live process sitting at the bare root).
+    """True only for the exact seat-office container (~/.osiris/seats), the parent of every
+    seat, never a project of its own. One shared check so every cwd-to-project fold
+    (agents.resolve_identity, census.live_bodies) applies the same guard instead of
+    drifting copies; census.live_bodies once lacked this and minted a phantom "seats"
+    project row from a live process sitting at the bare root.
 
     Deliberately narrower than "any office subdirectory": a real seat's own office dir IS an
-    ordinary basename guess here BY DESIGN — see
+    ordinary basename guess here by design, see
     test_resolve_identity_never_invents_a_project_from_the_bare_office_root. A seated agent's
-    project resolving to its seat's HOUSE instead of its handle is the DB-backed resolver's
+    project resolving to its seat's house instead of its handle is the DB-backed resolver's
     job (seats.resolve_project), not this pure, cwd-only guard's."""
     return cwd is not None and Path(cwd) == _default_office_root()
 
@@ -98,14 +97,14 @@ _WORKTREE_MARKER = "/.claude/worktrees/"
 
 
 def _infer_tree_kind(path: str) -> str | None:
-    """office | worktree | repo | container from PATH SHAPE alone, ruling 719ed5b1's
-    kind key — no graph query, no I/O beyond a `.git` existence check. `container` has its
-    own exact-match caller (`is_bare_office_root`) and `office` is decided by the caller
-    (a seat's `anchor_cwd`, never inferred from shape); this only ever returns worktree,
-    repo, or None for anything else. None is deliberate, not a bug: a directory whose shape
-    matches neither a worktree path nor a real repo root gets no `kind` proposal — the
-    migration this feeds names it as a gap rather than guessing (Thoth's own constraint,
-    msg 3919: 'a pin that confidently states a wrong seat is worse than a bare pin')."""
+    """office | worktree | repo | container from path shape alone, this is the pin
+    schema's `kind` key: no graph query, no I/O beyond a `.git` existence check.
+    `container` has its own exact-match caller (`is_bare_office_root`) and `office` is
+    decided by the caller (a seat's `anchor_cwd`, never inferred from shape); this only
+    ever returns worktree, repo, or None for anything else. None is deliberate, not a bug:
+    a directory whose shape matches neither a worktree path nor a real repo root gets no
+    `kind` proposal. The migration this feeds names it as a gap rather than guessing, on
+    the principle that a pin confidently stating the wrong seat is worse than a bare pin."""
     if _WORKTREE_MARKER in path.replace("\\", "/"):
         return "worktree"
     if (Path(path) / ".git").exists():
@@ -115,56 +114,57 @@ def _infer_tree_kind(path: str) -> str | None:
 
 def _dir_exists(path: str | None) -> bool:
     """A plain sync wrapper so `plan_pin_migration` (async) never calls a blocking Path
-    method inline (ASYNC240) — the same convention `seats.roster`'s own `_dir_exists`
+    method inline (ASYNC240), the same convention `seats.roster`'s own `_dir_exists`
     already keeps, kept local here rather than importing a private helper cross-module."""
     return path is not None and Path(path).is_dir()
 
 
 async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
-    """DRY RUN ONLY — never writes a byte (ruling 719ed5b1's five-key schema; Thoth's own two
-    added constraints, msg 3919). (1) A gap the graph cannot answer confidently is NAMED and
-    left unwritten, never guessed into a declaration — a pin that confidently states a wrong
-    seat is worse than a bare one, because the whole point of this build is to make the pin
-    outrank inference. (2) Every path's diff is computed and returned here, in full, BEFORE a
-    single file changes — 35 seats' identity files is the largest on-disk write this house has
-    made in one act, and there is no undo but git, which does not cover `~/.osiris`.
+    """DRY RUN ONLY, never writes a byte, against the pin schema's five keys. Two rules
+    govern it: (1) a gap the graph cannot answer confidently is named and left unwritten,
+    never guessed into a declaration, because a pin that confidently states the wrong seat
+    is worse than a bare one; the whole point of this build is to make the pin outrank
+    inference. (2) Every path's diff is computed and returned here, in full, before a
+    single file changes: rewriting every seat's identity file in one act is the largest
+    on-disk write this house has made at once, and there is no undo but git, which does
+    not cover `~/.osiris`.
 
-    Walks `roster()`'s own seat rows — the graph's EXISTING single source for handle/house/
-    anchor_cwd/tree_cwd, invents no new resolution path — and for every real directory
-    (`anchor_cwd`, and `tree_cwd` when it names a distinct, existing path) proposes:
-      seat  — the row's own handle. Skipped entirely for a seat with no handle on record.
-      house — `derive_house`'s own answer. None IS the honest "I don't know" (already built
-              into that function's cycle/hop-limit handling, ruling ff6148b0) — reported as a
-              gap, never defaulted to anything. Skipped entirely, and silently (no `unknown`
-              entry either), when the answer equals a repo the claiming seat's own charter
-              already governs — ruling 860b0306: a house pin exists only when it names
-              something DIFFERENT from the project, never a same-value default.
-      kind  — "office" for `anchor_cwd`; `_infer_tree_kind`'s path-shape read for `tree_cwd`.
+    Walks `roster()`'s own seat rows, the graph's existing single source for handle/house/
+    anchor_cwd/tree_cwd, and invents no new resolution path. For every real directory
+    (`anchor_cwd`, and `tree_cwd` when it names a distinct, existing path) it proposes:
+      seat  - the row's own handle. Skipped entirely for a seat with no handle on record.
+      house - `derive_house`'s own answer. None is the honest "I don't know" (already built
+              into that function's cycle/hop-limit handling), reported as a gap, never
+              defaulted to anything. Skipped entirely, and silently (no `unknown` entry
+              either), when the answer equals a repo the claiming seat's own charter
+              already governs: a house pin exists only when it names something different
+              from the project, never a same-value default.
+      kind  - "office" for `anchor_cwd`; `_infer_tree_kind`'s path-shape read for `tree_cwd`.
 
-    A path CLAIMED BY MORE THAN ONE SEAT (two rows naming the same anchor_cwd or tree_cwd —
-    should not happen, asserted rather than assumed) drops `seat` for that path and reports
-    the conflict instead of picking one; `house`/`kind` still propose if every claimant agrees
-    on them, since those aren't identity-bearing the way `seat` is.
+    A path claimed by more than one seat (two rows naming the same anchor_cwd or tree_cwd,
+    which should not happen, asserted rather than assumed) drops `seat` for that path and
+    reports the conflict instead of picking one; `house`/`kind` still propose if every
+    claimant agrees on them, since those aren't identity-bearing the way `seat` is.
 
-    `project`/`model` are untouched entirely — this plans only the three new keys, and only
-    ever proposes ADDING/CORRECTING them (never invents or removes anything else in a pin,
-    matching every existing writer's own preserve-what-I-don't-own discipline, `_write_osiris_
-    file`'s own convention). `changes` is the actual diff (current != proposed, so a pin
-    already correct proposes nothing there — idempotent by construction, the same no-churn
-    discipline `_write_model_pin_sync` already keeps for `model`).
+    `project`/`model` are untouched entirely: this plans only the three new keys, and only
+    ever proposes adding/correcting them, never inventing or removing anything else in a
+    pin, matching every existing writer's own preserve-what-I-don't-own discipline
+    (`_write_osiris_file`'s own convention). `changes` is the actual diff (current !=
+    proposed, so a pin already correct proposes nothing there): idempotent by construction,
+    the same no-churn discipline `_write_model_pin_sync` already keeps for `model`.
 
-    THE PIN SCHEMA'S OWN CONTRACT, STATED EXPLICITLY (decisions 126210f0/23b667d0, task
-    #152's own khepri mistake): `project` HOLDS A SoftwareProject'S CANONICAL SUFFIX,
-    NEVER A DISPLAY NAME. This was never written down before, and that silence is exactly
-    what let a "corrected" pin regress — `rename_project` changes only the `name` property,
-    the canonical stays fixed forever, and every mint/lookup path outside a narrow
-    diagnostic read (`register_agent`'s/`mint_heir`'s own `_resolve_or_mint_project`,
-    `f"repo:{project}"`, literal) treats a pin that doesn't match the canonical as grounds
-    to MINT A BRAND NEW OBJECT — not to look the project up by its current name. A seat
-    whose project was renamed keeps the OLD canonical string in its pin, forever; only the
-    project's own `name` property changes. `roster()`'s own `pin.name_resolution` field
-    (seats.py) is diagnostic-only for exactly this shape — it never implies a pin should be
-    rewritten to a display name, only reports when one already, mistakenly, is."""
+    THE PIN SCHEMA'S OWN CONTRACT, STATED EXPLICITLY: `project` holds a SoftwareProject's
+    canonical suffix, never a display name. This was never written down before, and that
+    silence is exactly what let a "corrected" pin regress: `rename_project` changes only
+    the `name` property, the canonical stays fixed forever, and every mint/lookup path
+    outside a narrow diagnostic read (`register_agent`'s/`mint_heir`'s own
+    `_resolve_or_mint_project`, `f"repo:{project}"`, literal) treats a pin that doesn't
+    match the canonical as grounds to mint a brand new object, not to look the project up
+    by its current name. A seat whose project was renamed keeps the old canonical string
+    in its pin, forever; only the project's own `name` property changes. `roster()`'s own
+    `pin.name_resolution` field (seats.py) is diagnostic-only for exactly this shape: it
+    never implies a pin should be rewritten to a display name, only reports when one
+    already, mistakenly, is."""
     from src.orchestrator.agents import read_house_label, read_seat_handle, read_tree_kind
     from src.orchestrator.seats import roster
 
@@ -177,7 +177,7 @@ async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
     for row in data["seats"]:
         handle = row["handle"]
         if not handle:
-            continue  # no handle on record — nothing to declare `seat` as, anywhere
+            continue  # no handle on record, nothing to declare `seat` as, anywhere
         seat_id = row["seat"]
         house = row["house"]
         anchor, tree = row["anchor_cwd"], row["tree_cwd"]
@@ -206,8 +206,8 @@ async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
         if len(houses) == 1:
             only_house = next(iter(houses))
             if only_house in projects_of_path.get(path, set()):
-                pass  # ruling 860b0306: redundant with the project this seat governs —
-                      # not a gap, nothing to propose, silently correct
+                pass  # redundant with the project this seat governs: not a gap,
+                      # nothing to propose, silently correct
             else:
                 proposed["house"] = only_house
         elif len(houses) > 1:
@@ -238,20 +238,19 @@ async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 def _pin_backup_path(p: Path) -> Path:
-    """Where a `.osiris` pin's own backup belongs — NEVER inside a tracked git working tree
-    (obligation 27ae4f89). A SEAT-OFFICE pin (~/.osiris/seats/<handle>, ruling ed5f5ce2)
-    already sits outside version control — its backup stays beside it, unchanged, exactly
-    the original behavior. A REPO-side pin lives INSIDE a git working tree, so a backup
-    beside it is a tracked-file hazard: nothing stops a caller's own `git add -A` or
-    `git commit -a` from picking up an untracked, unignored `.osiris.bak` sitting right next
-    to a real `.osiris` pin. For that case the backup goes inside the repo's OWN `.git`
-    metadata instead — the real directory for an ordinary repo root, or the worktree's own
-    PRIVATE gitdir (resolved from the `gitdir: <path>` one-line gitlink file every worktree
-    checkout carries in place of a real `.git` directory) for a worktree — never staged by
-    any git command, because git never walks its own `.git` contents as working-tree files.
-    `revert_pin_write` calls this SAME function to find what `write_pin_additions`/
-    `correct_pin_value` actually wrote, so the undo keeps working regardless of which branch
-    fired at write time."""
+    """Where a `.osiris` pin's own backup belongs: never inside a tracked git working tree.
+    A seat-office pin (~/.osiris/seats/<handle>) already sits outside version control, so
+    its backup stays beside it, unchanged, exactly the original behavior. A repo-side pin
+    lives inside a git working tree, so a backup beside it is a tracked-file hazard:
+    nothing stops a caller's own `git add -A` or `git commit -a` from picking up an
+    untracked, unignored `.osiris.bak` sitting right next to a real `.osiris` pin. For that
+    case the backup goes inside the repo's own `.git` metadata instead: the real directory
+    for an ordinary repo root, or the worktree's own private gitdir (resolved from the
+    `gitdir: <path>` one-line gitlink file every worktree checkout carries in place of a
+    real `.git` directory) for a worktree, never staged by any git command, because git
+    never walks its own `.git` contents as working-tree files. `revert_pin_write` calls
+    this same function to find what `write_pin_additions`/`correct_pin_value` actually
+    wrote, so the undo keeps working regardless of which branch fired at write time."""
     git_path = p.parent / ".git"
     if git_path.is_dir():
         return git_path / "osiris-pin.bak"
@@ -265,41 +264,42 @@ def _pin_backup_path(p: Path) -> Path:
 
 
 def write_pin_additions(path: str, proposed: dict[str, str]) -> dict[str, Any]:
-    """THE WRITER — ruling 719ed5b1's five-key schema, applying one `plan_pin_migration` entry's
-    `changes` at a time (Thoth's own staged rollout, msg 3929: her office alone first, then the
-    rest only after it lands clean — this function is what both stages call, never a bulk
-    driver that hides the boundary between them). Three constraints, msg 3929, none negotiable:
+    """THE WRITER for the pin schema's five keys, applying one `plan_pin_migration` entry's
+    `changes` at a time, in a staged rollout (one office first, then the rest only after it
+    lands clean; this function is what both stages call, never a bulk driver that hides the
+    boundary between them). Three constraints, none negotiable:
 
-    (1) ADDITIVE ONLY. Appends a key ONLY when `path/.osiris` does not already declare it —
+    (1) ADDITIVE ONLY. Appends a key only when `path/.osiris` does not already declare it,
     never rewrites, reorders, or reformats an existing line, even to correct a value that
-    disagrees with `proposed` (that disagreement is `plan_pin_migration`'s own `changes` dict
-    to surface; resolving it by silent overwrite is exactly the drift-vs-truth conflation this
-    whole build exists to end). Re-reads the file itself at write time rather than trusting a
-    caller's possibly-stale plan snapshot — a stale DIAGNOSIS is a lesser bug than a stale CURE.
+    disagrees with `proposed` (that disagreement is `plan_pin_migration`'s own `changes`
+    dict to surface; resolving it by silent overwrite is exactly the drift-vs-truth
+    conflation this whole build exists to end). Re-reads the file itself at write time
+    rather than trusting a caller's possibly-stale plan snapshot: a stale diagnosis is a
+    lesser bug than a stale cure.
 
-    (2) IDEMPOTENT, PROVEN BY TEST, NOT ASSUMED. A key already present — from an earlier call
-    to this function, a hand edit, or any other writer — is skipped, so two calls with the same
-    `proposed` leave the file byte-identical after the second (`written: False`).
+    (2) IDEMPOTENT, PROVEN BY TEST, NOT ASSUMED. A key already present, from an earlier
+    call to this function, a hand edit, or any other writer, is skipped, so two calls with
+    the same `proposed` leave the file byte-identical after the second (`written: False`).
 
     (3) REVERSIBLE. `~/.osiris` carries no git history and no undo but the one built here:
-    before the FIRST byte changes, the file's exact current bytes (or the empty string, if it
-    doesn't exist yet) are copied to `path/.osiris.bak` — overwritten on every real write, so
-    it always holds "immediately before the most recent touch" — and never written on a no-op
-    call. `revert_pin_write` restores from it.
+    before the first byte changes, the file's exact current bytes (or the empty string, if
+    it doesn't exist yet) are copied to `path/.osiris.bak`, overwritten on every real
+    write, so it always holds "immediately before the most recent touch", and never
+    written on a no-op call. `revert_pin_write` restores from it.
 
-    Refuses (an error dict, nothing written) when the file exists but is not valid TOML —
-    appending onto a broken file would make a bad file worse and harder to diagnose, not better.
+    Refuses (an error dict, nothing written) when the file exists but is not valid TOML:
+    appending onto a broken file would make a bad file worse and harder to diagnose, not
+    better.
 
     Returns `written` (bool), `added` (the keys actually appended, a strict subset of
-    `proposed`), `skipped` (keys already present, left untouched), `discarded` (the write-
-    boundary honesty rule, decision beb046cfbdf9/42176e16: the subset of `skipped` whose
-    ALREADY-PRESENT value actually DIFFERS from what `proposed` asked for — additive-only
-    means this function will never resolve that disagreement itself, but it must say the
-    disagreement exists rather than let `written: False` read identically to "already
-    correct." Alfred's own scenario, obligation 71f637e8: rerun a pin migration, get
-    byte-identical `written: False` across 31 files, wrongly conclude the fleet is
-    normalized when some of those files were left holding the WRONG value on purpose,
-    unannounced), and `backup` (only when a write happened)."""
+    `proposed`), `skipped` (keys already present, left untouched), `discarded` (a write-
+    boundary honesty check: the subset of `skipped` whose already-present value actually
+    differs from what `proposed` asked for. Additive-only means this function will never
+    resolve that disagreement itself, but it must say the disagreement exists rather than
+    let `written: False` read identically to "already correct". Otherwise a rerun of a
+    pin migration can come back byte-identical `written: False` across every file, and
+    wrongly conclude the fleet is normalized when some of those files were left holding
+    the wrong value on purpose, unannounced), and `backup` (only when a write happened)."""
     import tomllib
 
     p = Path(path) / ".osiris"
@@ -331,34 +331,35 @@ def write_pin_additions(path: str, proposed: dict[str, str]) -> dict[str, Any]:
 
 
 def correct_pin_value(path: str, key: str, value: str | None, *, reason: str) -> dict[str, Any]:
-    """THE NAMED EXCEPTION TO write_pin_additions' ADDITIVE-ONLY LAW (ruling 719ed5b1/msg
-    3929) — NOT a change to that function, NOT a bulk driver, and NOT interchangeable with
-    it. write_pin_additions refuses to overwrite an existing key so that a disagreement
-    between a declared pin and reality stays VISIBLE as `plan_pin_migration`'s own diagnosed
-    `changes`, never silently resolved by a migration tool guessing at intent. This function
-    exists for the opposite, narrower situation: a SPECIFIC, ALREADY-DIAGNOSED, individually
-    authorized correction (task #152's khepri repair — a rename the graph itself already
-    confirmed, decision 6602d39d/188df76a-class findings) where silence would be the actual
-    dishonesty, not the cure. Every call is a deliberate, one-seat-at-a-time act with a
-    `reason` that MUST land in the caller's own decision record — this function does not
-    itself write to the graph, it only makes the correction auditable at the call site.
+    """THE NAMED EXCEPTION TO write_pin_additions' ADDITIVE-ONLY LAW: not a change to that
+    function, not a bulk driver, and not interchangeable with it. write_pin_additions
+    refuses to overwrite an existing key so that a disagreement between a declared pin and
+    reality stays visible as `plan_pin_migration`'s own diagnosed `changes`, never silently
+    resolved by a migration tool guessing at intent. This function exists for the
+    opposite, narrower situation: a specific, already-diagnosed, individually authorized
+    correction (a case where the graph itself already confirmed a rename) where silence
+    would be the actual dishonesty, not the cure. Every call is a deliberate,
+    one-seat-at-a-time act with a `reason` that must land in the caller's own decision
+    record; this function does not itself write to the graph, it only makes the
+    correction auditable at the call site.
 
-    `value=None` UNSETS the key — the line is DELETED, not rewritten to an empty string or
-    the literal text "None" (#199's mint-layer prerequisite, decision 24e0b761/commit
-    cf201a9: found_seat/mint_seat already learned that a fabricated placeholder is worse
-    than genuine absence, and the pin-read self-heal at df646654/fe8ec7ff already tolerates
-    a missing key — but until this, nothing on the CORRECTION side could ever reach that
-    state for a seat minted BEFORE that fix, only for one founded after it. A transition
-    verb moving a seat's project off a fabricated value onto "no project, genuinely" needs
-    this as a legal target, not just the mint-time entry point.)
+    `value=None` unsets the key: the line is deleted, not rewritten to an empty string or
+    the literal text "None". This mirrors a lesson learned at the mint layer:
+    found_seat/mint_seat already learned that a fabricated placeholder is worse than
+    genuine absence, and the pin-read self-heal already tolerates a missing key, but until
+    this, nothing on the correction side could ever reach that state for a seat minted
+    before that fix, only for one founded after it. A transition verb moving a seat's
+    project off a fabricated value onto "no project, genuinely" needs this as a legal
+    target, not just the mint-time entry point.
 
-    Same backup discipline as write_pin_additions (`.osiris.bak` captures the exact pre-write
-    bytes, overwritten each real write): a caller who mis-corrects can revert_pin_write same
-    as any other write here. Refuses on invalid TOML, exactly like write_pin_additions, for
-    the same reason (a bad file made worse is never a fix). Refuses if `key` is not already
-    present — this function corrects an EXISTING declaration, it does not mint a new one;
-    write_pin_additions is the tool for a genuinely missing key, and calling this for that
-    case would blur the two verbs' distinct audit trails."""
+    Same backup discipline as write_pin_additions (`.osiris.bak` captures the exact
+    pre-write bytes, overwritten each real write): a caller who mis-corrects can
+    revert_pin_write same as any other write here. Refuses on invalid TOML, exactly like
+    write_pin_additions, for the same reason (a bad file made worse is never a fix).
+    Refuses if `key` is not already present: this function corrects an existing
+    declaration, it does not mint a new one; write_pin_additions is the tool for a
+    genuinely missing key, and calling this for that case would blur the two verbs'
+    distinct audit trails."""
     import tomllib
 
     p = Path(path) / ".osiris"
@@ -387,13 +388,13 @@ def correct_pin_value(path: str, key: str, value: str | None, *, reason: str) ->
     for i, line in enumerate(lines):
         if line.split("=", 1)[0].strip() == key:
             if value is None:
-                del lines[i]  # UNSET: the line is gone, never rewritten to a placeholder
+                del lines[i]  # unset: the line is gone, never rewritten to a placeholder
             else:
                 eol = "\n" if line.endswith("\n") else ""
                 lines[i] = f"{prefix} {json.dumps(value)}{eol}"
             rewritten = True
             break
-    if not rewritten:  # defensive — tomllib parsed the key but the line-scan missed it
+    if not rewritten:  # defensive: tomllib parsed the key but the line-scan missed it
         return {"error": f"{key!r} parsed by tomllib but its line could not be located in "
                          f"{p} — refusing rather than guessing at the file's shape"}
     p.write_text("".join(lines))
@@ -405,33 +406,32 @@ def _correct_or_add_pin_value(
     path: str, key: str, value: str | None, *, reason: str,
 ) -> dict[str, Any]:
     """`correct_pin_value`, widened to also cover a pin that never declared `key` at
-    all (operator ruling b5663511, PROJECT IDENTITY DRIFT, Thoth mail 12419 item 5,
-    live specimen: Marquee's rename cascade hit a seat whose `.osiris` had no
-    top-level `project` key — `correct_pin_value`'s own refusal, "only rewrites an
-    EXISTING key," is correct in isolation but the wrong terminal answer for THIS
-    caller: a cascade acting with the project rename's own elevated authority (see
-    `_cascade_governing_seats`) already has standing to FILL a genuinely absent key,
-    the same way `write_pin_additions` exists to do — it just never tried, because
+    all. This closes a gap found live: a project rename cascade hit a seat whose
+    `.osiris` had no top-level `project` key. `correct_pin_value`'s own refusal, "only
+    rewrites an existing key," is correct in isolation but the wrong terminal answer for
+    this caller: a cascade acting with the project rename's own elevated authority (see
+    `_cascade_governing_seats`) already has standing to fill a genuinely absent key,
+    the same way `write_pin_additions` exists to do; it just never tried, because
     `correct_pin_value` is deliberately narrow (its own docstring: a disagreement
     between a declared pin and reality must stay visible, never silently resolved by
-    a tool guessing at intent; a MISSING key is not that shape, there is no
+    a tool guessing at intent; a missing key is not that shape, there is no
     disagreement to preserve).
 
     Tries `correct_pin_value` first; falls back to `write_pin_additions` only on
-    that EXACT refusal (the "use write_pin_additions to add a missing one" tail is
+    that exact refusal (the "use write_pin_additions to add a missing one" tail is
     this file's own message, authored here, checked verbatim rather than re-parsing
-    the TOML a second time). Every OTHER refusal (invalid TOML, an empty reason)
-    passes through unchanged — this widens exactly one failure mode, nothing else.
+    the TOML a second time). Every other refusal (invalid TOML, an empty reason)
+    passes through unchanged: this widens exactly one failure mode, nothing else.
     `value=None` against a missing key is already correct (nothing to unset, nothing
     to add) and reports as such rather than attempting a write.
 
-    THE FALLBACK RESULT CARRIES `old_value`/`new_value` TOO (never a bare `write_pin_
-    additions` shape standing in unannounced): every existing caller of `correct_
-    pin_value`'s own return contract — cmd_correct_pin_value's own CLI command among
-    them — reads `old_value`/`new_value` unconditionally once `written` is true;
+    THE FALLBACK RESULT CARRIES `old_value`/`new_value` TOO, never a bare
+    `write_pin_additions` shape standing in unannounced: every existing caller of
+    `correct_pin_value`'s own return contract, including its own CLI command, reads
+    `old_value`/`new_value` unconditionally once `written` is true;
     `write_pin_additions` never carried those keys (it has no "old" value, only
     `added`/`skipped`/`discarded`), so returning it bare would trade one caller's
-    KeyError for another's. `old_value=None` (there was none — that IS the finding)
+    KeyError for another's. `old_value=None` (there was none, that is the finding)
     and `new_value=value`, layered onto write_pin_additions' own receipt unchanged."""
     result = correct_pin_value(path, key, value, reason=reason)
     if (result.get("error", "").endswith("use write_pin_additions to add a missing one")
@@ -446,61 +446,59 @@ async def correct_own_pin_value(
     office_root: Path | None = None, workspace_root: Path | None = None,
     tree_cwd: str | None = None,
 ) -> dict[str, Any]:
-    """THE SELF-SCOPED ENTRY POINT onto `correct_pin_value` (msg 4761, obligation 114f7ac9): the raw
-    function takes an arbitrary filesystem `path`, which is exactly the wrong shape for a
-    seat-facing surface — an MCP caller has no path to hand it that isn't either a guess or a
-    trust exercise. This composes `correct_pin_value` with `held_seat` (the SAME lookup
-    `correct_house` uses) so a caller names only WHAT to correct, never WHERE: the seat's own
-    office, resolved off its `handle`, exactly like `establish_office`/`write_model_pin`
-    already do (`_default_office_root() / handle.lower()`) — never `identity.cwd`, which can be
-    a shared root other seats climb to (#146's lesson), and never a directory-basename guess
-    (13af22fc's phantom `repo:seats` defect came from exactly that shape).
+    """THE SELF-SCOPED ENTRY POINT onto `correct_pin_value`: the raw function takes an
+    arbitrary filesystem `path`, which is exactly the wrong shape for a seat-facing
+    surface. An MCP caller has no path to hand it that isn't either a guess or a trust
+    exercise. This composes `correct_pin_value` with `held_seat` (the same lookup
+    `correct_house` uses) so a caller names only what to correct, never where: the seat's
+    own office, resolved off its `handle`, exactly like `establish_office`/`write_model_pin`
+    already do (`_default_office_root() / handle.lower()`), never `identity.cwd`, which
+    can be a shared root other seats climb to, and never a directory-basename guess (a
+    prior phantom `repo:seats` defect came from exactly that shape).
 
-    Refuses on a caller holding no seat — a pin correction is a seat's own act, never
+    Refuses on a caller holding no seat: a pin correction is a seat's own act, never
     performed on another's behalf and never inferred. `reason` stays required and non-empty;
     enforced by `correct_pin_value` itself, unchanged here. `office_root` exists only as a
     test seam, same convention as `establish_office`. `value=None` unsets `key` (deletes the
-    line) across every copy this reaches — see `correct_pin_value`'s own docstring.
+    line) across every copy this reaches, see `correct_pin_value`'s own docstring.
 
-    THE SECOND COPY (ruling b30e2b38, the Jesus/Godel live specimen): `rebind_seat` writes
-    its own courtesy `.osiris` at the seat's ANCHOR path — a second, independent pin copy
-    this function used to never reach, so a fully-correct transition (fold + rebind +
-    THIS call) still left the anchor copy reading the pre-transition project forever,
-    with no sanctioned entry point onto it at all. Still self-scoped, never a caller-supplied
-    path: the anchor is read fresh off the SAME held seat's own `anchor_cwd` property —
-    the seat's other self-owned location, not an arbitrary one. Corrected WHEN IT EXISTS,
-    DECLARES `key` ALREADY, AND DIFFERS FROM THE OFFICE PATH; skipped silently (never an
-    error) when it's the same directory as the office (no second copy to diverge) or has
-    no `.osiris` of its own yet. Reported separately under `anchor` so a caller can see
-    whether the second copy was touched, left alone, or doesn't apply — never folded into
-    the office result, which could otherwise mask a partial correction as a full one.
+    THE SECOND COPY: `rebind_seat` writes its own courtesy `.osiris` at the seat's anchor
+    path, a second, independent pin copy this function used to never reach, so a
+    fully-correct transition (fold + rebind + this call) still left the anchor copy
+    reading the pre-transition project forever, with no sanctioned entry point onto it at
+    all. Still self-scoped, never a caller-supplied path: the anchor is read fresh off the
+    same held seat's own `anchor_cwd` property, the seat's other self-owned location, not
+    an arbitrary one. Corrected when it exists, already declares `key`, and differs from
+    the office path; skipped silently (never an error) when it's the same directory as
+    the office (no second copy to diverge) or has no `.osiris` of its own yet. Reported
+    separately under `anchor` so a caller can see whether the second copy was touched,
+    left alone, or doesn't apply, never folded into the office result, which could
+    otherwise mask a partial correction as a full one.
 
-    THE THIRD COPY (thread 6483/6504, Thoth's own scoping and ruling: the workspace is
-    real, deliberate infrastructure, not an undeclared scratch dir — decision 87457dc1,
-    the operator's own correction that jesus/chad are real seats mid-arc, not accidents):
-    `mint_seat`/`found_seat` scaffold a WORKSPACE alongside the office, its own directory,
-    its own `.osiris` pin (`sweep_seat_workspace`'s own docstring names the convention,
-    `Path.home() / "code" / handle.lower()`, `path=` overridden at mint time) — a location
-    this function still never reached even after the anchor extension above, live-verified
-    still stale at the moment this was written. SAME PATTERN, a third time, not a new
-    design: self-scoped (the convention path, never caller-supplied — `workspace_root` is
-    a test seam only, matching `sweep_seat_workspace`'s own), corrected ONLY when it
-    exists, already declares `key`, and differs from BOTH the office AND the (possibly
-    already-corrected) anchor path — never a double-write when a seat's anchor happens to
-    equal its workspace default. Reported under `workspace`, same shape as `anchor`. Best-
-    effort like `sweep_seat_workspace`'s own default: a seat minted with an explicit
-    custom `path=` is not covered by this guess UNLESS that path was ever declared via
-    `bind_seat_tree` — see `tree_cwd` below — the existence+declares-key+differs guard
-    means a wrong guess here writes nothing, it simply finds no matching file to correct.
+    THE THIRD COPY: the workspace is real, deliberate infrastructure, not an undeclared
+    scratch dir. `mint_seat`/`found_seat` scaffold a workspace alongside the office, its
+    own directory, its own `.osiris` pin (`sweep_seat_workspace`'s own docstring names the
+    convention, `Path.home() / "code" / handle.lower()`, `path=` overridden at mint time),
+    a location this function still never reached even after the anchor extension above,
+    live-verified still stale at the moment this was written. Same pattern, a third time,
+    not a new design: self-scoped (the convention path, never caller-supplied,
+    `workspace_root` is a test seam only, matching `sweep_seat_workspace`'s own), corrected
+    only when it exists, already declares `key`, and differs from both the office and the
+    (possibly already-corrected) anchor path, never a double-write when a seat's anchor
+    happens to equal its workspace default. Reported under `workspace`, same shape as
+    `anchor`. Best-effort like `sweep_seat_workspace`'s own default: a seat minted with an
+    explicit custom `path=` is not covered by this guess unless that path was ever
+    declared via `bind_seat_tree`, see `tree_cwd` below; the existence+declares-key+differs
+    guard means a wrong guess here writes nothing, it simply finds no matching file to
+    correct.
 
-    `tree_cwd` (Marquee's blind spot, Thoth dispatch relayed 2026-09-05, operator "one
-    more round"): an explicit override for the THIRD copy's own location, tried BEFORE
-    the handle-derived guess above — and, when not given, this now also reads the seat's
-    own `bind_seat_tree`-declared `tree_cwd` property first, before falling to the guess.
-    A seat whose real workspace lives under a name that isn't its own handle (the exact
-    Marquee shape: her tree lives at the DTFB project's own checkout, not
-    `.../code/marquee`) was invisible to this correction no matter how it was called,
-    because the guess is the ONLY path this function ever tried — this closes that,
+    `tree_cwd` closes a real blind spot: an explicit override for the third copy's own
+    location, tried before the handle-derived guess above, and, when not given, this now
+    also reads the seat's own `bind_seat_tree`-declared `tree_cwd` property first, before
+    falling to the guess. A seat whose real workspace lives under a name that isn't its
+    own handle (a seat whose tree lived at a different project's own checkout, not
+    `.../code/<handle>`) was invisible to this correction no matter how it was called,
+    because the guess used to be the only path this function ever tried; this closes that,
     reusing `bind_tree`'s own already-declared fact rather than asking every caller to
     re-supply a path the graph already has."""
     from src.orchestrator.seats import held_seat
@@ -536,7 +534,7 @@ async def correct_own_pin_value(
 
 
 def _resolved(p: Path) -> Path:
-    """Sync helper (ASYNC240, this codebase's own ruff gate) — `Path.resolve()` stays out
+    """Sync helper (ASYNC240, this codebase's own ruff gate): `Path.resolve()` stays out
     of correct_own_pin_value/revert_own_pin_write's own async bodies."""
     return p.resolve()
 
@@ -546,42 +544,42 @@ async def correct_pin_value_third_party(
     dry_run: bool = True, office_root: Path | None = None, workspace_root: Path | None = None,
     tree_cwd: str | None = None,
 ) -> dict[str, Any]:
-    """THE THIRD-PARTY SIBLING of `correct_own_pin_value` — decision fff496fe22b0's own
-    named gap ("correct_pin_value has NO third-party entry point on any surface... an operator/
-    manager cannot fix another seat's pin at all"), closed the same way task #152 closed
-    the identical gap for Seat.house: `resync_seat_house_third_party` is the precedent —
-    NOT self-scoped, NOT headship-gated, `reason` required to actually write (same law
-    `correct_pin_value` and `resync_seat_house_third_party` both already enforce), and
-    callers are responsible for the authorization this docstring cannot enforce.
-    `seat_id` names ANY seat by its own canonical, never the caller's own held one.
+    """THE THIRD-PARTY SIBLING of `correct_own_pin_value`, closing a named gap: there was
+    no third-party entry point on any surface, so an operator or manager could not fix
+    another seat's pin at all. Closed the same way the identical gap was closed for
+    Seat.house: `resync_seat_house_third_party` is the precedent. Not self-scoped, not
+    headship-gated, `reason` required to actually write (same law `correct_pin_value` and
+    `resync_seat_house_third_party` both already enforce), and callers are responsible for
+    the authorization this docstring cannot enforce. `seat_id` names any seat by its own
+    canonical, never the caller's own held one.
 
-    NEVER A PARALLEL IMPLEMENTATION: `correct_own_pin_value` already reaches all THREE
-    pin copies (office, anchor, workspace — ruling b30e2b38) correctly and is not
-    actually self-scoped in its own code — it is self-scoped only by every existing
-    caller's CONVENTION of always passing the caller's own `agent_id` (`cmd_correct_
-    pin_value`'s own CLI command already exploits this identical seam, passing an
-    explicitly-named agent instead). This entry point does the same: resolves `seat_id`'s own
-    HOLDER agent via `seat_occupancy` (the one authority for who holds a seat, live or
-    cold — never a caller-supplied agent id) and hands that off to `correct_own_pin_
-    value` unchanged for the real write. Refuses when the seat has no holder on record
-    — a seat never claimed by any agent has nothing this call could correct.
+    NEVER A PARALLEL IMPLEMENTATION: `correct_own_pin_value` already reaches all three
+    pin copies (office, anchor, workspace) correctly and is not actually self-scoped in
+    its own code; it is self-scoped only by every existing caller's convention of always
+    passing the caller's own `agent_id` (its own CLI command already exploits this
+    identical seam, passing an explicitly-named agent instead). This entry point does the
+    same: resolves `seat_id`'s own holder agent via `seat_occupancy` (the one authority
+    for who holds a seat, live or cold, never a caller-supplied agent id) and hands that
+    off to `correct_own_pin_value` unchanged for the real write. Refuses when the seat has
+    no holder on record: a seat never claimed by any agent has nothing this call could
+    correct.
 
-    `dry_run=True` (default, same law `transition_seat_project` already established for
-    this exact shape) PEEKS every applicable copy (`_peek_pin_value`, read-only, the
-    SAME preflight `transition_seat_project` already uses for its own plan) and returns
-    a `plan` — which copies actually declare `key` with a value differing from the
-    target, without writing anything. `dry_run=False` requires a non-empty `reason` —
-    refused before anything is touched — then delegates the actual write wholesale to
+    `dry_run=True` (default, the same law `transition_seat_project` already established
+    for this exact shape) peeks every applicable copy (`_peek_pin_value`, read-only, the
+    same preflight `transition_seat_project` already uses for its own plan) and returns
+    a `plan`: which copies actually declare `key` with a value differing from the
+    target, without writing anything. `dry_run=False` requires a non-empty `reason`,
+    refused before anything is touched, then delegates the actual write wholesale to
     `correct_own_pin_value`.
 
-    `tree_cwd` (Marquee's blind spot, Thoth dispatch relayed 2026-09-05, operator "one
-    more round" — the first sweep of this entry point could never reach a seat whose real
-    workspace isn't named after its own handle, exactly Marquee's shape: her tree lives
-    at the DTFB project's own checkout): an explicit override for the THIRD copy's own
-    location. When not given, this reads the seat's own `bind_seat_tree`-declared
-    `tree_cwd` (already carried by `seat_facts`) before falling to the handle-derived
-    guess — the same fallback order `correct_own_pin_value` now applies for the real
-    write below, so the dry-run plan and the write it previews never disagree."""
+    `tree_cwd` closes a real blind spot: the first sweep of this entry point could never
+    reach a seat whose real workspace isn't named after its own handle (a seat whose tree
+    lived at a different project's own checkout). This parameter is an explicit override
+    for the third copy's own location. When not given, this reads the seat's own
+    `bind_seat_tree`-declared `tree_cwd` (already carried by `seat_facts`) before falling
+    to the handle-derived guess, the same fallback order `correct_own_pin_value` now
+    applies for the real write below, so the dry-run plan and the write it previews never
+    disagree."""
     from src.orchestrator.seats import seat_facts, seat_occupancy
 
     occ = await seat_occupancy(pool, seat_id)
@@ -628,18 +626,18 @@ async def correct_pin_value_third_party(
             plan[label] = {"path": str(path), "old_value": peek["value"], "new_value": value}
         elif (not peek.get("ok") and value is not None
                 and peek.get("error", "").startswith(f"{key!r} is not declared in ")):
-            # THE MISSING-KEY PLAN (operator ruling b5663511, PROJECT IDENTITY DRIFT,
-            # Thoth mail 12419 item 5, live specimen: Marquee's own .osiris never
-            # declared `project` at all): a peek that only ever recognizes VALUE
+            # THE MISSING-KEY PLAN: a live specimen showed a seat's own .osiris never
+            # declared `project` at all. A peek that only ever recognizes value
             # disagreements silently plans nothing for a genuinely missing key, so the
             # cascade's own "elif not plan: already-correct" reads a real gap as a
-            # no-op and never even calls the real write below -- correct_own_pin_value
-            # now resolves this exact shape via _correct_or_add_pin_value (write_pin_
-            # additions), and the dry-run plan must say so or the two permanently
-            # disagree, exactly the invariant this function's own docstring already
-            # names ("the dry-run plan and the write it previews never disagree").
-            # `_peek_pin_value`'s "does not exist"/invalid-TOML errors are deliberately
-            # NOT matched here -- those stay unplanned, same as before this fix.
+            # no-op and never even calls the real write below. correct_own_pin_value
+            # now resolves this exact shape via _correct_or_add_pin_value
+            # (write_pin_additions), and the dry-run plan must say so or the two
+            # permanently disagree, exactly the invariant this function's own docstring
+            # already names ("the dry-run plan and the write it previews never
+            # disagree"). `_peek_pin_value`'s "does not exist"/invalid-TOML errors are
+            # deliberately not matched here; those stay unplanned, same as before this
+            # fix.
             plan[label] = {"path": str(path), "old_value": None, "new_value": value}
 
     return {"seat_id": seat_id, "handle": handle, "key": key, "dry_run": True, "plan": plan}
@@ -648,8 +646,8 @@ async def correct_pin_value_third_party(
 def revert_pin_write(path: str) -> dict[str, Any]:
     """The reversibility half of `write_pin_additions`'s constraint 3: restore `path/.osiris`
     from the backup it took immediately before its most recent real write. Refuses (an error
-    dict, nothing touched) when no backup exists — never invents a prior state to revert to.
-    An EMPTY backup means the file didn't exist before that write: revert DELETES the current
+    dict, nothing touched) when no backup exists; never invents a prior state to revert to.
+    An empty backup means the file didn't exist before that write: revert deletes the current
     file, restoring true absence, rather than leaving a stray empty `.osiris` behind."""
     p = Path(path) / ".osiris"
     backup = _pin_backup_path(p)
@@ -667,23 +665,23 @@ async def revert_own_pin_write(
     pool: asyncpg.Pool, agent_id: str, *, office_root: Path | None = None,
     workspace_root: Path | None = None,
 ) -> dict[str, Any]:
-    """THE SELF-SCOPED ENTRY POINT onto `revert_pin_write` (ruling b30e2b38): built the same day
-    its absence was found live — a seat that follows the rules into a bad pin state had
-    no sanctioned way back out. `revert_pin_write` (above) has existed, tested, since
+    """THE SELF-SCOPED ENTRY POINT onto `revert_pin_write`: built the same day its
+    absence was found live, a seat that follows the rules into a bad pin state had no
+    sanctioned way back out. `revert_pin_write` (above) has existed, tested, since
     write_pin_additions's own constraint 3; it simply had no MCP surface a seat could
-    reach on its own behalf, the same unreached-not-unbuilt shape this house kept hitting
-    tonight. Composes `held_seat`, identical resolution to `correct_own_pin_value` — a
-    caller names nothing but its own act, never a path.
+    reach on its own behalf, the same "built but not wired to a caller" shape this house
+    kept hitting elsewhere. Composes `held_seat`, identical resolution to
+    `correct_own_pin_value`: a caller names nothing but its own act, never a path.
 
-    ALL THREE COPIES, SYMMETRIC WITH `correct_own_pin_value`'s OWN EXTENSION (thread
-    6483/6504's workspace-copy addendum included — a write with no matching undo would
-    break the "same backup discipline" promise that function's own docstring makes):
-    reverts the office first, then the seat's own current `anchor_cwd` copy, then the
-    `~/code/<handle>` workspace convention — each WHEN a backup exists there too
-    (silently skipped, never an error, when there isn't one to revert: that copy may
-    never have been corrected at all, or may be the same directory as one already
-    reverted). Each copy's own receipt lands separately (`office`/`anchor`/`workspace`)
-    so a caller can see exactly which copies actually moved."""
+    ALL THREE COPIES, SYMMETRIC WITH `correct_own_pin_value`'s OWN EXTENSION (the
+    workspace-copy addendum included; a write with no matching undo would break the
+    "same backup discipline" promise that function's own docstring makes): reverts the
+    office first, then the seat's own current `anchor_cwd` copy, then the `~/code/<handle>`
+    workspace convention, each when a backup exists there too (silently skipped, never an
+    error, when there isn't one to revert: that copy may never have been corrected at all,
+    or may be the same directory as one already reverted). Each copy's own receipt lands
+    separately (`office`/`anchor`/`workspace`) so a caller can see exactly which copies
+    actually moved."""
     from src.orchestrator.seats import held_seat
 
     bound = await held_seat(pool, agent_id)
@@ -713,37 +711,37 @@ async def revert_own_pin_write(
     return out
 
 
-# THE PEER ADDENDUM (ruling d74492ee, spec e6636c7e — LEGIBILITY leg 2, seats.py): rendered
-# INTO house_law.md's `{peer_block}` slot (boot_compiler.compile_managed_body) only when the
-# seat carries an active peer_of edge at establish_office's OWN call time (never at
-# mintseat.py's fresh-mint scaffold — a brand-new seat cannot yet have a peer to declare).
-# The default "\n" reproduces the template's original single blank line between the charter
-# section and "## How to work..." exactly (see the empty-vs-populated arithmetic in
-# _peer_addendum's own docstring); a populated block adds its own leading/trailing blank
-# lines so the surrounding sections never collide. THE BOOT COMPILER (thread 4951d818) closed
-# the v1.1 gap this comment used to name here: reissue_office recomputes this live on an
-# already-occupied seat, same as establish_office always has for a fresh one.
+# THE PEER ADDENDUM: rendered into house_law.md's `{peer_block}` slot
+# (boot_compiler.compile_managed_body) only when the seat carries an active peer_of edge
+# at establish_office's own call time (never at mintseat.py's fresh-mint scaffold, a
+# brand-new seat cannot yet have a peer to declare). The default "\n" reproduces the
+# template's original single blank line between the charter section and "## How to
+# work..." exactly (see the empty-vs-populated arithmetic in _peer_addendum's own
+# docstring); a populated block adds its own leading/trailing blank lines so the
+# surrounding sections never collide. The boot compiler closed an earlier gap this
+# comment used to name here: reissue_office recomputes this live on an already-occupied
+# seat, same as establish_office always has for a fresh one.
 async def self_heal_project_pin(pool: asyncpg.Pool, agent_id: str, cwd: str) -> dict[str, Any]:
-    """MECHANISM (1) of ruling fe8ec7ff — the operator's own standard (decision df646654):
-    "give each agent independence and infrastructure to fix their own problems... patch
-    osiris so the problems don't even happen in the first place." No human blesses a value
-    the graph already holds unambiguously; nobody escalates for the ordinary case.
+    """One mechanism of the house's self-healing standard: give each agent independence and
+    infrastructure to fix its own problems, patching osiris so the problems don't even
+    happen in the first place. No human blesses a value the graph already holds
+    unambiguously; nobody escalates for the ordinary case.
 
     Called at mount, before any pin banner renders. A no-op (`{"state": "n/a"}`) unless the
-    pin is genuinely unset (no `.osiris`, or one that never declares `project`) AND readable
+    pin is genuinely unset (no `.osiris`, or one that never declares `project`) and readable
     (a broken file or a missing cwd are `project_pin_banner`'s real errors, untouched here).
 
-    THE RULE, verbatim: write `project` into the seat's OWN pin only when THREE independent
-    graph signals — `governs` (this seat's own charter), `works_in` (this agent's own active
+    THE RULE, verbatim: write `project` into the seat's own pin only when three independent
+    graph signals, `governs` (this seat's own charter), `works_in` (this agent's own active
     project link), and the anchor directory's basename resolving to a real, active
-    SoftwareProject — ALL exist and ALL agree on the same one project. Any signal absent, or
+    SoftwareProject, all exist and all agree on the same one project. Any signal absent, or
     any two disagreeing, and the write is refused: `{"state": "unset", "reason": "..."}`
     names exactly which signals fired and which didn't, so unset stays a valid, auditable
-    state rather than a silent gap. A caller with no held seat gets the same honest refusal
-    — self-healing is a seat's own act, same law `correct_own_pin_value` already keeps.
+    state rather than a silent gap. A caller with no held seat gets the same honest refusal;
+    self-healing is a seat's own act, same law `correct_own_pin_value` already keeps.
 
     The write itself goes through `write_pin_additions` unchanged (additive-only, backup-
-    first, idempotent) — this function only ever supplies ITS OWN candidate value to that
+    first, idempotent): this function only ever supplies its own candidate value to that
     write path, never bypasses it. `revert_pin_write` undoes it exactly as it would any other
     write there."""
     from src.orchestrator.agents import read_project_pin
@@ -752,7 +750,7 @@ async def self_heal_project_pin(pool: asyncpg.Pool, agent_id: str, cwd: str) -> 
 
     pin_read = read_project_pin(cwd)
     if pin_read.error or pin_read.cwd_missing or pin_read.value is not None:
-        return {"state": "n/a"}  # a real error, or already declared — not this mechanism's case
+        return {"state": "n/a"}  # a real error, or already declared: not this mechanism's case
 
     bound = await held_seat(pool, agent_id)
     if bound is None:
@@ -794,10 +792,10 @@ async def self_heal_project_pin(pool: asyncpg.Pool, agent_id: str, cwd: str) -> 
 
 
 def _peer_addendum(peer_seat: str, peer_handle: str | None) -> str:
-    """The `## Peer` section's full text, INCLUDING its own leading `\\n` (one blank line
+    """The `## Peer` section's full text, including its own leading `\\n` (one blank line
     after the charter block) and trailing `\\n\\n` (one blank line before "## How to work").
-    An unpeered seat never calls this — its caller passes the bare `"\\n"` default instead,
-    which reproduces the template's ORIGINAL spacing (one literal `\\n` already sits before
+    An unpeered seat never calls this; its caller passes the bare `"\\n"` default instead,
+    which reproduces the template's original spacing (one literal `\\n` already sits before
     the `{peer_addendum}` slot in the template; this default's own single `\\n` supplies the
     second, together forming the one blank line the un-addended template always had)."""
     who = peer_handle or peer_seat
@@ -825,12 +823,12 @@ def _peer_addendum(peer_seat: str, peer_handle: str | None) -> str:
     )
 
 
-# THE CHARTER FILE (d80621a7 piece 3, alfred's alfred-seat-charter.md pattern graduating
-# to convention): the seat's own LIVE-STATE scratchpad, distinct from CLAUDE.md's standing
-# orders (identity, ritual — rarely rewritten) and distinct from the graph (typed, durable,
-# but not where a mid-thought working note belongs). This is the OFFLOAD TARGET the stop-
-# hook ritual (queue item 4) will enforce writing to above a context threshold — a session
-# that dies mid-turn leaves its heir this file, not a blank page.
+# THE CHARTER FILE (an early seat's own per-seat scratchpad pattern graduating to
+# convention): the seat's own live-state scratchpad, distinct from CLAUDE.md's standing
+# orders (identity, ritual, rarely rewritten) and distinct from the graph (typed, durable,
+# but not where a mid-thought working note belongs). This is the offload target the stop-
+# hook ritual will enforce writing to above a context threshold: a session that dies
+# mid-turn leaves its heir this file, not a blank page.
 _CHARTER_TEMPLATE = """\
 # {handle}'s charter
 
@@ -851,31 +849,31 @@ IN-PROGRESS state a typed object can't hold on its own.
 (anything else worth carrying forward that doesn't fit the graph's typed objects)
 """
 
-# THE ONE UNDECLARED SENTINEL (task #157 piece 1, operator's own words "fix the slop"): the
-# GRAPH declaration (a Seat's own `governs` edges, charter_of's own read) never had a single
-# word for "nothing there yet" — mint_seat's receipt said nothing at all about it while this
-# ceremony, one call over, already spoke plainly. Centralized so every caller that reports
-# charter state says the SAME thing, not a copy that can drift the moment one side is edited.
+# THE ONE UNDECLARED SENTINEL: the graph declaration (a Seat's own `governs` edges,
+# charter_of's own read) never had a single word for "nothing there yet"; mint_seat's
+# receipt said nothing at all about it while this ceremony, one call over, already spoke
+# plainly. Centralized so every caller that reports charter state says the same thing,
+# not a copy that can drift the moment one side is edited.
 #
-# THE VERB, NAMED IN THE SENTINEL ITSELF (operator's self-chartering ruling, "each agent
-# should be able to own it and handle it on their own" — msg 4378): the ORIGINAL text sent a
-# reader back to "the standing orders" (CLAUDE.md, read once at mint/boot) instead of naming
-# the call on THE ONE SURFACE a seat actually re-reads every session, orient()'s own live
-# payload (mcp_server.py, 26 of 33 active seats measured reading `charter` absent from their
-# own orient() — task #157's own live count). An office whose CLAUDE.md was "left in place"
-# (compile_managed_body's own branch — an existing office's standing orders are never
-# recompiled) can go an entire reign without that file crossing a session's eyes again; a
-# sentinel that only points at it, rather than carrying the verb itself, is a dead end for
-# exactly the seat it's meant to move. Plain text, no harness assumed — `charter(repos=[...])`
-# is the same MCP tool name on every surface, Claude Code or otherwise.
+# THE VERB, NAMED IN THE SENTINEL ITSELF: agents should be able to own their charter and
+# handle it on their own, so the original text, which sent a reader back to "the standing
+# orders" (CLAUDE.md, read once at mint/boot), was replaced by naming the call on the one
+# surface a seat actually re-reads every session: orient()'s own live payload. A live
+# measurement found most active seats had `charter` absent from their own orient() output.
+# An office whose CLAUDE.md was "left in place" (compile_managed_body's own branch, an
+# existing office's standing orders are never recompiled) can go an entire reign without
+# that file crossing a session's eyes again; a sentinel that only points at it, rather
+# than carrying the verb itself, is a dead end for exactly the seat it's meant to move.
+# Plain text, no harness assumed: `charter(repos=[...])` is the same MCP tool name on
+# every surface, Claude Code or otherwise.
 _CHARTER_UNDECLARED = ("UNDECLARED — call charter(repos=[...]) naming the repos you govern "
                        "(the standing orders say more, but this is the one line every "
                        "session sees)")
 
 
 async def _handle_of(pool: asyncpg.Pool, agent_id: str) -> str | None:
-    """The lineage's claimed handle (freshest generation's assertion), or None — an office
-    is NAMED for its seat, so an anonymous lineage has nothing to name one after."""
+    """The lineage's claimed handle (freshest generation's assertion), or None. An office
+    is named for its seat, so an anonymous lineage has nothing to name one after."""
     from src.orchestrator.agents import _generation
 
     base = _generation(agent_id)[0]
@@ -891,14 +889,14 @@ async def _establish_pure_seat_office(
     actions: Actions, *, seat_id: str, actor: str | None,
     office_root: Path | None, projects_root: Path | None, claude_json: Path | None,
 ) -> dict[str, Any]:
-    """The office ceremony for a seat with NO Agent lineage at all (thread 236d3940) — every
-    fact comes off the Seat record alone, since there is no claimed occupant to resolve a
-    handle/house/deed through. `seat_facts` already derives house the same way the
-    agent-lineage path does (`derive_house`, ruling ff6148b0); the charter is the SEAT's own
-    (ruling 1db1ff41 — `governs` is keyed on the seat, not any occupant), so it reads
-    straight off `seat_id`, occupied or not; `file_office_deed` is skipped outright — it
-    is Agent-only by construction (handshake.py), and there is nothing to deed until an
-    actual agent launches and claims this seat."""
+    """The office ceremony for a seat with no Agent lineage at all: every fact comes off
+    the Seat record alone, since there is no claimed occupant to resolve a handle/house/
+    deed through. `seat_facts` already derives house the same way the agent-lineage path
+    does (`derive_house`); the charter is the seat's own (`governs` is keyed on the seat,
+    not any occupant), so it reads straight off `seat_id`, occupied or not;
+    `file_office_deed` is skipped outright: it is Agent-only by construction
+    (handshake.py), and there is nothing to deed until an actual agent launches and
+    claims this seat."""
     from src.orchestrator.charter import charter_of
     from src.orchestrator.seats import peer_of_seat, seat_facts
 
@@ -907,11 +905,11 @@ async def _establish_pure_seat_office(
     if not handle:
         return {"error": f"{seat_id} has no handle on record — a seat directory is named "
                          "for its seat's handle, and this one has none"}
-    # A HOUSE IS OPTIONAL (ruling 860b0306): a seat governing a single repo carries none —
-    # this used to refuse the whole ceremony on a houseless seat, the exact shape the
-    # ruling exists to end ("nothing in osiris may require a house"). `house` renders as
-    # "" through compile_managed_body/house_law.md, which drops the clause entirely
-    # rather than showing an empty one.
+    # A HOUSE IS OPTIONAL: a seat governing a single repo carries none. This used to
+    # refuse the whole ceremony on a houseless seat, the exact shape the rule exists to
+    # end (nothing in osiris may require a house). `house` renders as "" through
+    # compile_managed_body/house_law.md, which drops the clause entirely rather than
+    # showing an empty one.
     house = facts["house"] or ""
     root = office_root or _default_office_root()
     office = root / handle.lower()
@@ -987,22 +985,22 @@ async def establish_office(
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
     """The whole ceremony, one receipt: resolve the seat, write its standing orders
-    (never clobbering — an occupied office's orders may be hand-tuned), then
+    (never clobbering, an occupied office's orders may be hand-tuned), then
     `rebind_seat(extract=True)` into ~/.osiris/seats/<handle>/. Refuses loudly on an
-    unknown seat and on an ANONYMOUS lineage (claim_name first — an office is named for
+    unknown seat and on an anonymous lineage (claim_name first: an office is named for
     its seat). Idempotent: re-running converges on the same office.
 
-    THE PURE SEAT PATH (thread 236d3940, mirroring rebind_seat's 3ae57d36 fix): a seat
-    minted by mint_seat/ensure_seat but never claim_name'd by any agent (grantprobe's real
-    shape) used to resolve to NO agent at all here — 'grantprobe' matches neither a claimed
-    handle nor an Agent canonical — so this refused outright before an office could ever be
-    built for the house's next never-yet-launched worker. An explicit SEAT identifier (its
-    own canonical, or its `handle` property) is now checked directly whenever agent
-    resolution supplies nothing, and a hit there builds the office off the Seat record
-    alone: `seat_facts` supplies handle/house (house already DERIVED there), charter is read
-    through the seat's occupant if it has ever had one (usually none), and `file_office_deed`
-    is skipped entirely (it is Agent-only by construction — nothing to deed an office to
-    until someone actually claims this seat by launching in it)."""
+    THE PURE SEAT PATH, mirroring a fix already made in rebind_seat: a seat minted by
+    mint_seat/ensure_seat but never claim_name'd by any agent used to resolve to no agent
+    at all here, since a seat handle matches neither a claimed handle nor an Agent
+    canonical, so this refused outright before an office could ever be built for the
+    house's next never-yet-launched worker. An explicit seat identifier (its own
+    canonical, or its `handle` property) is now checked directly whenever agent resolution
+    supplies nothing, and a hit there builds the office off the Seat record alone:
+    `seat_facts` supplies handle/house (house already derived there), charter is read
+    through the seat's occupant if it has ever had one (usually none), and
+    `file_office_deed` is skipped entirely (it is Agent-only by construction, nothing to
+    deed an office to until someone actually claims this seat by launching in it)."""
     from src.orchestrator.agents import project_of, resolve_handle
     from src.orchestrator.seats import held_seat, seat_occupancy
 
@@ -1024,22 +1022,22 @@ async def establish_office(
         return {"error": f"no such seat or agent: {seat_or_agent!r} — a seat-directory "
                          "ceremony never invents its occupant"}
     if agent_id is None and direct_seat_id is not None:
-        # THE OCCUPANCY GAP (Deckard's live run, thread 8833/msg 8835): `resolve_handle`
-        # and the direct-Agent-canonical check above both only ever match a bare HANDLE
-        # string or a literal `agent:<id>` — called with a SEAT canonical (or a seat
-        # matched only by its `handle` property above, never actually tried as a name)
-        # whose holder is COLD (claimed, just not live this instant), neither one ever
-        # finds it, and this ceremony fell to the PURE SEAT PATH claiming "no agent has
-        # ever claimed this seat" for a seat that plainly has one. `seat_occupancy` reads
-        # the SAME `holds` graph link `identify_agent`/`doors()` uses for a `seat:` ref
-        # (never a cache column) — a real holder here, live or cold, means this is NOT
-        # the pure-seat shape at all.
+        # THE OCCUPANCY GAP, found on a live run: `resolve_handle` and the
+        # direct-Agent-canonical check above both only ever match a bare handle string
+        # or a literal `agent:<id>`. Called with a seat canonical (or a seat matched only
+        # by its `handle` property above, never actually tried as a name) whose holder is
+        # cold (claimed, just not live this instant), neither one ever finds it, and this
+        # ceremony fell to the pure seat path claiming "no agent has ever claimed this
+        # seat" for a seat that plainly has one. `seat_occupancy` reads the same `holds`
+        # graph link `identify_agent`/`doors()` uses for a `seat:` ref (never a cache
+        # column); a real holder here, live or cold, means this is not the pure-seat
+        # shape at all.
         occ = await seat_occupancy(actions.pool, direct_seat_id)
         if occ.get("holder"):
             agent_id = str(occ["holder"])
     if agent_id is None:
         # direct_seat_id is guaranteed set here (the refusal above already ruled out both
-        # being None) — mirrors rebind_seat's own PURE SEAT PATH assert exactly.
+        # being None); mirrors rebind_seat's own pure seat path assert exactly.
         assert direct_seat_id is not None
         return await _establish_pure_seat_office(
             actions, seat_id=direct_seat_id, actor=actor, office_root=office_root,
@@ -1049,28 +1047,28 @@ async def establish_office(
         return {"error": f"{agent_id} has never claimed a name — a seat directory is "
                          "named for its seat. claim_name first, then establish the "
                          "seat directory"}
-    # RESOLVED, NEVER A RAW COPY (decision 68fba2e4, thread 19d6bdcb7fa9): house_of's raw
-    # `project` stamp could be a mint-time fabrication (24e0b761) — project_of resolves
-    # through charter/lineage works_in instead, never house. The refuse-on-nothing behavior
-    # below is unchanged; only the source of what counts as "something" moved.
+    # RESOLVED, NEVER A RAW COPY: house_of's raw `project` stamp could be a mint-time
+    # fabrication, so project_of resolves through charter/lineage works_in instead,
+    # never house. The refuse-on-nothing behavior below is unchanged; only the source of
+    # what counts as "something" moved.
     house = await project_of(actions.pool, agent_id)
     if not house:
         return {"error": f"{agent_id} has no durable project label — it has never been "
                          "mounted in a project, so there is no house to pin at an office"}
     # A LIVE SEAT IS NEVER MOVED (the rollout guard): extraction relocates the lineage's
-    # transcripts, and a running harness process appends to its own by path — moving it
-    # mid-tab splits the session's history between two slugs. The ceremony waits for a
-    # quiet seat (lineage-wide: a live heir blocks moving the base); close the tab,
+    # transcripts, and a running harness process appends to its own by path, so moving it
+    # mid-session splits the session's history between two slugs. The ceremony waits for a
+    # quiet seat (lineage-wide: a live heir blocks moving the base); close the session,
     # establish, relaunch at the office.
     #
-    # A NINTH SPECIMEN OF THE SAME ATLAS SHAPE, found live while fixing entry-point census item 4
-    # (Thoth msg 5772/5741, thread 2c3c2b9a): a fresh/refreshing agent_mounts row alone
-    # used to be enough to refuse this whole ceremony — even with no harness-confirmed
-    # body behind it. This entry point was not in the original count; found because it was
-    # masking doors.py's own `_record` fix inside lift()'s own call chain (establish_office
-    # runs its own, separate liveness check AFTER lift()'s pre-claim check already passed).
-    # establish_office is a rare, deliberate ceremony (never a hot per-mount path), so the
-    # same registry_census cross-check is affordable here too.
+    # ANOTHER SPECIMEN OF THE SAME "STALE ROW READ AS LIVE" SHAPE, found live while fixing
+    # a related liveness check: a fresh/refreshing agent_mounts row alone used to be
+    # enough to refuse this whole ceremony, even with no harness-confirmed body behind it.
+    # This entry point was not caught by the earlier fix; found because it was masking
+    # doors.py's own `_record` fix inside lift()'s own call chain (establish_office runs
+    # its own, separate liveness check after lift()'s pre-claim check already passed).
+    # establish_office is a rare, deliberate ceremony (never a frequently-called path), so
+    # the same registry_census cross-check is affordable here too.
     from src.orchestrator.agents import _generation
     from src.orchestrator.mounts import registry_census
 
@@ -1098,9 +1096,9 @@ async def establish_office(
     bound = await held_seat(actions.pool, agent_id)
     seat_line = (f" — durable identity `{bound['seat_id']}`." if bound else
                  " — not yet seated: your next claim binds you (the on-ramp).")
-    # THE CHARTER IS THE SEAT'S (ruling 1db1ff41) — not the lineage's: reads through the
-    # SAME `bound` this function already resolved for seat_line, one line up, no second
-    # lookup and no lineage-string walk. An agent not yet seated has no charter to read.
+    # THE CHARTER IS THE SEAT'S, not the lineage's: reads through the same `bound` this
+    # function already resolved for seat_line, one line up, no second lookup and no
+    # lineage-string walk. An agent not yet seated has no charter to read.
     from src.orchestrator.charter import charter_of
     from src.orchestrator.project_identity import charter_display_labels
 
@@ -1111,9 +1109,9 @@ async def establish_office(
         "Your charter was never formally declared — it lives only in prose. First act: "
         "`charter(repos=[...])` naming the repos you actually govern. A house is what a "
         "seat GOVERNS, not where it sits.")
-    # THE PEER ADDENDUM (ruling d74492ee, spec e6636c7e): computed LIVE, like seat_line
-    # and charter_block above it — a peer bonded after a fresh mint's scaffold still shows
-    # up here, the one place that reads the graph instead of a fixed mint-time default.
+    # THE PEER ADDENDUM: computed live, like seat_line and charter_block above it, so a
+    # peer bonded after a fresh mint's scaffold still shows up here, the one place that
+    # reads the graph instead of a fixed mint-time default.
     peer_addendum = "\n"
     if bound is not None:
         from src.orchestrator.seats import peer_of_seat
@@ -1146,8 +1144,8 @@ async def establish_office(
         orders_state = scaffold_boot_file(orders, wrapped, label="standing orders")
         agents_state = scaffold_boot_file(
             agents, wrapped, label="its own compiled standing orders (vendor-neutral)")
-    # THE CHARTER FILE, never clobbered (d80621a7 piece 3): an occupied office's charter is
-    # the seat's own hand-maintained live state — alfred's stays his, exactly like CLAUDE.md.
+    # THE CHARTER FILE, never clobbered: an occupied office's charter is the seat's own
+    # hand-maintained live state, exactly like CLAUDE.md stays untouched once written.
     charter_file = office / "charter.md"
     if charter_file.exists():
         charter_file_state = "left in place — the seat's own live state, never overwritten"
@@ -1158,10 +1156,10 @@ async def establish_office(
         actions, seat_or_agent=agent_id, new_cwd=str(office), actor=actor,
         projects_root=projects_root, claude_json=claude_json, extract=True,
         office_root=root)
-    # THE DEED (a2d06410): the ceremony records office ownership in the GRAPH — the
-    # fourth entry point must survive the seat's death, and mount rows don't (SessionEnd
-    # releases them; Ra's ended lineage held none, so every fresh launch at his own
-    # office minted a stranger). The deed is what office_seat reads first.
+    # THE DEED: the ceremony records office ownership in the graph, because this entry
+    # point must survive the seat's death, and mount rows don't (SessionEnd releases
+    # them; a lineage whose session had ended held none, so every fresh launch at its own
+    # office minted an unrecognized occupant). The deed is what office_seat reads first.
     from src.orchestrator.handshake import file_office_deed
 
     deeded = await file_office_deed(
@@ -1183,23 +1181,23 @@ async def establish_office(
     }
 
 
-_SWEEP_HEAL_WAIT_SECS = 90  # wave6probe's own measured respawn window (~1 min, decision
-# 4ca39589/ruling 457d5e96) plus margin — the interval a supervised harness daemon needs to
-# silently re-resume a killed session onto a fresh pid; a clean read taken before this has
-# elapsed is not evidence of nothing, it is evidence of "not yet"
+_SWEEP_HEAL_WAIT_SECS = 90  # a measured respawn window (about a minute) plus margin: the
+# interval a supervised harness daemon needs to silently re-resume a killed session onto
+# a fresh pid; a clean read taken before this has elapsed is not evidence of nothing, it
+# is evidence of "not yet"
 
 
 async def _live_body_at_office(
     pool: asyncpg.Pool, office: Path, *,
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any] | None:
-    """One registry_census read, matched against `office` by EITHER cwd the census carries
-    (harness-reported `harness_cwd` or /proc-confirmed `proc_cwd` — a body can disagree with
+    """One registry_census read, matched against `office` by either cwd the census carries
+    (harness-reported `harness_cwd` or /proc-confirmed `proc_cwd`; a body can disagree with
     itself mid-move, so both are checked) over `verified` (every /proc-confirmed live body,
-    matched-to-a-graph-row or not — `rowless` bodies are exactly the population house law
-    #178 warns never to treat as absent just because agent_mounts missed them). A blind
-    census (`blind: true`, the harness read itself failed) is NEVER read as "nothing live" —
-    it refuses the same as a real hit, one instant's silence is not proof of an empty room."""
+    matched-to-a-graph-row or not: "rowless" bodies are exactly the population that must
+    never be treated as absent just because agent_mounts missed them). A blind census
+    (`blind: true`, the harness read itself failed) is never read as "nothing live": it
+    refuses the same as a real hit, one instant's silence is not proof of an empty room."""
     from src.orchestrator.mounts import registry_census
 
     census = await registry_census(
@@ -1221,43 +1219,41 @@ async def sweep_retired_office(
     office_root: Path | None = None, sleep: Any = None,
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
-    """THE MISSING DISK HALF of seat cleanup (Thoth's msg 6026/6035 lane, wave6probe's own
-    finding): retire_seat/vacate_holder are graph-only by design — neither touches the
-    office directory establish_office scaffolded, so a retired seat's `~/.osiris/seats/
-    <handle>/` sits on disk forever, a complete-looking office belonging to nobody. This is
-    the deliberately SEPARATE verb that closes that gap — never folded into retire_seat
-    (every existing caller relies on its graph-only contract, and a seat can legitimately
-    be retired while its files are kept for archival/audit) or vacate_holder (that releases
-    a STILL-REUSABLE seat; deleting the office under something that may be relaunched into
-    the same directory would be actively wrong).
+    """THE MISSING DISK HALF of seat cleanup: retire_seat/vacate_holder are graph-only by
+    design, neither touches the office directory establish_office scaffolded, so a retired
+    seat's `~/.osiris/seats/<handle>/` sits on disk forever, a complete-looking office
+    belonging to nobody. This is the deliberately separate verb that closes that gap,
+    never folded into retire_seat (every existing caller relies on its graph-only
+    contract, and a seat can legitimately be retired while its files are kept for
+    archival/audit) or vacate_holder (that releases a still-reusable seat; deleting the
+    office under something that may be relaunched into the same directory would be
+    actively wrong).
 
     REFUSES, per directory, rather than guessing, on:
-    - no office directory at the resolved path — nothing to sweep;
-    - more than one Seat object shares this handle (any status) — ambiguous, never guesses
+    - no office directory at the resolved path: nothing to sweep;
+    - more than one Seat object shares this handle (any status): ambiguous, never guesses
       which one owns this directory;
-    - a matching Seat exists and is NOT retired (active/unknown status) — this verb only
-      ever touches a graph-retired seat's office, or an office with NO Seat row at all
-      (the climintworker1/inferredworker1 shape: pure test-run filesystem debris, never a
-      real seat, confirmed independently across 4+ prior generations);
-    - a matching Seat carries an active `holds` link despite its retired status — a shape
+    - a matching Seat exists and is not retired (active/unknown status): this verb only
+      ever touches a graph-retired seat's office, or an office with no Seat row at all
+      (pure test-run filesystem debris, never a real seat, confirmed independently
+      across several prior generations);
+    - a matching Seat carries an active `holds` link despite its retired status: a shape
       that should never exist and is not this verb's business to untangle;
-    - a live body's cwd resolves inside the office RIGHT NOW, per registry_census;
-    - a live body's cwd resolves inside the office after waiting `_SWEEP_HEAL_WAIT_SECS` —
-      wave6probe's own lesson (decision 4ca39589/ruling 457d5e96): a supervised harness
-      daemon can silently re-resume a killed session onto a fresh pid within about a
-      minute, so a single instant's clean read is not proof of an empty office. THE GUARD
-      IS TWO READS, NEVER ONE, exactly the discipline that build demanded.
+    - a live body's cwd resolves inside the office right now, per registry_census;
+    - a live body's cwd resolves inside the office after waiting `_SWEEP_HEAL_WAIT_SECS`:
+      a supervised harness daemon can silently re-resume a killed session onto a fresh pid
+      within about a minute, so a single instant's clean read is not proof of an empty
+      office. The guard is two reads, never one, exactly the discipline this demanded.
 
     `dry_run=True` (the default) reports `would-delete` with every entry under the office,
-    never removes anything. `dry_run=False` is the OPERATOR'S OWN CALL (his words, msg
-    6049: "all holds on me approved, take care of them") — requires `because`, runs the
-    EXACT SAME per-directory guard (no re-derivation, no separate execute-only code path
-    that could drift from what the dry-run actually checked), and on a clean pass removes
-    the office with `shutil.rmtree` before returning `status: "deleted"` with the entries
-    that were actually removed. Every refusal above applies identically in execute mode —
-    a directory that refuses is left untouched, exactly as it would be under dry-run,
-    which is what makes the two modes trustworthy: dry-run predicts precisely what execute
-    does, never an approximation of it."""
+    never removes anything. `dry_run=False` requires operator authorization and requires
+    `because`, runs the exact same per-directory guard (no re-derivation, no separate
+    execute-only code path that could drift from what the dry-run actually checked), and
+    on a clean pass removes the office with `shutil.rmtree` before returning
+    `status: "deleted"` with the entries that were actually removed. Every refusal above
+    applies identically in execute mode: a directory that refuses is left untouched,
+    exactly as it would be under dry-run, which is what makes the two modes trustworthy:
+    dry-run predicts precisely what execute does, never an approximation of it."""
     if not dry_run and not (because or "").strip():
         return {"error": "because is required to execute — a filesystem delete is not "
                          "self-justifying the way a dry-run report is"}
@@ -1266,24 +1262,24 @@ async def sweep_retired_office(
         return {"error": "a handle is required"}
     root = office_root or _default_office_root()
     office = root / handle.lower()
-    # CONTAINMENT, AND IT IS THE ONE GUARD THIS VERB WAS MISSING (Thoth LXXXIX, wave 8
-    # merge review). Every other refusal below interrogates THE SEAT — is it retired, is
-    # it ambiguous, does it hold, is a body live in it. Not one of them interrogates THE
-    # PATH, and `handle` is a caller-supplied string that goes straight into a `/` join:
+    # CONTAINMENT, AND IT IS THE ONE GUARD THIS VERB WAS MISSING, found during a merge
+    # review. Every other refusal below interrogates the seat: is it retired, is it
+    # ambiguous, does it hold, is a body live in it. Not one of them interrogates the
+    # path, and `handle` is a caller-supplied string that goes straight into a `/` join:
     # handle='../../code/osiris/docs' resolves clean out of the office root, matches no
-    # Seat row, carries no holder, has no live body inside it — so it sails past all five
+    # Seat row, carries no holder, has no live body inside it, so it sails past all five
     # seat guards and reaches shutil.rmtree with a real source directory in hand. Verified
     # by hand before this line existed. It was harmless while dry_run was the only wired
     # mode and became an arbitrary-directory delete the instant the execute path landed:
-    # A GUARD THAT CHECKS THE SUBJECT IS NOT A GUARD ON THE OBJECT.
+    # a guard that checks the subject is not a guard on the object.
     #
-    # The invariant is the one establish_office itself scaffolds — an office is a DIRECT
-    # CHILD of the office root, never a descendant, never a sibling reached by traversal.
+    # The invariant is the one establish_office itself scaffolds: an office is a direct
+    # child of the office root, never a descendant, never a sibling reached by traversal.
     # Compared after resolve() on both sides so symlinks and .. are collapsed first.
     #
     # The three other `root / handle.lower()` sites in this module (correct_office_pin,
-    # establish_office_for_seat, establish_office) are NOT patched here and that is
-    # deliberate, not an oversight: each takes its handle from the GRAPH (held_seat /
+    # establish_office_for_seat, establish_office) are not patched here and that is
+    # deliberate, not an oversight: each takes its handle from the graph (held_seat /
     # seat_facts), never from a caller argument, and each mkdirs rather than deletes. If a
     # handle ever becomes caller-supplied at one of those, it needs this same check.
     resolved_root = root.resolve()
@@ -1362,35 +1358,33 @@ async def sweep_seat_workspace(
     workspace_root: Path | None = None, sleep: Any = None,
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
-    """THE WORKSPACE HALF sweep_retired_office never covered (thread 6272, Thoth's own
-    lane, the operator's "jesus manages the godel project, chad manages the cdking"
-    correction that killed the accident premise this pair was first scoped under):
-    mint_seat/found_seat scaffold TWO directories per seat, the office
-    (`~/.osiris/seats/<handle>/`, an `.osiris` pin) AND the workspace (`~/code/<handle>/`
-    by convention, `path=` overridden at mint time, its OWN `.osiris` pin) — sweep_
-    retired_office only ever reached the first. A retired seat's workspace sits on disk
-    forever exactly the way its office used to, and needed the identical guard shape, not
-    a generalization of the office function (deliberately a SEPARATE function, same
-    reasoning sweep_retired_office's own docstring gives for staying separate from
+    """THE WORKSPACE HALF sweep_retired_office never covered: mint_seat/found_seat
+    scaffold two directories per seat, the office (`~/.osiris/seats/<handle>/`, an
+    `.osiris` pin) and the workspace (`~/code/<handle>/` by convention, `path=`
+    overridden at mint time, its own `.osiris` pin); sweep_retired_office only ever
+    reached the first. A retired seat's workspace sits on disk forever exactly the way
+    its office used to, and needed the identical guard shape, not a generalization of the
+    office function (deliberately a separate function, same reasoning
+    sweep_retired_office's own docstring gives for staying separate from
     retire_seat/vacate_holder: each caller relies on a narrow, specific contract).
 
     `workspace_root` defaults to `Path.home() / "code"`, the documented mint-time default
     (mintseat.py's own `workspace = Path.home() / "code" / handle.lower()` when no `path=`
-    was given) — the SAME best-effort convention sweep_retired_office's own `office_root`
+    was given), the same best-effort convention sweep_retired_office's own `office_root`
     resolution already leans on for the office half; a seat minted with an explicit custom
     `path=` needs a caller-supplied `workspace_root` naming that real parent directory
     instead, exactly as a test override does for the office side.
 
     EVERY GUARD IS THE OFFICE FUNCTION'S OWN, reapplied to the workspace path, not
-    reinvented: the containment check (`workspace.resolve().parent == workspace_root.
-    resolve()` — a handle is a seat's name, never a path, so `../../` never sails past the
-    other five seat guards the way it did before sweep_retired_office's own containment fix
-    landed), the ambiguous-Seat refusal, the retired-or-no-Seat-row gate, the active-holder
-    refusal even on a nominally-retired seat, and the DOUBLE live-body check (immediate
-    plus a `_SWEEP_HEAL_WAIT_SECS` heal-wait re-check, wave6probe's own measured daemon-
-    respawn race) before `shutil.rmtree` is ever reached. `dry_run=True` (default) reports
-    `would-delete`; `dry_run=False` is operator-gated (`because` required), same law every
-    repair verb here follows."""
+    reinvented: the containment check (`workspace.resolve().parent ==
+    workspace_root.resolve()`, a handle is a seat's name, never a path, so `../../` never
+    sails past the other five seat guards the way it did before sweep_retired_office's own
+    containment fix landed), the ambiguous-Seat refusal, the retired-or-no-Seat-row gate,
+    the active-holder refusal even on a nominally-retired seat, and the double live-body
+    check (immediate plus a `_SWEEP_HEAL_WAIT_SECS` heal-wait re-check, guarding against a
+    measured daemon-respawn race) before `shutil.rmtree` is ever reached. `dry_run=True`
+    (default) reports `would-delete`; `dry_run=False` is operator-gated (`because`
+    required), same law every repair verb here follows."""
     if not dry_run and not (because or "").strip():
         return {"error": "because is required to execute — a filesystem delete is not "
                          "self-justifying the way a dry-run report is"}
