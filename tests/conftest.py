@@ -675,6 +675,17 @@ async def actions(pg_dsn: str) -> AsyncIterator[Actions]:
 
     if not await is_known_object_type(pool, "Organization"):
         await seed_catalog(actions_)
+    # THE LEAKING STATE: seed_catalog fires through the same Actions
+    # writer as any domain call, so on whichever test draws the "first in this xdist
+    # worker" seat, its own outbox reset above is immediately refilled with a thousand-
+    # plus object_created/property_added/link_created rows for the Type catalog itself.
+    # evaluate_watches' batch claim (LIMIT 500, ORDER BY id) then exhausts entirely on
+    # that seeding noise before it ever reaches the test's OWN outbox rows, which land
+    # at a far higher id -- order/worker-dependent, since every OTHER test in that worker
+    # finds the catalog already seeded and skips this path. Catalog seeding is fixture
+    # infrastructure, not a domain event any test's own watch should ever see: clear it
+    # again here, unconditionally (cheap no-op when seeding didn't run this test).
+    await pool.execute("DELETE FROM outbox")
     try:
         yield actions_
     finally:
