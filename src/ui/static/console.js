@@ -996,14 +996,22 @@ async function initKey() {
   var backend = prompt('Backend (host-cred / host+tpm2 / file) — leave blank for the door’s own default:');
   if (backend === null) return;
   backend = backend.trim() || null;
+  // GUI PARITY (thread dd11ab34, item 3): the door's own `restart` field is what
+  // makes osiris-mcp/osiris-worker actually SEE the new key (mcp_server.py/
+  // arq_worker.py's own boot gates start degraded with no key otherwise) — a CLI
+  // user gets this via `--restart`; the pane must send it itself, since there is
+  // no separate flag the operator could re-run later from a browser.
+  if (!confirm('Init the soul key and restart osiris-mcp/osiris-worker to pick it up? ' +
+      'This briefly interrupts both daemons (the console itself runs on osiris-mcp).')) return;
   var out = $('key-out'); if (out) out.textContent = 'initializing…';
   var res = await fetch('/soul-key/init', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ backend: backend }),
+    body: JSON.stringify({ backend: backend, restart: true }),
   }).then(function(r){ return r.json(); });
   if (out) out.textContent = JSON.stringify(res, null, 2);
   if (res.error) { setStatus('Init failed: ' + res.error); return; }
-  setStatus('Key initialized (' + res.backend + ').');
+  setStatus('Key initialized (' + res.backend + ')' +
+    (res.restart_hint ? ' — ' + res.restart_hint : '') + '.');
   renderKeyInto(KEY_CONTAINER_ID);
 }
 async function rotateKey() {
@@ -1415,11 +1423,69 @@ async function renderSettingsSectionKey() {
 async function renderSettingsSectionOffload() {
   var container = $('settings-sec-offload');
   if (!container) return;
-  container.innerHTML = '<div id="settings-offload-targets"></div>' +
-    '<div id="settings-backup-status" class="o-faint" style="margin-top:16px">Loading backup status…</div>';
-  await renderOffloadInto('settings-offload-targets');
+  container.innerHTML =
+    '<div id="settings-restic-credential" class="o-faint">Loading restic credential…</div>' +
+    '<div id="settings-offload-targets" style="margin-top:12px"></div>' +
+    '<div style="margin-top:16px"><button class="iconbtn" onclick="runOffloadTick()">Run offload now</button></div>' +
+    '<div id="settings-backup-status" class="o-faint" style="margin-top:12px">Loading backup status…</div>';
+  await Promise.all([
+    renderResticCredentialWidget(), renderOffloadInto('settings-offload-targets'),
+    renderBackupStatusSection(),
+  ]);
+}
+// GUI PARITY (thread dd11ab34, item 1): restic-key init had no route or button.
+async function renderResticCredentialWidget() {
+  var el = $('settings-restic-credential');
+  if (!el) return;
+  var status;
+  try { status = await fetch('/restic-key/status').then(function(r){ return r.json(); }); }
+  catch (e) { status = { error: 'unreachable' }; }
+  el.innerHTML = renderResticCredentialHtml(status);
+}
+function renderResticCredentialHtml(s) {
+  var dot = s.present ? '<span style="color:#2ea043">●</span>' : '<span class="o-faint">○</span>';
+  var initBtn = s.present ? ''
+    : ' <button class="iconbtn" onclick="initResticKey()">Init…</button>';
+  var detail = s.present ? 'present (' + esc(s.backend) + ')'
+    : (s.error ? esc(s.error) : 'missing');
+  return '<div>' + dot + ' Restic credential: ' + detail + initBtn + '</div>';
+}
+async function initResticKey() {
+  var backend = prompt('Backend (host-cred / host+tpm2 / file) — leave blank for the door’s own default:');
+  if (backend === null) return;
+  backend = backend.trim() || null;
+  var res = await fetch('/restic-key/init', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ backend: backend }),
+  }).then(function(r){ return r.json(); });
+  if (res.error) { setStatus('Restic init failed: ' + res.error); return; }
+  setStatus('Restic credential initialized (' + res.backend + ').');
+  renderResticCredentialWidget();
+}
+// GUI PARITY (thread dd11ab34, item 2): no on-demand offload tick.
+async function runOffloadTick() {
+  var out = $('settings-backup-status');
+  if (out) out.textContent = 'running offload tick…';
+  var res;
+  try {
+    res = await fetch('/offload-runner/tick', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    }).then(function(r){ return r.json(); });
+  } catch (e) {
+    setStatus('Offload tick failed — unreachable.');
+    return;
+  }
+  if (res.error) { setStatus('Offload tick failed: ' + res.error); }
+  else {
+    var ok = (res.targets || []).filter(function(t) { return t.ok; }).length;
+    setStatus('Offload tick done — ' + ok + ' of ' + (res.targets || []).length + ' target(s) offloaded.');
+  }
+  renderBackupStatusSection(); // fresh receipts
+}
+async function renderBackupStatusSection() {
   var out = $('settings-backup-status');
   if (!out) return;
+  out.textContent = 'Loading backup status…';
   var status;
   try {
     var res = await fetch('/compositions/run-spec', {
