@@ -1,45 +1,48 @@
-"""MECHANICAL FLEET PRUNE (thread 07ca68ca, wave 8 — operator 2026-09-08: "automatic
-mechanical fleet hygiene ... pruning/cleaning up tools for seats that are not actually
-seats would dramatically improve the ux and mobility").
+"""Mechanical fleet prune.
 
-COMPOSES rather than re-derives: `fleet_reconcile.py` (task #59) already classifies most
-of what this thread asked for — `bulk_fold_swarm`/`rollup_office_remount` (identity
-folds), `drop_ephemeral_test_cwd` (mount residue against an already-retired project —
-this is where "probe or test cwd" mostly lands in practice, since `classification_laws_
-heartbeat` runs `apply_project_hygiene_sweep` immediately before this sweep in the same
-tick: a stub project retired this cycle already has its residue mounts caught here, same
-tick, no gap), and `ghost_gap` (false-live: graph says live, no OS body backs it). This
-module adds the two classes that sweep was never built to see (an OS body the graph has
-NEVER heard of; a mount row whose own anchor directory is gone from disk), and augments
-`bulk_fold_swarm` rows with a `swarm_root_retired` flag when the swarm's own root has no
-currently-live mount — Thoth's "swarm child of a retired root" language, folded into the
-existing bucket as a descriptive refinement rather than a second acting bucket, because
-the same `reconcile_execute` fold already handles it correctly regardless of the flag.
+Automatic, mechanical fleet hygiene: prunes or cleans up tools and mount rows for
+sessions that are not actually live sessions, to keep the fleet's registry accurate
+without manual intervention.
 
-ACTING SCOPE IS DELIBERATELY NARROWER THAN REPORTING SCOPE. `prune_dry_run` reports every
-bucket — fleet_reconcile's five plus this module's two — in ONE manifest, because "one
-classifier over every session registry row and OS body" is a REPORTING requirement.
-`prune_execute` only ever WRITES the two new buckets:
+Composes rather than re-derives: fleet_reconcile.py already classifies most of what
+this covers, bulk_fold_swarm/rollup_office_remount for identity folds,
+drop_ephemeral_test_cwd for mount residue against an already-retired project (this is
+where a probe or test cwd mostly lands in practice, since classification_laws_heartbeat
+runs apply_project_hygiene_sweep immediately before this sweep in the same tick: a stub
+project retired this cycle already has its residue mounts caught here, same tick, no
+gap), and ghost_gap for false-live rows where the graph says live but no OS process
+backs it. This module adds the two classes that sweep was never built to see: an OS
+process the graph has never heard of, and a mount row whose own anchor directory is
+gone from disk. It also augments bulk_fold_swarm rows with a swarm_root_retired flag
+when the swarm's own root has no currently-live mount, describing a "swarm child of a
+retired root" as a refinement of the existing bucket rather than a second acting
+bucket, because the same reconcile_execute fold already handles it correctly
+regardless of the flag.
 
-  dead_transcript — `mounts.drop_dead_transcript_mount` (reversible, audited, same shape
-                    `drop_dead_project_mount` already proves).
-  unclaimed_body  — bound via a plain `save_mount` upsert ONLY when `tree_seat_hint`
-                    resolves the body's own cwd to a living seat with a living holder —
-                    never a guess, never a mint; the seat and its holder must already be
-                    real before this ever writes a row.
+Acting scope is deliberately narrower than reporting scope. prune_dry_run reports every
+bucket, fleet_reconcile's five plus this module's two, in one manifest, because a
+single classifier over every session registry row and OS process is a reporting
+requirement. prune_execute only ever writes the two new buckets:
 
-It NEVER calls `fleet_reconcile.reconcile_execute` itself. That machinery already has its
-own scheduled leg (`fleet_reconcile_heartbeat`) gated behind its own kill switch
-(`osiris_fleet_reconcile_enabled`, Thoth's gate DM 2042 — "flipping that flag is a second
-signature a human gives separately from approving the diff"). Folding its acting half into
-THIS sweep's own always-on heartbeat sibling would silently arm identity-folding on every
-fresh install with no separate signature — exactly the birth-defect this house's own kill-
-switch discipline exists to prevent. The two buckets this module DOES act on are safe by
-construction (a reversible row-scoped delete on a directory that is provably gone; a bind
-that only ever writes when a real seat and a real holder already exist) and need no kill
-switch of their own, the same "ships mechanically, zero hand on it" bar
-`apply_project_hygiene_sweep`/`apply_ghost_house_sweep` already hold themselves to as
-`classification_laws_heartbeat`'s other unconditional siblings.
+  dead_transcript - mounts.drop_dead_transcript_mount (reversible, audited, same shape
+                    drop_dead_project_mount already proves).
+  unclaimed_body  - bound via a plain save_mount upsert only when tree_seat_hint
+                    resolves the process's own cwd to a living seat with a living
+                    holder, never a guess, never a mint; the seat and its holder must
+                    already be real before this ever writes a row.
+
+It never calls fleet_reconcile.reconcile_execute itself. That machinery already has its
+own scheduled leg (fleet_reconcile_heartbeat) gated behind its own kill switch
+(osiris_fleet_reconcile_enabled): flipping that flag is a separate approval step from
+approving the diff. Folding its acting half into this sweep's own always-on heartbeat
+sibling would silently arm identity-folding on every fresh install with no separate
+approval step, exactly what this house's kill-switch discipline exists to prevent. The
+two buckets this module does act on are safe by construction (a reversible row-scoped
+delete on a directory that is provably gone; a bind that only ever writes when a real
+seat and a real holder already exist) and need no kill switch of their own, the same
+"ships mechanically, with no manual approval" bar apply_project_hygiene_sweep and
+apply_ghost_house_sweep already hold themselves to as classification_laws_heartbeat's
+other unconditional siblings.
 """
 from __future__ import annotations
 
@@ -51,7 +54,7 @@ import asyncpg
 from src.actions.core import Actions
 from src.orchestrator import fleet_reconcile
 
-# the same 15-minute liveness window fleet_reconcile._LIVE_WINDOW_SECS already uses —
+# The same 15-minute liveness window fleet_reconcile._LIVE_WINDOW_SECS already uses,
 # reused by name rather than re-declared, so the two modules can never silently drift on
 # what "live" means.
 _LIVE_WINDOW_SECS = fleet_reconcile._LIVE_WINDOW_SECS
@@ -60,12 +63,12 @@ _LIVE_WINDOW_SECS = fleet_reconcile._LIVE_WINDOW_SECS
 async def _dead_transcript_mounts(
     pool: asyncpg.Pool, *, exists_fn: Any = None,
 ) -> list[dict[str, Any]]:
-    """Every `agent_mounts` row whose own `job_dir` anchor directory no longer exists on
-    disk (thread 07ca68ca's "dead transcript" class) — the whisper's own promise (`~/.
-    claude/jobs/<sid8>` names each session it greets) means a gone directory is
-    unambiguous: nothing can re-attach to an address that no longer exists. `exists_fn`
-    is the injection seam (tests drive it with a fake population, never the real
-    filesystem — `census.py`'s own discipline)."""
+    """Every agent_mounts row whose own job_dir anchor directory no longer exists on
+    disk (the "dead transcript" class). Each session is named by its own job directory
+    (~/.claude/jobs/<sid8>) as it starts, so a directory that no longer exists is
+    unambiguous: nothing can re-attach to an address that no longer exists. exists_fn
+    is the injection seam: tests drive it with a fake population, never the real
+    filesystem, the same discipline census.py uses."""
     exists = exists_fn or (lambda p: Path(p).exists())
     rows = await pool.fetch(
         "SELECT job_dir, agent_id, project, cwd, last_seen FROM agent_mounts "
@@ -89,16 +92,17 @@ async def _dead_transcript_mounts(
 async def _unclaimed_bodies(
     pool: asyncpg.Pool, *, registry_census_fn: Any = None,
 ) -> list[dict[str, Any]]:
-    """Every VERIFIED live OS body (`mounts.registry_census`'s own harness+/proc
-    cross-check) with NO `agent_mounts` row at all — `registry_census`'s own `rowless`
-    population, exactly the class a server bounce leaves behind (mounts.py's own module
-    docstring: "every bounce wiped the WHOLE fleet's mounts at once"). Each row carries a
-    `bind_candidate_handle` when the body's own cwd resolves through `tree_seat_hint`
-    (an already-bound `tree_cwd`, or a `.osiris` pin's declared `seat=` line) — a
-    resolution, never a guess: `prune_execute` only binds when this AND a living holder
-    both already exist. `census.get("blind")` (the harness registry read itself failed)
-    reports zero rows rather than guessing — "could not look" must never read as "nothing
-    unclaimed", the same law `fleet_reconcile._ghost_flagged_agents` already holds to."""
+    """Every verified live OS process (mounts.registry_census's own harness+/proc
+    cross-check) with no agent_mounts row at all: registry_census's own "rowless"
+    population, exactly the class a server restart leaves behind (mounts.py's own
+    module docstring notes that every restart wipes the whole fleet's mounts at once).
+    Each row carries a bind_candidate_handle when the process's own cwd resolves
+    through tree_seat_hint (an already-bound tree_cwd, or a .osiris pin's declared
+    seat= line): a resolution, never a guess. prune_execute only binds when this and a
+    living holder both already exist. census.get("blind") (the harness registry read
+    itself failed) reports zero rows rather than guessing: "could not look" must never
+    read as "nothing unclaimed", the same rule fleet_reconcile._ghost_flagged_agents
+    already holds to."""
     from src.orchestrator.mounts import registry_census
     from src.orchestrator.seats import tree_seat_hint
 
@@ -127,25 +131,25 @@ async def prune_dry_run(
     live_bodies_by_cwd: Any = None, registry_census_fn: Any = None, exists_fn: Any = None,
     include_reconcile: bool = True,
 ) -> dict[str, Any]:
-    """THE ONE CLASSIFIER, reporting only — never writes. Composes `fleet_reconcile.
-    reconcile_dry_run`'s five buckets verbatim with this module's two new ones
-    (`dead_transcript`, `unclaimed_body`) into a single manifest, and augments every
-    `bulk_fold_swarm` row with `swarm_root_retired: True` when the swarm's own root
-    (`into`) has no currently-live `agent_mounts` row — Thoth's "swarm child of a
-    retired root" class, reported here as a refinement rather than a bucket of its own,
-    since `reconcile_execute` already folds these rows correctly regardless of the flag.
+    """The one classifier, reporting only, never writes. Composes
+    fleet_reconcile.reconcile_dry_run's five buckets verbatim with this module's two
+    new ones (dead_transcript, unclaimed_body) into a single manifest, and augments
+    every bulk_fold_swarm row with swarm_root_retired: True when the swarm's own root
+    (into) has no currently-live agent_mounts row: a "swarm child of a retired root"
+    class, reported here as a refinement rather than a bucket of its own, since
+    reconcile_execute already folds these rows correctly regardless of the flag.
 
-    `include_reconcile=False` (thread cc82a8e7, classification_laws_heartbeat's own
-    heavy-sweep follow-up to 9150aec2) skips the `fleet_reconcile.reconcile_dry_run`
-    call entirely — a fold-candidate/ghost scan across the WHOLE fleet, measured live at
-    the dominant cost of this cron's own fleet_prune sub-sweep, which never acts on any
-    of those five buckets (see `prune_execute`'s own docstring: it only ever acts on
-    `dead_transcript`/`unclaimed_body`) and duplicates work the SEPARATE
-    `fleet_reconcile_heartbeat` cron already performs and acts on independently, gated
-    behind its own `osiris_fleet_reconcile_enabled` switch. The five reconcile buckets
-    come back empty and `reconciled: False` names why — every OTHER caller (the MCP
-    `backfill` tool, the CLI `fleet-prune` door, every existing test) keeps the default
-    `True` and the full picture, unchanged."""
+    include_reconcile=False (classification_laws_heartbeat's own heavier-sweep
+    follow-up) skips the fleet_reconcile.reconcile_dry_run call entirely: a
+    fold-candidate/ghost scan across the whole fleet, measured live at the dominant
+    cost of this cron's own fleet_prune sub-sweep, which never acts on any of those
+    five buckets (see prune_execute's own docstring: it only ever acts on
+    dead_transcript/unclaimed_body) and duplicates work the separate
+    fleet_reconcile_heartbeat cron already performs and acts on independently, gated
+    behind its own osiris_fleet_reconcile_enabled switch. The five reconcile buckets
+    come back empty and reconciled: False names why. Every other caller (the MCP
+    backfill tool, the CLI fleet-prune command, every existing test) keeps the default
+    True and the full picture, unchanged."""
     if include_reconcile:
         reconciled = await fleet_reconcile.reconcile_dry_run(
             pool, projects_root=projects_root, jobs_home=jobs_home,
@@ -203,26 +207,27 @@ async def prune_execute(
     live_bodies_by_cwd: Any = None, registry_census_fn: Any = None, exists_fn: Any = None,
     include_reconcile: bool = True,
 ) -> dict[str, Any]:
-    """THE ACTING HALF — DRY RUN IS THE DEFAULT (`execute=False`), same convention as
-    `reconcile_execute`. Acts ONLY on `dead_transcript` (drop, reversible/audited) and
-    `unclaimed_body` (bind, only when a `tree_seat_hint` resolution AND a living seat
-    holder both already exist) — see the module docstring for why `fleet_reconcile`'s own
+    """The acting half. Dry run is the default (execute=False), the same convention as
+    reconcile_execute. Acts only on dead_transcript (drop, reversible/audited) and
+    unclaimed_body (bind, only when a tree_seat_hint resolution and a living seat
+    holder both already exist); see the module docstring for why fleet_reconcile's own
     buckets are deliberately left untouched here, gated instead behind their own
-    `fleet_reconcile_heartbeat`/`osiris_fleet_reconcile_enabled` kill switch.
+    fleet_reconcile_heartbeat/osiris_fleet_reconcile_enabled kill switch.
 
-    `include_reconcile=False` (thread cc82a8e7) skips `prune_dry_run`'s own
-    `fleet_reconcile.reconcile_dry_run` call on both reads below — see that function's
-    own docstring. Since this door NEVER acts on those five buckets regardless, a caller
-    that also never reads `reconcile_buckets_untouched` (classification_laws_heartbeat's
-    own fleet_prune sub-sweep is the one such caller today) gets the identical
+    include_reconcile=False skips prune_dry_run's own fleet_reconcile.reconcile_dry_run
+    call on both reads below; see that function's own docstring. Since this function
+    never acts on those five buckets regardless, a caller that also never reads
+    reconcile_buckets_untouched (classification_laws_heartbeat's own fleet_prune
+    sub-sweep is the one such caller today) gets the identical
     would_drop/would_bind/dropped/bound behavior at a fraction of the cost. Every other
-    caller keeps the default `True`.
+    caller keeps the default True.
 
-    Re-reads the tray via `prune_dry_run` (never trusts a stale caller-supplied report).
-    A single row's drop or bind failing is caught and reported inline, never aborting the
-    batch — the same "one bad row must not sink a correct plan" discipline `reconcile_
-    execute` already proves. POST-ACT VERIFICATION: re-reads the tray a second time after
-    acting and reports before/after counts, proof the acted rows actually left the tray."""
+    Re-reads the current state via prune_dry_run (never trusts a stale caller-supplied
+    report). A single row's drop or bind failing is caught and reported inline, never
+    aborting the batch: the same "one bad row must not sink a correct plan" discipline
+    reconcile_execute already proves. Post-act verification: re-reads the state a
+    second time after acting and reports before/after counts, proof the acted rows
+    actually left the set."""
     from src.orchestrator.mounts import drop_dead_transcript_mount, save_mount
     from src.orchestrator.project_identity import project_name_for_disk_path
     from src.orchestrator.seats import seat_by_handle, seat_receipt

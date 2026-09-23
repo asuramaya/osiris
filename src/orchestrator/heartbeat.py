@@ -1,21 +1,24 @@
-"""THE STATUSLINE'S SHARED HEARTBEAT (thread #180, 2026-08-18) — the counts/bump logic
-`scripts/osiris_statusline.py::_counts` used to own outright, now callable against EITHER
-a fresh per-process connection (the script's own fallback path) or the MCP server's own
-warm shared pool (the new `/heartbeat` HTTP route) — ONE INGRESS instead of every rendering
-tab forking a cold `asyncpg.connect()`.
+"""Shared heartbeat/counts logic used by the statusline.
 
-Thoth's own measurement (msg 5205): 138 tx/s and 23 backends against an idle fleet of 16 —
-"at 1000 workers that is 20 backend forks/s from statusline alone against max_connections=100".
-`/succession` already proved the pattern (a hook POSTs, the server does the write on its own
-pool); this extends it to the FAR heavier statusline read/bump path.
+`scripts/osiris_statusline.py::_counts` used to own this logic outright; it is now
+callable against either a fresh per-process connection (the script's own fallback path)
+or the MCP server's own warm shared pool (the `/heartbeat` HTTP route), so there is one
+ingress instead of every rendering tab forking a new `asyncpg.connect()`.
 
-`conn` is deliberately `Any`, not `asyncpg.Connection` — every callee here (`find_session_row`,
-`held_seat`, `seat_facts`, `surface.fetch`) already accepts either a Pool or a Connection (both
-expose the same fetch/fetchrow/fetchval surface), so the SAME function serves a single warm
-connection (the script's own fallback, one connection, one query budget) and a shared pool
-(the route, where each sub-query may land on a different pooled connection — safe, since
-Postgres read-committed visibility does not depend on connection identity once a write has
-committed)."""
+A measurement against an idle fleet of 16 agents showed 138 tx/s and 23 backends from
+statusline traffic alone; at 1000 workers that would be roughly 20 backend connections
+per second against a max_connections=100 database, which motivated consolidating onto a
+shared pool. The `/succession` route already established the pattern of a hook POSTing
+and the server doing the write on its own pool; this extends that pattern to the heavier
+statusline read/bump path.
+
+`conn` is deliberately typed `Any`, not `asyncpg.Connection`: every callee here
+(`find_session_row`, `held_seat`, `seat_facts`, `surface.fetch`) already accepts either a
+Pool or a Connection, since both expose the same fetch/fetchrow/fetchval surface. That
+lets the same function serve a single warm connection (the script's own fallback, one
+connection, one query budget) or a shared pool (the route, where each sub-query may land
+on a different pooled connection) safely, since Postgres read-committed visibility does
+not depend on connection identity once a write has committed."""
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
@@ -39,23 +42,23 @@ class HeartbeatResult(NamedTuple):
     resolved_project: str | None
     resolved_intent: str | None
     resolved_seat_handle: str | None
-    # THE MANAGER'S OWN TEAM (operator 2026-09-06: "fleet is more apt for a manager role"):
-    # live bodies holding seats managed_by THIS seat. 0 for a seat that manages nobody, and
-    # the chrome then shows no fleet cell at all — the bar is scoped to the agent's premises.
+    # Live sessions holding seats managed_by this seat. 0 for a seat that manages nobody;
+    # the UI then shows no fleet cell at all, since the bar is scoped to the agent's own
+    # scope of responsibility.
     team: int = 0
-    # ...over the seats it manages: "team 3/4" (operator 2026-09-06: n/x, just information).
+    # ...over the seats it manages, rendered as "team 3/4" (an n/x count, informational only).
     team_of: int = 0
-    # THE ENVELOPE'S NUMBER: unread mail that asks something of this reader (direct mail of
-    # any grade, room broadcasts not graded fyi) — see mailbox.unread_split.
+    # Unread mail that asks something of this reader: direct mail of any grade, plus room
+    # broadcasts not graded fyi. See mailbox.unread_split.
     needs: int = 0
-    # THE BAR'S `owe`: open obligations owned by THIS seat/lineage/handle, and how many are
-    # past their stale window (operator 2026-09-06: owed_here counted the operator's debts).
+    # Open obligations owned by this seat/lineage/handle, and how many are past their
+    # stale window. (owed_here, elsewhere, counts the operator's own debts.)
     owed_mine: int = 0
     stale_mine: int = 0
-    # THE THIRD OWNER CATEGORY (thread 3a9d9a5d89fa, Ra XL's measured report): open
-    # obligations in a project THIS seat governs whose owner is the bare project name
-    # itself or empty — invisible to owed_mine's own individual-spelling match. Renders
-    # as the bar's `+M project` suffix, never folded into owed_mine.
+    # A third owner category: open obligations in a project this seat governs whose owner
+    # is the bare project name itself or empty, which owed_mine's individual-spelling
+    # match does not catch. Renders as the bar's `+M project` suffix, never folded into
+    # owed_mine.
     owed_mine_project: int = 0
 
 
@@ -82,18 +85,21 @@ async def _team_live(conn: Any, seat_id: str, *, live_secs: int) -> tuple[int, i
 
 
 def _seat_owns_cwd(cwd: str, *, handle: str, anchor_cwd: str | None) -> bool:
-    """Is `cwd` one of THIS seat's own mechanical pin copies — the office, the anchor_cwd
-    courtesy copy, or the `~/code/<handle>` scratch-workspace convention (Thoth's d8331496:
-    "THREE PIN COPIES AND NO WRITER REACHES ALL THREE") — rather than a genuinely separate
-    governed checkout? Containment, not exact match: `cwd` may be a subdirectory of any of
-    these roots and still be answered by that root's own `.osiris` (read_project_label's own
-    climb-to-repo-root behavior). The scratch-workspace root is best-effort, same convention
-    sweep_seat_workspace's own default leans on (mintseat.py's `workspace = Path.home() /
-    "code" / handle.lower()` when no custom `path=` was given at mint) — a seat minted with
-    an explicit custom path is not covered by this guess, same known gap that verb accepts.
+    """Is `cwd` one of this seat's own mechanical pin copies (the office, the anchor_cwd
+    courtesy copy, or the `~/code/<handle>` scratch-workspace convention), rather than a
+    genuinely separate governed checkout? There are three pin copies and no single writer
+    reaches all three, so this check has to cover each one.
 
-    Pure and cheap: no filesystem I/O beyond what Path.resolve() needs, no DB query — this
-    runs on every statusline paint (Thoth's own hard constraint)."""
+    This checks containment, not exact match: `cwd` may be a subdirectory of any of these
+    roots and still be answered by that root's own `.osiris` (read_project_label's own
+    climb-to-repo-root behavior). The scratch-workspace root is best-effort, following the
+    same convention sweep_seat_workspace's own default leans on (mintseat.py's
+    `workspace = Path.home() / "code" / handle.lower()` when no custom `path=` was given at
+    mint); a seat minted with an explicit custom path is not covered by this guess, a known
+    gap that convention accepts.
+
+    Pure and cheap: no filesystem I/O beyond what Path.resolve() needs, no DB query, since
+    this runs on every statusline render."""
     from src.orchestrator.offices import _default_office_root
 
     try:
@@ -118,36 +124,33 @@ async def compute_heartbeat(
     window_size: int | None = None, intent_hint: str | None = None, lease_secs: int,
     on_succession: OnSuccession | None = None, cwd: str = "",
 ) -> HeartbeatResult:
-    """Verbatim extraction of `_counts`'s own body (task #33's `find_session_row`, ruling
-    a882b334's succession-owned model stamp, Thoth's msg 3949/3951 seat fallback, ruling
-    e9ef7373's `surface.fetch` single authority) — see that function's own long-standing
-    comments for the WHY of each step; only the connection source and the succession call
-    moved, nothing about the resolution order changed.
+    """A near-verbatim extraction of the original combined counts function's body: see
+    that history for the reasoning behind each step. Only the connection source and the
+    succession call moved here; the resolution order below is unchanged.
 
-    `cwd` (added: thread 6483/6487/6492) used to feed an (A)/(B) split that let a seat's
-    own `house` override an already-resolved pin at the seat's own mechanical pin copies
-    (office/anchor/workspace) — on the premise that nobody ever DECLARES a value there, so
-    a divergence from the graph must be a mint fossil. THAT PREMISE BROKE the day
-    found_seat/mint_seat stopped fabricating `project` from the handle (decision
-    24e0b761/commit cf201a9): the office pin is now exactly where a seat's project gets
-    DELIBERATELY declared, so overriding it with `house` reintroduced the same class of
-    fabrication one hop over — the live specimen (operator bug, msg 6934, thread
-    19d6bdcb7fa9): Chad's pin correctly says `cdking`, but the statusline rendered
-    `Chad·Chad` because `house` (itself fabricated at mint — a seat founded via
-    found_seat/mint_seat gets `house=handle` unconditionally, never a project) won over it.
+    `cwd` used to feed a two-branch split that let a seat's own `house` field override an
+    already-resolved pin at the seat's own mechanical pin copies (office/anchor/workspace),
+    on the premise that nobody ever declares a value there, so a divergence from the graph
+    must be a leftover from minting. That premise broke once seat creation stopped
+    fabricating `project` from the handle: the office pin is now exactly where a seat's
+    project gets deliberately declared, so overriding it with `house` reintroduced the same
+    class of fabrication one step removed. The live bug this caused: a seat's pin correctly
+    named its real project, but the statusline rendered the handle twice, because `house`
+    (itself fabricated at mint, since a seat founded through the standard path gets
+    `house=handle` unconditionally, never a real project) won over the correct pin.
 
-    RESOLUTION ORDER NOW, PLAINLY: (1) the PIN — `project_hint`, however it resolved —
-    wins outright the instant it resolves to anything; no cwd-based override, ever. (2)
-    Absent a pin, the seat's own DECLARED `charter` — if it names exactly one repo, that
-    repo is the project; more than one is genuine ambiguity, not this function's call to
-    break. (3) Absent both, the agent's own LINEAGE `works_in` (`lineage_works_in`,
-    merge-normalized through `_normalize_project_label_through_merge`) — the same
-    ABSTAIN law that lookup already enforces (only when the whole lineage agrees). `house`
-    NEVER stands in for `project` anywhere in this order — it answers a different
-    question (which house a seat belongs to), and conflating the two is the exact bug this
-    fix closes. `model`'s file-wins precedent (ruling 1874ad35) does NOT transfer here:
-    the pin is a genuine operator INPUT for `model` (a deliberate /model swap); `project`
-    is never operator-input the same way, so there is no parallel input to protect."""
+    Resolution order now, plainly: (1) the pin, `project_hint`, however it resolved, wins
+    outright the instant it resolves to anything; there is no cwd-based override, ever. (2)
+    Absent a pin, the seat's own declared `charter`: if it names exactly one repo, that repo
+    is the project; more than one is genuine ambiguity, not this function's call to break.
+    (3) Absent both, the agent's own lineage `works_in` (`lineage_works_in`,
+    merge-normalized through `_normalize_project_label_through_merge`), following the same
+    abstain rule that lookup already enforces (only when the whole lineage agrees). `house`
+    never stands in for `project` anywhere in this order: it answers a different question
+    (which house a seat belongs to), and conflating the two was the bug this fix closes.
+    The file-wins precedent used for `model` does not transfer here: the pin is a genuine
+    external input for `model` (a deliberate model swap), while `project` is never
+    externally supplied the same way, so there is no parallel input to protect."""
     from src.orchestrator.mounts import find_session_row
 
     agent = None
@@ -156,11 +159,11 @@ async def compute_heartbeat(
         found = await find_session_row(conn, session_id)
         row0 = None
         if found is not None:
-            # EARNED-PULSE (thread 870d7391): a statusline render is a RENDERING READ, not
-            # an earned act — this bump may only REFRESH a pulse the row already earned
-            # (earned_pulse_at IS NOT NULL), never GRANT one to a row that never has. The
-            # metadata fields (model/model_raw/context_window_size) are not a liveness
-            # grant and still update unconditionally.
+            # A statusline render is a read, not an earned act: this bump may only refresh
+            # a pulse the row already earned (earned_pulse_at IS NOT NULL), never grant one
+            # to a row that never has. The metadata fields (model/model_raw/
+            # context_window_size) are not a liveness grant and still update
+            # unconditionally.
             row0 = await conn.fetchrow(
                 "UPDATE agent_mounts SET "
                 "last_seen=CASE WHEN earned_pulse_at IS NOT NULL THEN now() ELSE last_seen END, "
@@ -199,12 +202,13 @@ async def compute_heartbeat(
                 if resolved_intent is None and anchor:
                     from src.orchestrator.agents import read_project_model
                     resolved_intent = read_project_model(anchor)
-            # PIN WINS OUTRIGHT (see this function's own docstring for the full law and
-            # the live specimen that caught its absence): once `resolved_project` answers
-            # from the pin, nothing below ever touches it again — no cwd-based override,
-            # `house` least of all. Absent a pin, `project_of` (agents.py) carries the
-            # SAME charter -> lineage_works_in fallback this function used to inline —
-            # one implementation, not two copies drifting apart.
+            # The pin wins outright (see this function's docstring for the full
+            # resolution order and the bug that caught its absence): once
+            # `resolved_project` answers from the pin, nothing below ever touches it
+            # again, no cwd-based override, `house` least of all. Absent a pin,
+            # `project_of` (agents.py) carries the same charter -> lineage_works_in
+            # fallback this function used to inline, so there is one implementation
+            # rather than two copies drifting apart.
             if resolved_project is None:
                 from src.orchestrator.agents import project_of
                 resolved_project = await project_of(conn, agent, cwd=cwd or None)
