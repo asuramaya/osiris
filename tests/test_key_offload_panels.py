@@ -30,14 +30,14 @@ def test_key_panel_degrades_to_a_plain_notice_on_404_not_an_error() -> None:
     # standalone renderKeyPanel() and a pane's own embedded section call it.
     body = _CONSOLE_JS.split("async function renderKeyInto(containerId) {", 1)[1][:900]
     assert "res.status === 404" in body
-    assert "Key door not deployed yet" in body
+    assert "Encryption key setup is not available in this deployment yet" in body
     assert "renderKeyInto(KEY_CONTAINER_ID)" in body  # "Check again" re-runs the same fetch
     assert "await renderKeyInto('result');" in _CONSOLE_JS.split(
         "async function renderKeyPanel() {", 1)[1][:300]
 
 
 def test_key_panel_status_card_shows_backend_path_and_recovery_paths() -> None:
-    body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:2100]
+    body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:3000]
     assert "keyBackendLabel(s.backend)" in body
     assert "s.path" in body
     assert "keyAgeProse(s.created_age_seconds)" in body
@@ -105,7 +105,7 @@ def test_offload_presence_cell_never_probes_restic_reachability() -> None:
     # check only at write time, never a live network call from this read-only panel.
     body = _CONSOLE_JS.split("function offloadPresenceCell(t) {", 1)[1][:500]
     assert "t.kind !== 'local'" in body
-    assert "network fact this door never checks" in body
+    assert "Connection is not checked automatically" in body
 
 
 def test_offload_presence_cell_shows_present_writable_and_free_space_for_local() -> None:

@@ -23,7 +23,7 @@ const Osiris = (() => {
     return cat;
   }
 
-  const pct = (v) => (v != null ? Math.round(v * 100) + "%" : "—");
+  const pct = (v) => (v != null ? Math.round(v * 100) + "%" : "-");
   const OPSYM = { eq: "=", contains: "~", lt: "<", gt: ">" };
 
   // an op-tree -> a readable pipeline (innermost → outermost) — the lineage breadcrumb (W4).
@@ -89,7 +89,7 @@ const Osiris = (() => {
       ? `<div class="${cls}" onclick="this.classList.toggle('clamp')" title="click to expand">${esc(v)}</div>`
       : `<div class="o-v">${esc(v)}</div>`;
     return `<div class="o-k">${esc(p.name)}</div>${val}
-      <div class="o-pv">${esc(p.source_label || p.source_id || "—")} · ${esc(p.how || "—")} · ${pct(p.confidence)}</div>
+      <div class="o-pv">${esc(p.source_label || p.source_id || "-")} · ${esc(p.how || "-")} · ${pct(p.confidence)}</div>
       ${provenanceSignals(p)}
       <div class="o-upstream-expansion" data-for="${esc(p.name)}" style="display:none;grid-column:1/4"></div>`;
   }
@@ -521,7 +521,7 @@ const Osiris = (() => {
     const chipbar = chips.map((c) => `<span class="r-chip">${esc(c)}</span>`).join("");
     panel.innerHTML =
       `<div class="r-head">${items.length} object${items.length === 1 ? "" : "s"}` +
-      (chips.length ? ` <span class="o-faint">— all share</span> ${chipbar}` : "") + "</div>" +
+      (chips.length ? ` <span class="o-faint">, all share</span> ${chipbar}` : "") + "</div>" +
       (items.length ? `<table class="r-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>` +
         (items.length > shown.length ? _more(items.length - shown.length) : "")
         : `<div class="o-empty">Empty result.</div>`);
@@ -572,10 +572,10 @@ const Osiris = (() => {
   const SECTION_CAP = 12;
 
   function _more(n) {
-    return `<div class="r-more">+${n} more — filter, or ⑂ fan out, to see the rest</div>`;
+    return `<div class="r-more">+${n} more. Filter, or fan out, to see the rest.</div>`;
   }
   function _capped(list) {
-    if (!list.length) return `<div class="o-empty">—</div>`;
+    if (!list.length) return `<div class="o-empty">-</div>`;
     const shown = list.slice(0, SECTION_CAP);
     return table(shown) + (list.length > shown.length ? _more(list.length - shown.length) : "");
   }
@@ -775,12 +775,12 @@ const Osiris = (() => {
         body: JSON.stringify({ action: b.dataset.action, args }),
       }).then((res) => res.json());
       if (r && r.error) { toast(r.error, true); b.disabled = false; b.textContent = was; return; }
-      toast(`${_actionLabel(b.dataset.action)} — done`);
+      toast(`${_actionLabel(b.dataset.action)}: done`);
       // the row's own fact no longer holds (the graph write already landed, server-confirmed)
       // — remove it now rather than wait on a poll this composition may not even be running.
       b.closest("tr")?.remove();
     } catch (err) {
-      toast("action failed — " + err, true);
+      toast("Action failed: " + err, true);
       b.disabled = false;
       b.textContent = was;
     }
@@ -806,7 +806,7 @@ const Osiris = (() => {
       }
       return true;
     });
-    if (!cols.length) return `<div class="o-empty">—</div>`;
+    if (!cols.length) return `<div class="o-empty">-</div>`;
     // .r-table td .clamp (osiris.css) is a proper 2-line clamp+ellipsis, word-wrapped — built
     // 2026-07-11 for objectsTable's own cells, but table() never applied it, so a MEDIUM string
     // (short of the >160 "wall of text" bar below) sailed through untouched. In a many-column

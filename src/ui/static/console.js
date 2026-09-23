@@ -635,7 +635,7 @@ async function sendPaneReply() {
     }).then(function(r){ return r.json(); });
     if (res.error) { setStatus(res.error); }
   } catch(e) {
-    setStatus('reply failed — ' + e);
+    setStatus('Reply failed: ' + e);
   } finally {
     input.disabled = false; input.focus();
   }
@@ -655,11 +655,11 @@ async function sendPaneReply() {
 // just appears beside `value`; no UI change needed when it arrives. Reached via CMD-K
 // ("Settings…") — no standing-lens case for a tab.
 function settingsEffectProse(effect) {
-  if (effect === 'immediate') return 'takes effect immediately';
-  if (effect === 'next_tick') return 'takes effect on the next tick';
-  if (effect === 'next_deploy') return 'takes effect on the next osiris deploy';
+  if (effect === 'immediate') return 'Takes effect immediately';
+  if (effect === 'next_tick') return 'Takes effect within a few seconds';
+  if (effect === 'next_deploy') return 'Takes effect on the next update';
   if (effect && effect.indexOf('restart:') === 0) {
-    return 'takes effect on ' + effect.slice(8) + '’s next restart';
+    return 'Takes effect when ' + effect.slice(8) + ' next restarts';
   }
   return effect || '';
 }
@@ -688,7 +688,9 @@ function settingsFieldInput(item) {
   var id = 'setting-val-' + item.key;
   var v = item.value;
   if (item.type === 'secret_ref') {
-    return '<span class="o-faint">' + (v && v.set ? '(set)' : '(not set)') + '</span>';
+    return '<span class="o-faint">' + (v && v.set ? 'Already set' : 'Not set') + '</span> ' +
+      '<input type="password" id="' + id + '" placeholder="New value" style="width:160px" ' +
+      'oninput="settingsUpdateButtonState(\'' + esc(item.key) + '\')" />';
   }
   if (item.type === 'bool') {
     return '<input type="checkbox" id="' + id + '"' + (v ? ' checked' : '') + ' />';
@@ -710,9 +712,47 @@ function settingsFieldInput(item) {
   // str / path / schedule — plain text; path/schedule may be null (no override, uses
   // the shipped default) — an empty box round-trips to null on save (settingsFieldValue).
   var ph = (item.type === 'path' || item.type === 'schedule')
-    ? ' placeholder="(unset — uses shipped default)"' : '';
+    ? ' placeholder="(not set, uses the default)"' : '';
   return '<input type="text" id="' + id + '" value="' + esc(v == null ? '' : v) + '"' +
     ph + ' style="width:280px" />';
+}
+function settingsActionCell(it) {
+  var isSecret = it.type === 'secret_ref';
+  var needsConfirm = it.consequence === 'high' || isSecret;
+  var reasonInput = it.requires_because
+    ? '<input id="setting-because-' + esc(it.key) + '" class="filter" style="width:150px;margin:0" ' +
+      'placeholder="Reason for this change" oninput="settingsUpdateButtonState(\'' + esc(it.key) + '\')" /> '
+    : '';
+  var confirmBox = needsConfirm
+    ? '<label style="font-size:11px;white-space:nowrap"><input type="checkbox" id="setting-confirm-' + esc(it.key) +
+      '" onchange="settingsUpdateButtonState(\'' + esc(it.key) + '\')" /> Confirm</label> '
+    : '';
+  var startsDisabled = it.requires_because || needsConfirm || isSecret;
+  var btn = isSecret
+    ? '<button class="iconbtn" id="setting-btn-' + esc(it.key) + '"' + (startsDisabled ? ' disabled' : '') +
+      ' onclick="rotateSecret(\'' + esc(it.key) + '\')">Replace</button>'
+    : '<button class="iconbtn" id="setting-btn-' + esc(it.key) + '"' + (startsDisabled ? ' disabled' : '') +
+      ' onclick="saveSetting(\'' + esc(it.key) + '\')">Save</button>';
+  return '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' + reasonInput + confirmBox + btn + '</div>';
+}
+function settingsUpdateButtonState(key) {
+  var item = (SETTINGS_LIST || []).filter(function(it) { return it.key === key; })[0];
+  var btn = $('setting-btn-' + key);
+  if (!item || !btn) return;
+  var ok = true;
+  if (item.requires_because) {
+    var r = $('setting-because-' + key);
+    ok = ok && !!(r && r.value.trim());
+  }
+  if (item.consequence === 'high' || item.type === 'secret_ref') {
+    var c = $('setting-confirm-' + key);
+    ok = ok && !!(c && c.checked);
+  }
+  if (item.type === 'secret_ref') {
+    var v = $('setting-val-' + key);
+    ok = ok && !!(v && v.value);
+  }
+  btn.disabled = !ok;
 }
 function renderSettingsPanelHtml(items) {
   var groups = {}, order = [];
@@ -724,24 +764,23 @@ function renderSettingsPanelHtml(items) {
   var sections = order.map(function(g) {
     var rows = groups[g].map(function(it) {
       var live = (it.live !== undefined && it.live !== null)
-        ? ' <span class="o-faint" title="the value actually running right now">live: ' +
+        ? ' <span class="o-faint" title="The value actually running right now">running: ' +
           esc(JSON.stringify(it.live)) + '</span>' : '';
       return '<tr><td style="vertical-align:top"><code>' + esc(it.key) + '</code>' +
-        (it.consequence === 'high' ? ' <span title="high consequence" style="color:#e5534b">▲</span>' : '') +
+        (it.consequence === 'high' ? ' <span title="Significant change" style="color:#e5534b">▲</span>' : '') +
         '</td><td style="vertical-align:top">' + settingsFieldInput(it) + live +
         '<div id="setting-err-' + esc(it.key) + '" class="o-faint" style="color:#e5534b"></div></td>' +
         '<td class="o-faint" style="vertical-align:top">' + esc(settingsEffectProse(it.effect)) + '</td>' +
-        '<td style="vertical-align:top">' + (it.type === 'secret_ref' ?
-          '<button class="iconbtn" onclick="rotateSecret(\'' + esc(it.key) + '\')">Rotate</button>' :
-          '<button class="iconbtn" onclick="saveSetting(\'' + esc(it.key) + '\')">Save</button>') + '</td></tr>';
+        '<td style="vertical-align:top">' + settingsActionCell(it) + '</td></tr>';
     }).join('');
     return '<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin:20px 0 8px">' +
-      esc(g) + '</h3><table class="ee-table"><thead><tr><th>Key</th><th>Value</th><th>Effect</th><th></th></tr></thead>' +
+      esc(g) + '</h3><table class="ee-table"><thead><tr><th>Setting</th><th>Value</th><th>Effect</th><th></th></tr></thead>' +
       '<tbody>' + rows + '</tbody></table>';
   }).join('');
-  return '<div style="padding:16px;max-width:900px;margin:0 auto">' +
-    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Settings</h2>' +
-    '<div class="o-faint" style="margin-bottom:8px">Every configuration knob osiris has, one governed door.</div>' +
+  return '<div style="padding:16px 0">' +
+    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Registry</h2>' +
+    '<div class="o-faint" style="margin-bottom:8px">Every configuration setting, in one place. Change a value and save it, ' +
+    'with a short reason where one is required.</div>' +
     sections + '</div>';
 }
 function settingsFieldValue(item) {
@@ -762,12 +801,16 @@ async function saveSetting(key) {
   var errEl = $('setting-err-' + key); if (errEl) errEl.textContent = '';
   var value;
   try { value = settingsFieldValue(item); }
-  catch(e) { if (errEl) errEl.textContent = 'invalid value: ' + e; return; }
-  if (item.consequence === 'high' &&
-      !confirm('This is a high-consequence change to ' + key + '. Proceed?')) return;
+  catch(e) { if (errEl) errEl.textContent = 'This value is not valid: ' + e; return; }
+  if (item.consequence === 'high') {
+    var confirmEl = $('setting-confirm-' + key);
+    if (!confirmEl || !confirmEl.checked) return;
+  }
   var because = '';
   if (item.requires_because) {
-    because = prompt('Why this change? (required)'); if (!because) return;
+    var becauseEl = $('setting-because-' + key);
+    because = becauseEl ? becauseEl.value.trim() : '';
+    if (!because) return;
   }
   var res = await fetch('/settings', {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -778,28 +821,30 @@ async function saveSetting(key) {
     setStatus('Save failed: ' + res.error);
     return;
   }
-  setStatus(key + ' saved' + (res.note ? ' — ' + res.note : '') + '.');
+  setStatus(key + ' saved.' + (res.note ? ' ' + res.note : ''));
   renderSettingsInto(SETTINGS_CONTAINER_ID);
 }
-// THE SECRETS ROTATE ACT's own confirm-then-POST door (thread f4498ab304e4's follow-up,
-// Thoth mail 10441) — deliberately NOT saveSetting's own shape: a secret_ref field has
-// no visible <input> to read (settingsFieldInput never renders one for this type), so
-// the new value comes from its own prompt() here, and the confirm is UNCONDITIONAL
-// (never gated on item.consequence — a rotation always replaces the live credential,
-// no low-stakes case exists the way an ordinary knob has one). The write door is the
-// SAME /settings POST saveSetting already uses (settings_service.write_setting's own
-// secret_ref branch IS the rotate — no second endpoint to learn); res.note (which
-// daemon must restart) surfaces the identical way.
+// THE SECRETS REPLACE ACT (thread f4498ab304e4's follow-up, product form: an inline
+// password field plus a required confirm checkbox, never a browser dialog) -- the
+// confirm is UNCONDITIONAL (never gated on item.consequence -- replacing a secret
+// always replaces the live credential, no low-stakes case the way an ordinary knob
+// has one). The write door is the SAME /settings POST saveSetting already uses
+// (settings_service.write_setting's own secret_ref branch IS the replace -- no second
+// endpoint to learn); res.note (which service must restart) surfaces the same way.
 async function rotateSecret(key) {
   var item = (SETTINGS_LIST || []).filter(function(it) { return it.key === key; })[0];
   if (!item) return;
   var errEl = $('setting-err-' + key); if (errEl) errEl.textContent = '';
-  if (!confirm('Rotate ' + key + '? This replaces the live credential; the old value ' +
-      'cannot be recovered from this panel. Proceed?')) return;
-  var value = prompt('New value for ' + key + ':'); if (!value) return;
+  var confirmEl = $('setting-confirm-' + key);
+  if (!confirmEl || !confirmEl.checked) return;
+  var valueEl = $('setting-val-' + key);
+  var value = valueEl ? valueEl.value : '';
+  if (!value) return;
   var because = '';
   if (item.requires_because) {
-    because = prompt('Why this rotation? (required)'); if (!because) return;
+    var becauseEl = $('setting-because-' + key);
+    because = becauseEl ? becauseEl.value.trim() : '';
+    if (!because) return;
   }
   var res = await fetch('/settings', {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -807,10 +852,10 @@ async function rotateSecret(key) {
   }).then(function(r){ return r.json(); });
   if (res.error) {
     if (errEl) errEl.textContent = res.error;
-    setStatus('Rotate failed: ' + res.error);
+    setStatus('Replace failed: ' + res.error);
     return;
   }
-  setStatus(key + ' rotated' + (res.note ? ' — ' + res.note : '') + '.');
+  setStatus(key + ' replaced.' + (res.note ? ' ' + res.note : ''));
   renderSettingsInto(SETTINGS_CONTAINER_ID);
 }
 
@@ -829,7 +874,7 @@ var REPAIRS_TARGETS = [
   { key: 'lineage_repo_links', hint: 'Link a zero-link Decision/Thread to its author’s lineage project.' },
   { key: 'agent_project_links', hint: 'Move works_in/governs off an off-head Agent onto its living head.' },
   { key: 'closed_by_real_sources', hint: 'Re-point closed_by edges off placeholder Agents onto the real Person/SystemSource, then retire the placeholder.' },
-  { key: 'operator_charter', hint: 'Mint governs from person:operator to every active SoftwareProject it doesn’t already cover — fleet-wide authority scope. Apply is CLI-only: osiris backfill operator_charter --apply --because "..."', cliOnly: true },
+  { key: 'operator_charter', hint: 'Mint governs from person:operator to every active SoftwareProject it doesn’t already cover. Fleet-wide authority scope. Apply is CLI-only: osiris backfill operator_charter --apply --because "..."', cliOnly: true },
 ];
 function renderRepairsPanel() {
   const container = $('result'); showPanel();
@@ -911,10 +956,10 @@ async function applyRepair(target) {
 // rather than an error, since "not deployed yet" is the expected common case today,
 // never a broken panel. Reached via CMD-K ("Key…").
 function keyBackendLabel(b) {
-  if (b === 'host-cred') return 'systemd host credential';
-  if (b === 'host+tpm2') return 'systemd host credential + TPM2';
-  if (b === 'file') return 'plain file (no hardware backing)';
-  if (b === 'missing') return 'no key';
+  if (b === 'host-cred') return 'system credential store';
+  if (b === 'host+tpm2') return 'system credential store with hardware chip';
+  if (b === 'file') return 'plain file, no hardware protection';
+  if (b === 'missing') return 'not set up';
   return b || 'unknown';
 }
 function keyAgeProse(seconds) {
@@ -934,19 +979,19 @@ async function renderKeyInto(containerId) {
   KEY_CONTAINER_ID = containerId;
   var container = $(containerId);
   if (!container) return;
-  container.innerHTML = '<div class="o-empty" style="padding:40px">Loading key status…</div>';
+  container.innerHTML = '<div class="o-empty" style="padding:40px">Loading encryption key status…</div>';
   var res;
   try {
     res = await fetch('/soul-key/status');
   } catch (e) {
-    container.innerHTML = '<div class="o-empty" style="padding:40px">Could not reach the key door.</div>';
+    container.innerHTML = '<div class="o-empty" style="padding:40px">Could not check the encryption key status.</div>';
     return;
   }
   if (res.status === 404) {
     container.innerHTML = '<div style="padding:16px;max-width:700px;margin:0 auto">' +
       '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Key</h2>' +
-      '<div class="o-empty" style="padding:40px">Key door not deployed yet — build lands once the ' +
-      'operator mints the credential. <button class="iconbtn" onclick="renderKeyInto(KEY_CONTAINER_ID)">Check again</button></div></div>';
+      '<div class="o-empty" style="padding:40px">Encryption key setup is not available in this deployment yet. ' +
+      '<button class="iconbtn" onclick="renderKeyInto(KEY_CONTAINER_ID)">Check again</button></div></div>';
     return;
   }
   KEY_STATUS = await res.json();
@@ -959,97 +1004,99 @@ async function renderKeyPanel() {
 }
 function renderKeyPanelHtml(s) {
   var enrollBtn = (s.present && (s.recovery_paths_enrolled || []).length === 0)
-    ? ' <button class="iconbtn" onclick="enrollRecoveryBrowser()">Enroll recovery (this browser)…</button>'
+    ? ' <button class="iconbtn" onclick="enrollRecoveryBrowser()">Add a recovery method with a security key</button>'
     : '';
   var warn = s.recovery_warning
     ? '<div style="color:#e5534b;margin:8px 0">⚠ ' + esc(s.recovery_warning) +
-      ' — run <code>osiris soul-key enroll-recovery</code> in your terminal' +
+      '. Run <code>osiris soul-key enroll-recovery</code> in a terminal' +
       (enrollBtn ? ', or' + enrollBtn : '.') +
       '</div>' : '';
   var legacy = (s.legacy_plaintext_rows != null && s.legacy_plaintext_rows > 0)
     ? '<div style="color:#e5534b;margin:8px 0">⚠ ' + s.legacy_plaintext_rows +
-      ' row(s) still under the old key — rotate is not finished until this reads 0.</div>' : '';
+      ' item(s) still use the previous key. Replacement is not finished until this reaches zero.</div>' : '';
   var rotating = s.rotation_in_flight
-    ? '<div style="margin:8px 0"><span title="a .legacy sibling exists">Rotation in progress.</span> ' +
-      '<button class="iconbtn" onclick="finishKeyRotate()">Finish rotation</button></div>' : '';
+    ? '<div style="margin:8px 0"><span>Key replacement in progress.</span> ' +
+      '<button class="iconbtn" onclick="finishKeyRotate()">Finish replacement</button></div>' : '';
   var actions = !s.present
-    ? '<button class="iconbtn" onclick="initKey()">Init…</button> ' +
-      '<button class="iconbtn" onclick="recoverKeyBrowser()">Recover (this browser)…</button>'
+    ? '<div style="margin-bottom:8px">' +
+      '<label>Storage method: <select id="key-init-backend"><option value="">Default for this machine</option>' +
+      '<option value="host-cred">System credential store</option>' +
+      '<option value="host+tpm2">System credential store with hardware chip</option>' +
+      '<option value="file">Plain file, no hardware protection</option></select></label></div>' +
+      '<div style="margin-bottom:8px"><label><input type="checkbox" id="key-init-restart" checked /> ' +
+      'Restart the services now</label></div>' +
+      '<button class="iconbtn" onclick="initKey()">Set up the encryption key</button> ' +
+      '<button class="iconbtn" onclick="recoverKeyBrowser()">Recover using a security key</button>'
     : (s.rotation_in_flight ? '' :
-       '<button class="iconbtn" onclick="rotateKey()">Rotate…</button> ' +
-       '<button class="iconbtn" onclick="restoreDrillKey()">Restore drill</button>');
+       '<div style="margin-bottom:8px"><label><input type="checkbox" id="key-rotate-confirm" ' +
+       'onchange="$(\'key-rotate-btn\').disabled = !this.checked" /> ' +
+       'I understand existing data will move to a new key</label></div>' +
+       '<button class="iconbtn" id="key-rotate-btn" disabled onclick="rotateKey()">Replace the encryption key</button> ' +
+       '<button class="iconbtn" onclick="restoreDrillKey()">Test restore</button>');
   return '<div style="padding:16px;max-width:700px;margin:0 auto">' +
     '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Key</h2>' +
-    '<div class="o-faint" style="margin-bottom:8px">The soul key’s own custody status, over Khnum’s soul-key door.</div>' +
+    '<div class="o-faint" style="margin-bottom:8px">The encryption key that protects stored data. Set it up, replace it, ' +
+    'or add a way to recover it.</div>' +
     '<table class="ee-table"><tbody>' +
-    '<tr><td>Present</td><td>' + (s.present ? 'yes' : 'no') + '</td></tr>' +
-    '<tr><td>Backend</td><td>' + esc(keyBackendLabel(s.backend)) + '</td></tr>' +
-    '<tr><td>Path</td><td><code>' + esc(s.path || '') + '</code></td></tr>' +
+    '<tr><td>Set up</td><td>' + (s.present ? 'yes' : 'no') + '</td></tr>' +
+    '<tr><td>Storage method</td><td>' + esc(keyBackendLabel(s.backend)) + '</td></tr>' +
+    '<tr><td>File location</td><td><code>' + esc(s.path || '') + '</code></td></tr>' +
     '<tr><td>Created</td><td>' + esc(keyAgeProse(s.created_age_seconds)) + '</td></tr>' +
-    '<tr><td>Recovery paths enrolled</td><td>' +
+    '<tr><td>Recovery methods</td><td>' +
     esc((s.recovery_paths_enrolled || []).join(', ') || 'none') + '</td></tr>' +
     '</tbody></table>' + warn + legacy + rotating +
     '<div style="margin-top:12px">' + actions + '</div>' +
     '<pre id="key-out" class="o-faint" style="white-space:pre-wrap;margin-top:12px"></pre></div>';
 }
 async function initKey() {
-  var backend = prompt('Backend (host-cred / host+tpm2 / file) — leave blank for the door’s own default:');
-  if (backend === null) return;
-  backend = backend.trim() || null;
-  // GUI PARITY (thread dd11ab34, item 3): the door's own `restart` field is what
-  // makes osiris-mcp/osiris-worker actually SEE the new key (mcp_server.py/
-  // arq_worker.py's own boot gates start degraded with no key otherwise) — a CLI
-  // user gets this via `--restart`; the pane must send it itself, since there is
-  // no separate flag the operator could re-run later from a browser.
-  if (!confirm('Init the soul key and restart osiris-mcp/osiris-worker to pick it up? ' +
-      'This briefly interrupts both daemons (the console itself runs on osiris-mcp).')) return;
-  var out = $('key-out'); if (out) out.textContent = 'initializing…';
+  var backendEl = $('key-init-backend');
+  var backend = (backendEl && backendEl.value) || null;
+  var restart = !$('key-init-restart') || $('key-init-restart').checked;
+  var out = $('key-out'); if (out) out.textContent = 'Setting up…';
   var res = await fetch('/soul-key/init', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ backend: backend, restart: true }),
+    body: JSON.stringify({ backend: backend, restart: restart }),
   }).then(function(r){ return r.json(); });
   if (out) out.textContent = JSON.stringify(res, null, 2);
-  if (res.error) { setStatus('Init failed: ' + res.error); return; }
-  setStatus('Key initialized (' + res.backend + ')' +
-    (res.restart_hint ? ' — ' + res.restart_hint : '') + '.');
+  if (res.error) { setStatus('Setup failed: ' + res.error); return; }
+  setStatus('Encryption key set up (' + res.backend + ').' +
+    (res.restart_hint ? ' ' + res.restart_hint : ''));
   renderKeyInto(KEY_CONTAINER_ID);
 }
 async function rotateKey() {
-  if (!confirm('Rotate the soul key? Existing rows are re-wrapped under the new key; the ' +
-      'old key stays live as .legacy until Finish rotation confirms every row moved. Proceed?')) return;
-  var out = $('key-out'); if (out) out.textContent = 'rotating…';
+  var out = $('key-out'); if (out) out.textContent = 'Replacing…';
   var res = await fetch('/soul-key/rotate', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ finish: false }),
   }).then(function(r){ return r.json(); });
   if (out) out.textContent = JSON.stringify(res, null, 2);
-  if (res.error) { setStatus('Rotate failed: ' + res.error); return; }
-  setStatus('Rotation begun — re-wrap census above. Finish once legacy_plaintext_rows reads 0.');
+  if (res.error) { setStatus('Replace failed: ' + res.error); return; }
+  setStatus('Replacement begun. See the results above. Finish once the item count above reads zero.');
   renderKeyInto(KEY_CONTAINER_ID);
 }
 async function finishKeyRotate() {
-  var out = $('key-out'); if (out) out.textContent = 'finishing…';
+  var out = $('key-out'); if (out) out.textContent = 'Finishing…';
   var res = await fetch('/soul-key/rotate', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ finish: true }),
   }).then(function(r){ return r.json(); });
   if (out) out.textContent = JSON.stringify(res, null, 2);
   if (res.error) {
-    setStatus('Finish failed: ' + res.error + (res.census ? ' — rows still outstanding.' : ''));
+    setStatus('Finish failed: ' + res.error + (res.census ? '. Items still outstanding.' : ''));
     return;
   }
-  setStatus('Rotation finished (' + res.backend + ').');
+  setStatus('Replacement finished (' + res.backend + ').');
   renderKeyInto(KEY_CONTAINER_ID);
 }
 async function restoreDrillKey() {
-  var out = $('key-out'); if (out) out.textContent = 'drilling every offbox repository…';
+  var out = $('key-out'); if (out) out.textContent = 'Testing every offsite copy…';
   var res = await fetch('/soul-key/restore-drill', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({}),
   }).then(function(r){ return r.json(); });
   if (out) out.textContent = JSON.stringify(res, null, 2);
-  if (res.error) { setStatus('Restore drill failed: ' + res.error); return; }
-  setStatus(res.all_ok ? 'Restore drill: all repositories ok.' : 'Restore drill: at least one repository failed — see output.');
+  if (res.error) { setStatus('Test failed: ' + res.error); return; }
+  setStatus(res.all_ok ? 'Test restore: every copy is readable.' : 'Test restore: at least one copy failed. See the results above.');
 }
 
 // ── Browser recovery crypto (Thoth mail 13002, THE KEY PANEL piece 2) ──────────────────
@@ -1118,7 +1165,7 @@ async function fernetDecryptBytes(derivedKey32, token) {
   var signingInput = raw.slice(0, raw.length - 32);
   var hmacKey = await crypto.subtle.importKey('raw', signingKey, { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
   var ok = await crypto.subtle.verify('HMAC', hmacKey, hmacTag, signingInput);
-  if (!ok) throw new Error('recovery blob failed to decrypt — wrong Security Key, or the blob is corrupted');
+  if (!ok) throw new Error('Could not read the recovery method. Wrong security key, or the saved data is damaged.');
   var aesKey = await crypto.subtle.importKey('raw', encKey, 'AES-CBC', false, ['decrypt']);
   return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-CBC', iv: iv }, aesKey, ciphertext));
 }
@@ -1137,34 +1184,34 @@ function _rpOriginOk(rpId) {
 async function enrollRecoveryBrowser() {
   var out = $('key-out');
   if (!_webauthnPrfAvailable()) { setStatus('This browser has no WebAuthn/PRF support.'); return; }
-  if (out) out.textContent = 'checking the key door’s own rp_id setting…';
+  if (out) out.textContent = 'Checking settings…';
   var status = await fetch('/soul-key/status').then(function(r){ return r.json(); });
   var rpId = status.rp_id;
-  if (!rpId) { setStatus('GET /soul-key/status carries no rp_id yet — cannot enroll safely.'); return; }
+  if (!rpId) { setStatus('Could not find the setting needed to add this recovery method.'); return; }
   if (!_rpOriginOk(rpId)) {
-    setStatus('This console is served from "' + document.location.hostname + '", not "' +
-      rpId + '" — the browser will refuse to create a credential for a domain this page ' +
-      'is not actually served from. Open the console as http://' + rpId + ':8011 to enroll.');
+    setStatus('This page is open at "' + document.location.hostname + '", not "' +
+      rpId + '". The browser will not allow a security key on a different address. ' +
+      'Open the console as http://' + rpId + ':8011 instead.');
     return;
   }
-  if (out) out.textContent = 'requesting key material…';
+  if (out) out.textContent = 'Preparing…';
   var issued = await fetch('/soul-key/recovery-material', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
   }).then(function(r){ return r.json(); });
-  if (issued.error) { if (out) out.textContent = issued.error; setStatus('Enroll failed: ' + issued.error); return; }
+  if (issued.error) { if (out) out.textContent = issued.error; setStatus('Setup failed: ' + issued.error); return; }
   try {
-    if (out) out.textContent = 'touch your Security Key now…';
+    if (out) out.textContent = 'Touch your security key now.';
     var rawKey = b64urlDecodeToBytes(issued.raw_key);
     var credential = await navigator.credentials.create({ publicKey: {
-      rp: { id: rpId, name: 'Osiris soul-store key' },
-      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'soul-key', displayName: 'Osiris soul-store key' },
+      rp: { id: rpId, name: 'Osiris encryption key' },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'encryption-key', displayName: 'Osiris encryption key' },
       challenge: crypto.getRandomValues(new Uint8Array(32)),
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
       authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
       extensions: { prf: {} },
     }});
     var salt = crypto.getRandomValues(new Uint8Array(32));
-    if (out) out.textContent = 'touch your Security Key again to derive the wrap…';
+    if (out) out.textContent = 'Touch your security key again to finish setup.';
     var assertion = await navigator.credentials.get({ publicKey: {
       challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: rpId,
       allowCredentials: [{ type: 'public-key', id: credential.rawId }],
@@ -1173,13 +1220,13 @@ async function enrollRecoveryBrowser() {
     }});
     var prfResults = assertion.getClientExtensionResults().prf;
     if (!prfResults || !prfResults.results || !prfResults.results.first) {
-      throw new Error('this Security Key did not return a PRF/hmac-secret output — it may not support the extension');
+      throw new Error('This security key does not support the required feature.');
     }
     var prfOutput = new Uint8Array(prfResults.results.first);
     var wrapKey = await hkdfWrapKeyMaterial(prfOutput);
     var wrappedToken = await fernetEncryptBytes(wrapKey, rawKey);
     var fingerprint = await _sha256FingerprintHex16(rawKey);
-    if (out) out.textContent = 'persisting the enrollment…';
+    if (out) out.textContent = 'Saving the recovery method…';
     var res = await fetch('/soul-key/recovery-material/complete', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -1190,12 +1237,12 @@ async function enrollRecoveryBrowser() {
       }),
     }).then(function(r){ return r.json(); });
     if (out) out.textContent = JSON.stringify(res, null, 2);
-    if (res.error) { setStatus('Enroll failed: ' + res.error); return; }
-    setStatus('Recovery enrolled in this browser.');
+    if (res.error) { setStatus('Setup failed: ' + res.error); return; }
+    setStatus('Recovery method added.');
     renderKeyInto(KEY_CONTAINER_ID);
   } catch (e) {
     if (out) out.textContent = String((e && e.message) || e);
-    setStatus('Enroll failed: ' + ((e && e.message) || e));
+    setStatus('Setup failed: ' + ((e && e.message) || e));
   }
 }
 
@@ -1203,21 +1250,21 @@ async function enrollRecoveryBrowser() {
 async function recoverKeyBrowser() {
   var out = $('key-out');
   if (!_webauthnPrfAvailable()) { setStatus('This browser has no WebAuthn/PRF support.'); return; }
-  if (out) out.textContent = 'reading the recovery enrollment…';
+  if (out) out.textContent = 'Reading the saved recovery method…';
   var blob = await fetch('/soul-key/recovery-blob').then(function(r){ return r.json(); });
-  if (blob.error) { if (out) out.textContent = blob.error; setStatus('Recover failed: ' + blob.error); return; }
-  // the credential was enrolled against blob's OWN rp_id (Thoth's ruling, decision
-  // ff21aed514bc) -- that value, not a guess, is what the ceremony must present.
+  if (blob.error) { if (out) out.textContent = blob.error; setStatus('Recovery failed: ' + blob.error); return; }
+  // The security key was registered against this saved rp_id value, not a guess -- that
+  // is the address the browser must present for the key to answer.
   if (!_rpOriginOk(blob.rp_id)) {
-    setStatus('This console is served from "' + document.location.hostname + '", not "' +
-      blob.rp_id + '" — open the console as http://' + blob.rp_id + ':8011 to recover.');
+    setStatus('This page is open at "' + document.location.hostname + '", not "' +
+      blob.rp_id + '". Open the console as http://' + blob.rp_id + ':8011 to recover.');
     return;
   }
   var status = await fetch('/soul-key/status').then(function(r){ return r.json(); });
   try {
     var credentialId = b64urlDecodeToBytes(blob.credential_id);
     var salt = b64urlDecodeToBytes(blob.salt);
-    if (out) out.textContent = 'touch your Security Key now…';
+    if (out) out.textContent = 'Touch your security key now.';
     var assertion = await navigator.credentials.get({ publicKey: {
       challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: blob.rp_id,
       allowCredentials: [{ type: 'public-key', id: credentialId }],
@@ -1226,16 +1273,16 @@ async function recoverKeyBrowser() {
     }});
     var prfResults = assertion.getClientExtensionResults().prf;
     if (!prfResults || !prfResults.results || !prfResults.results.first) {
-      throw new Error('this Security Key did not return a PRF/hmac-secret output for the enrolled credential — wrong key plugged in?');
+      throw new Error('This security key does not match the one used to set up recovery.');
     }
     var prfOutput = new Uint8Array(prfResults.results.first);
     var wrapKey = await hkdfWrapKeyMaterial(prfOutput);
     var rawKey = await fernetDecryptBytes(wrapKey, blob.wrapped_key);
     var fingerprint = await _sha256FingerprintHex16(rawKey);
     if (fingerprint !== blob.key_fingerprint) {
-      throw new Error('recovered key’s own fingerprint does not match the recovery blob’s recorded one — refusing to seal a possibly-tampered key');
+      throw new Error('The recovered key does not match its saved record. Refusing to use it.');
     }
-    if (out) out.textContent = 'sealing the recovered key…';
+    if (out) out.textContent = 'Finishing recovery…';
     var res = await fetch('/soul-key/recover-from-browser', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -1244,12 +1291,12 @@ async function recoverKeyBrowser() {
       }),
     }).then(function(r){ return r.json(); });
     if (out) out.textContent = JSON.stringify(res, null, 2);
-    if (res.error) { setStatus('Recover failed: ' + res.error); return; }
-    setStatus('Key recovered and sealed (' + res.backend + ').');
+    if (res.error) { setStatus('Recovery failed: ' + res.error); return; }
+    setStatus('Encryption key recovered (' + res.backend + ').');
     renderKeyInto(KEY_CONTAINER_ID);
   } catch (e) {
     if (out) out.textContent = String((e && e.message) || e);
-    setStatus('Recover failed: ' + ((e && e.message) || e));
+    setStatus('Recovery failed: ' + ((e && e.message) || e));
   }
 }
 
@@ -1289,13 +1336,13 @@ async function renderOffloadPanel() {
 }
 function offloadPresenceCell(t) {
   if (t.kind !== 'local') {
-    return '<span class="o-faint" title="restic reachability is a network fact this door never checks">—</span>';
+    return '<span class="o-faint" title="Connection is not checked automatically for a remote repository">Not checked</span>';
   }
   var p = t.presence;
-  if (!p) return '<span class="o-faint" title="no expected_mountpoint set">—</span>';
+  if (!p) return '<span class="o-faint" title="No expected folder is set">-</span>';
   var dot = p.present
-    ? '<span style="color:#2ea043" title="mounted now">● present</span>'
-    : '<span class="o-faint" title="not mounted right now — the expected common case for an intermittent target">○ absent</span>';
+    ? '<span style="color:#2ea043" title="Connected now">● Connected</span>'
+    : '<span class="o-faint" title="Not connected right now. Expected for a target that is only sometimes plugged in.">○ Not connected</span>';
   var extra = p.present
     ? ' <span class="o-faint">' + (p.writable === false ? 'read-only' : 'writable') +
       (p.free_bytes != null ? ', ' + Math.round(p.free_bytes / 1024 ** 3) + ' GB free' : '') + '</span>'
@@ -1304,23 +1351,23 @@ function offloadPresenceCell(t) {
 }
 function offloadRowHtml(t, i) {
   var kindOpts = ['local', 'restic'].map(function(k) {
-    return '<option value="' + k + '"' + (t.kind === k ? ' selected' : '') + '>' + k + '</option>';
+    return '<option value="' + k + '"' + (t.kind === k ? ' selected' : '') + '>' + offloadKindLabel(k) + '</option>';
   }).join('');
   return '<tr>' +
-    '<td><input id="off-name-' + i + '" value="' + esc(t.name || '') + '" style="width:120px" /></td>' +
+    '<td><input id="off-name-' + i + '" value="' + esc(t.name || '') + '" style="width:110px" /></td>' +
     '<td><select id="off-kind-' + i + '" onchange="renderOffloadPanel_refreshRow(' + i + ')">' + kindOpts + '</select></td>' +
-    '<td><input id="off-url-' + i + '" value="' + esc(t.path_or_url || '') + '" style="width:220px" ' +
-    'placeholder="local: abs fs path — restic: repo URL" /></td>' +
-    '<td><input id="off-mount-' + i + '" value="' + esc(t.expected_mountpoint || '') + '" style="width:160px" ' +
-    (t.kind === 'local' ? 'placeholder="expected mountpoint"' : 'placeholder="(local only)" disabled') + ' /></td>' +
-    '<td><input id="off-sched-' + i + '" value="' + esc(t.schedule || '') + '" style="width:140px" placeholder="OnCalendar=" /></td>' +
+    '<td><input id="off-url-' + i + '" value="' + esc(t.path_or_url || '') + '" style="width:320px" ' +
+    'placeholder="Folder path, or repository address" title="' + esc(t.path_or_url || '') + '" /></td>' +
+    '<td><input id="off-mount-' + i + '" value="' + esc(t.expected_mountpoint || '') + '" style="width:150px" ' +
+    (t.kind === 'local' ? 'placeholder="Expected folder"' : 'placeholder="(not used)" disabled') + ' /></td>' +
+    '<td><input id="off-sched-' + i + '" value="' + esc(t.schedule || '') + '" style="width:110px" placeholder="e.g. daily" /></td>' +
     '<td><input type="checkbox" id="off-enabled-' + i + '"' + (t.enabled ? ' checked' : '') + ' /></td>' +
     '<td>' + offloadPresenceCell(t) + '</td>' +
     '<td><button class="iconbtn" onclick="removeOffloadRow(' + i + ')">Remove</button></td></tr>';
 }
 function renderOffloadPanel_refreshRow(i) {
-  // kind flipped client-side only — re-render so the mountpoint field's disabled
-  // state matches, without losing any other row's in-progress edits.
+  // The target's kind was flipped client-side only; re-render so the folder field's
+  // disabled state matches, without losing any other row's in-progress edits.
   syncOffloadRowsFromDom();
   $(OFFLOAD_CONTAINER_ID).innerHTML = renderOffloadPanelHtml();
 }
@@ -1349,22 +1396,28 @@ function removeOffloadRow(i) {
 }
 function renderOffloadPanelHtml() {
   var rows = (OFFLOAD_ROWS || []).map(function(t, i) { return offloadRowHtml(t, i); }).join('');
-  return '<div style="padding:16px;max-width:1100px;margin:0 auto">' +
-    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Offload Targets</h2>' +
-    '<div class="o-faint" style="margin-bottom:4px">Intermittent backup targets — present only when docked or on Tailscale/home LAN ' +
-    '(ruling be21384a). Vault path: <code>' + esc(OFFLOAD_VAULT || '(unset — see Settings)') + '</code></div>' +
-    '<div class="o-faint" style="margin-bottom:8px">The hot path never lives here — this is the ladder’s off-box copy only.</div>' +
-    '<table class="ee-table"><thead><tr><th>Name</th><th>Kind</th><th>Path / URL</th>' +
-    '<th>Expected mountpoint</th><th>Schedule</th><th>Enabled</th><th>Presence</th><th></th></tr></thead>' +
+  return '<div style="padding:16px 0">' +
+    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Offload targets</h2>' +
+    '<div class="o-faint" style="margin-bottom:4px">Extra backup copies that are only sometimes connected, such as an external drive or ' +
+    'a remote server. Storage location: <code>' + esc(OFFLOAD_VAULT || '(not set, see Registry)') + '</code></div>' +
+    '<div class="o-faint" style="margin-bottom:8px">These are copies only. The main working data is never stored here.</div>' +
+    '<table class="ee-table"><thead><tr><th>Name</th><th>Type</th><th>Location</th>' +
+    '<th>Expected folder</th><th>Schedule</th><th>Enabled</th><th>Status</th><th></th></tr></thead>' +
     '<tbody>' + rows + '</tbody></table>' +
-    '<div style="margin-top:8px"><button class="iconbtn" onclick="addOffloadRow()">+ Add target</button> ' +
-    '<button class="iconbtn" onclick="saveOffloadTargets()">Save</button></div>' +
+    '<div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+    '<button class="iconbtn" onclick="addOffloadRow()">Add target</button> ' +
+    '<label for="offload-reason">Reason for this change:</label>' +
+    '<input id="offload-reason" class="filter" style="width:260px;margin:0" oninput="' +
+    '$(\'offload-save-btn\').disabled = !this.value.trim()" />' +
+    '<button class="iconbtn" id="offload-save-btn" disabled onclick="saveOffloadTargets()">Save</button></div>' +
     '<pre id="offload-out" class="o-faint" style="white-space:pre-wrap;margin-top:12px"></pre></div>';
 }
 async function saveOffloadTargets() {
   syncOffloadRowsFromDom();
-  var because = prompt('Why this change? (required)'); if (!because) return;
-  var out = $('offload-out'); if (out) out.textContent = 'saving…';
+  var reasonEl = $('offload-reason');
+  var because = reasonEl ? reasonEl.value.trim() : '';
+  if (!because) return;
+  var out = $('offload-out'); if (out) out.textContent = 'Saving…';
   var res = await fetch('/backup-settings', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ offload_targets: OFFLOAD_ROWS, because: because }),
@@ -1374,7 +1427,7 @@ async function saveOffloadTargets() {
     setStatus('Save failed: ' + res.error);
     return;
   }
-  if (out) out.textContent = res.warnings ? 'Saved. Warnings: ' + JSON.stringify(res.warnings) : 'Saved.';
+  if (out) out.textContent = res.warnings ? 'Saved. Some settings need attention: ' + JSON.stringify(res.warnings) : 'Saved.';
   setStatus('Offload targets saved.');
   renderOffloadInto(OFFLOAD_CONTAINER_ID);
 }
@@ -1397,9 +1450,9 @@ async function renderSettingsPane() {
     '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:12px">Settings</h2>' +
     settingsSectionShell('key', 'Key') +
     settingsSectionShell('offload', 'Backup &amp; Offload') +
+    settingsSectionShell('box', 'Readiness') +
     settingsSectionShell('registry', 'Registry') +
     settingsSectionShell('desk', 'Operator Desk') +
-    settingsSectionShell('box', 'The Box') +
     '</div>';
   await Promise.all([
     renderSettingsSectionKey(), renderSettingsSectionOffload(),
@@ -1424,7 +1477,7 @@ async function renderSettingsSectionOffload() {
   var container = $('settings-sec-offload');
   if (!container) return;
   container.innerHTML =
-    '<div id="settings-restic-credential" class="o-faint">Loading restic credential…</div>' +
+    '<div id="settings-restic-credential" class="o-faint">Loading remote backup password…</div>' +
     '<div id="settings-offload-targets" style="margin-top:12px"></div>' +
     '<div style="margin-top:16px"><button class="iconbtn" onclick="runOffloadTick()">Run offload now</button></div>' +
     '<div id="settings-backup-status" class="o-faint" style="margin-top:12px">Loading backup status…</div>';
@@ -1433,7 +1486,8 @@ async function renderSettingsSectionOffload() {
     renderBackupStatusSection(),
   ]);
 }
-// GUI PARITY (thread dd11ab34, item 1): restic-key init had no route or button.
+// GUI PARITY (thread dd11ab34, item 1): setting up the remote backup password had no
+// route or button.
 async function renderResticCredentialWidget() {
   var el = $('settings-restic-credential');
   if (!el) return;
@@ -1444,43 +1498,47 @@ async function renderResticCredentialWidget() {
 }
 function renderResticCredentialHtml(s) {
   var dot = s.present ? '<span style="color:#2ea043">●</span>' : '<span class="o-faint">○</span>';
-  var initBtn = s.present ? ''
-    : ' <button class="iconbtn" onclick="initResticKey()">Init…</button>';
-  var detail = s.present ? 'present (' + esc(s.backend) + ')'
-    : (s.error ? esc(s.error) : 'missing');
-  return '<div>' + dot + ' Restic credential: ' + detail + initBtn + '</div>';
+  var setupForm = s.present ? ''
+    : '<label>Storage method: <select id="restic-init-backend"><option value="">Default for this machine</option>' +
+      '<option value="host-cred">System credential store</option>' +
+      '<option value="host+tpm2">System credential store with hardware chip</option>' +
+      '<option value="file">Plain file, no hardware protection</option></select></label> ' +
+      '<button class="iconbtn" onclick="initResticKey()">Set up</button>';
+  var detail = s.present ? 'set up (' + esc(s.backend) + ')'
+    : (s.error ? esc(s.error) : 'not set up');
+  return '<div>' + dot + ' Remote backup password: ' + detail + '</div>' +
+    (setupForm ? '<div style="margin-top:6px">' + setupForm + '</div>' : '');
 }
 async function initResticKey() {
-  var backend = prompt('Backend (host-cred / host+tpm2 / file) — leave blank for the door’s own default:');
-  if (backend === null) return;
-  backend = backend.trim() || null;
+  var backendEl = $('restic-init-backend');
+  var backend = (backendEl && backendEl.value) || null;
   var res = await fetch('/restic-key/init', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ backend: backend }),
   }).then(function(r){ return r.json(); });
-  if (res.error) { setStatus('Restic init failed: ' + res.error); return; }
-  setStatus('Restic credential initialized (' + res.backend + ').');
+  if (res.error) { setStatus('Setup failed: ' + res.error); return; }
+  setStatus('Remote backup password set up (' + res.backend + ').');
   renderResticCredentialWidget();
 }
 // GUI PARITY (thread dd11ab34, item 2): no on-demand offload tick.
 async function runOffloadTick() {
   var out = $('settings-backup-status');
-  if (out) out.textContent = 'running offload tick…';
+  if (out) out.textContent = 'Running the offload now…';
   var res;
   try {
     res = await fetch('/offload-runner/tick', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
     }).then(function(r){ return r.json(); });
   } catch (e) {
-    setStatus('Offload tick failed — unreachable.');
+    setStatus('Offload failed. Could not reach the service.');
     return;
   }
-  if (res.error) { setStatus('Offload tick failed: ' + res.error); }
+  if (res.error) { setStatus('Offload failed: ' + res.error); }
   else {
     var ok = (res.targets || []).filter(function(t) { return t.ok; }).length;
-    setStatus('Offload tick done — ' + ok + ' of ' + (res.targets || []).length + ' target(s) offloaded.');
+    setStatus('Offload finished. ' + ok + ' of ' + (res.targets || []).length + ' target(s) copied.');
   }
-  renderBackupStatusSection(); // fresh receipts
+  renderBackupStatusSection(); // fresh results
 }
 async function renderBackupStatusSection() {
   var out = $('settings-backup-status');
@@ -1500,12 +1558,15 @@ async function renderBackupStatusSection() {
   if (status.error) { out.textContent = status.error; return; }
   out.innerHTML = renderBackupStatusHtml(status);
 }
+function offloadKindLabel(k) {
+  return k === 'local' ? 'Local drive' : 'Remote repository';
+}
 function renderBackupStatusHtml(status) {
   var timerRows = (status.timers || []).map(function(t) {
     var mismatch = t.configured_schedule && t.configured_schedule !== t.schedule;
     var configuredCell = t.configured_schedule
       ? (mismatch
-         ? '<span style="color:#e5534b" title="configured but not taken effect yet — needs an osiris deploy">' +
+         ? '<span style="color:#e5534b" title="Set, but not active yet. Takes effect on the next update.">' +
            esc(t.configured_schedule) + '</span>'
          : esc(t.configured_schedule))
       : '<span class="o-faint">(default)</span>';
@@ -1517,17 +1578,17 @@ function renderBackupStatusHtml(status) {
   var targets = (status.offbox && status.offbox.offload_targets) || [];
   var targetRows = targets.map(function(t) {
     var presence = t.kind === 'local'
-      ? (t.presence ? (t.presence.present ? '● present' : '○ absent') : '—')
-      : '<span class="o-faint" title="reachability is a network fact this door never checks by design">—</span>';
-    return '<tr><td>' + esc(t.name) + '</td><td>' + esc(t.kind) + '</td><td>' + presence + '</td>' +
+      ? (t.presence ? (t.presence.present ? '● connected' : '○ not connected') : '-')
+      : '<span class="o-faint" title="Connection is not checked automatically for a remote repository">Not checked</span>';
+    return '<tr><td>' + esc(t.name) + '</td><td>' + esc(offloadKindLabel(t.kind)) + '</td><td>' + presence + '</td>' +
       '<td class="o-faint">' + esc(t.last_successful_offload || 'never') + '</td>' +
       '<td class="o-faint">' + esc(t.last_error || '') + '</td></tr>';
   }).join('');
   return '<div class="o-faint" style="margin-bottom:4px">As of ' + esc(status.as_of || '') + '</div>' +
-    '<table class="ee-table"><thead><tr><th>Timer</th><th>Schedule (live)</th><th>Configured</th>' +
-    '<th>State</th></tr></thead><tbody>' + timerRows + '</tbody></table>' +
-    (targetRows ? '<table class="ee-table" style="margin-top:8px"><thead><tr><th>Target</th><th>Kind</th>' +
-     '<th>Presence</th><th>Last successful offload</th><th>Last error</th></tr></thead><tbody>' +
+    '<table class="ee-table"><thead><tr><th>Backup schedule</th><th>Default</th><th>Set to</th>' +
+    '<th>Status</th></tr></thead><tbody>' + timerRows + '</tbody></table>' +
+    (targetRows ? '<table class="ee-table" style="margin-top:8px"><thead><tr><th>Target</th><th>Type</th>' +
+     '<th>Connection</th><th>Last successful offload</th><th>Last error</th></tr></thead><tbody>' +
      targetRows + '</tbody></table>' : '');
 }
 
@@ -1577,16 +1638,16 @@ function deskBandHtml(title, cards, band) {
 function renderDeskHtml(desk) {
   if (desk.error) return '<div class="o-empty">' + esc(desk.error) + '</div>';
   var dimmed = (desk.dimmed || []).map(function(d) {
-    return '<div class="o-faint">' + esc(d.headline) + ' — moot: ' + esc(d.moot) + '</div>';
+    return '<div class="o-faint">' + esc(d.headline) + '. No longer relevant: ' + esc(d.moot) + '</div>';
   }).join('');
   var queue = desk.your_queue ? (desk.your_queue.threads || []).map(function(t) {
     return '<div>' + esc(t.summary || t.id) + '</div>';
   }).join('') : '';
-  return '<div class="o-faint" style="margin-bottom:8px">owed: ' + (desk.owed || 0) +
-    ' · letters: ' + (desk.letters || 0) + '</div>' +
-    deskBandHtml('Needs decision', desk.needs_decision, 'decision') +
-    deskBandHtml('Blocked on hands', desk.needs_hands, 'hands') +
-    deskBandHtml('FYI', desk.fyi, 'fyi') +
+  return '<div class="o-faint" style="margin-bottom:8px">Needs your input: ' + (desk.owed || 0) +
+    ', Notices: ' + (desk.letters || 0) + '</div>' +
+    deskBandHtml('Needs a decision', desk.needs_decision, 'decision') +
+    deskBandHtml('Needs someone to act', desk.needs_hands, 'hands') +
+    deskBandHtml('Notices', desk.fyi, 'fyi') +
     (queue ? '<h4 style="font-size:11px;text-transform:uppercase;color:var(--muted);margin:12px 0 4px">' +
      'Your queue</h4>' + queue : '') +
     (dimmed ? '<h4 style="font-size:11px;text-transform:uppercase;color:var(--muted);margin:12px 0 4px">' +
@@ -1627,7 +1688,7 @@ function renderMergeCandidatesHtml(list) {
     var line = mergeLine(c);
     return '<div style="border-bottom:1px solid var(--border);padding:8px 0">' +
       '<div>' + esc(c.a_label) + ' <span class="o-faint">(' + esc(c.a_type) + ')</span> ↔ ' +
-      esc(c.b_label) + ' <span class="o-faint">(' + esc(c.b_type) + ')</span> — score ' +
+      esc(c.b_label) + ' <span class="o-faint">(' + esc(c.b_type) + ')</span>, match score ' +
       c.score.toFixed(2) + '</div>' +
       '<input readonly value="' + esc(line) + '" style="width:80%;font-family:monospace;font-size:11px" ' +
       'onclick="this.select()" /> <button class="iconbtn" onclick="copyMergeLine(this)" ' +
@@ -1635,12 +1696,14 @@ function renderMergeCandidatesHtml(list) {
       '<button class="iconbtn" data-id="' + c.id + '" onclick="rejectMergeCandidate(this)">Reject</button></div>';
   }).join('');
   return '<h4 style="font-size:11px;text-transform:uppercase;color:var(--muted);margin:16px 0 4px">' +
-    'Fold candidates — merges stay the operator’s own act</h4>' + rows;
+    'Possible duplicates</h4>' +
+    '<div class="o-faint" style="margin-bottom:8px">These records may describe the same thing. ' +
+    'Merging is a deliberate step you run yourself; copy the command below into a terminal.</div>' + rows;
 }
 function copyMergeLine(btn) {
   var line = btn.getAttribute('data-line');
   try { navigator.clipboard.writeText(line); setStatus('Copied.'); }
-  catch (e) { setStatus('Copy failed — select the line by hand.'); }
+  catch (e) { setStatus('Could not copy automatically. Select the text and copy it by hand.'); }
 }
 async function rejectMergeCandidate(btn) {
   var id = btn.getAttribute('data-id');
@@ -1652,8 +1715,9 @@ async function rejectMergeCandidate(btn) {
   renderSettingsSectionDesk();
 }
 
-// --- section 5: THE BOX — a hands-on-the-box checklist, read live off four existing
-// doors + the two new ones (restic-key status, deploy-status) --------------------------
+// --- section 5: READINESS — a checklist of what is set up and connected, read live
+// off four existing status routes plus the two newer ones (remote backup password,
+// running-version status) --------------------------------------------------------------
 async function renderSettingsSectionBox() {
   var container = $('settings-sec-box');
   if (!container) return;
@@ -1661,14 +1725,14 @@ async function renderSettingsSectionBox() {
   var soulKey, resticKey, backupSettings, deployStatus;
   try {
     var r1 = await fetch('/soul-key/status');
-    soulKey = r1.status === 404 ? { present: false, backend: 'missing (door not deployed)' } : await r1.json();
-  } catch (e) { soulKey = { error: 'unreachable' }; }
+    soulKey = r1.status === 404 ? { present: false, backend: 'not available in this deployment' } : await r1.json();
+  } catch (e) { soulKey = { error: 'Could not check.' }; }
   try { resticKey = await fetch('/restic-key/status').then(function(r){ return r.json(); }); }
-  catch (e) { resticKey = { error: 'unreachable' }; }
+  catch (e) { resticKey = { error: 'Could not check.' }; }
   try { backupSettings = await fetch('/backup-settings').then(function(r){ return r.json(); }); }
-  catch (e) { backupSettings = { error: 'unreachable' }; }
+  catch (e) { backupSettings = { error: 'Could not check.' }; }
   try { deployStatus = await fetch('/deploy-status').then(function(r){ return r.json(); }); }
-  catch (e) { deployStatus = { error: 'unreachable' }; }
+  catch (e) { deployStatus = { error: 'Could not check.' }; }
   container.innerHTML = renderBoxHtml(soulKey, resticKey, backupSettings, deployStatus);
 }
 function boxRow(label, ok, detail) {
@@ -1678,30 +1742,30 @@ function boxRow(label, ok, detail) {
 }
 function renderBoxHtml(soulKey, resticKey, backupSettings, deployStatus) {
   var rows = '';
-  rows += boxRow('Soul key present', !!(soulKey && soulKey.present),
+  rows += boxRow('Encryption key set up', !!(soulKey && soulKey.present),
     soulKey && soulKey.backend ? esc(soulKey.backend) : (soulKey && soulKey.error ? esc(soulKey.error) : ''));
-  rows += boxRow('Restic credential present', !!(resticKey && resticKey.present),
+  rows += boxRow('Remote backup password set up', !!(resticKey && resticKey.present),
     resticKey && resticKey.backend ? esc(resticKey.backend) : (resticKey && resticKey.error ? esc(resticKey.error) : ''));
   var targets = (backupSettings && backupSettings.offload_targets) || [];
   targets.filter(function(t) { return t.kind === 'local'; }).forEach(function(t) {
-    rows += boxRow('Local target "' + t.name + '" mounted', t.presence ? !!t.presence.present : null,
+    rows += boxRow('Local target "' + t.name + '" connected', t.presence ? !!t.presence.present : null,
       t.presence
         ? (t.presence.present
            ? (t.presence.free_bytes != null ? Math.round(t.presence.free_bytes / 1024 ** 3) + ' GB free' : '')
-           : 'not mounted now — expected for an intermittent target')
-        : 'no expected_mountpoint set');
+           : 'Not connected right now. Expected for a target that is only sometimes plugged in.')
+        : 'No expected folder is set.');
   });
   targets.filter(function(t) { return t.kind === 'restic'; }).forEach(function(t) {
-    rows += boxRow('Restic target "' + t.name + '" reachable', null,
-      'reachability is never probed live by design — see Backup &amp; Offload above for its last successful offload');
+    rows += boxRow('Remote target "' + t.name + '" connected', null,
+      'Connection is not checked automatically. See Backup &amp; Offload above for its last successful offload.');
   });
-  if (!targets.length) rows += boxRow('Offload targets configured', false, 'none configured yet');
+  if (!targets.length) rows += boxRow('Offload targets configured', false, 'None configured yet.');
   var inSync = deployStatus && deployStatus.in_sync;
-  rows += boxRow('Deploy snapshot matches running code',
+  rows += boxRow('Running the latest version',
     deployStatus && deployStatus.running_sha ? !!inSync : null,
     deployStatus && deployStatus.running_sha
-      ? ('running ' + deployStatus.running_sha.slice(0, 8) + ' · snapshot ' +
-         (deployStatus.deploy_snapshot_sha ? deployStatus.deploy_snapshot_sha.slice(0, 8) : 'never pinned'))
+      ? ('current: ' + deployStatus.running_sha.slice(0, 8) + ', latest available: ' +
+         (deployStatus.deploy_snapshot_sha ? deployStatus.deploy_snapshot_sha.slice(0, 8) : 'not yet published'))
       : (deployStatus && deployStatus.error ? esc(deployStatus.error) : ''));
   return '<table class="ee-table"><tbody>' + rows + '</tbody></table>';
 }
@@ -1805,7 +1869,7 @@ function bindUpstreamExpansions(scope) {
               return esc(f.name) + '=' + esc(String(f.value)) + ' (' + esc(f.source_id) + ')';
             }).join(', ');
             return '<div class="o-rel" style="padding-left:8px"><a data-pick="' + esc(g.id) +
-              '" style="cursor:pointer">' + esc(g.name) + '</a> — <span class="o-faint">' +
+              '" style="cursor:pointer">' + esc(g.name) + '</a>, <span class="o-faint">' +
               facts + '</span></div>';
           }).join('');
         exp.querySelectorAll('[data-pick]').forEach(function(a) {
@@ -1908,7 +1972,7 @@ const POWER_TOOLS = [
   // still reachable directly (nothing deleted), just no longer surfaced as its own
   // separate palette row — the pane below embeds each one's shared fetch+render
   // (renderKeyInto/renderOffloadInto/renderSettingsInto) instead.
-  { label: 'Settings', hint: 'Key, backup & offload, registry, operator desk, the box', cat: 'Admin', run: () => renderSettingsPane() },
+  { label: 'Settings', hint: 'Encryption key, backup, readiness, configuration, and the operator desk', cat: 'Admin', run: () => renderSettingsPane() },
 ];
 
 // THE COMPOSER SHELL (Thoth dispatch 9257 piece 2, thread 588148bb): "run" used to mean
