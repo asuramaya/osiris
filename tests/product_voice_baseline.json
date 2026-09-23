@@ -2,7 +2,7 @@
   "README.md": 31,
   "docs/INSTALL.md": 2,
   "src/cli.py": 737,
-  "src/mcp_server.py": 103,
+  "src/mcp_server.py": 33,
   "src/ui/static/index.html": 2,
   "src/ui/static/space.html": 1
 }

@@ -2238,7 +2238,7 @@ async def test_resolve_thread_tool_receipt_admits_when_the_edge_does_NOT_land(
         out = await srv.resolve_thread(str(t), artifact="src/doohickey/hum.py:17")
     finally:
         srv._pool = saved_pool
-    assert out["resolved_by"].startswith("none —")
+    assert out["resolved_by"].startswith("none:")
     assert "did not resolve to a graph object" in out["resolved_by"]
 
 
