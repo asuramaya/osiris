@@ -49,22 +49,23 @@ def test_checkboxes_are_excluded_never_get_a_background_swap() -> None:
     assert '.ee-table input:not([type="checkbox"])' in _OSIRIS_CSS
 
 
-# --- fix 2: the recovery-path warning sentence never dangles --------------------------
+# --- fix 2 (superseded): the recovery-path warning sentence's own dangling-"or" risk
+# is gone entirely, not just fixed -- the warning paragraph itself moved off the Key
+# panel onto the first-run stepper (readiness.py's "recovery_enrolled" step, a single
+# fixed sentence with no conditional string concatenation, so the bug class this
+# section's own fix 2 patched cannot recur there). The Key panel keeps only the
+# unconditional enroll button (still gated on the same 0-recovery-paths check). -------
 
-def test_recovery_warning_never_ends_with_a_dangling_or() -> None:
-    body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:1200]
-    assert "(enrollBtn ? ', or' + enrollBtn : '.')" in body
-    # the old, dangling construction is gone
-    assert "in your terminal, or' + enrollBtn +" not in body
+def test_key_panel_no_longer_renders_the_recovery_warning_paragraph() -> None:
+    body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:1600]
+    assert "recovery_warning" not in body
+    assert "in a terminal" not in body
 
 
-def test_recovery_warning_ends_with_a_period_when_no_enroll_button_applies() -> None:
-    # recovery_paths_enrolled.length === 1 (not 0): the warning still shows (soul_key_
-    # status's own law: warn whenever <=1 enrolled) but enrollBtn is deliberately empty
-    # (the server refuses a second enrollment) -- the sentence must still read cleanly.
-    body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:1200]
-    assert "in a terminal'" in body
-    assert "enrollBtn ? ', or' + enrollBtn : '.')" in body
+def test_key_panel_still_offers_the_enroll_button_unconditionally() -> None:
+    body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:1600]
+    assert "(s.recovery_paths_enrolled || []).length === 0)" in body
+    assert "enrollRecoveryBrowser()" in body
 
 
 # --- fix 3: space.js hoisting closes the TDZ race ---------------------------------------

@@ -42,16 +42,17 @@ def test_key_panel_status_card_shows_backend_path_and_recovery_paths() -> None:
     assert "s.recovery_paths_enrolled" in body
 
 
-def test_key_panel_warns_when_recovery_has_at_most_one_path() -> None:
-    body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:2000]
-    assert "s.recovery_warning" in body
-    # points at the CLI, never a browser button, per policy
-    assert "osiris soul-key enroll-recovery" in body
+# The recovery-path warning and the legacy-plaintext-rows warning both moved off this
+# panel onto the first-run stepper (src.orchestrator.readiness's own "recovery_enrolled"
+# and "data_encrypted" steps, tests/test_readiness.py) -- the stepper reads the exact
+# same underlying facts (s.recovery_warning, s.legacy_plaintext_rows) server-side, this
+# panel no longer renders either as its own paragraph.
 
 
-def test_key_panel_flags_outstanding_legacy_plaintext_rows() -> None:
+def test_key_panel_no_longer_shows_the_recovery_or_legacy_rows_warnings() -> None:
     body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:2000]
-    assert "s.legacy_plaintext_rows != null && s.legacy_plaintext_rows > 0" in body
+    assert "s.recovery_warning" not in body
+    assert "s.legacy_plaintext_rows" not in body
 
 
 def test_key_panel_never_renders_a_browser_enrollment_button() -> None:

@@ -11,10 +11,59 @@ to `soul_crypto.soul_key_init`, kept here only so callers have one entry point t
 """
 from __future__ import annotations
 
+import json
+import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import asyncpg
+
+_RESTORE_DRILL_RECEIPTS_ENV = "OSIRIS_RESTORE_DRILL_RECEIPTS_FILE"
+_DEFAULT_RESTORE_DRILL_RECEIPTS_FILE = "~/.local/state/osiris/restore_drill_receipts.json"
+
+
+def _restore_drill_receipts_path() -> Path:
+    env = os.environ.get(_RESTORE_DRILL_RECEIPTS_ENV)
+    if env:
+        return Path(env).expanduser()
+    return Path(_DEFAULT_RESTORE_DRILL_RECEIPTS_FILE).expanduser()
+
+
+def _read_restore_drill_receipts() -> dict[str, Any]:
+    path = _restore_drill_receipts_path()
+    try:
+        return dict(json.loads(path.read_text()))
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_restore_drill_receipt(repo_url: str, *, ok: bool, error: str | None) -> None:
+    """Same merge discipline as offload_runner._write_receipt: a failed drill never
+    clobbers an earlier real `last_passed_at` with None, it only ever adds
+    `last_attempt_at`/`last_error` alongside whatever last actually passed. The
+    readiness stepper's own "restore test passed" step reads this back (there was
+    nowhere to read it back from before this file existed: run_drill itself writes
+    nothing, a bare pass/fail returned to the caller and never seen again)."""
+    path = _restore_drill_receipts_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    receipts = _read_restore_drill_receipts()
+    existing = receipts.get(repo_url, {})
+    now = datetime.now(UTC).isoformat()
+    existing["last_attempt_at"] = now
+    if ok:
+        existing["last_passed_at"] = now
+        existing["last_error"] = None
+    else:
+        existing["last_error"] = error
+    receipts[repo_url] = existing
+    path.write_text(json.dumps(receipts, indent=2))
+
+
+def restore_drill_receipts() -> dict[str, Any]:
+    """Public read entry point, mirrors offload_runner.offload_receipts() under the
+    same name shape. Never writes."""
+    return _read_restore_drill_receipts()
 
 
 async def soul_key_status(pool: asyncpg.Pool, *, path: str | None = None) -> dict[str, Any]:
@@ -134,10 +183,40 @@ async def soul_key_restore_drill(
     results = []
     for url in urls:
         fail = await asyncio.to_thread(run_drill, url)
-        results.append({"repo_url": url, "ok": fail is None, "error": fail})
+        ok = fail is None
+        results.append({"repo_url": url, "ok": ok, "error": fail})
+        _write_restore_drill_receipt(url, ok=ok, error=fail)
     all_ok = all(r["ok"] for r in results)
     out: dict[str, Any] = {"drills": results, "all_ok": all_ok}
     if not all_ok:
         failing = [r["repo_url"] for r in results if not r["ok"]]
         out["error"] = f"{len(failing)} of {len(results)} drill(s) failed: {failing}"
     return out
+
+
+async def soul_key_encrypt_existing(
+    pool: asyncpg.Pool, *, path: str | None = None, batch_size: int = 2000,
+) -> dict[str, Any]:
+    """The readiness stepper's own "encrypt now" action, real work
+    (`dry_run=False`): the same `soul_store.encrypt_existing_soul_lines` the CLI script
+    (`scripts/osiris_encrypt_soul_lines.py`) and `soul_key_status`'s own dry-run census
+    already call, resolving the key the same explicit-path way `soul_key_status` does
+    rather than trusting the calling process's own env/default. Refuses outright when no
+    key exists yet: encrypting "existing" rows onto a key that was never minted is not a
+    recoverable half-state, it's a caller mistake. The whole migration runs inside this
+    one call (a `while` loop over every batch already lives in
+    `encrypt_existing_soul_lines` itself); the returned counts ARE the progress readout,
+    the same report the CLI script prints, not a separate live stream."""
+    from cryptography.fernet import Fernet, MultiFernet
+
+    from src.ingest import soul_crypto
+    from src.ingest.soul_store import encrypt_existing_soul_lines
+
+    status = soul_crypto.soul_key_status(path=path)
+    if not status["present"]:
+        return {"error": "no encryption key set up yet; run soul-key init first"}
+    key_bytes = soul_crypto.read_key_bytes_at(  # noqa: ASYNC240 -- a 44-byte key
+        Path(status["path"]), explicit=path is not None)
+    fernet = MultiFernet([Fernet(key_bytes)])
+    return await encrypt_existing_soul_lines(
+        pool, batch_size=batch_size, dry_run=False, fernet=fernet)

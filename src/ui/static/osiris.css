@@ -1077,6 +1077,12 @@ select.field:focus, input.field:focus { border-color: var(--border-focus); }
 .ee-row.sel {
   background: rgba(56, 139, 253, 0.12);
 }
+/* THE FIRST-RUN STEPPER's own current-step highlight: the one row a newcomer
+   should act on next, picked out from the rest without a paragraph explaining why. */
+.readiness-current {
+  background: rgba(56, 139, 253, 0.1);
+  box-shadow: inset 3px 0 0 var(--border-focus, #58a6ff);
+}
 .ee-table td {
   padding: 6px 10px;
   vertical-align: middle;
