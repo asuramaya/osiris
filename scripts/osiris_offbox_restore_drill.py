@@ -12,9 +12,15 @@ holding zero snapshots (nothing ever backed up, or every snapshot pruned), and e
 is not restorable. This drill fails that case explicitly rather than reporting a
 `check`-clean repo as proof of anything.
 
-CREDENTIALS: RESTIC_PASSWORD or RESTIC_PASSWORD_FILE (restic's own env contract) must
-already be set in the calling environment, same as osiris_offbox_backup.sh. This
-script never touches it.
+CREDENTIALS: `restic_credential.get_restic_password()`, the same resolution ladder
+`orchestrator.offload_runner._run_restic_backup` already uses, not the ambient
+environment (an earlier version of this script trusted RESTIC_PASSWORD/
+RESTIC_PASSWORD_FILE to already be set by the caller; the runner and this drill now
+resolve the SAME credential the SAME way, so a drill run genuinely proves the runner's
+own real password unlocks the repository, not a different one a human happened to have
+exported). Set directly as the RESTIC_PASSWORD subprocess env var, never a temp file,
+never a CLI argument (visible via `ps`), matching osiris_offbox_backup.sh's own
+long-standing rule; never logged or included in any error message this script prints.
 """
 from __future__ import annotations
 
@@ -26,15 +32,26 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 
 def run_drill(repo_url: str, *, scratch: Path | None = None) -> str | None:
     """Returns a failure string, or None on success. Cleans up the scratch directory
     in every case (`finally`), same discipline as osiris_pitr_drill.py's own
     run_drill. `scratch` defaults to a fresh tempdir, never a caller-reused
     directory, so a prior drill's leftovers can never be mistaken for this run's own
-    restored content."""
+    restored content. Resolves the restic password itself (`ResticPasswordMissing`
+    degrades this one call, never a subprocess.run with a half-populated env);
+    the password never appears in the returned failure string."""
+    from src.orchestrator.restic_credential import ResticPasswordMissing, get_restic_password
+
+    try:
+        password = get_restic_password()
+    except ResticPasswordMissing as exc:
+        return str(exc)
+
     scratch = scratch or Path(tempfile.mkdtemp(prefix="osiris-offbox-drill-"))
-    env = {**os.environ, "RESTIC_REPOSITORY": repo_url}
+    env = {**os.environ, "RESTIC_REPOSITORY": repo_url, "RESTIC_PASSWORD": password.decode()}
     try:
         check = subprocess.run(["restic", "check"], env=env, capture_output=True,
                                text=True, timeout=600)
@@ -49,7 +66,7 @@ def run_drill(repo_url: str, *, scratch: Path | None = None) -> str | None:
 
         restored_files = [p for p in scratch.rglob("*") if p.is_file()]
         if not restored_files:
-            return ("restore produced zero files — the repository has no snapshots, "
+            return ("restore produced zero files: the repository has no snapshots, "
                      "or the latest one is empty; a check-clean repository is NOT "
                      "proof of a restorable backup")
         return None
@@ -70,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     if fail:
         print(f"OFF-BOX RESTORE DRILL FAILED: {fail}", file=sys.stderr)
         return 1
-    print("off-box restore drill: PASS — restic check clean, restore produced real "
+    print("off-box restore drill: PASS. restic check clean, restore produced real "
           "content")
     return 0
 
