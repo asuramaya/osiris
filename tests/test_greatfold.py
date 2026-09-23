@@ -149,7 +149,7 @@ async def test_fold_seat_execute_folds_mints_the_seat_and_briefs_after(
     brief = await actions.pool.fetchval(
         "SELECT body FROM fleet_messages WHERE to_project='operator' "
         "ORDER BY id DESC LIMIT 1")
-    assert brief and brief.startswith("GREAT FOLD — seat khnum")
+    assert brief and brief.startswith("GREAT FOLD: seat khnum")
     assert out["briefed"] is not None
     # idempotent: a second run finds nothing left to fold
     again = await fold_seat(actions, handle="khnum", actor="operator", execute=True,

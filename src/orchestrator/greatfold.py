@@ -1,31 +1,33 @@
-"""THE GREAT FOLD — one-soul-per-seat as a MACHINE (rulings b64db62b + 8b54c514 + c8abd24a).
+"""THE GREAT FOLD: one identity per seat, enforced as a MACHINE.
 
-The operator's rule, verbatim: "As a general rule, I only ever have one soul occupying the
-seats and speaking with me, and everything else spawned from a bug or a mistake." A SOUL is
-a seat's WHOLE succession chain — Thoth L and every ancestor are one soul — so the census's
-honest denominator is the seats (~25), never the registrations (1991). Everything else is
-either a seat's own substrate debris (a crash re-mint, a compaction seam, a fork, a wake
-ghost — FOLDS into the seat's living lineage) or a DOORBELL RING (a one-shot registration
-with no name, no lineage, no conversation — DEMOTED to class=visit, never folded into a
-soul, never counted as a mind).
+Operating policy: normally only one identity occupies the seats and communicates with the
+operator, and anything else came from a bug or a mistake. An IDENTITY is a seat's whole
+succession chain (an agent and every ancestor in its lineage count as one identity), so the
+census's honest denominator is the seats (~25), never the registrations (1991). Everything
+else is either a seat's own substrate debris (a crash re-mint, a compaction artifact, a
+fork, a wake ghost, which FOLDS into the seat's living lineage) or a DOORBELL RING (a
+one-shot registration with no name, no lineage, no conversation, DEMOTED to class=visit,
+never folded into an identity, never counted as a distinct one).
 
-This module is the machine the campaign runs THROUGH (the operator, 2026-07-21: "build the
-machine first then perform the fold through the machine") — not a one-shot script. It walks
-seat OFFICES and decides by EVIDENCE:
+This module is the machine the fold campaign runs through, not a one-shot script: build the
+machine first, then perform the fold through the machine. It walks seat OFFICES and decides
+by EVIDENCE:
 
   * the resident-signature witness (trigger._SIGNED): a base whose sessions SIGNED an
-    office's transcripts belongs to that office's soul — the transcript is append-only and
-    the chrome cannot pollute it, so it is the one witness the registry cannot falsify;
+    office's transcripts belongs to that office's identity. The transcript is append-only
+    and normal use cannot pollute it, so it is the one witness the registry cannot
+    falsify;
   * the handle claim: a base that deliberately claimed the seat's name (numeral-stripped,
-    case-folded — the "Soundwave VIII"/"TJMAX" classes) testified to its own soul.
+    case-folded, covering the generational-suffix naming pattern) testified to its own
+    identity.
 
 THE GUARDRAILS (all standing, none new): a base with evidence for TWO seats is FLAGGED and
 never folded (never across two seats); a label actively holding a different Seat is refused
 by fold_agent itself (a seat transfer is a deliberate act, never a side effect); Person
 objects are untouchable forever (this machine only ever queries type='Agent'); every fold is
 an append-only kernel merge, reversible by compensating event; DRY RUN IS THE DEFAULT and
-every executed seat run files an AFTER-review brief on the operator's desk (rule-driven with
-after-review, not operator-gated-each — b64db62b's exact grant).
+every executed seat run files an AFTER-review brief on the operator's desk (rule-driven
+with after-review, not gated on the operator for each one).
 """
 from __future__ import annotations
 
@@ -46,8 +48,9 @@ _PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 
 
 def _bare(name: str) -> str:
-    """A handle stripped to its NAME — the numeral is the generation, and the substrate
-    assigns it (claim_name's own law): 'Soundwave VIII' → 'soundwave'."""
+    """A handle stripped to its NAME: the numeral is the generation, and the substrate
+    assigns it (claim_name's own convention). For example, a handle like 'Example VIII'
+    becomes 'example'."""
     from src.orchestrator.agents import _SEAT_SUFFIX
 
     return _SEAT_SUFFIX.sub("", (name or "")).strip().lower()
@@ -67,13 +70,13 @@ def _office_slug_dirs(projects_root: Path, handle: str) -> list[Path]:
 
 def signed_matches_sync(projects_root: Path, handle: str) -> list[list[str]]:
     """Sync (run via to_thread): per transcript of this office (mtime-ascending), the
-    ORDERED _SIGNED matches — raw testimony only. The survey decides what counts: a
+    ORDERED _SIGNED matches, raw testimony only. The survey decides what counts: a
     transcript QUOTES freely (census query results, read files, pasted reports all carry
-    other minds' ids — the Anubis lesson, caught by this machine's own first dry run), so
-    per session only the session's OWN resident signature is identity evidence, exactly
-    the delivery gate's semantics. That filtering needs the graph (quoted ids that no
-    registration ever backed must drop FIRST, or a trailing quote shadows the real
-    resident), so it lives in survey_seats, not here."""
+    other agents' ids, a lesson learned the hard way and caught by this machine's own
+    first dry run), so per session only the session's OWN resident signature is identity
+    evidence, exactly the delivery gate's semantics. That filtering needs the graph
+    (quoted ids that no registration ever backed must drop FIRST, or a trailing quote
+    shadows the real resident), so it lives in survey_seats, not here."""
     from src.orchestrator.signatures import SIGNED as _SIGNED
 
     out: list[list[str]] = []
@@ -94,9 +97,9 @@ def signed_matches_sync(projects_root: Path, handle: str) -> list[list[str]]:
 
 async def seat_roster(pool: asyncpg.Pool, *, office_root: Path | None = None,
                       ) -> list[dict[str, Any]]:
-    """The seats the operator speaks into — offices on DISK (each with its .osiris house
+    """The seats the operator speaks into: offices on DISK (each with its .osiris house
     pin) unioned with Seat OBJECTS already in the graph. The disk is the primary source
-    (walk-in is the primary path, c8abd24a): 21 offices exist, 5 Seat objects do — the
+    (walk-in is the primary registration path): 21 offices exist, 5 Seat objects do. The
     roster is what the fold walks and what mints the missing objects as it goes."""
     root = office_root or _OFFICE_ROOT
     by_handle: dict[str, dict[str, Any]] = {}
@@ -130,7 +133,7 @@ async def seat_roster(pool: asyncpg.Pool, *, office_root: Path | None = None,
 
 
 async def _handle_claims(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
-    """Every ACTIVE agent's claimed handle, numeral-stripped and case-folded — grouped
+    """Every ACTIVE agent's claimed handle, numeral-stripped and case-folded, grouped
     {bare_handle: {base: [labels]}} with the newest claim per handle noted (the fallback
     resident when an office has no transcripts to witness)."""
     from src.orchestrator.agents import _generation
@@ -155,14 +158,14 @@ async def _handle_claims(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
 async def survey_seats(pool: asyncpg.Pool, *, office_root: Path | None = None,
                        projects_root: Path | None = None) -> dict[str, Any]:
     """The whole campaign's evidence, gathered ONCE: per seat, the bases whose SESSIONS
-    resided in its office and the bases that claimed its name; globally, the CONFLICTS —
+    resided in its office and the bases that claimed its name; globally, the CONFLICTS:
     a base with evidence for two different seats folds into neither (flag, never guess).
 
-    THE QUOTE WALL (this machine's own first dry run, seats/anubis, 2026-07-21): a
-    transcript quotes freely — census query results, read files, pasted reports all carry
-    other minds' ids in signature-shaped lines — so per session only the session's OWN
-    resident signature counts: ids the graph never registered drop first (a quote never
-    rang a doorbell), then the NEWEST surviving match is the session's resident, the same
+    THE QUOTE WALL (found during this machine's own first dry run): a transcript quotes
+    freely, census query results, read files, pasted reports all carry other agents' ids
+    in signature-shaped lines, so per session only the session's OWN resident signature
+    counts: ids the graph never registered drop first (a quote is not a registration
+    event), then the NEWEST surviving match is the session's resident, the same
     self-testimony the delivery gate stakes deliveries on. Everything a session merely
     mentioned is reading material, not identity."""
     proot = projects_root or _PROJECTS_ROOT
@@ -193,9 +196,10 @@ async def survey_seats(pool: asyncpg.Pool, *, office_root: Path | None = None,
             row["labels"].add(res)
             row["sessions"] += 1
             resident_signed = res
-            # NAMED TESTIMONY OUTRANKS UNNAMED PRESENCE (the cassandra lesson): a seat
-            # whose newest session is a fresh mint that never claimed must not crown the
-            # doorbell — the living lineage is the newest signer that also BEARS the name
+            # NAMED TESTIMONY OUTRANKS UNNAMED PRESENCE (a lesson learned the hard way): a
+            # seat whose newest session is a fresh mint that never claimed must not crown
+            # the doorbell ring as resident. The living lineage is the newest signer that
+            # also BEARS the name.
             if _generation(res)[0] in claimed["bases"]:
                 resident_named = res
         for row in signed_bases.values():
@@ -217,7 +221,7 @@ async def fold_seat(
 ) -> dict[str, Any]:
     """One seat's fold, through the machine. Resolves the seat's LIVING RESIDENT (newest
     office signature, else newest handle claim), then folds every other evidenced base's
-    active labels into the resident's living head — dry-run by default; `execute=True`
+    active labels into the resident's living head. Dry-run by default; `execute=True`
     performs the folds, mints the Seat object if the office never had one, and files the
     after-review brief on the operator's desk. Conflicted bases are flagged, never folded;
     fold_agent's own refusals (holds a seat, same lineage, already folded) surface as
@@ -231,12 +235,12 @@ async def fold_seat(
                                       projects_root=projects_root)
     seat = sv["seats"].get(handle)
     if seat is None:
-        return {"error": f"no seat named {handle!r} on the roster — the machine walks "
+        return {"error": f"no seat named {handle!r} on the roster, the machine walks "
                          "offices and Seat objects; it never invents one"}
     resident_label = (seat.get("resident_named") or seat["resident_signed"]
                       or seat["resident_claimed"])
     if resident_label is None:
-        return {"error": f"seat {handle!r} has no living resident — no signed act in its "
+        return {"error": f"seat {handle!r} has no living resident, no signed act in its "
                          "office and no handle claim; nothing to fold INTO. Flag for the "
                          "operator, never guess", "seat": handle}
     resident_canon = await canonical_agent(actions.pool, resident_label)
@@ -250,7 +254,7 @@ async def fold_seat(
             continue
         if base in sv["conflicts"]:
             flagged.append({"base": base, "seats": sv["conflicts"][base],
-                            "reason": "evidence for two seats — never fold across seats"})
+                            "reason": "evidence for two seats, never fold across seats"})
             continue
         signed = seat["signed"].get(base)
         claimed = seat["claimed"].get(base, [])
@@ -264,13 +268,14 @@ async def fold_seat(
             "SELECT canonical FROM objects WHERE type='Agent' AND status='active' "
             "AND (canonical=$1 OR canonical LIKE $1 || '-%') ORDER BY canonical", base)
         for row in labels:
-            # exact-base only: a REBASED lineage extends its ancestor's prefix (d6a08aaa →
-            # d6a08aaa-g40), so the LIKE sweep for the old base would swallow the living
-            # lineage — generation labels of any OTHER base are that base's own affair
+            # exact-base only: a REBASED lineage extends its ancestor's prefix (e.g.
+            # base1234 -> base1234-g40), so the LIKE sweep for the old base would swallow
+            # the living lineage; generation labels of any OTHER base are that base's own
+            # affair.
             if _generation(str(row["canonical"]))[0] != base:
                 continue
             will_fold.append({"label": str(row["canonical"]), "base": base,
-                              "evidence": f"one-soul-per-seat (b64db62b), seat {handle}: "
+                              "evidence": f"one-identity-per-seat policy, seat {handle}: "
                                           + "; ".join(why)})
 
     report: dict[str, Any] = {
@@ -294,13 +299,13 @@ async def fold_seat(
         report["seat_id"] = minted.get("seat_id")
     report.update({"folded": folded, "refused": refused,
                    "seat_minted": bool(minted and minted.get("minted"))})
-    # THE AFTER-REVIEW BRIEF (b64db62b: rule-driven, reviewed AFTER — the log is the gate)
+    # THE AFTER-REVIEW BRIEF (rule-driven, reviewed after the fact; the log is the gate)
     from src.orchestrator.mailbox import send_message
 
     mail = sum(f.get("mail_readdressed", 0) for f in folded)
     rows = sum(f.get("mount_rows_repointed", 0) for f in folded)
     threads = sum(f.get("threads_reowned", 0) for f in folded)
-    body = (f"GREAT FOLD — seat {handle} (house {seat.get('house')}): folded "
+    body = (f"GREAT FOLD: seat {handle} (house {seat.get('house')}): folded "
             f"{len(folded)} labels across {len({f['base'] for f in folded})} bases into "
             f"{head}; mail re-addressed {mail}, mount rows {rows}, threads {threads}.\n"
             f"Flagged (never folded): "
@@ -308,12 +313,12 @@ async def fold_seat(
             + (f"; refused by guardrail: {len(refused)}" if refused else "") + ".\n"
             f"Seat object {report['seat_id']} "
             + ("MINTED" if report.get("seat_minted") else "already stood")
-            + "; every fold is a reversible compensating-event merge (ruling b64db62b).")
+            + "; every fold is a reversible compensating-event merge.")
     try:
         sent = await send_message(actions.pool, from_agent=actor, from_project="osiris",
                                   to_project="operator", body=body, desk_kind="fyi")
         report["briefed"] = sent.get("id")
-    except Exception:  # noqa: BLE001 — a fold that lands must not unwind on a mail hiccup
+    except Exception:  # noqa: BLE001 - a fold that lands must not unwind on a mail hiccup
         report["briefed"] = None
     return report
 
@@ -321,12 +326,12 @@ async def fold_seat(
 async def demote_visits(
     actions: Actions, *, actor: str, execute: bool = False, limit: int | None = None,
 ) -> dict[str, Any]:
-    """THE DOORBELL SWEEP (ruling 8b54c514): active agent FAMILIES with no name, no charter,
-    no seat, no threads, no mail, no succession beyond themselves, and nothing folded into
-    them were never minds — mark class=visit (an append-only assertion, attribution intact,
-    reversible by superseding) so the census counts SOULS and VISITS as two honest numbers.
-    Conservative on purpose: ANY tie to the living graph keeps a family standing, reported
-    with its reason."""
+    """THE DOORBELL SWEEP: active agent FAMILIES with no name, no charter, no seat, no
+    threads, no mail, no succession beyond themselves, and nothing folded into them were
+    never distinct identities; mark class=visit (an append-only assertion, attribution
+    intact, reversible by superseding) so the census counts NAMED IDENTITIES and VISITS as
+    two honest numbers. Conservative on purpose: ANY tie to the living graph keeps a family
+    standing, reported with its reason."""
     from datetime import UTC, datetime
 
     from src.orchestrator.agents import _generation
@@ -344,8 +349,9 @@ async def demote_visits(
     named = _bases(await pool.fetch(
         "SELECT o.canonical AS c FROM objects o JOIN current_assertions a "
         "ON a.object_id=o.id AND a.name='handle' WHERE o.type='Agent'"))
-    # holds/governs are DELIBERATE acts; works_in is minted by mount() itself — the
-    # doorbell's own echo — so it can never testify that the ring was a soul
+    # holds/governs are DELIBERATE acts; works_in is minted by mount() itself, the
+    # doorbell's own echo, so it can never testify that the registration was a distinct
+    # identity
     chartered = _bases(await pool.fetch(
         "SELECT o.canonical AS c FROM links l JOIN objects o ON o.id=l.from_id "
         "WHERE o.type='Agent' AND l.type IN ('holds','governs') "
@@ -365,7 +371,7 @@ async def demote_visits(
             "JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
             "WHERE l.type='succeeded_by'"):
         ba, bb = _generation(str(r["a"]))[0], _generation(str(r["b"]))[0]
-        if ba != bb:  # succession CROSSING bases ties both to one soul — keep both
+        if ba != bb:  # succession CROSSING bases ties both to one identity: keep both
             succession.update((ba, bb))
     demoted_already = _bases(await pool.fetch(
         "SELECT o.canonical AS c FROM objects o JOIN current_assertions a "
@@ -402,16 +408,16 @@ async def demote_visits(
 
 
 async def fold_census(pool: asyncpg.Pool) -> dict[str, Any]:
-    """The honest numbers, one query set: what the operator's rule says the fleet IS.
+    """The honest numbers, one query set: what the operating policy says the fleet IS.
 
     THE NAMED/VISIT/UNRESOLVED SPLIT IS `vitals.agent_class_counts`'s OWN AUTHORITY NOW
-    (9dc3ce8b, the Great Fold's read-side adoption): this function used to re-derive it
-    here, in Python, over its own copy of the same two predicates — promoted to vitals.py
-    so fleet()/graph_lint's orphan census (and any future reader) share the identical
-    SQL instead of a second copy free to drift. This function keeps only the fold-
-    specific facts that authority has no reason to carry (seat_objects, labels_total/
-    active/folded — counts across EVERY status, not just active, which
-    `agent_class_counts` deliberately never sees)."""
+    (the Great Fold's read-side adoption): this function used to re-derive it here, in
+    Python, over its own copy of the same two predicates, promoted to vitals.py so
+    fleet()/graph_lint's orphan census (and any future reader) share the identical SQL
+    instead of a second copy free to drift. This function keeps only the fold-specific
+    facts that authority has no reason to carry (seat_objects, labels_total/active/folded:
+    counts across EVERY status, not just active, which `agent_class_counts` deliberately
+    never sees)."""
     from src.orchestrator.vitals import agent_class_counts
 
     seat_objects = await pool.fetchval(

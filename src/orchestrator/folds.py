@@ -256,41 +256,41 @@ async def fold_agent(
 
     dupe, into = (dupe or "").strip(), (into or "").strip()
     if not (evidence or "").strip():
-        return {"error": "a fold without evidence is an auto-merge wearing a signature — "
-                         "cite the transcripts/census/timing that prove one mind"}
+        return {"error": "a fold without evidence is an auto-merge wearing a signature: "
+                         "cite the transcripts/census/timing that prove one agent"}
     if not await is_operator_actor(actions.pool, actor) and actor != _SANCTIONED_AUTO_FOLD_ACTOR:
-        return {"error": f"{actor!r} is not authorized to fold agents — fold_agent runs "
+        return {"error": f"{actor!r} is not authorized to fold agents: fold_agent runs "
                          "only on the operator's own word (mount as the operator) or via "
                          "resolve_fold's judgment of an approved merge_candidate, relaying "
-                         "the operator's own actor through unchanged; a mind cannot "
+                         "the operator's own actor through unchanged; an agent cannot "
                          "approve its own fold"}
     if not dupe or not into:
         return {"error": "fold_agent needs both labels: dupe and into"}
     if _generation(dupe)[0] == _generation(into)[0]:
-        return {"error": f"{dupe} and {into} are the same lineage — generations are "
+        return {"error": f"{dupe} and {into} are the same lineage: generations are "
                          "succession, not duplication; a fold here would collapse a "
-                         "death boundary (the mind ruling, a882b334)"}
+                         "death boundary that the succession rule exists to protect"}
     rows = await actions.pool.fetch(
         "SELECT id, canonical, status FROM objects WHERE canonical = ANY($1::text[]) "
         "AND type='Agent'", [dupe, into])
     by_label = {r["canonical"]: r for r in rows}
     if dupe not in by_label or into not in by_label:
         missing = [x for x in (dupe, into) if x not in by_label]
-        return {"error": f"unknown agent(s): {', '.join(missing)} — a fold never invents "
+        return {"error": f"unknown agent(s): {', '.join(missing)}: a fold never invents "
                          "either side"}
     if by_label[dupe]["status"] == "merged":
         prior = await canonical_agent(actions.pool, dupe)
-        return {"error": f"{dupe} is already folded (→ {prior}) — nothing to do"}
+        return {"error": f"{dupe} is already folded (now {prior}): nothing to do"}
     if by_label[into]["status"] == "merged":
         prior = await canonical_agent(actions.pool, into)
-        return {"error": f"{into} is itself folded (→ {prior}) — fold into the living "
+        return {"error": f"{into} is itself folded (now {prior}): fold into the living "
                          "label instead"}
     held = await actions.pool.fetchval(
         "SELECT ht.canonical FROM links hl JOIN objects hf ON hf.id=hl.from_id "
         "JOIN objects ht ON ht.id=hl.to_id WHERE hf.canonical=$1 AND hl.type='holds' "
         "AND (hl.valid_until IS NULL OR hl.valid_until > now()) LIMIT 1", dupe)
     if held:
-        return {"error": f"{dupe} actively holds {held} — a seat transfer is a deliberate "
+        return {"error": f"{dupe} actively holds {held}: a seat transfer is a deliberate "
                          "act, never a fold's side effect; release or transfer the seat "
                          "first"}
     # The record move happens first, mirroring fold_project's already-safe pattern: a
@@ -327,7 +327,7 @@ async def fold_agent(
         "mount_rows_repointed": estate["mount_rows_repointed"],
         "threads_reowned": estate["threads_reowned"],
         "project_links_moved": estate["project_links_moved"], "evidence": evidence,
-        "note": (f"{dupe} is folded into {into} — its words stay its own (provenance "
+        "note": (f"{dupe} is folded into {into}: its words stay its own (provenance "
                  "resolves through merged_into at read); its unread mail, mount rows, "
                  "open threads, and works_in/governs edges now belong to "
                  f"{estate['living_head']}. Reversible by compensating event; nothing "
@@ -368,30 +368,30 @@ async def reconcile_agent_fold(
 
     dupe, into = (dupe or "").strip(), (into or "").strip()
     if not await is_operator_actor(actions.pool, actor) and actor != _SANCTIONED_AUTO_FOLD_ACTOR:
-        return {"error": f"{actor!r} is not authorized to reconcile an agent fold — same "
-                         "gate as fold_agent itself (962579a6): repairing a merge needs "
+        return {"error": f"{actor!r} is not authorized to reconcile an agent fold: same "
+                         "gate as fold_agent itself: repairing a merge needs "
                          "the same authority as making one"}
     if not dupe or not into:
         return {"error": "reconcile_agent_fold needs both labels: dupe and into"}
     if dupe == into:
-        return {"error": "dupe and into name the same agent — nothing to reconcile"}
+        return {"error": "dupe and into name the same agent: nothing to reconcile"}
     row = await actions.pool.fetchrow(
         "SELECT id, status, merged_into FROM objects WHERE canonical=$1 AND type='Agent'",
         dupe)
     if row is None:
-        return {"error": f"no such agent: {dupe!r} — reconcile never invents a label"}
+        return {"error": f"no such agent: {dupe!r}: reconcile never invents a label"}
     if row["status"] != "merged":
-        return {"error": f"{dupe} is {row['status']}, not merged — reconcile_agent_fold "
+        return {"error": f"{dupe} is {row['status']}, not merged: reconcile_agent_fold "
                          "only repairs an ALREADY-completed fold; use merge to fold it in "
                          "the first place"}
     into_row = await actions.pool.fetchrow(
         "SELECT id, status FROM objects WHERE canonical=$1 AND type='Agent'", into)
     if into_row is None:
-        return {"error": f"no such agent: {into!r} — reconcile never invents a label"}
+        return {"error": f"no such agent: {into!r}: reconcile never invents a label"}
     if into_row["id"] != row["merged_into"]:
         actual = await actions.pool.fetchval(
             "SELECT canonical FROM objects WHERE id=$1", row["merged_into"])
-        return {"error": f"{dupe} is merged into {actual}, not {into} — "
+        return {"error": f"{dupe} is merged into {actual}, not {into}: "
                          "reconcile_agent_fold never redirects to a different pair"}
     if into_row["status"] != "active":
         return {"error": f"{into} is {into_row['status']}, not active"}
@@ -425,7 +425,7 @@ async def fold_justification_and_parity_check(
     if "operator" in original_evidence.lower() and "operator" not in because.lower():
         return ev, original_evidence, {
             "error": f"{label}'s fold was justified by citing the operator's word "
-                     f"({original_evidence!r}) — an unfold needs the operator's word "
+                     f"({original_evidence!r}): an unfold needs the operator's word "
                      "too; add it to `because` or get it first"}
     return ev, original_evidence, None
 
@@ -468,7 +468,7 @@ async def unfold_agent(
 
     dupe, because = (dupe or "").strip(), (because or "").strip()
     if not because:
-        return {"error": "an unfold without a because is an un-audited reversal — cite "
+        return {"error": "an unfold without a because is an un-audited reversal: cite "
                          "the evidence/ruling that proves the fold was wrong"}
     if not dupe:
         return {"error": "unfold_agent needs a dupe label"}
@@ -476,9 +476,9 @@ async def unfold_agent(
         "SELECT id, status, merged_into FROM objects WHERE canonical=$1 AND type='Agent'",
         dupe)
     if row is None:
-        return {"error": f"unknown agent: {dupe} — an unfold never invents a label"}
+        return {"error": f"unknown agent: {dupe}: an unfold never invents a label"}
     if row["status"] != "merged":
-        return {"error": f"{dupe} is not folded (status={row['status']}) — nothing to "
+        return {"error": f"{dupe} is not folded (status={row['status']}): nothing to "
                          "unfold"}
     into_canon = await actions.pool.fetchval(
         "SELECT canonical FROM objects WHERE id=$1", row["merged_into"])
@@ -536,12 +536,12 @@ async def unfold_agent(
         "plan": plan,
         "estate_unreturnable": {
             "mail": unreturnable_mail, "mounts": unreturnable_mounts,
-            "note": ("pre-fold UPDATEs overwrote to_agent/agent_id in place — these "
+            "note": ("pre-fold UPDATEs overwrote to_agent/agent_id in place: these "
                      "predate the fold and still sit on the living head, but nothing "
                      "proves they were EVER addressed to the dupe rather than already "
                      "the head's own; read them and judge by hand, never auto-moved")
                     if (unreturnable_mail or unreturnable_mounts) else
-                    "none found — no pre-fold mail or mount rows sit unclaimed on the head",
+                    "none found: no pre-fold mail or mount rows sit unclaimed on the head",
         },
         "execute": execute,
     }
@@ -558,12 +558,12 @@ async def unfold_agent(
                                       evidence_class="self_declared")
     report.update({
         "unmerged": True, "chain_restored": stitch, "threads_reowned": len(reversible_threads),
-        "note": (f"{dupe} is active again — provenance for the folded era stays on the "
+        "note": (f"{dupe} is active again: provenance for the folded era stays on the "
                  f"record (the merge event and same_as link are witnesses, never erased). "
                  + (f"succeeded_by cleared; {dupe} is its own lineage's tail. "
                     if stitch else "")
                  + f"{len(reversible_threads)} thread(s) re-owned. "
-                 + ("Unreturnable estate items are listed above for a human to judge by "
+                 + ("Unreturned items are listed above for a human to judge by "
                     "hand." if (unreturnable_mail or unreturnable_mounts) else "")),
     })
     return report
@@ -643,7 +643,7 @@ async def find_agent_fold_candidates(
                     signals = [f"no transcript for sid {sid8} anywhere under {root}",
                                f"jobs/{sid8} holds no state.json (not a daemon session)",
                                f"co-resident at {cwd} with {o['agent_id']}, whose sid "
-                               f"{osid} has a body"]
+                               f"{osid} has an active session"]
                     break
         if target is None and cwd:
             named = await pool.fetchval(
@@ -666,13 +666,13 @@ async def find_agent_fold_candidates(
                 target, cls = str(named), "restart-mint"
                 if int(seats_here) <= 1:
                     score = 0.75
-                    signals = [f"anonymous mount at {cwd} — {named} is the project's "
+                    signals = [f"anonymous mount at {cwd}: {named} is the project's "
                                "ONLY seat, so this session is presumed its child or fold "
                                "(the single-seat rule)"]
                 else:
                     score = 0.55
                     signals = [f"anonymous mount at {cwd}, the anchor of named lineage "
-                               f"{named} — but {seats_here} seats share this project; "
+                               f"{named}, but {seats_here} seats share this project; "
                                "nuanced, verify by hand"]
         if target is None and r["project"]:
             # The charter match: nobody named anchors at this cwd, but the room may
@@ -755,20 +755,20 @@ async def find_agent_fold_candidates(
             cls = "charter-match"
             if len(souls) == 1:
                 score = 0.75
-                signals = [f"anonymous mount in room '{r['project']}' at {cwd} — no "
+                signals = [f"anonymous mount in room '{r['project']}' at {cwd}: no "
                            f"named lineage anchors there (the seat's row moved home at "
                            f"the office migration), but the graph's charter answers: "
                            f"{target} ({'/'.join(sorted(souls[base]))} "
-                           f"repo:{r['project']}) is the room's ONLY seat — the "
+                           f"repo:{r['project']}) is the room's ONLY seat: the "
                            "single-seat rule"]
             else:
                 roster = ", ".join(f"{b} ({'/'.join(sorted(v))})"
                                    for b, v in sorted(souls.items()))
                 score = 0.55
-                signals = [f"anonymous mount in room '{r['project']}' at {cwd} — no "
+                signals = [f"anonymous mount in room '{r['project']}' at {cwd}: no "
                            f"named lineage anchors there; the charter names "
-                           f"{len(souls)} souls for this room [{roster}], declared "
-                           f"governor presumed: {target} — nuanced, verify by hand"]
+                           f"{len(souls)} distinct agents for this room [{roster}], declared "
+                           f"governor presumed: {target}, nuanced, verify by hand"]
         if target is None:
             continue
         trow = await pool.fetchrow(
@@ -800,12 +800,12 @@ async def find_agent_fold_candidates(
     succession = await unresumed_heads(pool)
     return {"examined": len(anons), "proposed": proposed, "pending": pending,
             "seatless": seatless, "unresumed_heads": succession,
-            "note": "proposals only — judge each with resolve_fold_candidate (merged | "
+            "note": "proposals only: judge each with resolve_fold_candidate (merged | "
                     "rejected); a rejection is remembered and never re-proposed; "
-                    "`seatless` counts anons in rooms whose charter names NO seat — "
+                    "`seatless` counts anons in rooms whose charter names NO seat: "
                     "visitor-gate demotion candidates, not folds. `unresumed_heads` is a "
-                    "SEPARATE, NON-FOLD class (thread ef88e2bb's aftermath, module docstring "
-                    "has the full reasoning) — never resolved via resolve_fold_candidate, a "
+                    "SEPARATE, NON-FOLD class (see the module docstring for the full "
+                    "reasoning), never resolved via resolve_fold_candidate, a "
                     "human judgment call every time."}
 
 
@@ -834,7 +834,7 @@ async def resolve_fold_candidate(
         return {"error": f"candidate {candidate_id} already {row['resolved']}"}
     reasons = row["reasons"] or {}
     if reasons.get("kind") != "agent-fold":
-        return {"error": f"candidate {candidate_id} is not an agent-fold proposal — "
+        return {"error": f"candidate {candidate_id} is not an agent-fold proposal: "
                          "judge it in the entity tray (resolution.resolve_candidate)"}
     if decision == "merged":
         # the pair's roles live in reasons; the table's columns are uuid-ordered
@@ -859,5 +859,5 @@ async def resolve_fold_candidate(
             "UPDATE merge_candidates SET resolved='rejected', resolved_by=$2, "
             "resolved_at=now() WHERE id=$1", candidate_id, actor)
         return {"candidate": candidate_id, "resolved": "rejected",
-                "note": "pair linked not_same_as — never re-proposed"}
+                "note": "pair linked not_same_as: never re-proposed"}
     return {"error": f"decision must be 'merged' or 'rejected', got {decision!r}"}

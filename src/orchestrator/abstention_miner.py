@@ -1,47 +1,46 @@
-"""THE FIRST MINER (wave 16, decision 4d622aee, operator 2026-09-10: "why do they all
-need separate miners? if a miner abstract has the same job over different types, it
-becomes more manageable"; "yes, build and wire it" — thread 8dfcd4b1, which supersedes
-every earlier miner design). ONE generic abstention miner, never N miners per type:
-lanes are DATA (object type, required link type, candidate-pool signal, text fields to
-read), not code. Each call to `abstention_miner_tick` picks the NEXT object, in
-round-robin rotation ACROSS lanes (so no lane's own backlog starves another), that
-carries a live `derivation_abstained_<link_type>` record with no already-outstanding
-Proposal against it, reads that lane's own text fields, and calls `propose()`
-(proposals.py, wave 15 item 1) with AT MOST ONE candidate — or writes nothing at all.
-Never a link write: miners remain last resort. Budget, the 30-day acceptance-rate
-throttle, the 7-day zero-acceptance stop, and the DERIVED-tier confidence cap all
-already exist in `propose()` (wave 15 items 3-4), reused unchanged here, keyed by
-(miner='abstention', owner).
+"""THE FIRST MINER (decision recorded 2026-09-10, prompted by an operator observation
+that separate miners per type were becoming hard to manage, and a request to build one
+generic miner and wire it in, which supersedes every earlier miner design). ONE generic
+abstention miner, never N miners per type: lanes are DATA (object type, required link
+type, candidate-pool signal, text fields to read), not code. Each call to
+`abstention_miner_tick` picks the NEXT object, in round-robin rotation ACROSS lanes (so
+no lane's own backlog starves another), that carries a live
+`derivation_abstained_<link_type>` record with no already-outstanding Proposal against
+it, reads that lane's own text fields, and calls `propose()` (proposals.py) with AT MOST
+ONE candidate, or writes nothing at all. Never a link write: miners remain last resort.
+Budget, the 30-day acceptance-rate throttle, the 7-day zero-acceptance stop, and the
+DERIVED-tier confidence cap all already exist in `propose()`, reused unchanged here,
+keyed by (miner='abstention', owner).
 
-STARTING LANES, MEASURED LIVE (decision 4d622aee, 2026-09-10): Decision (79 orphans),
-Thread (5), Practice (8), Reference (56) — each targets `in_repo`, the SAME project-
+STARTING LANES, MEASURED LIVE (2026-09-10): Decision (79 orphans),
+Thread (5), Practice (8), Reference (56); each targets `in_repo`, the SAME project-
 membership link `resolve_agent_orphans`/`resolve_reference_orphans` (capture.py) already
 try to derive mechanically and abstain on when they can't. This lane's own candidate
-signal is a project-name MENTION anywhere in the object's own text fields — a real, if
+signal is a project-name MENTION anywhere in the object's own text fields: a real, if
 crude, textual read, deliberately DIFFERENT from the mechanical sweep's own strict
 prefix match on ONE named property (`session`/`topic`), so a miner tick is not simply
-re-running the exact check that already gave up. Agent is registered with an EMPTY
-pool — "never guessing from names" (operator's own words, mail 9130) — so it proposes
-nothing, ever, until a real signal is designed for it.
+re-running the exact check that already gave up. Agent is registered with an EMPTY pool,
+by design never guessing a project from a name alone, so it proposes nothing, ever, until
+a real signal is designed for it.
 
-THE LANE SIGNAL (Thoth ruling, mail 9847, decision 2406c9c5, 2026-09-11): the FIRST
-DAY's own telemetry (decision 47c24d12) measured the original "exactly one project
-mentioned" gate against real next-in-queue text and found it almost never true — 6, 8,
-0, 0 candidates — so real text was either silent or ambiguous, never singular.
-`_dominant_project` replaces it: the project mentioned most often wins when it leads the
-runner-up by `_DOMINANCE_FACTOR` (2x); a non-dominant or silent read falls back to the
-object's own author's `works_in` project (`_author_works_in`, via the `produced` edge —
-Decision/Thread only, this schema declares no author edge for Practice/Reference);
-neither firing means abstain. Still exactly one candidate into `propose()`, and budget/
-throttle/confidence cap stay exactly as they were — this ruling only ever touches which
-signal picks the candidate, never propose()'s own law. Each proposal's own `candidate`
-carries a `signal` key ("dominance"/"author_tiebreak") so the lane telemetry
-(digest.py's `_proposal_telemetry`) can say which one produced it.
+THE LANE SIGNAL (a later ruling, 2026-09-11): the FIRST DAY's own telemetry measured the
+original "exactly one project mentioned" gate against real next-in-queue text and found
+it almost never true (6, 8, 0, 0 candidates), so real text was either silent or
+ambiguous, never singular. `_dominant_project` replaces it: the project mentioned most
+often wins when it leads the runner-up by `_DOMINANCE_FACTOR` (2x); a non-dominant or
+silent read falls back to the object's own author's `works_in` project
+(`_author_works_in`, via the `produced` edge, Decision/Thread only, this schema declares
+no author edge for Practice/Reference); neither firing means abstain. Still exactly one
+candidate into `propose()`, and budget/throttle/confidence cap stay exactly as they
+were: this ruling only ever touches which signal picks the candidate, never propose()'s
+own rule. Each proposal's own `candidate` carries a `signal` key
+("dominance"/"author_tiebreak") so the lane telemetry (digest.py's
+`_proposal_telemetry`) can say which one produced it.
 
-`guarded_miner_tick` (proposals.py, wave 15 item 4) is the failure-receipt-first wrapper
-every miner tick runs inside; this module supplies the tick body, never calls
-`guarded_miner_tick` itself — that is the caller's (the heartbeat wiring's) own job, so
-this module stays independently testable without the alarm-thread machinery."""
+`guarded_miner_tick` (proposals.py) is the failure-reporting-first wrapper every miner
+tick runs inside; this module supplies the tick body, never calls `guarded_miner_tick`
+itself: that is the caller's (the heartbeat wiring's) own job, so this module stays
+independently testable without the alarm-thread machinery."""
 from __future__ import annotations
 
 import re
@@ -79,7 +78,7 @@ _LANES: tuple[_Lane, ...] = (
 
 async def _next_lane_index(pool: asyncpg.Pool) -> int:
     """Round-robin state, persisted in the generic cursor store (watermarks table, the
-    SAME call digest.py's own operator watermark uses) — never in-process memory, since
+    SAME call digest.py's own operator watermark uses), never in-process memory, since
     a tick can run from any process and must pick up where the last one left off."""
     raw = await get_cursor(pool, _CURSOR_KEY)
     idx = int(raw) if raw and raw.isdigit() else 0
@@ -92,9 +91,9 @@ async def _advance_lane_index(pool: asyncpg.Pool, idx: int) -> None:
 
 async def _next_abstained_object(pool: asyncpg.Pool, lane: _Lane) -> uuid.UUID | None:
     """The OLDEST active object of this lane's own type carrying a LIVE (unresolved)
-    `derivation_abstained_<link_type>` record — the exact predicate `propose()`'s own
-    last-resort law already requires (proposals.py's `_live_abstention_exists`, mirrored
-    here as a set-scan rather than a single-object check) — that does NOT already carry
+    `derivation_abstained_<link_type>` record, the exact predicate `propose()`'s own
+    last-resort rule already requires (proposals.py's `_live_abstention_exists`, mirrored
+    here as a set-scan rather than a single-object check), that does NOT already carry
     an outstanding (`status='proposed'`, not expired for this check's purpose) Proposal
     against the same (from_id, link_type) pair. Without this second exclusion, every tick
     that lands on an exhausted budget or a slow-to-judge owner would just re-propose the
@@ -124,10 +123,11 @@ async def _mention_counts(
 ) -> tuple[dict[uuid.UUID, int], str]:
     """Read `text_fields` off `obj_id`'s own CURRENT properties, concatenate, and count
     every LIVE SoftwareProject's own whole-word, case-insensitive MENTION COUNT in that
-    text — word-boundary-anchored so a short project name never matches inside an
+    text: word-boundary-anchored so a short project name never matches inside an
     unrelated longer word (e.g. "os" inside "cosmos"). Returns ({project_id: count, ...}
-    with only projects mentioned at least once, joined_text) — the text is handed back
-    too so a caller/receipt can show what the miner actually read, never a black box."""
+    with only projects mentioned at least once, joined_text); the text is handed back
+    too so a caller or log record can show what the miner actually read, never a black
+    box."""
     parts = []
     for field in text_fields:
         val = await pool.fetchval(
@@ -157,10 +157,10 @@ async def _mention_counts(
 
 
 async def _author_works_in(pool: asyncpg.Pool, obj_id: uuid.UUID) -> uuid.UUID | None:
-    """The tie-break signal (Thoth ruling, mail 9847, decision 2406c9c5): `obj_id`'s own
-    author — the Agent generation that `produced` it (capture.py's traceability edge,
+    """The tie-break signal (from the same later ruling): `obj_id`'s own
+    author, the Agent generation that `produced` it (capture.py's traceability edge,
     the only authorship edge this schema declares onto Decision/Thread; Practice/
-    Reference have none, so this always returns None for those lanes) — and that
+    Reference have none, so this always returns None for those lanes), and that
     author's own current `works_in` project. None when the object has no author, or the
     author has no live works_in project; either way the caller abstains."""
     author_id = await pool.fetchval(
@@ -177,15 +177,15 @@ async def _author_works_in(pool: asyncpg.Pool, obj_id: uuid.UUID) -> uuid.UUID |
 async def _dominant_project(
     pool: asyncpg.Pool, text_fields: tuple[str, ...], obj_id: uuid.UUID,
 ) -> tuple[uuid.UUID | None, str, str]:
-    """THE LANE SIGNAL (Thoth ruling, mail 9847, decision 2406c9c5, replacing the old
-    "exactly one mention" gate that real text almost never satisfied — decision 47c24d12
+    """THE LANE SIGNAL (from the later ruling, replacing the old
+    "exactly one mention" gate that real text almost never satisfied: telemetry
     measured 6/8/0/0 candidates against real next-in-queue objects in every lane):
     the project mentioned most often in `obj_id`'s own text fields, accepted ONLY when it
     leads the runner-up by at least `_DOMINANCE_FACTOR`x (a lone mention still counts,
     since the runner-up is then 0); tied or non-dominant falls back to the object's own
     author's `works_in` project; neither signal firing means abstain. Returns
     (candidate_id_or_None, joined_text, signal) where `signal` is "dominance",
-    "author_tiebreak", or "none" — named so the miner's own receipt and the lane
+    "author_tiebreak", or "none", named so the miner's own outcome record and the lane
     telemetry can say which produced (or failed to produce) a proposal, never leave that
     invisible."""
     counts, text = await _mention_counts(pool, text_fields, obj_id)
@@ -209,14 +209,14 @@ def _lanes_off(settings: Any) -> set[str]:
 async def abstention_miner_tick(actions: Actions) -> dict[str, Any]:
     """One tick: advance the round-robin, look at the next lane, propose at most one
     candidate against its next eligible abstention, or do nothing. Never raises past a
-    normal `{"action": ...}` receipt — `guarded_miner_tick` (the caller's own wrapper) is
-    where a genuine exception becomes a durable failure receipt; this function's own
+    normal `{"action": ...}` result; `guarded_miner_tick` (the caller's own wrapper) is
+    where a genuine exception becomes a durable failure record; this function's own
     business-as-usual "found nothing"/"too many candidates" outcomes are not failures.
 
-    Reads `settings_with_overlay` (THE SETTINGS MENU piece 1, thread f4498ab304e4),
-    not bare `get_settings()` — `miner.abstention.enabled` is registered with
-    `effect='immediate'`, so a write through the settings entry point takes hold on the very
-    next tick, no restart needed."""
+    Reads `settings_with_overlay` (part of the settings-overlay design), not bare
+    `get_settings()`: `miner.abstention.enabled` is registered with
+    `effect='immediate'`, so a write through the settings entry point takes hold on the
+    very next tick, no restart needed."""
     from src.orchestrator.settings_service import settings_with_overlay
 
     pool = actions.pool
@@ -231,7 +231,7 @@ async def abstention_miner_tick(actions: Actions) -> dict[str, Any]:
                 "reason": "silenced via osiris_abstention_miner_lanes_off"}
     if not lane.has_pool:
         return {"lane": lane.object_type, "action": "skipped",
-                "reason": "empty candidate pool by design — never guessing from names"}
+                "reason": "empty candidate pool by design: never guessing from names"}
     obj_id = await _next_abstained_object(pool, lane)
     if obj_id is None:
         return {"lane": lane.object_type, "action": "none",

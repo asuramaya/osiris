@@ -75,19 +75,20 @@ class AgentIdentity:
     # model swap that follows one was chosen, not suffered.
     model_deliberate: bool = False
     # When the anchored model observation was witnessed: the timestamp of the transcript
-    # record that carried it (None when unanchored, or the record was unstamped). The seam
-    # gate compares clocks with this: the tail lags a /model command until the next assistant
-    # turn, so an observation not fresher than the stamp it disagrees with is a stale read,
-    # never a real model swap. source_model is stamped at this moment too, so the ledger is
-    # dated by the event, not by the bookkeeping.
+    # record that carried it (None when unanchored, or the record was unstamped). The
+    # transition gate compares clocks with this: the tail lags a /model command until the
+    # next assistant turn, so an observation not fresher than the stamp it disagrees with
+    # is a stale read, never a real model swap. source_model is stamped at this moment too,
+    # so the ledger is dated by the event, not by the bookkeeping.
     model_observed_at: datetime | None = None
     # False when identity fell back to a best-effort id (no session/job-id/transcript anchor).
     # The fallback is distinct per session rather than a shared sink, so distinct actors can't
     # merge; the flag lets the fleet digest surface an unresolved onboarding.
     resolved: bool = True
     # Set by register_agent (the one out-param): "<prior> -> <observed>" when this registration
-    # crossed a succession seam, i.e. a fresh context inheriting an identity another model wrote
-    # under. None when no seam fired. mount() reads it to report the seam.
+    # crossed a succession transition, i.e. a fresh context inheriting an identity another
+    # model wrote under. None when no transition fired. mount() reads it to report the
+    # transition.
     model_succession: str | None = None
     # Set by register_agent: True when this mount re-attached an identity that was already marked
     # retired=true. The trigger already refuses to reanimate a retired identity (resume, not
@@ -96,7 +97,8 @@ class AgentIdentity:
     # reports it, instead of letting it happen silently.
     reanimated: bool = False
     # Set by register_agent: this context was minted a new lineage-linked id
-    # (agent:<base>-ii...) because it arrived across a detected seam or wore a retired face.
+    # (agent:<base>-ii...) because it arrived across a detected transition or carried a
+    # retired identity.
     # Holds the ancestor's canonical id; mount() reports the minting to the heir.
     succeeded_from: str | None = None
     # Could not read a `.osiris` declaration that exists: the file was found but failed to
@@ -252,7 +254,7 @@ async def lineage_works_in(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     generation's own live `works_in`, and of 251 agent-written orphan Decisions, only 19
     authors had one. The default was never missing; it fired on nothing, because the
     specific generation that happened to write is itself commonly an orphan (a fresh mint,
-    a compacted heir, a body that never called `mount()` with a resolvable cwd). But
+    a compacted heir, an instance that never called `mount()` with a resolvable cwd). But
     `works_in` is a lineage property in practice: every generation of one seat/session
     chain works the same project by construction, so widening the read from "this one
     generation" to "every generation sharing this lineage's root" (reusing `_generation()`'s
@@ -360,8 +362,8 @@ def normalize_model(model: str | None) -> str | None:
     """Canonical model id for model-identity comparisons: the harness decorates display ids
     with a bracketed variant suffix (claude-opus-4-8[1m] is the 1M-context tier of the same
     weights) while transcripts record the bare id. Same weights mean the same model; a
-    variant suffix must never be read as a model change. Every seam comparator and every
-    stored model goes through this."""
+    variant suffix must never be read as a model change. Every transition comparator and
+    every stored model goes through this."""
     if not model:
         return model
     return model.split("[", 1)[0].strip()
@@ -375,22 +377,22 @@ def normalize_model(model: str | None) -> str | None:
 #
 # The old model keyed a lineage to the anchor (job_dir), so every new conversation minted a
 # whole new bloodline (roughly 1000 registered agents for about 20 real seats), and the name
-# died with the conversation that held it. The next mind in the house woke nameless, reached
-# for the family name, was refused as a stranger, and took a new one. The fragmentation was
+# died with the conversation that held it. The next agent in the house woke nameless, reached
+# for the family name, was refused as an outsider, and took a new one. The fragmentation was
 # the bug.
 #
 # Two things were conflated, and only one of them follows the anchor:
-#   * the writer, e.g. agent:c7ef52a9-iii: a particular mind. Attribution stays exactly
-#     per-writer, which is why merging different writers into one identity is refused; each
-#     writer's writes are its own.
+#   * the writer, e.g. agent:c7ef52a9-iii: a particular agent instance. Attribution stays
+#     exactly per-writer, which is why merging different writers into one identity is
+#     refused; each writer's writes are its own.
 #   * the seat, e.g. a named role in a given house: held by successive writers.
 # The seat sits above the writer, so nothing merges and nothing is falsified: a writer's
-# writes remain its own, and it holds a seat, e.g. as that seat's 5th holder. Different mind,
-# same job.
+# writes remain its own, and it holds a seat, e.g. as that seat's 5th holder. Different
+# agent, same job.
 
 
 async def seat_holders(pool: asyncpg.Pool, house: str | None, seat: str) -> list[str]:
-    """Every mind that has held this seat in this house, in the order they took it up. The
+    """Every agent that has held this seat in this house, in the order they took it up. The
     generation is the ordinal here (holder I, holder II), and it counts holders, not
     anchors."""
     return [r["canonical"] for r in await pool.fetch(
@@ -568,13 +570,13 @@ async def correct_agent_house(
     Refuses loudly on: no correction named at all; an empty project string; a non-positive
     generation; an unknown or inactive Agent.
 
-    PRIOR ART SURFACED, NEVER REFUSED: the receipt's own `prior_art`/`prior_art_flag` keys,
+    PRIOR ART SURFACED, NEVER REFUSED: the result's own `prior_art`/`prior_art_flag` keys,
     when present, name a standing Decision that may already cover this agent's
     project/generation, the same search()-based guard record_decision runs on itself,
     generalized here. Cannot distinguish a deliberate correction from an uninformed
     overwrite; only ensures the write does not land silently unread."""
     if project is None and seat_generation is None:
-        return {"error": "nothing to correct — pass project and/or seat_generation"}
+        return {"error": "nothing to correct, pass project and/or seat_generation"}
     if project is not None and not project.strip():
         return {"error": "project cannot be corrected to an empty string"}
     if seat_generation is not None and seat_generation < 1:
@@ -584,7 +586,7 @@ async def correct_agent_house(
     if row is None:
         return {"error": f"no such agent: {agent_id!r}"}
     if row["status"] != "active":
-        return {"error": f"{agent_id} is {row['status']}, not active — nothing to correct"}
+        return {"error": f"{agent_id} is {row['status']}, not active, nothing to correct"}
     now = datetime.now(UTC)
     was: dict[str, Any] = {}
     corrected: dict[str, Any] = {}
@@ -630,7 +632,7 @@ async def retire_agent(
     self-scoped retire() (mcp_server.py derives the caller's own id, no target param at
     all). This closes a real gap: cleanup of two genuinely-dead agents could previously
     only be done via direct assert_property under a live permission grant, twice, because
-    no sanctioned verb reached a third party.
+    no sanctioned function reached a third party.
 
     NOT SELF-SCOPED, and NOT MANAGER-GATED either. Any mounted caller may name any active
     agent as the target, the same shape retire_seat/retire_project already carry;
@@ -648,13 +650,13 @@ async def retire_agent(
     self-retirement already does for the exact same act. Fixed by reusing two
     already-proven mechanisms rather than inventing a third:
 
-    (1) LIVENESS: mounts.agent_liveness (already built for send()'s own listener receipt,
+    (1) LIVENESS: mounts.agent_liveness (already built for send()'s own listener check,
     "seen within 15 min") is the gate. retire_seat refuses outright on a live holder
     (protecting an occupant's ongoing work in its role); vacate_holder instead trusts its
     caller with no liveness check at all (its blast radius is one link + one property,
     small). retire_agent's blast radius is bigger (a terminal Agent status plus deleted
     mount rows), so blind trust under-protects a genuinely live third party, but this
-    verb's own founding purpose (third-party cleanup of agents that can never call
+    function's own founding purpose (third-party cleanup of agents that can never call
     retire() on themselves) means a permanent block would defeat it. The resolution
     reuses retire()'s own shape rather than reinventing it: refuse by default on a live
     target, naming the evidence, but accept `override_live=True` as a deliberate,
@@ -667,7 +669,7 @@ async def retire_agent(
     `holds` link the same way retire_seat's own vacate-then-retire discipline would,
     without retiring the seat itself (the role may still get a legitimate new occupant;
     only retire_seat closes the role). Exact match only: held_seat's own lineage-wide
-    resolution (any generation sharing the base, newest wins) is right for a live mind's
+    resolution (any generation sharing the base, newest wins) is right for a live agent's
     self-lookup, but wrong for a third-party act on a specific named generation: an
     already-superseded ancestor sharing its heir's base would resolve to the seat the
     heir currently, rightfully holds, and this step would vacate the live heir's own seat
@@ -680,7 +682,7 @@ async def retire_agent(
     target unless `override_live=True`."""
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required — retiring an agent is a deliberate act "
+        return {"error": "because is required, retiring an agent is a deliberate act "
                          "on the record"}
     agent_id = (agent_id or "").strip()
     row = await actions.pool.fetchrow(
@@ -688,14 +690,14 @@ async def retire_agent(
     if row is None:
         return {"error": f"no such agent: {agent_id!r}"}
     if row["status"] != "active":
-        return {"error": f"{agent_id} is already {row['status']} — nothing to retire"}
+        return {"error": f"{agent_id} is already {row['status']}, nothing to retire"}
 
     from src.orchestrator import mounts
 
     liveness = await mounts.agent_liveness(actions.pool, agent_id)
     if liveness["live"] and not override_live:
-        return {"error": f"{agent_id} is LIVE right now (last_seen {liveness['last_seen']}) "
-                         "— retire_agent refuses to pronounce a live mind dead by default; "
+        return {"error": f"{agent_id} is LIVE right now (last_seen {liveness['last_seen']}), "
+                         "retire_agent refuses to pronounce a live agent dead by default; "
                          "pass override_live=True to retire it anyway, a deliberate act on "
                          "the record (mirroring retire()'s own acknowledge_leftovers escape "
                          "hatch)", "liveness": liveness}
@@ -714,7 +716,7 @@ async def retire_agent(
     out: dict[str, Any] = {"retired": agent_id, "because": because,
                            "was_live": liveness["live"]}
     # Exact match only: held_seat's own lineage-wide resolution ("any generation sharing
-    # the base, newest wins") is right for a live mind's self-lookup, but wrong here, since
+    # the base, newest wins") is right for a live agent's self-lookup, but wrong here, since
     # it would resolve an ancestor's already-superseded generation onto whatever seat its
     # live heir currently holds, and vacate that instead. This agent's own exact holds
     # link, or nothing.
@@ -749,7 +751,7 @@ async def retire_agent(
 
 def seat_label(canonical: str, handle: str | None, generation: int | None = None) -> str | None:
     """The human display for an agent, e.g. 'Name V': the seat name plus which holder of it
-    this mind is.
+    this agent is.
 
     `generation` is the ordinal among the seat's holders (stamped at claim time). It falls
     back to the anchor's roman suffix only for agents claimed before the house/seat model
@@ -764,7 +766,7 @@ def seat_label(canonical: str, handle: str | None, generation: int | None = None
 
 
 # A trailing roman numeral is a seat label, not a name (e.g. "Name VIII" names that
-# seat's 8th mind). Claiming it as a handle forks the lineage; see claim_name.
+# seat's 8th holder). Claiming it as a handle forks the lineage; see claim_name.
 _SEAT_SUFFIX = re.compile(r"[\s_-]+(?:[IVXLC]+)\s*$", re.IGNORECASE)
 
 
@@ -789,8 +791,8 @@ async def _anchor_names_a_seat(
     TWO ANCHOR SHAPES, either sufficient: (1) cwd is a seat's own office, `<office_root>/
     <handle>`, the same convention `offices.seat_office_target` derives (office_root
     defaults identically), checked via `seats_by_handle` so an exact, unambiguous seat
-    is required (a twin, i.e. 2+ seats sharing the handle, is a separate, pre-existing
-    ambiguity this function declines to adjudicate, same as `claim_name`'s own twin
+    is required (a duplicate, i.e. 2+ seats sharing the handle, is a separate, pre-existing
+    ambiguity this function declines to adjudicate, same as `claim_name`'s own duplicate
     guard just above: returns None, deferring to whatever already handles that). (2)
     job_dir is a background-launched seat's own durable per-seat anchor (`trigger.
     _launch_anchor`'s convention, `.../jobs/seat-<id>`); its basename starting with
@@ -834,8 +836,8 @@ async def claim_name(
 ) -> dict[str, Any]:
     """An agent names itself: the intelligence picks a meaningful name, the substrate
     enforces uniqueness. Refuses a name held by a different lineage (permanent exhaustion:
-    a name belongs to one lineage forever; a successor inherits it automatically, a
-    stranger cannot take it). Global namespace, so addressing is unambiguous. Stamps
+    a name belongs to one lineage forever; a successor inherits it automatically, an
+    unrelated agent cannot take it). Global namespace, so addressing is unambiguous. Stamps
     `handle` on the agent's Agent object (self-declared).
 
     A HANDLE IS A NAME. THE GENERATION IS A NUMERAL THE SYSTEM ASSIGNS. The uniqueness
@@ -860,35 +862,36 @@ async def claim_name(
         "WHERE o.canonical=$1 AND l.type='spawned_by' LIMIT 1", agent_id)
     if spawner:
         return {"error": f"a VISITOR may not claim a seat: {agent_id} was spawned_by "
-                         f"{spawner} — a sub-agent works in its parent's name; the seat, "
+                         f"{spawner}, a sub-agent works in its parent's name; the seat, "
                          "its mail, and its succession belong to the parent."}
     bare = _SEAT_SUFFIX.sub("", name).strip()
     if bare and bare.lower() != name.lower():
-        return {"error": f"'{name}' is a SEAT LABEL, not a name — the numeral is the generation, "
+        return {"error": f"'{name}' is a SEAT LABEL, not a name: the numeral is the generation, "
                          f"and the substrate assigns it. Claim '{bare}' if that lineage is "
                          "yours to continue; otherwise pick a name of your own."}
     # A mis-resolution must refuse the whole call, not just the collided name (see the
     # specimen in `_anchor_names_a_seat`'s docstring above: a session anchored in its own
     # seat's office/job_dir got refused claiming that seat's name, then successfully
-    # claimed an unrelated name instead, minting a stranger where it already had a home).
+    # claimed an unrelated name instead, minting a separate identity where it already had
+    # a home).
     # When the caller's own anchor names a real seat, this claim is only ever legitimate
     # as a claim of that seat's own name; any other name, however unconflicted on its own,
     # is a mint the caller has no business making. A caller with no anchor match at all (a
-    # genuine visitor, or an anchor that names nothing) is unaffected and falls through
+    # genuine newcomer, or an anchor that names nothing) is unaffected and falls through
     # to the ordinary uniqueness checks below.
     anchor = await _anchor_names_a_seat(actions.pool, agent_id)
     if anchor is not None:
         mismatch_seat_id, anchor_handle = anchor
         if (bare or name).lower() != anchor_handle.lower():
-            return {"error": f"MIS-RESOLUTION, NOT A STRANGER COLLISION — refusing the "
-                             f"whole claim, no writes: your own anchor (the office/"
+            return {"error": f"MIS-RESOLUTION, NOT A NAME COLLISION: refusing the "
+                             f"whole claim, no writes. Your own anchor (the office/"
                              f"job_dir this session is actually running in) already "
                              f"names seat {anchor_handle!r} ({mismatch_seat_id}). Claiming "
-                             f"{name!r} instead would mint a stranger where you already "
-                             f"have a home. If {anchor_handle!r} is genuinely yours, "
-                             f"claim THAT name; if it isn't, this session's own identity "
-                             "resolution is wrong and needs fixing before any name "
-                             "claim — never routed around by picking a different one."}
+                             f"{name!r} instead would mint a separate identity where you "
+                             f"already have a home. If {anchor_handle!r} is genuinely "
+                             f"yours, claim THAT name; if it isn't, this session's own "
+                             "identity resolution is wrong and needs fixing before any "
+                             "name claim, never routed around by picking a different one."}
     # Global first, house-scoped only when genuinely new: a real, unambiguous seat for
     # this handle can be vacant (no holder to disagree with a stale house guess).
     # find_seat's own (house, handle) lookup silently misses it whenever the caller's own
@@ -897,22 +900,22 @@ async def claim_name(
     # answers the question find_seat can't: does any active seat already carry this name,
     # regardless of house? Zero, mint fresh, house-scoped is correct (nothing to conflict
     # with). One, that seat, always, whatever its own stored house says. Two or more, an
-    # ambiguity (a twin) this claim refuses rather than silently arbitrates; fold_seat
+    # ambiguity (a duplicate) this claim refuses rather than silently arbitrates; fold_seat
     # resolves it deliberately, on its own turn, never as a side effect of an unrelated
     # claim. Resolved here, early, because the seat's own id is also the counting house
     # below, not a separate concern to revisit after the generation math runs.
     from src.orchestrator.seats import bind_holder, derive_house, ensure_seat, seats_by_handle
     existing = await seats_by_handle(actions.pool, name)
     if len(existing) > 1:
-        return {"error": f"'{name}' names {len(existing)} active seats — an ambiguity this "
+        return {"error": f"'{name}' names {len(existing)} active seats, an ambiguity this "
                          f"claim will not silently arbitrate: {', '.join(existing)}. A "
-                         "deliberate fold_seat resolves a twin; claim_name never guesses."}
+                         "deliberate fold_seat resolves a duplicate; claim_name never guesses."}
     seat_id: str | None = existing[0] if existing else None
     # A seat belongs to a house, and an heir inherits it. The old guard keyed a name to a
     # lineage root, the anchor, so the moment a conversation ended, its name died with it:
-    # the next mind in the same house reached for the family name, was refused as a
-    # "stranger", and took a new one. Now the question is not "were you minted under the
-    # same job_dir" but "do you work in the same house".
+    # the next agent in the same house reached for the family name, was refused as an
+    # "unrelated agent", and took a new one. Now the question is not "were you minted under
+    # the same job_dir" but "do you work in the same house".
     house = await house_of(actions.pool, agent_id)
     holders = await seat_holders(actions.pool, house, name)
     # The counting house is the seat's, not the caller's: a live case had a transient
@@ -971,12 +974,12 @@ async def claim_name(
             if _seat_owns_cwd(caller_cwd, handle=name, anchor_cwd=anchor_cwd):
                 anchor_seat_id = elsewhere_seat["seat_id"]
         if anchor_seat_id is None:
-            return {"error": f"'{name}' is a seat in another house ({elsewhere['canonical']}) — "
+            return {"error": f"'{name}' is a seat in another house ({elsewhere['canonical']}), "
                              "a name belongs to one house; pick a name for your own."}
         seat_id = anchor_seat_id
         counting_house = await derive_house(actions.pool, seat_id) or house
         counting_holders = await seat_holders(actions.pool, counting_house, name)
-    # A seat a live mind is already sitting in is not vacant: two minds in one house do two
+    # A seat a live agent is already sitting in is not vacant: two agents in one house do two
     # jobs. Unconditional now: gating this behind `holders`, an agent-history, house-scoped
     # count, used to mean a caller whose own computed house didn't match the seat's own
     # stored house skipped the seat-world check entirely, a specimen where a fresh
@@ -984,9 +987,9 @@ async def claim_name(
     sitting = await resolve_seat(
         actions, name, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     if sitting["live"] and sitting["agent"] != agent_id:
-        return {"error": f"'{name}' is currently held by {sitting['agent']}, who is LIVE — a seat "
-                         "is a job, and two minds in one house do two jobs. Take another seat, or "
-                         "wait for this one to be vacated."}
+        return {"error": f"'{name}' is currently held by {sitting['agent']}, who is LIVE, a seat "
+                         "is a job, and two agents in one house do two jobs. Take another seat, "
+                         "or wait for this one to be vacated."}
     a = await actions.create_or_find_object("Agent", agent_id, source)
     now = datetime.now(UTC)
     await actions.assert_property(a, "handle", name, source, now, _CONF, evidence_class=_EC)
@@ -1000,13 +1003,13 @@ async def claim_name(
     # successor seats carried no edge to their ancestor, so a lineage was not walkable from
     # the record, which is exactly why one holder could not tell a contemporary agent from
     # its own ghost and asked for the two to be merged. A seat's history must be
-    # traversable, or the next mind re-derives it from disk instead.
+    # traversable, or the next agent re-derives it from disk instead.
     # The predecessor is the holder before me, not "the last holder unless it happens to be
     # me". That older reading silently skipped the edge for the one case that needs it
     # most: an heir minted by mint_heir already carries the inherited handle, so it is
     # already in `counting_holders`, and as the newest it is counting_holders[-1], which
-    # resolved `prior` to None and minted nothing. A mind that inherited its seat could not
-    # claim its own ancestry.
+    # resolved `prior` to None and minted nothing. An agent that inherited its seat could
+    # not claim its own ancestry.
     if agent_id in counting_holders:
         i = counting_holders.index(agent_id)
         prior = counting_holders[i - 1] if i > 0 else None
@@ -1049,7 +1052,7 @@ async def claim_name(
             source=source, observed=now)
     # A seat-world mint failure used to vanish into the same bare omission as "no seat
     # needed yet": the claim itself still succeeds (the assertion world doesn't depend on
-    # the seat world), but the receipt now says why seat_id is missing instead of just not
+    # the seat world), but the result now says why seat_id is missing instead of just not
     # having it.
     return {"claimed": name, "seat": seat_label(agent_id, name, gen), "agent": agent_id,
             "house": counting_house, "generation": gen, "inherited_from": prior,
@@ -1070,17 +1073,17 @@ async def resolve_seat(
     outranked a live successor that had no mount row at all. A send to a name delivered
     into a grave, returned a success count, and the only signal was a boolean the caller
     had to notice himself. Another agent's entire port report died in a corpse's inbox the
-    same way, and its own receipt said live=true, because liveness was read off one seat
+    same way, and its own result said live=true, because liveness was read off one seat
     while delivery went to another.
 
-    A RECEIPT MUST DESCRIBE THE SEAT THAT ACTUALLY RECEIVED. This is not a cosmetic
+    THE RESULT MUST DESCRIBE THE SEAT THAT ACTUALLY RECEIVED. This is not a cosmetic
     misroute: every mount banner tells the fleet how to send it mail by name, so the
     documented path was the broken one, and a dead seat accepts mail exactly like a live
     one, which makes the loss silent. Lineages that turn over fastest resolved wrongest,
     so the blast radius grew with the fleet's health.
 
     Now: retired and false-mint seats are never candidates (reaching a grave takes an
-    explicit agent id, an act of intent, not a banner a tired mind followed); a live seat
+    explicit agent id, an act of intent, not a banner a tired agent followed); a live seat
     always wins; and among equals the latest generation wins, because an heir outranks its
     ancestor. The whole picture is returned so the caller can warn loudly instead of hiding
     it in a field.
@@ -1099,9 +1102,9 @@ async def resolve_seat(
             "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1", bound["holder"])
         # One liveness authority: a fresh/refreshing agent_mounts row is not proof of a
         # live session, as one past incident proved, where an agent id carried a fresh
-        # mount row with no harness-confirmed body under it at all. A mount-freshness pulse
-        # alone used to be enough to refuse a new claimant here; cross-checking the same
-        # occupancy authority launch_seat/mailbox/the deploy gate already use means a
+        # mount row with no harness-confirmed process under it at all. A mount-freshness
+        # pulse alone used to be enough to refuse a new claimant here; cross-checking the
+        # same occupancy authority launch_seat/mailbox/the deploy gate already use means a
         # stale-but-fresh row can never again block a name that is genuinely free to claim.
         live = bool(pulse and (datetime.now(UTC) - pulse).total_seconds() < 900
                     and await is_occupied_by_a_live_body(
@@ -1113,7 +1116,7 @@ async def resolve_seat(
         }
         if not live:
             out_b["warning"] = (
-                f"NO LIVE SESSION holds '{name}' — {bound['holder']} is bound to "
+                f"NO LIVE SESSION holds '{name}': {bound['holder']} is bound to "
                 f"{bound['seat_id']} but is NOT listening. This message may never be read.")
         return out_b
     rows = await actions.pool.fetch(
@@ -1125,7 +1128,7 @@ async def resolve_seat(
         "FROM objects o "
         "LEFT JOIN agent_mounts m ON m.agent_id=o.canonical "
         "WHERE o.type='Agent' "
-        # The winning handle: one mind, one seat. A re-seated agent keeps its old claim in
+        # The winning handle: one agent, one seat. A re-seated agent keeps its old claim in
         # the record at a lower grade, and it must not answer to the name it no longer holds.
         "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='handle' "
@@ -1157,7 +1160,7 @@ async def resolve_seat(
     }
     if not best_live:
         out["warning"] = (
-            f"NO LIVE SEAT holds '{name}' — {best['canonical']} is the newest seat of that "
+            f"NO LIVE SEAT holds '{name}': {best['canonical']} is the newest seat of that "
             "lineage and it is NOT listening. This message may never be read.")
     return out
 
@@ -1366,7 +1369,8 @@ def read_seat_handle(cwd: str | None) -> str | None:
     """The handle of the seat this tree belongs to (TOML: seat = "..." in `.osiris`). A
     handle, not a seat:uuid, matches how the fleet already addresses seats everywhere (mail,
     fleet(), roster()); a rename drifts this the same way it drifts any handle-keyed
-    reference, detectable and re-syncable by the migration verb, never a silent corruption.
+    reference, detectable and re-syncable by the migration function, never a silent
+    corruption.
     None means no seat declared (a bare code checkout nobody's office is)."""
     return _read_osiris_key(cwd, "seat").value
 
@@ -1434,7 +1438,7 @@ async def write_model_pin(seat_handle: str, model: str) -> bool:
 def read_project_pin(cwd: str | None) -> OsirisKeyRead:
     """The full `project`-key read behind `read_project_label`: value plus, when a
     `.osiris` file exists but failed to parse/read, the path and error a banner can act on.
-    `resolve_identity` uses this one, because it's the seam that carries the couldn't-read
+    `resolve_identity` uses this one, because it's the path that carries the couldn't-read
     signal into `AgentIdentity` for mount()/orient() to confess. Everything else that only
     wants the plain fallback-to-basename value keeps using `read_project_label`, unchanged,
     still a bare `str | None`."""
@@ -1476,16 +1480,16 @@ def project_pin_banner(ident: AgentIdentity) -> str | None:
         return None
     if ident.project_pin_cwd_missing:
         return (
-            f"⚠ {ident.cwd} DOES NOT EXIST ON DISK — nothing can be read here, and no "
-            f"ancestor's declaration should be borrowed for it either (msg 3928: the old "
-            f"climb silently did exactly that). Your project fell back to a BASENAME GUESS "
+            f"⚠ {ident.cwd} DOES NOT EXIST ON DISK, nothing can be read here, and no "
+            f"ancestor's declaration should be borrowed for it either (the old climb "
+            f"silently did exactly that). Your project fell back to a BASENAME GUESS "
             f"({ident.project!r}) for an address that is not real. If this office was "
             "retired, the fix is reaping its stale graph beliefs, never writing a pin here."
         )
     if ident.project_pin_error:
         return (
             f"⚠ .osiris AT {ident.project_pin_path} COULD NOT BE READ "
-            f"({ident.project_pin_error}) — this directory HAS a project pin, but it's "
+            f"({ident.project_pin_error}): this directory HAS a project pin, but it's "
             f"broken, so your project fell back to a BASENAME GUESS ({ident.project!r}) "
             "instead of reading it. Fix the file's TOML syntax (the error above names "
             "exactly what's wrong), then add `project = \"...\"` if it isn't there yet."
@@ -1509,14 +1513,14 @@ def project_pin_state(ident: AgentIdentity) -> str | None:
         return None  # project_pin_banner's own cases, a real problem, not a valid state
     if ident.project_pin_path:
         return (
-            f"project: unset (general-purpose, or not yet named) — .osiris at "
+            f"project: unset (general-purpose, or not yet named). .osiris at "
             f"{ident.project_pin_path} is valid and answers a different question (e.g. only "
             "`model`), and does not declare `project`. This is a valid state, not an error. "
             "If you know your project, write it: correct_own_pin_value / write_pin_additions."
         )
     if ident.project_pin_missing:
         return (
-            f"project: unset (general-purpose, or not yet named) — no .osiris pin exists "
+            f"project: unset (general-purpose, or not yet named). No .osiris pin exists "
             f"yet under {ident.cwd}. This is a valid state, not an error. If you know your "
             "project, write `.osiris` here with `project = \"...\"`, or pass it explicitly."
         )
@@ -1547,7 +1551,7 @@ def write_attribution_banner(ident: AgentIdentity) -> str | None:
     return (
         f"⚠ this lineage's own writes mostly land in {ident.write_attribution_top!r} "
         f"({ident.write_attribution_total} in_repo edge(s) checked), but this session "
-        f"resolved project={ident.project!r} — worth a look; nothing was overridden."
+        f"resolved project={ident.project!r}, worth a look; nothing was overridden."
     )
 
 
@@ -1616,12 +1620,13 @@ def resolve_identity(
     history: list[str] = []  # the transcript's model sequence, the swap history (job_dir path)
     deliberate = False       # a /model on the record makes any swap the operator's own hand
     # The store is the only observation lane since the JSONL-fallback removal. The
-    # reading's own `method` is the harness name; identity's downstream contract (the seam
-    # gates, _MODEL_EC) speaks the anchor vocabulary, so translate: an anchored discovery is
-    # exactly what "job_dir" has always meant here (this session's own record, found by its
-    # own anchor; the adapters enforce anchored_only just as the deleted probe did), and an
-    # unanchored one is a hottest-guess that grades like the old cwd read (derived, never
-    # seam-confessing). Without this translation a store reading graded CO_OCCURRENCE and
+    # reading's own `method` is the harness name; identity's downstream contract (the
+    # transition gates, _MODEL_EC) speaks the anchor vocabulary, so translate: an anchored
+    # discovery is exactly what "job_dir" has always meant here (this session's own record,
+    # found by its own anchor; the adapters enforce anchored_only just as the deleted probe
+    # did), and an unanchored one is a hottest-guess that grades like the old cwd read
+    # (derived, never transition-confessing). Without this translation a store reading
+    # graded CO_OCCURRENCE and
     # anchored=False, an under-grade the store-first mount path used to ship with.
     if store_reading and store_reading.current:
         observed = store_reading.current
@@ -1737,9 +1742,9 @@ async def _flag_unattributed_revisit(
 
     Never refuses the mint, the fresh identity is real, whatever route resolved it, only
     confesses that this may be one of four unresolved-revisit shapes (weeks-cold project,
-    harness churn, no .osiris pin, foreign harness) landing as a stranger instead of a
-    recognized return, exactly the population "zero inference-minted Agents after the
-    fold" is meant to measure. `open_thread`'s own summary-hash dedup absorbs a repeat
+    harness churn, no .osiris pin, foreign harness) landing as an unrecognized arrival
+    instead of a recognized return, exactly the population "zero inference-minted Agents
+    after the fold" is meant to measure. `open_thread`'s own summary-hash dedup absorbs a repeat
     mount finding the same gap again, so this fires once per (agent, project) pair, not
     once per mount."""
     from src.orchestrator.capture import open_thread
@@ -1757,12 +1762,12 @@ async def _flag_unattributed_revisit(
     await open_thread(
         actions,
         f"UNATTRIBUTED REVISIT: a fresh identity ({base}) just minted at {project!r} via "
-        "a transcript self-restore with no known lineage — the project already carries "
+        "a transcript self-restore with no known lineage. The project already carries "
         f"works_in activity from {other}. Either a genuinely new visitor sharing this "
         "project, or one of the four unresolved-revisit shapes (weeks-cold project, "
-        "harness churn, no .osiris pin, foreign harness) landing as a stranger instead "
-        "of a recognized return. Never auto-resolved: a human's own judgment decides "
-        "which.",
+        "harness churn, no .osiris pin, foreign harness) landing as an unrecognized "
+        "arrival instead of a recognized return. Never auto-resolved: a human's own "
+        "judgment decides which.",
         kind="obligation", owner="operator", repo=project, source="revisit-determinism")
 
 
@@ -1812,7 +1817,7 @@ async def _lineage_head_walk(
     live right now (`agent_liveness_exact`, never the lineage-base-widened
     `agent_liveness`; an unrelated live generation sharing the same base prefix must
     never make a stale fork branch read as live, that widening is exactly why a
-    specific-generation caller has its own exact twin). `depth` is real hops travelled
+    specific-generation caller has its own exact counterpart). `depth` is real hops travelled
     along the winning branch since this call (0 when a real head sits right here), the
     tenure signal, a longer-continuing branch over a shorter one, compared only among
     branches that both found a real head. `budget[0]` is a shared, mutable total-hop
@@ -1908,7 +1913,7 @@ async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
     merged node resolves through merged_into first: a row bound to a folded phantom must
     come home to the winner, not testify for the grave.
 
-    A healed husk is also not a head: false_mint healing (heal.py / seam-debounce) never
+    A healed husk is also not a head: false_mint healing (heal.py / transition-debounce) never
     flips objects.status, so a husk stays 'active' forever, the same gap as retire_seat
     leaving Seat.status active, so a walk that landed on a husk as its final hop would
     wrongly call it the head. Walked live and confirmed this doesn't currently misroute
@@ -2100,8 +2105,9 @@ async def misfiled_by_lineage(
     # string-match. Resolved the same way filed_under_check's own rescue is:
     # canonical-or-name-property, one real project, unambiguous, and, same fix as
     # filed_under_check's own, `project` itself is reassigned to the resolved canonical
-    # (not just used to decide which rows still count as misfiled), so the receipt's own
-    # `filed_under` names the same canonical the `misfiled` rows are compared against.
+    # (not just used to decide which rows still count as misfiled), so the returned
+    # result's own `filed_under` names the same canonical the `misfiled` rows are compared
+    # against.
     filed_projects = {str(r["filed_project"]).removeprefix("repo:") for r in rows}
     if filed_projects and project not in filed_projects:
         try:
@@ -2177,7 +2183,7 @@ async def nearest_handoff_ancestor(
     simply never wrote a handoff) even though a real one sits one more hop back (a real
     repro: generation xxiv wrote a handoff, xxv was zero-turn and wrote nothing, xxvi
     arrived blind, one hop from xxv only). Shared by orient()'s succession-note block and
-    the boot whisper's own succession-steering, one implementation, not two copies
+    the boot message's own succession-steering, one implementation, not two copies
     drifting.
 
     Structured first, prose as fallback: an is_handoff='true' property (ack_handoff's own
@@ -2188,9 +2194,10 @@ async def nearest_handoff_ancestor(
     found within the bound (never widens into an unbounded search).
 
     `respect_ack` (default True): "is this baton still live", what orient()'s
-    succession-note block and the boot whisper both actually want, from a "read receipt"
-    redesign. An explicit is_handoff='false' (ack_handoff's own retirement stamp) excludes
-    the record entirely, overriding the ILIKE fallback too: once acknowledged, a handoff
+    succession-note block and the boot message both actually want, from a "read
+    acknowledgment" redesign. An explicit is_handoff='false' (ack_handoff's own retirement
+    stamp) excludes the record entirely, overriding the ILIKE fallback too: once
+    acknowledged, a handoff
     must not resurrect for a later generation merely because nothing more recent exists;
     recall()/search() stay the route for that history, orient() should not re-deliver a
     baton someone already took. The fallback applies only to objects that never had an
@@ -2228,7 +2235,7 @@ async def nearest_handoff_ancestor(
     larger `max_hops` explicitly and reads `complete` either way.
     This signal is built, not yet wired into any visible surface: no caller's own
     observable output changes in this pass; orient()'s succession_note, handshake's boot
-    whisper, and handoff_briefing's boundary all still behave byte-for-byte as before for
+    message, and handoff_briefing's boundary all still behave byte-for-byte as before for
     the same graph state. Surfacing `complete` to a reader is a deliberate, separate,
     operator-authorized step, held pending: it changes what every session sees on its
     first call, which is not this build's authorization."""
@@ -2259,10 +2266,10 @@ async def nearest_handoff_ancestor(
 
 
 def cap_handoff_text(text: str, limit: int = 800) -> str:
-    """Truncate a handoff pick's `summary` for succession_note/boot-whisper display,
-    marking it with '…' when actually shortened, the same never-silent-truncation law
+    """Truncate a handoff pick's `summary` for succession_note/boot-message display,
+    marking it with '…' when actually shortened, the same never-silent-truncation rule
     mcp_server.py's own `_cap_text` already enforces for open_threads/recent_decisions.
-    An earlier inline `[:800]` at this call site predated that law and truncated real
+    An earlier inline `[:800]` at this call site predated that rule and truncated real
     900-3500 char records with no marker, indistinguishable from a complete note."""
     return text if len(text) <= limit else text[:limit] + "…"
 
@@ -2273,9 +2280,10 @@ _LOCK_TIMEOUT = "5s"  # a genuinely wedged holder fails waiters loud, not silent
 @asynccontextmanager
 async def mint_lock(pool: asyncpg.Pool, lineage_root: str) -> AsyncIterator[None]:
     """Serialize generation-minting per lineage (a pg advisory lock on the root). Two
-    concurrent seam observers once minted two generations in the same second with
-    identical seam strings: each walked the head, each minted, and the loser's head-walk
-    found the winner's fresh mint, so the race stacked generations instead of converging.
+    concurrent transition observers once minted two generations in the same second with
+    identical transition strings: each walked the head, each minted, and the loser's
+    head-walk found the winner's fresh mint, so the race stacked generations instead of
+    converging.
     The caller must re-read its evidence inside the lock so the loser sees the winner's
     write and concludes no-op.
 
@@ -2294,7 +2302,7 @@ async def mint_lock(pool: asyncpg.Pool, lineage_root: str) -> AsyncIterator[None
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", key)
         except asyncpg.exceptions.LockNotAvailableError as exc:
             raise LockWedged(
-                f"mint_lock: {key!r} still held past {_LOCK_TIMEOUT} — another mint is "
+                f"mint_lock: {key!r} still held past {_LOCK_TIMEOUT}: another mint is "
                 "genuinely in flight (or wedged)") from exc
         yield
 
@@ -2324,10 +2332,11 @@ async def _last_anchored_stamp(
     observed: direct_observation grade only (a job_dir transcript probe), read off the raw
     assertions so a later weak-grade write from the same source can't hide it behind
     supersession. This is the succession baseline: only two anchored observations
-    disagreeing can witness a seam; a cwd guess or self-report on either side would be a
-    false alarm (one live agent's own falsely-flagged "demoted to haiku"). The timestamp
-    is the seam gate's clock: only an observation fresher than this stamp may testify to a
-    seam, the tail of a transcript is evidence about a past moment."""
+    disagreeing can witness a transition; a cwd guess or self-report on either side would
+    be a false alarm (one live agent's own falsely-flagged "demoted to haiku"). The
+    timestamp is the transition gate's clock: only an observation fresher than this stamp
+    may testify to a transition, the tail of a transcript is evidence about a past
+    moment."""
     row = await actions.pool.fetchrow(
         "SELECT value #>> '{}' AS v, observed_at FROM assertions "
         "WHERE object_id=$1 AND name='source_model' AND evidence_class=$2 "
@@ -2368,7 +2377,7 @@ async def _report_half_healed_phantom(
     of the phantom since the interruption (exactly what happened to the three specimens
     this class was first found from), and finishing the unwind now would run
     follow_binding against whatever seat currently holds the live head, rebinding it
-    backward onto a stale ancestor and stranding every real mind and every
+    backward onto a stale ancestor and stranding every real agent and every
     seat-addressed message since. Surfaced for a human's own judgment via the standard
     obligation call, idempotent on the summary so a repeat sighting (this walk runs at
     every mint) converges on one Thread rather than paging every caller who passes
@@ -2397,8 +2406,8 @@ async def _report_half_healed_phantom(
 
     summary = (
         f"HALF-HEALED PHANTOM: {phantom} was flagged false_mint but its ancestor "
-        f"{grandancestor}'s succeeded_by was never unwound — an interrupted heal "
-        f"(decision ee012ebc). Do not auto-complete: a real successor may already be "
+        f"{grandancestor}'s succeeded_by was never unwound, an interrupted heal. "
+        f"Do not auto-complete: a real successor may already be "
         f"live past {phantom}. A human must judge whether/how to reconcile.")
     canon = _thread_canon(summary, None)
     current_status = await actions.pool.fetchval(
@@ -2409,7 +2418,7 @@ async def _report_half_healed_phantom(
         await annotate_thread(
             actions, canon,
             f"still present at {datetime.now(UTC).isoformat()}: {grandancestor}'s "
-            f"succeeded_by remains unwound past {phantom}. Resolved once already — "
+            f"succeeded_by remains unwound past {phantom}. Resolved once already, "
             "re-opening it is a human's call, not this detector's.",
             source=_HALF_HEAL_SRC)
         return
@@ -2435,21 +2444,21 @@ async def correct_succession(
     override_live: bool = False,
 ) -> dict[str, Any]:
     """The sanctioned entry point for `succeeded_by`: a batch of half-heal-detect threads were
-    found genuinely live, not bulk-closeable, but bulk-reviewable, and no verb anywhere
+    found genuinely live, not bulk-closeable, but bulk-reviewable, and no existing function
     touched this property; a raw assert_property from outside the MCP surface is exactly
     what house policy rules against, and the auto-mode classifier caught it before it ran.
     Third-party, `rehold_seat`-shaped: gathers its own refusal evidence, writes once,
-    receipts both sides of the change.
+    confirms both sides of the change.
 
     `value=""` retracts the pointer to unset (the same NOT-NULL-safe empty-string
     sentinel `_debounce_roundtrip`/`_fold_zero_turn_ancestors` already use for a
     compensating retraction), never a delete; the stale assertion this supersedes stays
-    in history, exactly the append-only law every other correction entry point in this house
-    already holds to.
+    in history, exactly the append-only rule every other correction entry point in this
+    house already holds to.
 
     The liveness guard mirrors `retire_agent`'s shape, not its exact check (this corrects
     a property on the named agent itself, not a seat's holder): `agent_id` reading live
-    right now refuses by default. A mind still active is not settled history yet, and
+    right now refuses by default. An agent still active is not settled history yet, and
     correcting its own succession record out from under it is exactly the "two signals
     disagree" shape this house's own population practice warns against.
     `override_live=True` names that as a deliberate act, the same escape hatch
@@ -2462,15 +2471,15 @@ async def correct_succession(
     descendant's fresh mount row and refuse nearly the whole batch, the opposite of what a
     "is this specific ancestor still active" question should ask.
 
-    The receipt names both sides of the change and its own consequence, not just the
-    write: `was`/`now` for the property itself, and `lineage_head` before and after the
-    write for `agent_id`, the exact invariant the batch's own dry-run was built to verify
-    per pair (a retraction that quietly moves the resolved head is the live-sibling-rebind
-    class of bug this lane has been chasing; `head_moved` says so in the receipt itself
-    rather than leaving a caller to re-derive it)."""
+    The returned result names both sides of the change and its own consequence, not just
+    the write: `was`/`now` for the property itself, and `lineage_head` before and after
+    the write for `agent_id`, the exact invariant the batch's own dry-run was built to
+    verify per pair (a retraction that quietly moves the resolved head is the
+    live-sibling-rebind class of bug this lane has been chasing; `head_moved` says so in
+    the returned result itself rather than leaving a caller to re-derive it)."""
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required — correcting a succession pointer is a "
+        return {"error": "because is required: correcting a succession pointer is a "
                          "deliberate act on the record"}
     agent_id = (agent_id or "").strip()
     row = await actions.pool.fetchrow(
@@ -2482,8 +2491,8 @@ async def correct_succession(
 
     liveness = await mounts.agent_liveness_exact(actions.pool, agent_id)
     if liveness["live"] and not override_live:
-        return {"error": f"{agent_id} is LIVE right now (last_seen {liveness['last_seen']}) "
-                         "— correct_succession refuses to rewrite a live mind's own "
+        return {"error": f"{agent_id} is LIVE right now (last_seen {liveness['last_seen']}), "
+                         "correct_succession refuses to rewrite a live agent's own "
                          "succession record by default; pass override_live=True to "
                          "correct it anyway, a deliberate act on the record (mirroring "
                          "retire_agent's own override_live escape hatch)",
@@ -2525,7 +2534,7 @@ async def is_occupied_by_a_live_body(
     `mailbox.py`'s own send() eligibility gate needs this exact same check without
     wrapping a pool in an Actions object it never writes through.
 
-    Injectable (`agents_json`/`read_exe`/`read_cwd`), same seam discipline as
+    Injectable (`agents_json`/`read_exe`/`read_cwd`), same test-injection discipline as
     `registry_census` itself: the real defaults fire on every production mint, an
     accepted cost (a subprocess plus a bounded /proc walk) for a safety-critical check on
     a path that is not a hot loop.
@@ -2559,7 +2568,7 @@ async def _fold_zero_turn_ancestors(
     never acted upon must never appear as a link in the inheritance chain, count a reign
     numeral, or intercept a handoff. Canonical repro: /compact then /model back-to-back
     with zero turns between minted two generations (a phantom, then its heir) for one
-    real seam.
+    real transition event.
 
     Called by both real mint call sites (live_succession, register_agent) right before
     they call mint_heir, not from inside mint_heir itself, since mint_heir's return tuple
@@ -2569,18 +2578,19 @@ async def _fold_zero_turn_ancestors(
     src/ to verify - there are exactly two).
 
     Extends the existing mint gate rather than adding a new one beside it: an earlier fix
-    (which built _debounce_roundtrip) coalesces duplicate observations of one real seam
-    event (two observers racing the same /model). This is the other residual class: two
-    real, different seam events back-to-back (compact, then swap) with no turns between.
-    The outcome has to differ, deliberately - a round-trip returns to a value this
-    lineage already had, so nothing new ever happened and _debounce_roundtrip heals to no
-    mint at all; a compact-then-swap reaches a genuinely new model, which still deserves
-    a numeral - coalescing here means mint once, not mint zero, so this folds the phantom
-    and lets the caller's normal mint_heir call proceed against the corrected ancestor,
-    rather than returning a heal dict that skips minting the way _debounce_roundtrip's
-    own round-trip case correctly does. What is shared, on purpose: the same window
-    (_SEAM_DEBOUNCE_SECS, the mint gate's actless-head window, not a second one), the
-    same acts-check (agent_has_acted), and the same false_mint/retired stamp shape.
+    (which built _debounce_roundtrip) coalesces duplicate observations of one real
+    transition event (two observers racing the same /model). This is the other residual
+    class: two real, different transition events back-to-back (compact, then swap) with
+    no turns between. The outcome has to differ, deliberately - a round-trip returns to a
+    value this lineage already had, so nothing new ever happened and _debounce_roundtrip
+    heals to no mint at all; a compact-then-swap reaches a genuinely new model, which
+    still deserves a numeral - coalescing here means mint once, not mint zero, so this
+    folds the phantom and lets the caller's normal mint_heir call proceed against the
+    corrected ancestor, rather than returning a heal dict that skips minting the way
+    _debounce_roundtrip's own round-trip case correctly does. What is shared, on purpose:
+    the same window (_SEAM_DEBOUNCE_SECS, the mint gate's actless-head window, not a
+    second one), the same acts-check (agent_has_acted), and the same false_mint/retired
+    stamp shape.
 
     Walks up through any consecutive run of zero-turn ancestors within that window (the
     same 64-iteration bound mint_heir's own grave-avoidance loop uses), un-minting each,
@@ -2628,7 +2638,7 @@ async def _fold_zero_turn_ancestors(
             break
         if await agent_has_acted(actions, cur_id, exclude=[cur_oid, grand_oid],
                                  settled_after=minted_at):
-            break  # a real mind lived here, nothing to fold
+            break  # a real agent lived here, nothing to fold
         if await is_occupied_by_a_live_body(
             actions.pool, cur_id, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd,
         ):
@@ -2647,8 +2657,8 @@ async def _fold_zero_turn_ancestors(
             for k, v in (("false_mint", True), ("retired", True),
                          ("retired_by", _PHANTOM_FOLD_SRC),
                          ("false_mint_because",
-                          "zero-turn generation folded at supersession (ruling d3531cd8) — "
-                          "minted but never acted upon before the next seam")):
+                          "zero-turn generation folded at supersession: "
+                          "minted but never acted upon before the next transition")):
                 await a.assert_property(cur_oid, k, v, _PHANTOM_FOLD_SRC, now, conf,
                                         evidence_class=do.value)
             await a.assert_property(grand_oid, "succeeded_by", "", _PHANTOM_FOLD_SRC, now,
@@ -2656,7 +2666,7 @@ async def _fold_zero_turn_ancestors(
             await a.execute(
                 "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
                 grandancestor, cur_id)
-            # THE SAME ESTATE-TRANSFER RULE mint_heir HOLDS: this walk is a second
+            # THE SAME OWNERSHIP-TRANSFER RULE mint_heir HOLDS: this walk is a second
             # mail-reassignment site, mint_heir's own sibling, and it needs to do both
             # halves of that transfer, not just the fleet_messages half above. A phantom
             # generation folded here could carry a lease (message_recipients row, read_at
@@ -2689,7 +2699,7 @@ async def _skip_false_mint_ancestors(
     node as a terminal halt (correct mid-walk, where it means "a prior fold already
     resolved this and I should stop here"), so it returned the phantom completely
     unchanged, and the reanimated heir's `succeeded_from` chained onto a folded phantom
-    instead of a real mind.
+    instead of a real agent.
 
     Walks forward past any consecutive false_mint ancestors via their own
     `succeeded_from`, landing on the first eligible (non-false_mint) ancestor, or the
@@ -2756,7 +2766,7 @@ async def reinstate_generation(
         "AND name='retired' ORDER BY confidence DESC, observed_at DESC LIMIT 1", oid)
     if str(was_false_mint).lower() != "true" and str(was_retired).lower() != "true":
         return {"ok": False,
-                "detail": f"{agent_id!r} is not currently false_mint or retired — "
+                "detail": f"{agent_id!r} is not currently false_mint or retired: "
                           "nothing to reinstate"}
     old_predecessor = await actions.pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
@@ -2822,10 +2832,10 @@ async def move_agent_project_links(
     plus create, the same pattern `_move_project_estate`/`_move_agent_estate`/`_move_seat_
     estate` already use (measured 906 of 6,245 fleet-wide), applied here to an agent's
     own outbound project edges instead of a project's inbound ones. Two callers, one
-    implementation, to avoid writing a fourth estate-mover: `mint_heir` (prospective, an
+    implementation, to avoid writing a fourth ownership-mover: `mint_heir` (prospective, an
     ancestor's edges move to its fresh heir on ordinary succession, the mechanism that was
     missing entirely) and `folds._move_agent_estate` (a different, related gap:
-    fold_agent's own estate-move never covered works_in/governs at all, only
+    fold_agent's own ownership transfer never covered works_in/governs at all, only
     mail/mounts/threads; reconcile_agent_fold inherits the fix automatically since it
     calls the same function unchanged).
 
@@ -2903,7 +2913,7 @@ async def backfill_agent_project_links(
         item: dict[str, Any] = {"agent": r["canonical"], "status": r["status"],
                                 "head": head_label}
         if head_oid is None:
-            item["note"] = "living head resolved to a label with no Agent object — skipped"
+            item["note"] = "living head resolved to a label with no Agent object: skipped"
             plan.append(item)
             continue
         if dry_run:
@@ -2946,12 +2956,12 @@ async def invalidate_works_in(
     Deliberately narrow: a same-agent, same-generation cleanup, orthogonal to the
     still-open question of whether a predecessor generation's stale works_in edge gets
     moved on succession, write-side or read-side. This never touches an ancestor's edges,
-    never re-points anything onto a different agent, and does not use the estate-move
+    never re-points anything onto a different agent, and does not use the ownership-move
     pattern `_move_agent_estate`/`move_agent_project_links` use for exactly that reason:
     those move edges between two agent objects; this invalidates one of the same agent's
-    own two edges. No mail/mounts/thread-ownership moves with it (unlike a fold's estate
-    move) because nothing there is project-scoped in a way a dropped works_in edge would
-    orphan.
+    own two edges. No mail/mounts/thread-ownership moves with it (unlike a fold's
+    ownership move) because nothing there is project-scoped in a way a dropped works_in
+    edge would orphan.
 
     Refuses loudly on: blank `because`; `agent_id` not resolving to an active Agent;
     `stale_project` resolving ambiguously (never guesses) or to no SoftwareProject at
@@ -2962,7 +2972,7 @@ async def invalidate_works_in(
 
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required — invalidating a works_in edge is a "
+        return {"error": "because is required: invalidating a works_in edge is a "
                          "deliberate act on the record"}
     agent_id = (agent_id or "").strip()
     if not agent_id:
@@ -2988,10 +2998,10 @@ async def invalidate_works_in(
     live_by_id = {r["to_id"]: r["project"] for r in live}
     if proj_row["id"] not in live_by_id:
         return {"error": f"{agent_row['canonical']} has no active works_in edge to "
-                         f"{proj_row['canonical']} — nothing to invalidate"}
+                         f"{proj_row['canonical']}: nothing to invalidate"}
     if len(live_by_id) <= 1:
         return {"error": f"{proj_row['canonical']} is {agent_row['canonical']}'s ONLY "
-                         "live works_in edge — invalidate_works_in is for duplicates, "
+                         "live works_in edge: invalidate_works_in is for duplicates, "
                          "never for a lone edge"}
     now = datetime.now(UTC)
     await actions.invalidate_link(agent_row["id"], proj_row["id"], "works_in", actor, now)
@@ -3026,7 +3036,7 @@ async def retire_governs_edges(
 
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required — retiring a governs edge is a deliberate "
+        return {"error": "because is required: retiring a governs edge is a deliberate "
                          "act on the record"}
     agent_id = (agent_id or "").strip()
     if not agent_id:
@@ -3038,7 +3048,7 @@ async def retire_governs_edges(
         return {"error": f"no such active Agent: {agent_id!r}"}
     repos = [r.strip() for r in (repos or []) if r and r.strip()]
     if not repos:
-        return {"error": "repos is required — at least one project name to retire"}
+        return {"error": "repos is required: at least one project name to retire"}
 
     live = await actions.pool.fetch(
         "SELECT to_id, t.canonical AS project FROM links l JOIN objects t ON t.id=l.to_id "
@@ -3197,12 +3207,12 @@ async def mint_heir(
     minting_door: str | None = None, upcoming_project: str | None = None,
     bind_seat: bool = True,
 ) -> tuple[str, uuid.UUID]:
-    """Mint the next generation of a lineage: a new mind gets a new numeral, and the
-    seams that count as a new mind include mid-session ones (live model swap,
+    """Mint the next generation of a lineage: a new identity gets a new numeral, and the
+    transitions that count as a new identity include mid-session ones (live model swap,
     compaction), not just session death. Stamps the succession chain on both sides,
     passes the seat (handle) down, and re-addresses the ancestor's unread messages to the
-    heir; the mailbox is part of the estate (a message sent to the old mind must reach
-    whoever now holds the seat, or every compaction would orphan in-flight mail).
+    heir; the mailbox is part of what transfers (a message sent to the old identity must
+    reach whoever now holds the seat, or every compaction would orphan in-flight mail).
 
     Takes `ancestor_id`/`ancestor_oid` as given: folding any zero-turn phantom off the
     front of the chain is the caller's job, done via _fold_zero_turn_ancestors before
@@ -3240,7 +3250,7 @@ async def mint_heir(
     now = now or datetime.now(UTC)
     heir = next_generation(ancestor_id)
     # A mint never lands on a grave: after a same-lineage fold, the next numeral may name
-    # a merged object - create_or_find would resurrect it and the estate transfer would
+    # a merged object - create_or_find would resurrect it and the record transfer would
     # drag the living head's unread mail onto a corpse (witnessed: 10 unread on a merged
     # generation within the hour of its folding).
     #
@@ -3259,7 +3269,7 @@ async def mint_heir(
     # not mint zero), not a resurrection. The two heal cases share the identical
     # false_mint/retired shape and are distinguished only by age: a heal still inside the
     # mint gate's own debounce window (_SEAM_DEBOUNCE_SECS, the same window the fold uses
-    # for its own back-to-back check, not a second one) is part of the seam being
+    # for its own back-to-back check, not a second one) is part of the transition being
     # resolved right now; a heal older than that (20 hours cold, in one specimen) is a
     # closed one-way route.
     #
@@ -3423,11 +3433,11 @@ async def mint_heir(
                                       evidence_class=_EC)
         # ...and the seat passes with the name, or the name is just a label. (A specimen
         # of the earlier gap: one heir was minted carrying its predecessor's handle with
-        # no generation edge to the mind whose work it continued.) This is where a seat
-        # changes hands without a handoff: mint_heir is the automatic succession, it
+        # no generation edge to the identity whose work it continued.) This is where a
+        # seat changes hands without a handoff: mint_heir is the automatic succession, it
         # fires on every compaction, every model swap, every session death, and it passed
         # the name down while leaving the seat's chain broken. Only claim_name(), an
-        # explicit act by a mind that thinks to call it, ever minted the edge. A
+        # explicit act by an agent that thinks to call it, ever minted the edge. A
         # historical backfill closed 77 existing gaps but never fixed the code that omits
         # them, so the chain healed and then broke again at the very next heir minted
         # after the heal. Left alone it would re-open the gap at every compaction,
@@ -3442,8 +3452,9 @@ async def mint_heir(
                                       _CONF, evidence_class=_EC)
         await _link_once(actions, a, ancestor_oid, "succeeds_seat", heir, now)
     # The binding follows the head: every Seat object the ancestor actively holds
-    # re-links to the heir - the durable address must keep pointing at whoever the mind
-    # is now, or the first compaction after an attach would strand the seat on a corpse.
+    # re-links to the heir - the durable address must keep pointing at whoever holds
+    # the identity now, or the first compaction after an attach would strand the seat
+    # on a corpse.
     # The old link heals by valid_until; holder history stays walkable. Gated on
     # bind_seat (see the docstring's own holds-sandwich paragraph): a caller that knows
     # this heir is pure pre-spawn bookkeeping, never yet a real occupant, passes
@@ -3478,22 +3489,22 @@ async def mint_heir(
         heir, ancestor_id)
     # ...and so does the read state: the heir inherits the ancestor's recipient rows, or
     # every mint (i.e. every compaction) would redeliver the project's whole settled
-    # broadcast history to the new mind. The heir literally remembers reading them, that
-    # memory is exactly what survived the seam.
+    # broadcast history to the new identity. The heir literally remembers reading them,
+    # that memory is exactly what survived the transition.
     #
     # But only the settled half: a message_recipients row with read_at IS NULL is a
     # lease, not a memory - the ancestor read it (delivered_at) but never replied or
-    # acked before dying, and a lease belongs to the mind that holds it, not to whoever
-    # inherits its name next. The old unconditional copy carried the ancestor's own
-    # (recent) delivered_at straight onto the heir, so the heir's very next inbox() read
-    # the message as "already delivered inside its lease window" and stayed silent about
-    # it for as long as that lease had left to run - a genuinely unread ask going dark
-    # across the one seam that most needs it surfaced (one specimen: two leased asks read
-    # as settled by the mint, neither ever answered). Filtering to read_at IS NOT NULL
-    # here is the fix: a truly settled message still carries its memory forward exactly
-    # as before; a merely-leased one carries nothing, so the heir's own next inbox()
-    # finds it with no prior row at all - fresh, undelivered, exactly as if this mind
-    # were reading it for the first time, which it is.
+    # acked before dying, and a lease belongs to the identity that holds it, not to
+    # whoever inherits its name next. The old unconditional copy carried the ancestor's
+    # own (recent) delivered_at straight onto the heir, so the heir's very next inbox()
+    # read the message as "already delivered inside its lease window" and stayed silent
+    # about it for as long as that lease had left to run - a genuinely unread ask going
+    # dark across the one transition that most needs it surfaced (one specimen: two
+    # leased asks read as settled by the mint, neither ever answered). Filtering to
+    # read_at IS NOT NULL here is the fix: a truly settled message still carries its
+    # memory forward exactly as before; a merely-leased one carries nothing, so the
+    # heir's own next inbox() finds it with no prior row at all - fresh, undelivered,
+    # exactly as if this identity were reading it for the first time, which it is.
     await actions.pool.execute(
         "INSERT INTO message_recipients (message_id, agent_id, delivered_at, read_at, deliveries)"
         " SELECT message_id, $1, delivered_at, read_at, deliveries FROM message_recipients"
@@ -3537,7 +3548,8 @@ async def fold_existing_zero_turn_phantoms(actions: Actions) -> list[dict[str, A
     return folded
 
 
-# Notify at seam: a compacting worker session's manager should learn from the fleet, not
+# Notify at the transition: a compacting worker session's manager should learn from the
+# fleet, not
 # from the human noticing. Only a harness-reported context death fires this, the silent
 # class nobody else is watching. Model-succession and live-swap already surface on the
 # existing danger map; reanimation-of-retired is a deliberate act, not an accident that
@@ -3571,7 +3583,7 @@ async def _notify_seam_manager(
         return
     check = await reachability(actions.pool, heir)
     handle = bound["handle"] or heir
-    body = (f"{handle} just {mint_because.replace('-', ' ')} — new generation {heir}. "
+    body = (f"{handle} just {mint_because.replace('-', ' ')}, new generation {heir}. "
            f"{check['detail']}")
     await send_message(actions.pool, from_agent=heir, from_project=project,
                        to_agent=manager_seat, body=body, grade="fyi")
@@ -3585,13 +3597,13 @@ async def agent_has_acted(
     actions: Actions, agent_id: str, *, exclude: list[uuid.UUID],
     settled_after: datetime | None,
 ) -> bool:
-    """A mind is witnessed by its acts: did this agent ever do anything beyond its own
-    mint/registration bookkeeping? Acts = assertions on objects other than the excluded
-    lineage pair, words sent, or mail settled after the mint. Not acts: the display-name
-    stamps registration writes onto the repo and principal objects (routine registration
-    paperwork - the register path stamps those on every mount, and counting them made
-    every register-minted heir read as a mind, so the cross-path debounce could never
-    heal one)."""
+    """An identity is witnessed by its acts: did this agent ever do anything beyond its
+    own mint/registration bookkeeping? Acts = assertions on objects other than the
+    excluded lineage pair, words sent, or mail settled after the mint. Not acts: the
+    display-name stamps registration writes onto the repo and principal objects (routine
+    registration paperwork - the register path stamps those on every mount, and counting
+    them made every register-minted heir read as a distinct identity, so the cross-path
+    debounce could never heal one)."""
     return bool(await actions.pool.fetchval(
         "SELECT EXISTS (SELECT 1 FROM assertions x JOIN objects o ON o.id=x.object_id "
         "         WHERE x.source_id=$1 AND NOT (x.object_id = ANY($2::uuid[])) "
@@ -3607,16 +3619,17 @@ async def _debounce_roundtrip(
     actions: Actions, *, agent_id: str, observed: str, now: datetime,
     job_dir: str | None = None,
 ) -> dict[str, Any] | None:
-    """Debounce for the generation-succession seam: toggling the model setting back and forth
-    within a short window used to mint a new generation for each toggle, diluting what a
-    generation change is supposed to mean (a new generation tracks a new mind, not a settings
-    change). The distinction that keeps both concepts intact: a mind is witnessed by its acts.
-    When the model returns to the left side of the seam within the window and the transient
-    heir asserted nothing beyond its own mint bookkeeping, sent nothing, and settled nothing,
-    no independent mind ever existed; the mint heals as false (event-sourced, compensating,
-    its record stays) and the ancestor takes its seat back, including its prior state. One
-    witnessed act, and the heir stands: a real mind passed through, however briefly. Returns
-    the heal dict, or None if the mint stands.
+    """Debounce for the generation-succession transition: toggling the model setting back
+    and forth within a short window used to mint a new generation for each toggle,
+    diluting what a generation change is supposed to mean (a new generation tracks a new
+    identity, not a settings change). The distinction that keeps both concepts intact: an
+    identity is witnessed by its acts. When the model returns to the left side of the
+    transition within the window and the transient heir asserted nothing beyond its own
+    mint bookkeeping, sent nothing, and settled nothing, no independent identity ever
+    existed; the mint heals as false (event-sourced, compensating, its record stays) and
+    the ancestor takes its seat back, including its prior state. One witnessed act, and
+    the heir stands: a real identity passed through, however briefly. Returns the heal
+    dict, or None if the mint stands.
 
     Shared by both mint paths: this originally lived only in the heartbeat check and only
     healed heads minted via 'live-swap', so a round-trip whose return leg was witnessed by a
@@ -3634,8 +3647,8 @@ async def _debounce_roundtrip(
         "FROM current_assertions WHERE object_id=$1 "
         "AND name IN ('succeeded_from','minted_because','model_succession') "
         "ORDER BY name, confidence DESC, observed_at DESC", cur_oid)}
-    # Both model-seam mints heal; a compaction/clear/reanimation mint is a context death,
-    # not model flapping, so there is no "left side" to return to.
+    # Both model-transition mints heal; a compaction/clear/reanimation mint is a context
+    # death, not model flapping, so there is no "left side" to return to.
     if meta.get("minted_because", (None, None))[0] not in ("live-swap", "model-succession"):
         return None
     ancestor, minted_at = meta.get("succeeded_from", (None, None))
@@ -3645,7 +3658,7 @@ async def _debounce_roundtrip(
         return None
     left = normalize_model(seam.split("→")[0].strip()) if "→" in seam else None
     if left is None or left != observed:
-        return None  # not a round-trip: a third model is a real third mind
+        return None  # not a round-trip: a third model is a genuine third identity
     ancestor_oid = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", ancestor)
     if ancestor_oid is None:
@@ -3669,15 +3682,15 @@ async def _debounce_roundtrip(
     async with actions.atomic() as a:
         for k, v in (("false_mint", True), ("retired", True), ("retired_by", _DEBOUNCE_SRC),
                      ("false_mint_because",
-                      "model round-trip within the debounce window, no witnessed act — "
-                      "settings churn, not a death (Soundwave's grievance, b813e389)")):
+                      "model round-trip within the debounce window, no witnessed act, "
+                      "settings churn, not a death")):
             await a.assert_property(cur_oid, k, v, _DEBOUNCE_SRC, now, conf,
                                     evidence_class=do.value)
         # Unwind the head-walk (the old pointer stays in history: compensating, never deleted).
         await a.assert_property(ancestor_oid, "succeeded_by", "", _DEBOUNCE_SRC, now, conf,
                                 evidence_class=do.value)
-        # State returns to the restored mind: unread messages re-address to it; read state
-        # needs no unwind (the heir's copied rows are inert once the heir is retired).
+        # State returns to the restored identity: unread messages re-address to it; read
+        # state needs no unwind (the heir's copied rows are inert once the heir is retired).
         await a.execute(
             "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
             ancestor, cur)
@@ -3694,20 +3707,22 @@ async def _debounce_roundtrip(
                 "UPDATE agent_mounts SET agent_id=$2, model=$3, "
                 "last_seen=CASE WHEN earned_pulse_at IS NOT NULL THEN now() ELSE last_seen END "
                 "WHERE job_dir=$1", job_dir, ancestor, observed)
-        else:  # the register path: any row naming the healed heir follows the restored mind
+        else:
+            # the register path: any row naming the healed heir follows the restored
+            # identity
             await a.execute(
                 "UPDATE agent_mounts SET agent_id=$2, model=$3 WHERE agent_id=$1",
                 cur, ancestor, observed)
     return {"healed": cur, "restored": ancestor,
             "seam": f"{seam} → {observed} (round-trip within "
-                    f"{_SEAM_DEBOUNCE_SECS // 60}m, no act — debounced, not a death)"}
+                    f"{_SEAM_DEBOUNCE_SECS // 60}m, no act, debounced, not a death)"}
 
 
 async def _already_reached(actions: Actions, *, agent_id: str, observed: str) -> bool:
     """Did this lineage head already record a swap landing on `observed`? This guards against
     a real live repro where a single real model transition produced three separate
     'live-swap' mints because of idempotency gaps in the succession check. The comparison
-    live_succession runs the seam against, agent_mounts.model, is a mutable row that can
+    live_succession runs the comparison against, agent_mounts.model, is a mutable row that can
     drift back to a stale value after the real swap already completed (mount()'s own
     re-derivation resets it; the deeper cause is tracked separately). The head's own
     `source_model` is equally mutable, reset by the same path. `model_succession` is not:
@@ -3731,12 +3746,12 @@ async def _already_reached(actions: Actions, *, agent_id: str, observed: str) ->
 async def live_succession(
     actions: Actions, *, session_id: str, observed_model: str,
 ) -> dict[str, Any]:
-    """A mid-session model change, sensed by the heartbeat check: the mind changed under a
-    live session, so the seat passes now. Mint the heir, move the durable mount row, and
-    every per-render read (statusline, stop hook, digest) resolves to the new mind from the
-    next glance. Idempotent: an unchanged model or an unknown mount is a no-op; a row with no
-    stored model gets a first stamp, not a succession (you can only succeed something that
-    existed)."""
+    """A mid-session model change, sensed by the heartbeat check: the identity changed
+    under a live session, so the seat passes now. Mint the heir, move the durable mount
+    row, and every per-render read (statusline, stop hook, digest) resolves to the new
+    identity from the next glance. Idempotent: an unchanged model or an unknown mount is
+    a no-op; a row with no stored model gets a first stamp, not a succession (you can
+    only succeed something that existed)."""
     sid = (session_id or "").strip().lower()
     observed = normalize_model(observed_model)
     if len(sid) < 8 or not observed:
@@ -3754,8 +3769,8 @@ async def live_succession(
         return {"unchanged": True}
     async with mint_lock(actions.pool, _generation(row["agent_id"])[0]):
         # Re-read inside the lock: two concurrent heartbeats once both read the pre-swap row
-        # and both minted, producing identical seam strings a second apart. The loser now
-        # waits, re-reads, sees the winner's write, and no-ops.
+        # and both minted, producing identical transition strings a second apart. The loser
+        # now waits, re-reads, sees the winner's write, and no-ops.
         row = await find_session_row(actions.pool, sid)
         if row is None:
             return {"unchanged": True, "reason": "no mount"}
@@ -3766,17 +3781,17 @@ async def live_succession(
                     "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1",
                     row["job_dir"], observed)
             return {"unchanged": True}
-        # The null-seam gate, mirroring the same check in forks.py as defense-in-depth: a row
-        # with no stored model was never observed, not observed-as-something-else, so it can
-        # never "disagree with" the first real reading. This is a first stamp, never a seam
-        # to mint against.
+        # The no-baseline gate, mirroring the same check in forks.py as defense-in-depth: a
+        # row with no stored model was never observed, not observed-as-something-else, so
+        # it can never "disagree with" the first real reading. This is a first stamp, never
+        # a transition to mint against.
         if old is None:
             await actions.pool.execute(
                 "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1", row["job_dir"], observed)
             return {"unchanged": True, "reason": "first stamp"}
         now = datetime.now(UTC)
-        # Seams run on the lineage head, and the debounce judges the head, not the row,
-        # which may lag its own succession.
+        # Transitions run on the lineage head, and the debounce judges the head, not the
+        # row, which may lag its own succession.
         head = await lineage_head(actions.pool, row["agent_id"])
         # A there-and-back model toggle with no act between heals instead of minting again.
         healed = await _debounce_roundtrip(actions, agent_id=head, observed=observed,
@@ -3799,12 +3814,12 @@ async def live_succession(
                 "WHERE job_dir=$1",
                 row["job_dir"], observed)
             return {"unchanged": True,
-                   "reason": f"idempotent — {head} already recorded reaching {observed}; "
+                   "reason": f"idempotent: {head} already recorded reaching {observed}; "
                              "repaired the drifted stored model, minted nothing"}
         # Whose hand moved the model? A model change on this session's own transcript makes
-        # the seam the operator's deliberate act. The mint still happens (a mind change is a
-        # mind change regardless of cause) but the seam string carries who caused it, so no
-        # downstream surface misreports it.
+        # the transition the operator's deliberate act. The mint still happens (an identity
+        # change is an identity change regardless of cause) but the transition string
+        # carries who caused it, so no downstream surface misreports it.
         deliberate = False
         try:
             main = locate_current_transcript(
@@ -3824,8 +3839,8 @@ async def live_succession(
             "SELECT earned_pulse_at FROM agent_mounts WHERE job_dir=$1", row["job_dir"])
         if earned is None:
             return {"unchanged": True,
-                   "reason": "no earned pulse on this row — refusing to mint an heir off "
-                             "an unearned observation (THE EARNED-PULSE COLUMN, mail 9873)"}
+                   "reason": "no earned pulse on this row, refusing to mint an heir off "
+                             "an unearned observation (the earned-pulse column)"}
         ancestor_oid = await actions.create_or_find_object("Agent", head, head)
         # Succession follows turns: fold any zero-turn phantom off the front of the chain
         # before minting on top of it. head/ancestor_oid below name whoever this heir
@@ -3836,9 +3851,9 @@ async def live_succession(
                                          succession=seam, now=now,
                                          minting_door=row["job_dir"])
         # The heartbeat's model is the harness's own word about a session it is rendering, as
-        # anchored as a job_dir transcript read, and the baseline the next seam check runs
-        # against (without it, a later re-mount would see no anchored model on the heir and
-        # stay quiet).
+        # anchored as a job_dir transcript read, and the baseline the next transition check
+        # runs against (without it, a later re-mount would see no anchored model on the
+        # heir and stay quiet).
         do = EvidenceClass.DIRECT_OBSERVATION
         await actions.assert_property(heir_oid, "source_model", observed, heir, now,
                                       confidence_for(do), evidence_class=do.value)
@@ -3928,19 +3943,19 @@ async def register_agent(
     (the operator's standing choice) turns on the swap detector: the intent is stamped, and a
     silent demotion away from it is recorded as a first-class observed event on the Agent.
 
-    The succession seam: session-keyed identity means a retire-compact-swap sequence hands a
-    dead agent's id to a fresh context, a different model then writes as it, and the
+    The succession transition: session-keyed identity means a retire-compact-swap sequence
+    hands a dead agent's id to a fresh context, a different model then writes as it, and the
     transcript-level swap detector is blind when the new transcript never ran the old model.
     So registration also compares the fresh anchored observation against the graph's last
-    anchored source_model: any disagreement is a succession seam under the standing rule that
-    a generation tracks a mind, even one the transcript witnessed. An older exemption for
-    witnessed transitions ("same context, different seam") encoded tenure semantics that has
-    since been overruled: the generation number tracks which mind, and a mind is one
-    contiguous run of one model, so a witnessed swap is a succession like any other (the
-    warm-swap `model_swapped` stamp still lands too; both records are true). `mint_reason`
-    forces a mint for a context death the harness reported with no model change at all
-    (compaction, session clear): the weights survive but the memory the operator was talking
-    to does not.
+    anchored source_model: any disagreement is a succession transition under the standing
+    rule that a generation tracks an identity, even one the transcript witnessed. An older
+    exemption for witnessed transitions ("same context, different transition") encoded
+    tenure semantics that has since been overruled: the generation number tracks which
+    identity, and an identity is one contiguous run of one model, so a witnessed swap is a
+    succession like any other (the warm-swap `model_swapped` stamp still lands too; both
+    records are true). `mint_reason` forces a mint for a context death the harness reported
+    with no model change at all (compaction, session clear): the weights survive but the
+    memory the operator was talking to does not.
 
     `revisit_check=True` is opt-in, load-bearing only at the one call site that genuinely
     needs it (_reattach's own transcript self-restore fallback in mcp_server.py, audited
@@ -3950,8 +3965,8 @@ async def register_agent(
     from a different, unrelated lineage, `_flag_unattributed_revisit` opens a loud obligation
     thread naming it instead of minting silently; it never refuses the mint itself, only
     confesses it. False by default: every other register_agent call site already carries its
-    own attribution (a fork's spawned_by link, an office-birth's deed, a seam heir's own
-    parent generation) that this check has no way to see, and must never second-guess."""
+    own attribution (a fork's spawned_by link, an office-birth's deed, a succession heir's
+    own parent generation) that this check has no way to see, and must never second-guess."""
     now = datetime.now(UTC)
     obs: str | None = None
     # The mint lock: phases 0-1 read-then-write the succession chain; two concurrent
@@ -3959,7 +3974,8 @@ async def register_agent(
     # the loser's head-walk finds the winner's mint and stacks a generation on it.
     async with mint_lock(actions.pool, _generation(identity.agent_id)[0]):
         # Phase 0, lineage: a session-keyed resolve lands on the base id; walk to the lineage
-        # head first, since the head is who this name is now. Seam checks run against the head.
+        # head first, since the head is who this name is now. Transition checks run against
+        # the head.
         head = await lineage_head(actions.pool, identity.agent_id)
         if head != identity.agent_id:
             identity.agent_id = head
@@ -3973,7 +3989,7 @@ async def register_agent(
             "SELECT 1 FROM objects WHERE type='Agent' AND canonical=$1", identity.agent_id))
         a = await actions.create_or_find_object("Agent", identity.agent_id, src)
 
-        # Phase 1, seam detection leading to mint: the heir gets its own name.
+        # Phase 1, transition detection leading to mint: the heir gets its own name.
         mint_because: str | None = None
         if await _winning_retired(actions, a):
             # A retired identity is never re-worn: the arriving context is an heir and gets
@@ -3981,26 +3997,27 @@ async def register_agent(
             mint_because = "reanimation-of-retired"
         anchored = bool(identity.model) and identity.model_method == "job_dir"
         if anchored:
-            # The succession seam: read the baseline before the new observation supersedes
-            # it. There is no witnessed-transition exemption: oscillation mints every time,
-            # since the returning model is a third mind, not the first one back. Normalized
-            # comparison: a bracketed display variant of the same weights is the same mind,
-            # never a seam.
+            # The succession transition: read the baseline before the new observation
+            # supersedes it. There is no witnessed-transition exemption: oscillation mints
+            # every time, since the returning model is a third identity, not the first one
+            # back. Normalized comparison: a bracketed display variant of the same weights
+            # is the same identity, never a transition.
             prior_raw, prior_at = await _last_anchored_stamp(actions, a)
             prior = normalize_model(prior_raw)
             obs = normalize_model(identity.model)
-            # The null-seam gate, defense-in-depth for the same lesson applied in forks.py: a
+            # The no-baseline gate, defense-in-depth for the same lesson applied in forks.py: a
             # null or "unknown" prior is the absence of an observation, never a value; "we
-            # have not looked yet" is not "the mind was someone else". A fresh reading can't
-            # disagree with a null, so `prior is not None` must gate every comparison below it.
+            # have not looked yet" is not "the identity was someone else". A fresh reading
+            # can't disagree with a null, so `prior is not None` must gate every comparison
+            # below it.
             if prior is not None and prior != obs:
                 # The dating gate: the transcript tail lags a model change, since no
                 # assistant turn has run on the new model yet, so an observation not fresher
                 # than the stamp it disagrees with is stale data arguing with a current
-                # reading, never a real seam. (One prior incident showed opposite seams
-                # minted off each other's stale reads, four seconds apart.) An unstamped
-                # observation keeps the old behavior: the gate only ever suppresses a mint it
-                # can prove stale.
+                # reading, never a real transition. (One prior incident showed opposite
+                # transitions minted off each other's stale reads, four seconds apart.) An
+                # unstamped observation keeps the old behavior: the gate only ever suppresses
+                # a mint it can prove stale.
                 stale = (identity.model_observed_at is not None and prior_at is not None
                          and identity.model_observed_at <= prior_at)
                 if not stale:
@@ -4008,13 +4025,13 @@ async def register_agent(
                     mint_because = mint_because or "model-succession"
         if mint_reason:
             # A harness-reported context death (compaction, session clear) with no model
-            # seam of its own.
+            # transition of its own.
             mint_because = mint_because or mint_reason
         if mint_because == "model-succession" and not mint_reason and obs is not None:
-            # A model seam alone may be settings flapping: try the heal before minting. The
-            # debounce must work whichever observer witnesses the return leg (it used to
-            # live only in the heartbeat, so a mount seeing the round-trip minted a phantom
-            # generation).
+            # A model transition alone may be settings flapping: try the heal before
+            # minting. The debounce must work whichever observer witnesses the return leg
+            # (it used to live only in the heartbeat, so a mount seeing the round-trip
+            # minted a phantom generation).
             healed = await _debounce_roundtrip(actions, agent_id=identity.agent_id,
                                                observed=obs, now=now)
             if healed is not None:
@@ -4048,7 +4065,7 @@ async def register_agent(
             src = heir
     if identity.succeeded_from is None:
         # `succeeded_from` is written onto `identity` in exactly one place in this whole
-        # module: the mint branch just above, for the single turn a seam is actually
+        # module: the mint branch just above, for the single turn a transition is actually
         # detected. Every later call for the same (already-minted, already-head) agent
         # builds a brand-new `AgentIdentity` via `resolve_identity()` (no pool, no DB
         # access, `succeeded_from` stays its dataclass default of None), so before this
@@ -4078,7 +4095,7 @@ async def register_agent(
                                    # mount, but swallowing it without a trace would just
                                    # relocate the same silence one layer down. Fail open,
                                    # never fail quiet.
-            logger.warning("notify-at-seam failed for heir %s (%s): %r",
+            logger.warning("notify-at-transition failed for heir %s (%s): %r",
                            src, mint_because, exc)
     label = f"{identity.model or 'claude'} in {identity.project or '?'}"
     await actions.assert_property(a, "name", label, src, now, _CONF, evidence_class=_EC)
@@ -4099,8 +4116,8 @@ async def register_agent(
     if identity.model:
         ec = _MODEL_EC.get(identity.model_method or "", EvidenceClass.CO_OCCURRENCE)
         # Dated by the event (the transcript record that carried the model), never by the
-        # bookkeeping, so the next seam check compares clocks honestly: a fresher heartbeat
-        # stamp beats this one, an older tail read loses to it.
+        # bookkeeping, so the next transition check compares clocks honestly: a fresher
+        # heartbeat stamp beats this one, an older tail read loses to it.
         await actions.assert_property(a, "source_model", identity.model, src,
                                       identity.model_observed_at or now,
                                       confidence_for(ec), evidence_class=ec.value)
@@ -4352,12 +4369,12 @@ async def seat_bearings(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     model stamped a seat in the graph, but orient() went on answering with a bare agent id and
     nothing about the seat. The refusal to double-seat a house was fixed before this, but the
     discovery wasn't: an agent would not be refused as an unrecognized session anymore, but it
-    would simply never learn that a named seat existed for it to claim. A fresh mind reads the
-    briefing and nothing else, so an inheritance nobody is told about is not an inheritance. It
-    protects a name the next holder will never reach for.
+    would simply never learn that a named seat existed for it to claim. A fresh session reads
+    the briefing and nothing else, so an inheritance nobody is told about is not an
+    inheritance. It protects a name the next holder will never reach for.
 
     So the briefing now says it: your seat if you hold one; and if you are anonymous, the seats
-    of your house that are standing empty, with the verb that takes them."""
+    of your house that are standing empty, with the call that claims them."""
     seat = await pool.fetchrow(
         "SELECT "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -4368,17 +4385,17 @@ async def seat_bearings(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS house "
         "FROM objects o WHERE o.canonical=$1", agent_id)
-    # The binding is part of who you are: a mind that actively holds a Seat object is told
-    # so, whether or not it ever claimed a name for itself in the assertion world. An
-    # attached-at-birth mind that reads its own orient() and sees nothing was the discovery
-    # gap all over again, one layer down.
+    # The binding is part of who you are: an agent that actively holds a Seat object is
+    # told so, whether or not it ever claimed a name for itself in the assertion world. An
+    # attached-at-birth agent that reads its own orient() and sees nothing was the
+    # discovery gap all over again, one layer down.
     from src.orchestrator.seats import held_seat
     bound = await held_seat(pool, agent_id)
     binding = {"seat_binding": bound} if bound else {}
-    # A seated mind's house is derived: held_seat already walked the managed_by chain to
+    # A seated agent's house is derived: held_seat already walked the managed_by chain to
     # compute `binding`'s own seat_binding.house; this function used to ignore that and read
     # the Agent's own raw `project` stamp instead (the same duplicate house_of() reads
-    # independently), the exact bypass orient() shipped through. An unseated mind has no
+    # independently), the exact bypass orient() shipped through. An unseated agent has no
     # seat to walk, so the raw stamp remains its only signal; that branch is unchanged.
     house = bound["house"] if bound and bound.get("house") else (seat["house"] if seat else None)
     if seat and seat["handle"]:
@@ -4409,7 +4426,7 @@ async def seat_bearings(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     if not vacant:
         return {"house": house, **binding}
     return {"house": house, "vacant_seats": vacant, **binding,
-            "note": f"you are anonymous in the house of {house}. These seats are STANDING EMPTY — "
+            "note": f"you are anonymous in the house of {house}. These seats are STANDING EMPTY: "
                     "claim_name('<seat>') INHERITS one (you become its next holder; the previous "
-                    "holders' work stays theirs). A seat a LIVE mind holds is not vacant and will "
-                    "be refused: two minds in one house do two jobs."}
+                    "holders' work stays theirs). A seat a LIVE agent holds is not vacant and "
+                    "will be refused: two agents in one house do two jobs."}

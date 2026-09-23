@@ -1,26 +1,26 @@
-"""The watch — the kernel as a tripwire, not just a lens.
+"""The watch: the kernel as a tripwire, not just a lens.
 
 Three source-agnostic primitives, each riding reliability the kernel already has
 (idempotent emit, durable outbox, atomic cursors). No real collection lives here:
 a `tick` takes an injected puller; a real connector lands in a later phase.
 
-  * watermarks (`get_cursor`/`set_cursor`) — a generic "last cursor" store. A source
+  * watermarks (`get_cursor`/`set_cursor`): a generic "last cursor" store. A source
     tick pulls only the delta past its cursor. Re-pulls are already safe (find-or-
     create dedups); the watermark makes them cheap.
-  * `tick` — a scheduled, source-agnostic pull: read cursor -> puller(cursor) -> feed
+  * `tick`: a scheduled, source-agnostic pull: read cursor -> puller(cursor) -> feed
     each item through Actions -> advance cursor. The materialized objects write outbox
-    events, which the evaluator below picks up. One clean seam between collection and
-    the watch.
-  * `evaluate_watches` — drains the durable outbox PAST ITS OWN CLAIM FLAG
+    events, which the evaluator below picks up. One clean boundary between collection
+    and the watch.
+  * `evaluate_watches`: drains the durable outbox PAST ITS OWN CLAIM FLAG
     (`evaluated_at`, independent of the cascade's `published_at`), matches each new
     mutation against active WATCHES (kind='watch' compositions, whose `select` spec is
     reduced to match criteria), and emits an `alerts` row to a dumb sink.
 
 A watch and a lens are ONE primitive (a composition): the same `select` spec you run() on
-demand (the lens — current members) drives this evaluator (the tripwire — alert on a new
+demand (the lens, current members) drives this evaluator (the tripwire: alert on a new
 member). The match is prospective: a watch created today fires on tomorrow's events, not
-yesterday's (each outbox row is evaluated exactly once) — "tell me when X happens", not
-"search what already happened".
+yesterday's (each outbox row is evaluated exactly once). It answers "tell me when X
+happens", not "search what already happened".
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ async def set_cursor(pool: asyncpg.Pool, key: str, cursor: str) -> None:
     )
 
 
-# --- worker dead-man's-switch (D3): the heartbeat IS a watermark's freshness ----
+# --- worker dead-man's-switch: the heartbeat IS a watermark's freshness ----
 WORKER_HEARTBEAT_KEY = "worker:heartbeat"
 
 
@@ -86,19 +86,19 @@ async def heartbeat_age_secs(pool: asyncpg.Pool) -> float | None:
 # --- ORGAN HEALTH: per-JOB vitals, derived at READ time -------------------------
 #
 # The session-miner died at 08:50 on 2026-07-12 and stayed dead for TEN HOURS. Every ten-minute
-# tick failed ("no LLM provider"), the memory stopped forming, and nothing told anyone — the only
-# witness was a counter buried inside a fleet_digest too large to open (bug 79e1328c).
+# tick failed ("no LLM provider"), the memory stopped forming, and nothing told anyone: the only
+# witness was a counter buried inside a fleet digest too large to open (a known past defect).
 #
 # TWO THINGS THAT LOOK LIKE FIXES AND ARE NOT:
 #
 #  1. "Add a cron that checks whether the miner is dead." That cron would live in the SAME worker.
-#     A dead process cannot report its own death — the watcher would fail exactly when it mattered
-#     (loop pathology, invariant 7). So health is never WRITTEN by a watchdog; it is DERIVED at
-#     READ time by whoever asks, all of whom are alive by construction: the statusline (the
-#     operator's shell), orient() (the MCP), the console. No new daemon watches the daemons.
+#     A dead process cannot report its own death: the watcher would fail exactly when it mattered
+#     (a loop pathology). So health is never WRITTEN by a watchdog; it is DERIVED at READ time by
+#     whoever asks, all of whom are alive by construction: the statusline (the operator's shell),
+#     orient() (the MCP), the console. No new daemon watches the daemons.
 #
 #  2. "Check the worker's heartbeat." It was GREEN the whole ten hours. The worker was perfectly
-#     alive and healthy — it was the JOB INSIDE IT that was failing. A process-level pulse would
+#     alive and healthy: it was the JOB INSIDE IT that was failing. A process-level pulse would
 #     have reported all-clear while the graph went blind. So vitals are per-JOB, never per-process.
 #
 # And Osiris HAS NO HANDS: this senses and surfaces. It never restarts anything.
@@ -108,13 +108,13 @@ _JOB_PREFIX = "job:"
 async def record_job(
     pool: asyncpg.Pool, name: str, *, every: int, secs: float = 0.0, error: str | None = None,
 ) -> None:
-    """A job confesses its own outcome — the one write in this file's health story.
+    """A job reports its own outcome: the one write in this file's health story.
 
     `every` is the job's PERIOD in seconds, recorded WITH the outcome so the reader never needs
     a table of magic thresholds: a job is late relative to its own cadence, and a job added next
     year brings its own definition of late.
 
-    A failure does NOT clear `last_ok` — the reader needs to know both that it broke and when it
+    A failure does NOT clear `last_ok`: the reader needs to know both that it broke and when it
     last worked, which is the difference between "down 4 minutes" and "down ten hours".
     """
     key = f"{_JOB_PREFIX}{name}"
@@ -137,16 +137,16 @@ async def record_job(
     await set_cursor(pool, key, json.dumps(blob))
 
 
-# THE ONE PLACE THIS THRESHOLD LIVES (Thoth msg 6327): `grep -rn "3 \* every"` used to return
-# three hand-copied sites — this file, src/orchestrator/surface.py, and
-# scripts/osiris_fleet_glance.py — the exact "same word, same number, same SQL, three
+# THE ONE PLACE THIS THRESHOLD LIVES: `grep -rn "3 \* every"` used to return three
+# hand-copied sites: this file, src/orchestrator/surface.py, and
+# scripts/osiris_fleet_glance.py, the exact "same word, same number, same SQL, three
 # implementations" bug surface.py's own module docstring names as its founding problem. A fix
-# landed at one site (surface.py's floor, commit ac20a0e) left the other two answering a
+# landed at one site (surface.py's floor) left the other two answering a
 # different question about the same job at the same instant. Every reader of "is this job
 # late" now calls THIS function; none re-derives the arithmetic.
 #
 # `_SICK_FLOOR_SECS`: a worker restart's boot cost is 0-2s (measured, 8 restarts, 2026-09-01)
-# and never explains a false alarm on its own — what does is a cron tick actually IN FLIGHT,
+# and never explains a false alarm on its own. What does is a cron tick actually IN FLIGHT,
 # draining a real backlog, cancelled mid-run by a deploy's SIGTERM (measured worst case: 44s,
 # "cron:drain_cascade cancelled" in the worker log). 90s is 2x that. It only LOOSENS
 # sub-30s-cadence jobs (max(3*every, 90)); a 24h job still reads down after 3 days, unchanged.
@@ -174,28 +174,28 @@ def _verdict(last_ok: datetime | None, every: int, now: datetime) -> tuple[str, 
 async def reap_decommissioned_jobs(pool: asyncpg.Pool) -> list[str]:
     """DELETE the watermarks of crons that no longer exist. Returns what it reaped.
 
-    A watermark OUTLIVES the job that wrote it. When the session-miner's crawl was removed
-    (ceae1604), `job:sense_sessions` stayed behind with its last_ok frozen at the moment it died —
-    and THREE separate readers, each with its own copy of the same law, went on reporting "NOT
-    SENSING" forever about a capability we had deliberately deleted. The operator saw it on his
-    statusline and told me. He was right.
+    A watermark OUTLIVES the job that wrote it. When the session-miner's crawl was removed,
+    `job:sense_sessions` stayed behind with its last_ok frozen at the moment it died, and THREE
+    separate readers, each with its own copy of the same rule, went on reporting "NOT SENSING"
+    forever about a capability that had been deliberately deleted. The operator noticed it on the
+    statusline and flagged it, correctly.
 
-    I had already fixed this — in ONE of the three. organ_health got a filter; the statusline
+    The first fix touched only ONE of the three readers: organ_health got a filter; the statusline
     re-implements the check inline (it is standalone on purpose, so it imports nothing); preflight
-    has its own copy again. THAT IS THE BUG I HAVE COMMITTED ALL WEEK: a correction that lands at
+    has its own copy again. That is the recurring failure mode here: a correction that lands at
     one site and not at the others that READ.
 
     So the fix is not a third filter. It is to stop lying in the DB. THE SCHEDULE IS THE SOURCE OF
-    TRUTH; the watermark is only residue — and the worker, which knows its own schedule, reconciles
+    TRUTH; the watermark is only residue, and the worker, which knows its own schedule, reconciles
     the two at boot. Every reader is corrected for free, and a reader written next year inherits it
     without knowing this exists.
 
     It is telemetry, never the graph: deleting it forgets an outage's *timing*, not any fact the
-    kernel holds. And it is LOUD — the caller logs what it reaped, because an organ silently
+    kernel holds. And it is LOUD: the caller logs what it reaped, because an organ silently
     vanishing is exactly the class of failure this whole module exists to prevent.
     """
     live = scheduled_jobs()
-    if not live:                       # cannot ask the schedule → never reap on a guess
+    if not live:                       # cannot ask the schedule -> never reap on a guess
         return []
     rows = await pool.fetch(
         "DELETE FROM watermarks WHERE key LIKE $1 "
@@ -205,24 +205,24 @@ async def reap_decommissioned_jobs(pool: asyncpg.Pool) -> list[str]:
 
 
 def scheduled_jobs() -> set[str]:
-    """The crons that ACTUALLY run right now — imported lazily so the read path never depends on
+    """The crons that ACTUALLY run right now, imported lazily so the read path never depends on
     the worker being importable. Empty set = "I could not ask", and the caller then trusts the
     watermarks rather than silently hiding a sick organ (fail-loud, not fail-quiet)."""
     try:
         from src.workers.arq_worker import WorkerSettings
         return {n for c in WorkerSettings.cron_jobs
                 if (n := getattr(c.coroutine, "__name__", ""))}
-    except Exception:  # pragma: no cover — arq missing in a satellite/read-only deploy
+    except Exception:  # pragma: no cover: arq missing in a satellite/read-only deploy
         return set()
 
 
 async def organ_health(
     pool: asyncpg.Pool, *, scheduled: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """THE READ SIDE — every job's vitals, computed now, by you, from what it last stamped.
+    """THE READ SIDE: every job's vitals, computed now, by you, from what it last stamped.
 
     Returns one row per job, worst first, so a caller can `[o for o in organs if o["down"]]` and
-    render nothing at all when the body is well. Silence when healthy is the whole design: an
+    render nothing at all when everything is well. Silence when healthy is the whole design: an
     alarm that is always on is an alarm nobody reads.
     """
     rows = await pool.fetch(
@@ -233,9 +233,9 @@ async def organ_health(
     for r in rows:
         job = r["key"][len(_JOB_PREFIX):]
         # AN ORGAN THAT IS NO LONGER SCHEDULED IS NOT AN ORGAN. A watermark row outlives the job
-        # that wrote it, so a DECOMMISSIONED cron (the session-miner's crawl, killed in ceae1604)
+        # that wrote it, so a DECOMMISSIONED cron (the session-miner's crawl, removed earlier)
         # would sit here reading "down" forever and nag the operator at every prompt about a
-        # capability we deliberately removed. THE SCHEDULE IS THE SOURCE OF TRUTH, never the
+        # capability that was deliberately removed. THE SCHEDULE IS THE SOURCE OF TRUTH, never the
         # residue. An alarm that is always on is an alarm nobody reads.
         if live and job not in live:
             continue
@@ -263,15 +263,15 @@ async def organ_health(
 
 
 def health_banner(organs: list[dict[str, Any]]) -> str | None:
-    """One line, or None when the body is well. The line a mind reads at mount, and the operator
-    reads at every prompt: WHAT stopped, and HOW LONG AGO it last worked.
+    """One line, or None when the system is well. The line a session reads at mount, and the
+    operator reads at every prompt: WHAT stopped, and HOW LONG AGO it last worked.
 
-    THE BANNER MUST NOT OVERSTATE. It used to end "the graph is not forming memory" — written when
+    THE BANNER MUST NOT OVERSTATE. It used to end "the graph is not forming memory", written when
     the only organ that could plausibly die was the session-miner's crawl. That crawl is gone
-    (ceae1604) and memory now forms through DELIBERATE CAPTURE, which no cron can break. A banner
-    that cries "you have lost your memory" because the semantic index is late is the same crime as
-    everything else we killed this week: a claim wearing more authority than the evidence supports.
-    So it names WHAT stopped and lets the reader judge the blast radius.
+    and memory now forms through DELIBERATE CAPTURE, which no cron can break. A banner
+    that cries "you have lost your memory" because the semantic index is late overstates its own
+    authority relative to the evidence: it should name WHAT stopped and let the reader judge the
+    blast radius.
     """
     sick = [o for o in organs if o["down"]]
     if not sick:
@@ -281,8 +281,8 @@ def health_banner(organs: list[dict[str, Any]]) -> str | None:
         when = "never ran" if o["verdict"] == "never" else f"last ok {_ago(o['age_secs'])}"
         parts.append(f"{o['job']} ({when})")
     more = f" +{len(sick) - 3} more" if len(sick) > 3 else ""
-    return ("⚠ AN OSIRIS ORGAN HAS STOPPED — " + ", ".join(parts) + more
-            + ". Deliberate capture (record_decision / open_thread) still works — it does not "
+    return ("⚠ AN OSIRIS ORGAN HAS STOPPED: " + ", ".join(parts) + more
+            + ". Deliberate capture (record_decision / open_thread) still works; it does not "
               "ride a cron. Nothing auto-restarts this (Osiris has no hands over your systems). "
               "Check: systemctl --user status osiris-worker")
 
@@ -297,10 +297,10 @@ def _ago(secs: float | None) -> str:
     return f"{int(secs // 86400)}d ago"
 
 
-# --- miner tick telemetry: the onboarding-day lesson (decision 3191e0df) --------
+# --- miner tick telemetry: the onboarding-day lesson --------
 # A fail-open cron was down a DAY behind a green heartbeat. The heartbeat says the worker
 # breathes; THIS says whether the sensing tick actually finishes, how long it runs, and
-# whether it is saturated. One writer by design — the sense_sessions cron (unique=True);
+# whether it is saturated. One writer by design: the sense_sessions cron (unique=True);
 # the digest and preflight only read.
 MINER_TICKS_KEY = "miner:ticks"
 _MINER_KEEP = 48  # ~8h of 10-min ticks
@@ -333,7 +333,7 @@ async def miner_tick_ended(
     pool: asyncpg.Pool, *, secs: float, budget: int,
     report: dict[str, int] | None = None, error: str | None = None,
 ) -> None:
-    """Record a tick's outcome — duration, chunk spend vs budget, yield, or the error."""
+    """Record a tick's outcome: duration, chunk spend vs budget, yield, or the error."""
     blob = await _miner_blob(pool)
     blob["completions"] += 1
     rec: dict[str, Any] = {"at": datetime.now(UTC).isoformat(),
@@ -385,7 +385,7 @@ async def tick(actions: Actions, source_id: str, puller: Puller) -> int:
     """Pull the delta past `source:<source_id>`'s cursor, materialize each item
     through Actions, then advance the cursor. Returns the number of items applied.
 
-    The cursor is advanced ONLY after the items commit — if the process dies
+    The cursor is advanced ONLY after the items commit: if the process dies
     mid-tick, the next tick re-pulls the same delta and find-or-create dedups it."""
     pool = actions.pool
     cursor = await get_cursor(pool, f"source:{source_id}")
@@ -417,14 +417,14 @@ class GraphEvent:
     canonical: str | None
     payload: dict[str, Any]
     value: Any | None  # the new property value (property_added only)
-    # the object's current scalar properties — loaded for object_created so a beat can
+    # the object's current scalar properties, loaded for object_created so a beat can
     # match a whole object at once (e.g. zip AND price); empty for other events.
     props: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class Watch:
-    """A saved watch — a kind='watch' composition. Its `select` spec is reduced to the
+    """A saved watch: a kind='watch' composition. Its `select` spec is reduced to the
     evaluator's match `criteria`; the same spec is also run() on demand as a lens."""
 
     id: uuid.UUID
@@ -436,7 +436,7 @@ class Watch:
 def watch_criteria(spec: dict[str, Any]) -> dict[str, Any]:
     """Derive the evaluator's match criteria from a watch's `select` spec. A watch fires
     on SET-ENTRY: a newly created object whose type+properties satisfy the select (the
-    real-beat semantic — new filing/notice/entity). Membership-change on an existing
+    real-beat semantic: new filing/notice/entity). Membership-change on an existing
     object via a later property update is out of scope for v1 (documented)."""
     criteria: dict[str, Any] = {
         "event_types": ["object_created"],
@@ -453,12 +453,12 @@ def matches(criteria: dict[str, Any], event: GraphEvent) -> dict[str, Any] | Non
     None. All present clauses must hold (AND); absent clauses don't constrain.
 
     Supported clauses (all source-agnostic):
-      event_types       : list[str]  — any of these outbox event types
-      object_type       : str        — the object's type
-      canonical_prefix  : str        — object canonical starts with (e.g. 'cik:')
-      canonical_contains: str        — substring, case-insensitive
-      property_name     : str        — for property_added: the property's name
-      value_contains    : str        — for property_added: substring of the new value
+      event_types       : list[str]  : any of these outbox event types
+      object_type       : str        : the object's type
+      canonical_prefix  : str        : object canonical starts with (e.g. 'cik:')
+      canonical_contains: str        : substring, case-insensitive
+      property_name     : str        : for property_added, the property's name
+      value_contains    : str        : for property_added, substring of the new value
     """
     ets = criteria.get("event_types")
     if ets and event.event_type not in ets:
@@ -498,14 +498,14 @@ def matches(criteria: dict[str, Any], event: GraphEvent) -> dict[str, Any] | Non
 
 def match_condition(actual: Any, op: str, expected: Any) -> bool:
     """One beat condition. Ops: eq / contains (case-insensitive substring) / matches_all
-    (every whitespace-separated token in `expected` present in `actual`, any order —
+    (every whitespace-separated token in `expected` present in `actual`, any order,
     word-order-proof) / lt / gt (numeric) / present / absent (the value exists / is
-    missing-or-blank — `expected` is ignored). A missing value or an un-parseable number
+    missing-or-blank; `expected` is ignored). A missing value or an un-parseable number
     fails closed (no false match). Shared by the evaluator (matches), composition `where`
     clauses (select's _eval), and the read-model feed (/matches)."""
     if op == "present":                       # the property exists and isn't blank
         return actual is not None and str(actual).strip() != ""
-    if op == "absent":                        # missing or blank — the complement
+    if op == "absent":                        # missing or blank: the complement
         return actual is None or str(actual).strip() == ""
     if actual is None:
         return False
@@ -526,7 +526,7 @@ def match_condition(actual: Any, op: str, expected: Any) -> bool:
 
 
 async def _active_watches(pool: asyncpg.Pool) -> list[Watch]:
-    """The active watches — kind='watch' compositions. Read straight from the table (no
+    """The active watches: kind='watch' compositions. Read straight from the table (no
     import of compositions.py, which imports this module) and reduce each select spec to
     the evaluator's criteria."""
     import json
@@ -547,7 +547,7 @@ async def _active_watches(pool: asyncpg.Pool) -> list[Watch]:
 
 # A sink delivers an alert OUTSIDE the durable `alerts` table (which is always written
 # first). The default routes by channel (webhook → email → log; see `default_sink`). NOT a
-# CRM — a table row + an optional notification, nothing more. Injectable for tests.
+# CRM: a table row plus an optional notification, nothing more. Injectable for tests.
 Sink = Callable[["Alert"], Awaitable[bool]]
 
 
@@ -582,7 +582,7 @@ async def _sink_webhook(alert: Alert) -> bool:
 
 async def _sink_log(alert: Alert) -> bool:
     """The default channel: a structured log line. Always 'delivers' (the record IS the log
-    + the durable /alerts row) — the right fallback for a single-operator box with no webhook."""
+    + the durable /alerts row), the right fallback for a single-operator box with no webhook."""
     logger.info(
         "ALERT watch=%r event=%s object=%s matched=%s",
         alert.watch_name, alert.event_type, alert.object_id, alert.matched,
@@ -591,7 +591,7 @@ async def _sink_log(alert: Alert) -> bool:
 
 
 async def _sink_email(alert: Alert) -> bool:
-    """Email channel (the seam). Requires OSIRIS_SMTP_HOST; absent => recorded-only + warn,
+    """Email channel. Requires OSIRIS_SMTP_HOST; absent => recorded-only + warn,
     never crash a run. Sends via stdlib smtplib only when fully configured."""
     s = get_settings()
     if not s.osiris_smtp_host:
@@ -748,7 +748,7 @@ async def evaluate_watches(
 
 async def _deliverable(pool: asyncpg.Pool, alert: Alert, s: Settings) -> bool:
     """Should this alert be DELIVERED (vs. recorded-only)? Suppress a re-alert of the same
-    (watch, object) inside the cooldown, and cap deliveries per watch per window — so a
+    (watch, object) inside the cooldown, and cap deliveries per watch per window, so a
     burst or a flapping object can't flood the operator. The durable row stands regardless."""
     if alert.object_id is not None and s.osiris_alert_cooldown_secs > 0:
         recent = await pool.fetchval(
