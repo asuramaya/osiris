@@ -1,23 +1,22 @@
-"""Seat-identity self-healing (fe8ec7ff mechanism 3, operator ruling df646654: SELF-HEALING
-OVER MANUAL CLEANUP). #157's own diagnosis (decision 6e2ea596/7a46db36) found the disease:
-assert_property's supersession is SAME-SOURCE only, by design — a peer's correction from a
-DIFFERENT source never retires an older contradicting value, so a stale row sits beside the
-winning one forever, both "current" by current_assertions' own definition, outvoted but never
-invalidated. The repair used to be a human walking rows by hand and staging retire_assertion
-calls that needed the operator's personal sign-off every time (decision 4fdd419e, four calls
-still staged when this was built). The operator's own standard: design as though no agent can
-ever escalate to Thoth or the operator for this class of problem.
+"""Seat-identity self-healing. Automated repair is preferred over manual cleanup. An earlier
+diagnosis found the underlying problem: assertion supersession only applies within the same
+source, by design. A peer's correction from a different source never retires an older
+contradicting value, so a stale row sits beside the winning one forever, both "current" by
+current_assertions' own definition, outvoted but never invalidated. The repair used to be a
+human walking rows by hand and staging retire_assertion calls that needed manual sign-off
+every time. The design goal here is that no agent should need to escalate for this class of
+problem.
 
-SCOPED DELIBERATELY NARROW to two properties, both single-valued by nature — a Seat's `house`
-and an Agent's `project` — NEVER generalised to every property (Khnum's n=4 qualifier, 6e2ea596:
-newest-wins was empirically true for that population, not a law). #102's `agreement` marks stay
-untouched for everything else; a genuinely multi-valued or corroborating property is never a
-target here.
+Scoped deliberately narrow to two properties, both single-valued by nature: a Seat's `house`
+and an Agent's `project`. This is never generalised to every property; newest-wins was
+empirically true for that population, not a general law. Corroboration marks used elsewhere
+stay untouched for everything else; a genuinely multi-valued or corroborating property is
+never a target here.
 
-Reuses retire_assertion for every write — no second supersession path. `heal_contradicting_
-property` is the one place a "contradiction" is even defined (>1 current row, DIFFERENT
-values) — same-value multi-source rows (real corroboration, not a contradiction) are left
-alone, exactly as #102's agreement marks are."""
+Reuses retire_assertion for every write, so there is no second supersession path.
+`heal_contradicting_property` is the one place a "contradiction" is even defined (more than
+one current row, with different values); same-value multi-source rows (real corroboration,
+not a contradiction) are left alone, the same way corroboration marks are handled elsewhere."""
 from __future__ import annotations
 
 import uuid
@@ -35,8 +34,8 @@ from src.parsers.evidence import confidence_for
 _ANCHOR_EC = EvidenceClass.SELF_DECLARED.value
 _ANCHOR_CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 
-# Deliberately just these two — see module docstring. Never read as a general allowlist to
-# extend without a fresh ruling: house/project were named BY THE OPERATOR, not inferred.
+# Deliberately just these two, see module docstring. Never read as a general allowlist to
+# extend without a fresh decision: house/project were named explicitly, not inferred.
 SEAT_IDENTITY_PROPS = ("house", "project")
 
 _STALE_SEAT_DETECTION_CAP = 25
@@ -45,33 +44,35 @@ _STALE_SEAT_DETECTION_CAP = 25
 async def detect_possibly_stale_seats(
     pool: asyncpg.Pool, old_name: str, *, cap: int = _STALE_SEAT_DETECTION_CAP,
 ) -> dict[str, Any]:
-    """DETECTION-ONLY, never a write (Thoth dispatch 6484/6493, the dtfb specimen f5d5473b):
-    fold_project and rename_project already carry every graph EDGE correctly (charter
-    included) and agent_mounts.project, but neither ever re-asserts a Seat's OWN `house` or
-    `anchor_cwd` under the new name — not because the self-service repair tools don't work
-    (`reconcile_seat_identity`/`_third_party` in this module, `rebind_seat` for a path),
-    but because nothing ever tells a seat it needs them (Practice a5938da2's shape:
-    capability exists, unadopted). This names the hits AND the verb that fixes each, in the
-    same line, so the nudge and the fix stay one hop apart — called from fold_project's and
-    rename_project's own receipts, adding a key, changing nothing else.
+    """Detection-only, never a write. fold_project and rename_project already carry every
+    graph edge correctly (charter included) and agent_mounts.project, but neither ever
+    re-asserts a Seat's own `house` or `anchor_cwd` under the new name. This isn't because
+    the self-service repair tools don't work (`reconcile_seat_identity`/`_third_party` in
+    this module, `rebind_seat` for a path), but because nothing ever tells a seat it needs
+    them: the capability exists but goes unadopted. This function names the hits and the
+    action that fixes each, in the same line, so the nudge and the fix stay one step apart.
+    It is called from fold_project's and rename_project's own results, adding a key and
+    changing nothing else.
 
-    A HEURISTIC, NEVER A VERDICT: house is matched EXACTLY against `old_name`; anchor_cwd is
-    matched by its PATH'S OWN BASENAME (Path(value).name), not a raw substring — a bare
-    substring match on a common old name ("core", "seats") would flag half the fleet. Even
-    basename matching still over-matches on a common word; `note` says so in every response
-    rather than let a caller read this list as ground truth. Capped at `cap` hits per field
-    (a name common enough to blow the cap degrades to `truncated: true`, not a flood).
+    A heuristic, never a verdict: house is matched exactly against `old_name`; anchor_cwd is
+    matched by its path's own basename (Path(value).name), not a raw substring. A bare
+    substring match on a common old name ("core", "seats") would flag a large fraction of
+    the fleet. Even basename matching still over-matches on a common word; `note` says so in
+    every response rather than let a caller read this list as ground truth. Capped at `cap`
+    hits per field (a name common enough to blow the cap degrades to `truncated: true`, not
+    a flood).
 
-    THE .osiris PIN FILE IS DELIBERATELY UNCHECKED: rename_project's own docstring already
-    calls itself "a graph-only verb" — reading another seat's pin off disk from inside this
-    call would be a filesystem read across someone else's tree, on the hot path of a live,
-    frequently-used verb. `note` says the pin is unchecked; a confessed blind spot beats a
-    slow or fragile one.
+    The .osiris pin file is deliberately unchecked: rename_project is documented as a
+    graph-only action, and reading another seat's pin off disk from inside this call would
+    be a filesystem read across someone else's tree, on the primary path of a frequently
+    used call. `note` says the pin is unchecked; a confessed blind spot beats a slow or
+    fragile one.
 
-    NEVER RAISES: any failure (a bad connection, a malformed row) degrades to
-    `{"checked": False, "error": ...}` rather than aborting the fold/rename that called it —
-    the #107 lesson (settle() whole-batch-aborting on one bad repo) applied to an advisory
-    field, not a batch. An empty `old_name` is the same shape, not an exception."""
+    Never raises: any failure (a bad connection, a malformed row) degrades to
+    `{"checked": False, "error": ...}` rather than aborting the fold/rename that called it,
+    following the lesson that a whole-batch abort on one bad repo is worse than an advisory
+    field failing gracefully. An empty `old_name` is handled the same way, not as an
+    exception."""
     try:
         bare = (old_name or "").removeprefix("repo:").strip()
         if not bare:
@@ -111,22 +112,22 @@ async def detect_possibly_stale_seats(
 async def heal_contradicting_property(
     actions: Actions, *, object_id: uuid.UUID, name: str, actor: str, reason: str | None = None,
 ) -> dict[str, Any]:
-    """The one mechanism: read every CURRENT assertion of `name` on `object_id` (multi-
-    source, since assert_property's own supersession never crosses sources), tie-break them
-    the SAME way the read path already does (confidence DESC, observed_at DESC — the winner
-    is never a new decision, only the existing rule made to actually stick), and retire every
-    OTHER current row that names a DIFFERENT value. A row that already agrees with the winner
-    (real multi-source corroboration) is left untouched — never retired for merely being a
-    second source, only for being a WRONG one.
+    """The one mechanism: read every current assertion of `name` on `object_id` (multiple
+    sources, since supersession never crosses sources on write), tie-break them the same way
+    the read path already does (confidence descending, then observed_at descending: the
+    winner is never a new decision, only the existing rule made to actually stick), and
+    retire every other current row that names a different value. A row that already agrees
+    with the winner (real multi-source corroboration) is left untouched, never retired for
+    merely being a second source, only for being a wrong one.
 
-    Each retirement goes through retire_assertion unchanged — reversible (the loser's own
-    assertion id is in the receipt), attributed to `actor`, `because` self-documenting so an
-    audit never has to guess why a row went quiet. `reason`, when given (the third-party
-    sibling's own mandatory `because`), rides into that same `because` text so a THIRD-PARTY
+    Each retirement goes through retire_assertion unchanged: reversible (the loser's own
+    assertion id is in the result), attributed to `actor`, with `because` self-documenting so
+    an audit never has to guess why a row went quiet. `reason`, when given (the third-party
+    sibling's own mandatory `because`), rides into that same `because` text so a third-party
     correction's own stated justification is distinguishable in the audit trail from a plain
-    self-heal's mechanical "newest-declared-wins" — never a second write, never a second
-    field, the SAME retire_assertion call either way. Returns `healed: False` when 0 or 1
-    current rows exist (nothing to reconcile) or every row already agrees (already healed)."""
+    self-heal's mechanical "newest-declared-wins", with no second write or second field, the
+    same retire_assertion call either way. Returns `healed: False` when zero or one current
+    rows exist (nothing to reconcile) or every row already agrees (already healed)."""
     rows = await actions.pool.fetch(
         "SELECT id, value #>> '{}' AS value, source_id, observed_at "
         "FROM current_assertions WHERE object_id=$1 AND name=$2 "
@@ -137,7 +138,7 @@ async def heal_contradicting_property(
     superseded: list[dict[str, Any]] = []
     for loser in rows[1:]:
         if loser["value"] == winner["value"]:
-            continue  # corroboration, not a contradiction — never touched
+            continue  # corroboration, not a contradiction, never touched
         result = await retire_assertion(
             actions, ref=str(object_id), name=name, superseded_id=loser["id"],
             value=winner["value"], actor=actor,
@@ -159,11 +160,11 @@ async def heal_contradicting_property(
     if not superseded:
         return {"healed": False, "reason": "every current row already agrees",
                 "current": len(rows), "value": winner["value"]}
-    # RECEIPT HONESTY: a `superseded` entry can be an ERROR (retire_assertion refused —
-    # e.g. "already superseded", the exact shape of a current_assertions/is_current
-    # inconsistency this mechanism cannot itself repair) — `healed` must never read True
-    # over a batch where every attempted write actually failed. A partial success (some
-    # rows really retired, one refused) still reports healed=True; the per-row `error` key
+    # Result honesty: a `superseded` entry can be an error (retire_assertion refused, for
+    # example "already superseded", the exact shape of a current_assertions/is_current
+    # inconsistency this mechanism cannot itself repair). `healed` must never read True over
+    # a batch where every attempted write actually failed. A partial success (some rows
+    # really retired, one refused) still reports healed=True; the per-row `error` key
     # is how a caller tells which rows actually moved.
     if all("error" in s for s in superseded):
         return {"healed": False, "reason": "every contradicting row refused retirement",
@@ -175,16 +176,16 @@ async def reconcile_seat_identity(
     actions: Actions, *, seat_id: str, agent_id: str | None, actor: str,
     reason: str | None = None,
 ) -> dict[str, Any]:
-    """THE SELF-SERVICE VERB (fe8ec7ff mechanism 3b): any agent may run this for its OWN
-    seat, no personal sign-off — this is what #157's four staged retire_assertion calls
-    become, one call each, not four operator authorizations. Heals `house` on the Seat
+    """The self-service action: any agent may run this for its own seat, with no manual
+    sign-off required. This replaces what used to be several staged retire_assertion calls
+    each needing separate authorization, with one call each. Heals `house` on the Seat
     object and, when `agent_id` is given (the seat's current holder), `project` on that
-    Agent object — the same two properties the operator named from two angles (#157/#161).
+    Agent object, the same two properties identified as needing this treatment.
 
-    Refuses LOUDLY on an unknown seat (never guesses); `agent_id=None` heals house alone
+    Refuses loudly on an unknown seat (never guesses); `agent_id=None` heals house alone
     (a caller reconciling a seat it does not currently hold an agent identity for, or a
     vacant seat with a stale house). `reason` is internal plumbing for the third-party
-    sibling below (its own mandatory `because`) — the self-service caller never sets it."""
+    sibling below (its own mandatory `because`); the self-service caller never sets it."""
     seat_row = await actions.pool.fetchrow(
         "SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
         seat_id)
@@ -207,23 +208,22 @@ async def reconcile_seat_identity(
 async def reconcile_seat_identity_third_party(
     actions: Actions, *, seat_id: str, agent_id: str | None, because: str, actor: str,
 ) -> dict[str, Any]:
-    """THE THIRD-PARTY SIBLING of reconcile_seat_identity — the gap named in decision
-    f78b41c8: mechanism 3 shipped self-service-only, and #157's own population (four OTHER
-    seats' stale rows) structurally cannot be reached by a verb that always resolves its
-    target from the caller's own held seat. Mirrors resync_seat_house_third_party's own
-    precedent exactly: NOT self-scoped — the target need not be the caller, on purpose (a
-    coordinator correcting a seat that cannot correct itself, or simply hasn't taken its own
-    next turn yet, is exactly the case this exists for) — and `because` is REQUIRED, same
-    cause resync_seat_house_third_party refuses an empty reason for: a correction with no
-    stated reason is the silent overwrite 719ed5b1 rules against, not a fix. Does NOT check
-    caller authority beyond being mounted — same as correct_agent_house and resync_seat_
-    house_third_party, callers are responsible for the authorization this docstring cannot
+    """The third-party sibling of reconcile_seat_identity: the initial self-service-only
+    version left a gap, since a population of other seats' stale rows structurally cannot be
+    reached by an action that always resolves its target from the caller's own held seat.
+    Mirrors an existing precedent for third-party house correction exactly: not self-scoped,
+    the target need not be the caller, on purpose (a coordinator correcting a seat that
+    cannot correct itself, or simply hasn't taken its own next turn yet, is exactly the case
+    this exists for), and `because` is required, for the same reason that precedent refuses
+    an empty reason: a correction with no stated reason is a silent overwrite, not a fix.
+    Does not check caller authority beyond being mounted, the same as other third-party
+    correction actions; callers are responsible for the authorization this docstring cannot
     enforce.
 
-    OTHERWISE IDENTICAL to the self-service verb — same heal_contradicting_property
+    Otherwise identical to the self-service action: same heal_contradicting_property
     mechanism, same two properties (house/project), same reversibility, same graph writes
-    for the same row (the only difference is `because` riding into the retired rows' own
-    audit trail, naming the third party's reason instead of the mechanical default)."""
+    for the same row. The only difference is `because` riding into the retired rows' own
+    audit trail, naming the third party's reason instead of the mechanical default."""
     because = (because or "").strip()
     if not because:
         return {"error": "a correction with no reason is exactly the silent overwrite "
@@ -233,23 +233,22 @@ async def reconcile_seat_identity_third_party(
 
 
 def _office_dir_exists(target: str) -> bool:
-    """A plain sync helper (ASYNC240: file I/O stays out of async function bodies, same
-    convention `trigger._tree_exists` documents) — this healer re-asserts identity at an
+    """A plain sync helper (ASYNC240: file I/O stays out of async function bodies, the same
+    convention `trigger._tree_exists` follows). This healer re-asserts identity at an
     office that already exists; it never provisions one."""
     return Path(target).is_dir()
 
 
 async def detect_anchor_invariant_violations(actions: Actions) -> dict[str, list[dict[str, Any]]]:
-    """THE ANCHOR INVARIANT'S OWN DETECTOR (piece 1, msg 6546) — read-only, ARMED here so a
-    caller need not remember to run the standalone script. Reports, for every active Seat:
-    (a) a current `anchor_cwd` OUTSIDE the office root, (b) more than one CURRENT
-    `anchor_cwd` row at all (the supersession-leak shape). Kept as SEPARATE axes on purpose
-    (#103/#141's own law: a surface that says "these disagree," never one that silently
-    collapses) — a seat can be outside-root with only one current row (a clean, if
-    invariant-violating, deliberate anchor) or multi-row while still resolving inside the
-    root (corrupted-but-lucky). `heal_seat_anchor`'s own target population is the seats
-    hitting BOTH axes at once, computed by the caller from this same result, never a third
-    axis duplicated here."""
+    """The anchor invariant's own detector: read-only, wired in here so a caller need not
+    remember to run a standalone script separately. Reports, for every active Seat: (a) a
+    current `anchor_cwd` outside the office root, (b) more than one current `anchor_cwd` row
+    at all (the supersession-leak shape). Kept as separate axes on purpose, so the surface
+    reports that these disagree rather than silently collapsing them. A seat can be
+    outside-root with only one current row (a clean, if invariant-violating, deliberate
+    anchor) or multi-row while still resolving inside the root (corrupted-but-lucky).
+    `heal_seat_anchor`'s own target population is the seats hitting both axes at once,
+    computed by the caller from this same result, never a third axis duplicated here."""
     from src.orchestrator.offices import _default_office_root
 
     root = str(_default_office_root())
@@ -288,35 +287,35 @@ async def detect_anchor_invariant_violations(actions: Actions) -> dict[str, list
     return {"outside_root": outside_root, "multi_current": multi_current}
 
 
-# --- THE ANCHOR INVARIANT (ruling 23771416, msg 6546/6561/6563) -----------------------
+# --- THE ANCHOR INVARIANT -------------------------------------------------------------
 #
-# `heal_contradicting_property`'s own tie-break (confidence DESC, observed_at DESC — the
-# NEWEST wins) is exactly WRONG for `anchor_cwd`: the corrupting value is always the newer
-# one (a self-invoked rebind at the moment a session's cwd moved), and the correct office
-# value is always the older, mint-time one. So this is a SEPARATE mechanism, not an
-# extension of SEAT_IDENTITY_PROPS — the winner here is never "whoever wrote last," it is
-# the one value the invariant itself computes: `<office_root>/<handle>`. Same shape as
-# reconcile_seat_identity otherwise: a self-service verb, a third-party sibling, reversible
-# writes only (assert_singular_property never deletes — a superseded row stays readable).
+# `heal_contradicting_property`'s own tie-break (confidence descending, then observed_at
+# descending, so the newest wins) is exactly wrong for `anchor_cwd`: the corrupting value is
+# always the newer one (a self-invoked rebind at the moment a session's cwd moved), and the
+# correct office value is always the older, mint-time one. So this is a separate mechanism,
+# not an extension of SEAT_IDENTITY_PROPS: the winner here is never "whoever wrote last," it
+# is the one value the invariant itself computes: `<office_root>/<handle>`. Same shape as
+# reconcile_seat_identity otherwise: a self-service action, a third-party sibling, reversible
+# writes only (assert_singular_property never deletes, a superseded row stays readable).
 
 
 async def heal_seat_anchor(
     actions: Actions, *, seat_id: str, actor: str, because: str | None = None,
     office_root: Path | None = None, dry_run: bool = True,
 ) -> dict[str, Any]:
-    """Assert the INVARIANT anchor (`<office_root>/<handle>`) as the seat's sole current
-    `anchor_cwd`, via `Actions.assert_singular_property` — one call collapses every stray
-    current row regardless of source, whether there are zero (Marquee: no office anchor at
-    all, this call WRITES one), one (the common corrupted case: the correct office value
-    already current beside a rogue one), or more.
+    """Assert the invariant anchor (`<office_root>/<handle>`) as the seat's sole current
+    `anchor_cwd`, via `Actions.assert_singular_property`. One call collapses every stray
+    current row regardless of source, whether there are zero (no office anchor at all, in
+    which case this call writes one), one (the common corrupted case: the correct office
+    value already current beside a rogue one), or more.
 
-    REFUSES rather than guesses: no handle on record (nothing to derive an office path
-    from), or the computed office directory does NOT exist on disk (this healer asserts
+    Refuses rather than guesses: no handle on record (nothing to derive an office path
+    from), or the computed office directory does not exist on disk (this healer asserts
     identity at an office that already exists; scaffolding one is `establish_office`'s job,
     never silently done here). Returns `healed: False, reason: "already correct"` when the
-    sole current value already matches the invariant — never a no-op write.
+    sole current value already matches the invariant, never a no-op write.
 
-    `dry_run=True` is the hard default — the receipt always includes `current_before` and
+    `dry_run=True` is the default: the result always includes `current_before` and
     `target`; only when `dry_run=False` does the write actually happen. `because`, when
     given (the third-party sibling's own mandatory reason), rides into the audit trail the
     same way `reconcile_seat_identity`'s `reason` does."""
@@ -372,9 +371,9 @@ async def heal_seat_anchor_third_party(
     actions: Actions, *, seat_id: str, because: str, actor: str,
     office_root: Path | None = None, dry_run: bool = True,
 ) -> dict[str, Any]:
-    """THE THIRD-PARTY SIBLING of `heal_seat_anchor` — same mandatory-`because` law as
-    `reconcile_seat_identity_third_party`: a correction with no stated reason is the silent
-    overwrite 719ed5b1 rules against, not a fix."""
+    """The third-party sibling of `heal_seat_anchor`: the same mandatory-`because` rule as
+    `reconcile_seat_identity_third_party`. A correction with no stated reason is a silent
+    overwrite, not a fix."""
     because = (because or "").strip()
     if not because:
         return {"error": "a correction with no reason is exactly the silent overwrite "
