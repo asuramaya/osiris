@@ -1,77 +1,71 @@
-"""osiris — the operator's console-script (task #69, ruling 45b074bf, thread 16a0c76b: "no
-bash runes; the user never debugs the machinery"). Thin subcommands, each wrapping an
-EXISTING verb rather than re-deriving it:
+"""osiris - the operator's console-script. The guiding rule: no bash incantations, the
+user never debugs the machinery directly. Thin subcommands, each wrapping an EXISTING verb
+rather than re-deriving it:
 
   osiris attach <handle>            resolve handle -> a live PTY session, hand off to
                                      src.manager.attach (replaces the raw
-                                     `.venv/bin/python -m src.manager.attach "[OS] imhotep"`
-                                     the operator was handed before this build)
+                                     `.venv/bin/python -m src.manager.attach "[OS] <handle>"`
+                                     invocation this build superseded)
   osiris smoke                      the same probe src.orchestrator.smoke runs for the fleet
-  osiris seed [--compositions-only] src.init's seeder (task #63's own deploy-step flag)
-  osiris soul-key <status|init|     THE KEY ENTRY POINT (Thoth mail 12810/12830, wave 17):
-       rotate|restore-drill>        status/init/rotate the soul-store encryption key,
-                                     or drill an off-box backup's restorability —
-                                     init/rotate run once, by a human, in their own
-                                     terminal, before/after (re)starting
+  osiris seed [--compositions-only] src.init's seeder, with a deploy-step-only flag
+  osiris soul-key <status|init|     THE KEY ENTRY POINT: status/init/rotate the soul-store
+       rotate|restore-drill>        encryption key, or drill an off-box backup's
+                                     restorability. init/rotate run once, by a human, in
+                                     their own terminal, before/after (re)starting
                                      osiris-worker/osiris-mcp
-  osiris restic-key <status|init>   the offload runner's own credential entry point (ruling
-                                     e0b98ff2's "same shape for the restic repository
-                                     password"), the same systemd-creds custody as
-                                     soul-key above
-  osiris offload-runner tick        THE OPPORTUNISTIC OFFLOAD RUNNER (ruling be21384a):
-                                     one pass syncing the vault via restic to every
-                                     present, enabled offload target — meant as
-                                     osiris-offload.timer's own ExecStart
-  osiris launch <handle> [--model]  body a seat via `claude --bg` by default (task #72,
-             [--debug]              following trigger.launch_seat's own flip, rulings
-                                     0fe36e59 + 33d6a2eb clause 3) — every body lands in the
+  osiris restic-key <status|init>   the offload runner's own credential entry point (the
+                                     same systemd-creds custody shape as the restic
+                                     repository password), the same custody as soul-key above
+  osiris offload-runner tick        THE OPPORTUNISTIC OFFLOAD RUNNER: one pass syncing the
+                                     vault via restic to every present, enabled offload
+                                     target, meant as osiris-offload.timer's own ExecStart
+  osiris launch <handle> [--model]  body a seat via `claude --bg` by default, following
+             [--debug]              trigger.launch_seat's own flip - every body lands in the
                                      operator's own `claude agents` list by construction.
                                      `--debug` keeps the original osiris PTY-broker lane alive
                                      (the manager daemon directly, never trigger.py's
-                                     launch_seat() — that verb is explicitly seat-to-seat
-                                     only, "THE OPERATOR NEVER CALLS THIS"; a human at this
-                                     CLI is a different trust boundary, the same one
-                                     src.manager.attach.py already stands in for)
+                                     launch_seat(), which is explicitly seat-to-seat only and
+                                     never meant to be called by the operator directly; a
+                                     human at this CLI is a different trust boundary, the
+                                     same one src.manager.attach.py already stands in for)
   osiris fleet [--full]             the same fleet() the MCP tool answers, called over the
                                      wire (never a second implementation of what it computes)
-  osiris migrate [--check]          env-correct `alembic upgrade head` (thread c4681c38 leg
-                                     1) — IN-PROCESS via alembic's own command API, never a
-                                     subprocess rune (a bare `alembic upgrade head` connects
-                                     to the prod-shaped 5432 default because env.py reads
-                                     DATABASE_URL and nothing set the dev fallback first —
-                                     exactly the class ruling 45b074bf bans). `--check`
+  osiris migrate [--check]          env-correct `alembic upgrade head`, IN-PROCESS via
+                                     alembic's own command API, never a subprocess rune (a
+                                     bare `alembic upgrade head` connects to the prod-shaped
+                                     5432 default because env.py reads DATABASE_URL and
+                                     nothing set the dev fallback first, exactly the failure
+                                     mode this module exists to prevent). `--check`
                                      reports a pending revision without applying it.
-  osiris deploy                     the deploy ritual as one verb (thread e51a841c): refuse
-                                     on a dirty tracked src/ tree (a live near-miss shipped a
-                                     half-written edit this way), compare migrations and
-                                     refuse-or-run them BEFORE anything restarts (thread
-                                     c4681c38 leg 2 — a deploy is atomic from the schema's
-                                     point of view), restart osiris-mcp/worker/console, run
-                                     smoke, and name any un-run seeder step by comparison
-                                     instead of assuming one happened
+  osiris deploy                     the deploy ritual as one verb: refuse on a dirty tracked
+                                     src/ tree (a live near-miss shipped a half-written edit
+                                     this way), compare migrations and refuse-or-run them
+                                     BEFORE anything restarts (a deploy is atomic from the
+                                     schema's point of view), restart
+                                     osiris-mcp/worker/console, run smoke, and name any
+                                     un-run seeder step by comparison instead of assuming one
+                                     happened
   osiris merge <dupe> <into>        the same self-typing orchestrator.merge.merge the merge
-             --evidence --actor     MCP tool wraps (thread 2446, renamed from fold-project
-                                     per dispatch 3683 — fold_project no longer exists as an
-                                     MCP tool, ruling 31c02dca/decision a926a8d0, and the CLI
-                                     had silently kept the old name) — the sanctioned second
+             --evidence --actor     MCP tool wraps (renamed from fold-project since
+                                     fold_project no longer exists as an MCP tool, and the CLI
+                                     had silently kept the old name) - the sanctioned second
                                      entry point for a worker whose sandbox classifier permits an
                                      installed entrypoint but refuses a raw DATABASE_URL
                                      script, or when a client's MCP tool index is stale.
                                      `osiris fold-project` still works (identical args,
                                      SoftwareProject-only) as a hidden, printed-deprecated
-                                     alias — never advertised, never silently broken.
+                                     alias, never advertised, never silently broken.
   osiris unmerge <dupe>             the same orchestrator.merge.unmerge the unmerge MCP tool
-             --because --actor      wraps — reverses a wrongful merge. Dry run by default
+             --because --actor     wraps, reverses a wrongful merge. Dry run by default
              [--execute]            (matches the MCP tool's own convention); built alongside
-                                     merge's own CLI rename, dispatch 3683's own point that
-                                     an MCP pair had no reason to stay asymmetric here.
+                                     merge's own CLI rename, on the reasoning that an MCP pair
+                                     had no reason to stay asymmetric here.
   osiris charter-for <seat>         the same manager/operator-enforced charter.charter_for
-             --repos --because      the charter_for MCP tool wraps (thread 2474) — same
-             --actor                second-entry-point reasoning as fold-project, same guard,
-                                     untouched
+             --repos --because      the charter_for MCP tool wraps, same second-entry-point
+             --actor                reasoning as fold-project, same guard, untouched
   osiris amend-practice <ref>       the same capture.amend_practice the amend_practice MCP
-             <amendment> --actor    tool wraps (thread 06c3529b) — narrows a LIVE practice's
-                                     guidance without touching its id/statement/witness count.
+             <amendment> --actor    tool wraps, narrows a LIVE practice's guidance without
+                                     touching its id/statement/witness count.
                                      Calls the orchestrator function directly with an explicit
                                      --actor (fold-project/charter-for's own pattern, not
                                      cmd_fleet's anonymous call_mcp_tool one) because this is a
@@ -79,36 +73,34 @@ EXISTING verb rather than re-deriving it:
                                      has no mounted identity, so a call_mcp_tool round-trip
                                      would stamp the amendment's source as the generic
                                      "session" bucket (mcp_server._source_for's own documented
-                                     fallback) instead of a named actor — a real provenance
+                                     fallback) instead of a named actor, a real provenance
                                      loss for a governance-relevant write, unlike cmd_fleet's
                                      read-only round-trip where no attribution is at stake.
   osiris annotate-thread <ref>      the same capture.annotate_thread the annotate_thread MCP
-             <note> --actor         tool wraps (thread 2474 — named there alongside
-                                     amend_decision as sharing fold_project's stale-tool-index
-                                     shape, but never built until now) — appends to a thread's
-                                     record without closing it. Same explicit-actor,
-                                     direct-orchestrator-call pattern as amend-practice above.
+             <note> --actor         tool wraps, appends to a thread's record without closing
+                                     it. Same explicit-actor, direct-orchestrator-call pattern
+                                     as amend-practice above.
   osiris amend-decision <ref>       the same capture.amend_decision the amend_decision MCP
-             <addendum> --actor     tool wraps (thread 2474, the other half of the pair named
-                                     above) — appends reasoning to a LIVE decision without
+             <addendum> --actor     tool wraps (the other half of the annotate-thread pair
+                                     above), appends reasoning to a LIVE decision without
                                      superseding it. Same pattern, same reason.
-  osiris mint-seat <handle>         the same mintseat.mint_seat the mint_seat MCP tool wraps —
+  osiris mint-seat <handle>         the same mintseat.mint_seat the mint_seat MCP tool wraps,
              --manager <seat>       a DIFFERENT shape of gap than the four entry points above:
                                      the MCP tool has no `manager` parameter at all, it infers the
              [--model] --actor      manager from the CALLING agent's own held seat, which a raw
-             [--adopt] [--force]    terminal doesn't have. Takes `manager` explicitly instead —
-                                     closes the "brand-new seat needs a hand-rolled python -c
-                                     heredoc" gap CLI.md's own house law names as a finding.
+             [--adopt] [--force]    terminal doesn't have. Takes `manager` explicitly instead,
+                                     closing the gap where a brand-new seat needed a
+                                     hand-rolled python -c heredoc to mint.
 
-CANONICAL ENV RESOLUTION (the actual root-fix, 3e96c10e's cousin): every DB-backed command
-applies src.config.dev_env.apply_dev_fallback() first — a bare invocation must target the
-SAME dev instance the systemd user units already inline, never silently fall to Settings'
+CANONICAL ENV RESOLUTION: every DB-backed command applies
+src.config.dev_env.apply_dev_fallback() first - a bare invocation must target the SAME dev
+instance the systemd user units already inline, never silently fall to Settings'
 prod-shaped 5432/6379 default. `attach`/`launch`'s manager-socket calls and `smoke`/`fleet`'s
 MCP round-trip need no such fallback (neither touches Postgres directly); only `seed`,
 `launch`'s own seat-facts lookup + honesty check, `migrate`, and `deploy`'s migration gate
 do.
 
-Every error is honest and names the next step — no raw traceback reaches the operator's
+Every error is honest and names the next step, no raw traceback reaches the operator's
 terminal for a condition this module can anticipate (a dark daemon, an unreachable database,
 an ambiguous or unknown handle)."""
 from __future__ import annotations
@@ -136,19 +128,19 @@ AgentsJson = Callable[..., Awaitable[list[dict[str, Any]]]]
 ResumeSpawn = Callable[..., Awaitable[None]]
 ClearStaleRecord = Callable[..., Awaitable[bool]]
 
-# dispatch 3678, the operator's own "make the cli friendly": every sanctioned-second-entry-point
-# command below used to REQUIRE --actor, forcing a human at a raw terminal to type a value
-# that is always going to be the same one anyway. `console` is already a member of
-# `_OPERATOR_ACTORS` (src/orchestrator/seats.py) — a raw terminal call IS a console act by
-# construction (no MCP round-trip, no borrowed agent identity), so it already carries
-# operator authority; defaulting to it is naming a fact, not granting one. Never inferred
-# silently past this: the flag stays a real override for a caller who wants a different
-# name attributed (a script driving this CLI on someone else's behalf, say).
+# Every sanctioned-second-entry-point command below used to REQUIRE --actor, forcing a
+# human at a raw terminal to type a value that is always going to be the same one anyway.
+# `console` is already a member of `_OPERATOR_ACTORS` (src/orchestrator/seats.py). A raw
+# terminal call IS a console act by construction (no MCP round-trip, no borrowed agent
+# identity), so it already carries operator authority; defaulting to it is naming a fact,
+# not granting one. Never inferred silently past this: the flag stays a real override for
+# a caller who wants a different name attributed (a script driving this CLI on someone
+# else's behalf, say).
 _CONSOLE_ACTOR = "console"
 
 
 async def _default_manager(req: dict[str, Any]) -> dict[str, Any]:
-    """The real manager socket, bound to the daemon's own default path — the injectable
+    """The real manager socket, bound to the daemon's own default path. The injectable
     `manager` param this module's async commands take defaults to this exact call, matching
     trigger.py's own `launch_seat(manager=...)` precedent so tests can swap a fake in without
     a live daemon, same as that verb's own test suite does."""
@@ -185,8 +177,8 @@ def resolve_model(
 ) -> str | None:
     """Launch's own model precedence: an explicit --model flag wins outright; else the target
     SEAT's own stamped intended_model; else the wake-lane economy default; else None (the
-    claude CLI's own default). Thread 20e4feb6's still-open bug is trigger.py's launch() never
-    consulting the middle tier at all — this CLI is new code and does not repeat it."""
+    claude CLI's own default). trigger.py's launch() still has an open bug where it never
+    consults the middle tier at all; this CLI is new code and does not repeat it."""
     return explicit or seat_intended or wake_default or None
 
 
@@ -226,11 +218,11 @@ async def cmd_attach(handle: str, *, manager: ManagerCall = _default_manager) ->
 # --- smoke -----------------------------------------------------------------------------------
 
 async def _run_smoke_probes_full() -> tuple[list[str], list[str]]:
-    """The two probes, composed, PLUS osiris-mcp's own non-blocking `warnings` (task
-    #180 follow-through, Thoth DM 5257: the registry_census `rowless` count folded into
-    smoke's verdict) — split from `_run_smoke_probes` only so the deploy gate's retry
-    loop (which must key its backoff on FAILS alone, never a non-blocking warning) keeps
-    its existing narrow `list[str]` contract untouched. Returns (fails, warnings)."""
+    """The two probes, composed, plus osiris-mcp's own non-blocking `warnings` (the
+    registry_census `rowless` count folded into smoke's verdict). Split from
+    `_run_smoke_probes` only so the deploy gate's retry loop (which must key its backoff on
+    FAILS alone, never a non-blocking warning) keeps its existing narrow `list[str]`
+    contract untouched. Returns (fails, warnings)."""
     import httpx
 
     from src.config.settings import get_settings
@@ -255,7 +247,7 @@ async def _run_smoke_probes_full() -> tuple[list[str], list[str]]:
 
 
 async def _run_smoke_probes() -> list[str]:
-    """The two probes, composed — shared by `cmd_smoke` and `cmd_deploy` so neither
+    """The two probes, composed. Shared by `cmd_smoke` and `cmd_deploy` so neither
     re-derives it. Returns the flat failure list (empty = all green); see
     `_run_smoke_probes_full` for the non-blocking warnings alongside it."""
     fails, _warnings = await _run_smoke_probes_full()
@@ -263,10 +255,10 @@ async def _run_smoke_probes() -> list[str]:
 
 
 async def _health_probe() -> bool:
-    """One GET at /health — cheap (no chrome render, no MCP round-trip) and only answers
+    """One GET at /health. Cheap (no chrome render, no MCP round-trip) and only answers
     after the console app's own lifespan finishes standing up its pool (src/api/app.py), so
     it's an honest readiness signal, not just "uvicorn is listening". False on ANY failure
-    (refused, timed out, non-200) — not up yet is not a smoke failure."""
+    (refused, timed out, non-200): not up yet is not a smoke failure."""
     import httpx
 
     from src.config.settings import get_settings
@@ -286,12 +278,12 @@ async def _wait_for_health(
     ceiling_secs: float = 120.0, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> tuple[bool, float]:
     """A BOUNDED poll of /health (never indefinite), run BEFORE smoke so a still-starting
-    console reads as "still starting", not a smoke false-alarm. Measured, same box same day
-    (Thoth DM 2823): console cold-start ranged 47s-94s — a fixed sleep sized to one sample
+    console reads as "still starting", not a smoke false-alarm. Measured on the same box on
+    the same day: console cold-start ranged 47s-94s, so a fixed sleep sized to one sample
     is a lie waiting for a slower boot, so this reports the REAL elapsed wait instead of
     asserting one. Retries with backoff (1s, 2s, 4s, 8s, 8s, ...) capped at `ceiling_secs`
     (120s: comfortable margin over the measured 94s, still bounded). Returns (ready,
-    elapsed) — ready=False past elapsed>=ceiling_secs is a REAL finding (the console did not
+    elapsed): ready=False past elapsed>=ceiling_secs is a REAL finding (the console did not
     come up), not a timing race."""
     elapsed = 0.0
     delay = 1.0
@@ -309,12 +301,13 @@ async def _wait_for_smoke(
     ceiling_secs: float = 30.0, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> tuple[list[str], float]:
     """A BOUNDED wait-for-up loop (never indefinite): a service that just restarted (uvicorn
-    still binding, the MCP pool still warming) needs a few seconds — a single immediate probe
-    cried wolf on a genuinely healthy deploy (found live, batch 4's maiden `osiris deploy`
-    run: all-red immediately, all-green five seconds later). Retries with backoff (2s, 4s,
-    8s, 8s, ... capped at `ceiling_secs`) until the probe comes back clean or the ceiling
-    elapses. Returns (fails, elapsed) — an empty `fails` past elapsed>0 means it recovered;
-    a non-empty `fails` once elapsed>=ceiling_secs is a REAL finding, not a false alarm."""
+    still binding, the MCP pool still warming) needs a few seconds, and a single immediate
+    probe cried wolf on a genuinely healthy deploy in practice (observed live on an early
+    `osiris deploy` run: all-red immediately, all-green five seconds later). Retries with
+    backoff (2s, 4s, 8s, 8s, ... capped at `ceiling_secs`) until the probe comes back clean
+    or the ceiling elapses. Returns (fails, elapsed): an empty `fails` past elapsed>0 means
+    it recovered; a non-empty `fails` once elapsed>=ceiling_secs is a REAL finding, not a
+    false alarm."""
     elapsed = 0.0
     delay = 2.0
     fails = await probe()
@@ -327,11 +320,11 @@ async def _wait_for_smoke(
 
 
 def diff_tool_lists(before: dict[str, str], after: dict[str, str]) -> list[str]:
-    """Named additions/removals/changes between two MCP tool-list snapshots (thread 6a78e64b
-    leg 2) — pure, so the exact wording is testable without a live server. `+name` a tool the
-    after-list has that the before-list didn't; `-name removed` the reverse; `~name changed`
-    the same name with a different fingerprint (a signature or docstring edit) — so a deploy
-    names exactly which verbs are arriving, not just that something changed somewhere."""
+    """Named additions/removals/changes between two MCP tool-list snapshots. Pure, so the
+    exact wording is testable without a live server. `+name` a tool the after-list has that
+    the before-list didn't; `-name removed` the reverse; `~name changed` the same name with
+    a different fingerprint (a signature or docstring edit), so a deploy names exactly
+    which verbs are arriving, not just that something changed somewhere."""
     added = sorted(set(after) - set(before))
     removed = sorted(set(before) - set(after))
     changed = sorted(n for n in (set(before) & set(after)) if before[n] != after[n])
@@ -342,13 +335,13 @@ def diff_tool_lists(before: dict[str, str], after: dict[str, str]) -> list[str]:
 async def cmd_smoke(
     *, chaos: bool = False, reboot: bool = False, as_json: bool = False,
 ) -> int:
-    """`as_json` (Thoth dispatch 6746, specimen A): never chaos's OR reboot's own path —
-    `--chaos` and `--reboot` each run a longer-lived, separate probe with their own
-    text-only receipt, untouched here; the ordinary probe's `fails`/`warnings` are
-    already `list[str]`, trivially JSON-serializable.
+    """`as_json` never covers chaos's OR reboot's own path: `--chaos` and `--reboot` each
+    run a longer-lived, separate probe with their own text-only receipt, untouched here;
+    the ordinary probe's `fails`/`warnings` are already `list[str]`, trivially
+    JSON-serializable.
 
-    `reboot` (REBOOT SURVIVAL, thread 194eac83): see `cmd_smoke_reboot`'s own docstring —
-    a REAL restart of every daemon in dependency order, never run automatically."""
+    `reboot` (REBOOT SURVIVAL): see `cmd_smoke_reboot`'s own docstring, a REAL restart of
+    every daemon in dependency order, never run automatically."""
     if chaos:
         return await cmd_smoke_chaos()
     if reboot:
@@ -373,7 +366,7 @@ CHAOS_LEDGER_KEY = "chaos-replay:last"
 
 
 async def _real_chaos_gate(pool: asyncpg.Pool) -> dict[str, Any]:
-    """The real wiring `osiris smoke --chaos` and `cmd_deploy`'s own chaos gate share — the
+    """The real wiring `osiris smoke --chaos` and `cmd_deploy`'s own chaos gate share: the
     only place either caller passes `chaos_replay` its real, un-injected side effects.
     `automount_probe` reuses `_real_check_whisper_probe` unchanged (the same throwaway
     /automount+/session-end round trip `cmd_deploy`'s ordinary whisper check already makes,
@@ -392,23 +385,23 @@ async def _real_chaos_gate(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def _real_full_suite_gate(repo_root: Path) -> dict[str, Any]:
-    """The real wiring `osiris deploy`'s own full-suite gate uses (task #186, Thoth DM
-    5637): `pytest -q -n 4` against `repo_root` — the SAME bounded worker cap
-    `scripts/gate_hook.py`'s own scoped runs use, never `-n auto`, so this gate cannot
-    itself become the thing that exhausts a host already running concurrent agents'
-    commits. Each invocation spins its OWN throwaway pg testcontainer (pytest's own
-    session fixture), entirely separate from the real dev Postgres `osiris deploy`
-    operates against — the concurrency risk this must respect (#100) is host resource
-    contention with OTHER pytest runs, not a shared database. `osiris deploy` itself is a
-    single coordinated action (the operator's/coordinator's own, never run by multiple
-    fleet agents at once — the same assumption `record_deploy`'s own cursor write already
-    makes), so this gate's own worst case is bounded the same way gate_hook.py's is.
+    """The real wiring `osiris deploy`'s own full-suite gate uses: `pytest -q -n 4` against
+    `repo_root`, the SAME bounded worker cap `scripts/gate_hook.py`'s own scoped runs use,
+    never `-n auto`, so this gate cannot itself become the thing that exhausts a host
+    already running concurrent agents' commits. Each invocation spins its OWN throwaway pg
+    testcontainer (pytest's own session fixture), entirely separate from the real dev
+    Postgres `osiris deploy` operates against: the concurrency risk this must respect is
+    host resource contention with OTHER pytest runs, not a shared database. `osiris deploy`
+    itself is a single coordinated action (run by one operator or coordinator at a time,
+    never by multiple fleet agents at once, the same assumption `record_deploy`'s own
+    cursor write already makes), so this gate's own worst case is bounded the same way
+    gate_hook.py's is.
 
-    Bounded at 600s (the suite measured ~200-230s under real load tonight; generous
-    headroom, never unbounded) — a timeout is reported as a genuine failure, never
-    swallowed as fail-open (577988ed's fail-open clause is for infrastructure this can't
-    control; a suite that cannot even finish is exactly the invariant violation this gate
-    exists to catch, same posture as the chaos gate beside it)."""
+    Bounded at 600s (the suite measured roughly 200-230s under real load in testing;
+    generous headroom, never unbounded): a timeout is reported as a genuine failure, never
+    swallowed as fail-open (the existing fail-open clause elsewhere is for infrastructure
+    this can't control; a suite that cannot even finish is exactly the invariant violation
+    this gate exists to catch, same posture as the chaos gate beside it)."""
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "pytest", "-q", "-n", "4",
         cwd=repo_root, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
@@ -425,7 +418,7 @@ async def _real_full_suite_gate(repo_root: Path) -> dict[str, Any]:
 
 
 async def cmd_smoke_chaos(*, pool: asyncpg.Pool | None = None) -> int:
-    """`osiris smoke --chaos` — runs the crash replay standalone (never as a side effect of
+    """`osiris smoke --chaos` runs the crash replay standalone (never as a side effect of
     an ordinary `osiris smoke`) and records the numbers to the deploy ledger's own cursor
     store (`CHAOS_LEDGER_KEY`) whether it passes or fails, so `cmd_deploy`'s own gate (and
     a human reading the ledger later) never has to re-derive them from scrollback."""
@@ -473,34 +466,32 @@ async def cmd_boot_status(
     *, pool: asyncpg.Pool | None = None, as_json: bool = False, fleet: bool = False,
     units: bool = False,
 ) -> int:
-    """Report-only rollout check (thread 0e5bae06, #84) — names every active seat NOT
-    carrying a compiled managed section, classified by why, same shape as
-    `composition_gap_notes`: a build isn't done when its acceptance test passes, it's
-    done when the effect reaches every office, and 'reached most of them' is a gap this
-    prints by name, never a count that can read clean while 19 offices are silently
-    unreached.
+    """Report-only rollout check: names every active seat NOT carrying a compiled managed
+    section, classified by why, same shape as `composition_gap_notes`: a build isn't done
+    when its acceptance test passes, it's done when the effect reaches every office, and
+    'reached most of them' is a gap this prints by name, never a count that can read clean
+    while some offices are silently unreached.
 
-    `as_json` (Thoth dispatch 6746, specimen A): the CLI's own top-level help claims
-    "Every read verb takes --json" for this verb's own displayed group — this used to be
-    false. `gaps` is already `list[dict[str, str]]`, trivially JSON-serializable; no
-    second data shape invented for the machine path.
+    `as_json`: the CLI's own top-level help claims "Every read verb takes --json" for this
+    verb's own displayed group; this used to be false. `gaps` is already
+    `list[dict[str, str]]`, trivially JSON-serializable; no second data shape invented for
+    the machine path.
 
-    `fleet` (thread bc6a5d455da2, REBOOT SURVIVAL's fleet half): a SEPARATE report mode,
-    never blended with the rollout-gap check above — swaps to `mounts.
-    apply_boot_time_fleet_pass`, the SAME function the worker calls once at its own
-    startup, so an operator can run the identical boot-time reconciliation on demand
-    without waiting for (or forcing) a worker restart. Not a dry run: refreshing a
-    registry_census-verified live body's own mount row and stamping boot_resumed_at is
-    purely additive and safe by construction (the same class of always-on, no-kill-
-    switch-needed write classification_laws_heartbeat's own siblings already are) —
-    exits 1 only when a live body has NO mount row at all (rowless — named, never
-    bound, see that function's own docstring for why), 0 otherwise.
+    `fleet` (REBOOT SURVIVAL's fleet half): a SEPARATE report mode, never blended with the
+    rollout-gap check above, swaps to `mounts.apply_boot_time_fleet_pass`, the SAME
+    function the worker calls once at its own startup, so an operator can run the
+    identical boot-time reconciliation on demand without waiting for (or forcing) a worker
+    restart. Not a dry run: refreshing a registry_census-verified live body's own mount row
+    and stamping boot_resumed_at is purely additive and safe by construction (the same
+    class of always-on, no-kill-switch-needed write classification_laws_heartbeat's own
+    siblings already are). Exits 1 only when a live body has NO mount row at all (rowless:
+    named, never bound, see that function's own docstring for why), 0 otherwise.
 
-    `units` (REBOOT SURVIVAL, the units half, thread 194eac83, operator ruling aaa8e841):
-    an ADDITIVE, entirely separate axis — see `_cmd_boot_status_units`'s own docstring.
-    No pool needed, so this branches BEFORE the pool-connect block below; a different
-    keyword param than any `--fleet`-shaped extension this verb may also grow elsewhere,
-    on purpose, so two independent report axes over the same CLI verb never collide."""
+    `units` (REBOOT SURVIVAL, the units half): an ADDITIVE, entirely separate axis, see
+    `_cmd_boot_status_units`'s own docstring. No pool needed, so this branches BEFORE the
+    pool-connect block below; a different keyword param than any `--fleet`-shaped
+    extension this verb may also grow elsewhere, on purpose, so two independent report
+    axes over the same CLI verb never collide."""
     if units:
         return await _cmd_boot_status_units(as_json=as_json)
     if fleet:
@@ -583,14 +574,14 @@ async def cmd_boot_status(
 # --- lint --------------------------------------------------------------------------------------
 
 def _lint_project_match(finding: dict[str, Any], project: str) -> bool:
-    """A crude, honest heuristic (WAVE 22 scope note, thread bf10608b): graph_lint's own
-    findings carry no dedicated project/repo field at all (unlike closure_health's own
-    args.repo scoping) — most checks are fleet-wide graph-integrity questions with no
-    single project to attribute a finding to. Rather than invent a false-precision per-
-    check SQL join graph_lint itself doesn't have, this matches `project` as a case-
-    insensitive substring of the two fields nearly every check actually populates
-    (`subject`, `detail`) — real but approximate, documented as such in the receipt via
-    `checks_not_evaluable_for_project`, never silently presented as a genuine scope."""
+    """A crude, honest heuristic: graph_lint's own findings carry no dedicated
+    project/repo field at all (unlike closure_health's own args.repo scoping), and most
+    checks are fleet-wide graph-integrity questions with no single project to attribute a
+    finding to. Rather than invent a false-precision per-check SQL join graph_lint itself
+    doesn't have, this matches `project` as a case-insensitive substring of the two fields
+    nearly every check actually populates (`subject`, `detail`): real but approximate,
+    documented as such in the receipt via `checks_not_evaluable_for_project`, never
+    silently presented as a genuine scope."""
     needle = project.lower()
     for key in ("subject", "detail"):
         val = finding.get(key)
@@ -600,13 +591,12 @@ def _lint_project_match(finding: dict[str, Any], project: str) -> bool:
 
 
 async def cmd_lint_triage(pool: asyncpg.Pool, *, as_json: bool) -> int:
-    """`osiris lint --check triage`'s own branch (WAVE 27, PARITY GAP 2, Thoth mail
-    11752: "a headless entry point onto graph_lint and its sibling audits (triage, ...)"):
-    the SAME `triage(mode='census')` MCP call, one row per (type, status). Pass/fail
-    signal: any row carrying a live orphan or thin count -- the two columns census
-    mode itself flags as worth a mind's attention; a real bucket-mode dig is what a
-    human reaches for next, this call only needs to say whether the fleet has
-    anything to look at."""
+    """`osiris lint --check triage`'s own branch: a headless entry point onto graph_lint
+    and its sibling audits (triage, ...), the SAME `triage(mode='census')` MCP call, one
+    row per (type, status). Pass/fail signal: any row carrying a live orphan or thin
+    count, the two columns census mode itself flags as worth attention; a real
+    bucket-mode dig is what a human reaches for next, this call only needs to say whether
+    the fleet has anything to look at."""
     from src import cli_render as render
     from src.orchestrator import compositions as comp
 
@@ -626,16 +616,15 @@ async def cmd_lint_triage(pool: asyncpg.Pool, *, as_json: bool) -> int:
 
 
 async def cmd_lint_audit(pool: asyncpg.Pool, name: str, *, as_json: bool) -> int:
-    """`osiris lint --check <audit-name>` for one of `AUDIT_NAMES` (WAVE 27, PARITY
-    GAP 2): the SAME `comp.run_composition` call `osiris audit` itself makes -- no
-    second implementation. DISCLOSED, same as `cmd_audit`'s own docstring: these five
-    are read-only lenses with no fleet-agreed pass/fail signal (closure-health
-    reports four summary numbers, not a findings list) -- exit 1 only on the
-    composition's OWN error (an unknown name, a query failure), never on content,
-    exactly `osiris audit`'s own contract. Reached through `osiris lint` purely so
-    the whole graph-health namespace (checks + triage + audits) has one entry point,
-    per Thoth's own wording; `osiris audit <name>` stays the direct, unaggregated
-    way to run just one."""
+    """`osiris lint --check <audit-name>` for one of `AUDIT_NAMES`: the SAME
+    `comp.run_composition` call `osiris audit` itself makes, no second implementation.
+    DISCLOSED, same as `cmd_audit`'s own docstring: these five are read-only lenses with
+    no fleet-agreed pass/fail signal (closure-health reports four summary numbers, not a
+    findings list); exit 1 only on the composition's OWN error (an unknown name, a query
+    failure), never on content, exactly `osiris audit`'s own contract. Reached through
+    `osiris lint` purely so the whole graph-health namespace (checks + triage + audits)
+    has one entry point; `osiris audit <name>` stays the direct, unaggregated way to run
+    just one."""
     from src import cli_render as render
     from src.orchestrator import compositions as comp
 
@@ -649,25 +638,23 @@ async def cmd_lint(
     stale_days: int = 14, limit: int | None = None, offset: int = 0,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris lint [--check NAME] [--project P] [--json] — the console-script entry point onto
+    """osiris lint [--check NAME] [--project P] [--json]: the console-script entry point onto
     graph_lint's own orchestrator function, the SAME call graph_lint's MCP tool makes
     (mcp_server.py:1379: `comp.run_spec(pool, {"op": "function", "name": "lint", ...},
-    None, name="graph-lint")`) — never a second implementation of the 32 checks
-    themselves. Headless health check for a cron or a stranger's shell with no MCP
+    None, name="graph-lint")`), never a second implementation of the 32 checks
+    themselves. Headless health check for a cron or a plain shell with no MCP
     client: exit 0 when the (optionally --check/--project-scoped) result carries zero
     findings, 1 when it carries any.
 
-    `--project P` is a CLIENT-SIDE post-filter — see `_lint_project_match`'s own
-    docstring for why (WAVE 22 scope note, thread bf10608b): graph_lint has no per-check
-    SQL-level project scoping to mirror, so inventing one here would be new capability,
-    not a mirror. The receipt names which checks' findings could not even be evaluated
-    for project membership (most of them), rather than silently implying a scoped-clean
-    pass just because nothing matched.
+    `--project P` is a CLIENT-SIDE post-filter, see `_lint_project_match`'s own
+    docstring for why: graph_lint has no per-check SQL-level project scoping to mirror,
+    so inventing one here would be new capability, not a mirror. The receipt names which
+    checks' findings could not even be evaluated for project membership (most of them),
+    rather than silently implying a scoped-clean pass just because nothing matched.
 
-    THE SIBLING-AUDITS WIDENING (WAVE 27, PARITY GAP 2, Thoth mail 11752): `--check`
-    now also accepts `"triage"` (delegates to `cmd_lint_triage`) or any of
-    `AUDIT_NAMES` (delegates to `cmd_lint_audit`) — one entry point onto the whole graph-
-    health namespace her own dispatch named, rather than a fourth-through-eighth
+    THE SIBLING-AUDITS WIDENING: `--check` now also accepts `"triage"` (delegates to
+    `cmd_lint_triage`) or any of `AUDIT_NAMES` (delegates to `cmd_lint_audit`), one entry
+    point onto the whole graph-health namespace, rather than a fourth-through-eighth
     subcommand. `--project`/`--stale-days`/`--limit`/`--offset` are inert on either
     branch (graph_lint-only concepts); a caller mixing them with a widened `--check`
     gets the branch's own, narrower contract, not a silent no-op."""
@@ -753,15 +740,14 @@ async def cmd_lint(
 async def cmd_graph_export(
     *, out: str | None = None, as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris graph-export --out FILE [--json] — the CLI mirror of GET /graph/stream
-    (NAVIGABLE SPACE, THE SERVER piece B, thread b6cb1d7c0b36): calls the SAME
-    src.orchestrator.graph_stream.fetch_snapshot the REST route calls, direct-to-
-    Postgres and headless (this command owns its own pool, no MCP/HTTP round trip) —
-    the same Pattern B shape as `osiris lint`, chosen because bulk-exporting tens of
+    """osiris graph-export --out FILE [--json]: the CLI mirror of GET /graph/stream. Calls
+    the SAME src.orchestrator.graph_stream.fetch_snapshot the REST route calls,
+    direct-to-Postgres and headless (this command owns its own pool, no MCP/HTTP round
+    trip), the same Pattern B shape as `osiris lint`, chosen because bulk-exporting tens of
     thousands of positioned objects through an MCP round trip is the wrong shape for
     this call. `--json` prints a header-only summary (schema_version/count/edge_count/
     types/projects, no array bodies); `--out FILE` writes the exact binary payload
-    /graph/stream itself would have returned — pass both to get the summary AND the
+    /graph/stream itself would have returned: pass both to get the summary AND the
     file."""
     from src.orchestrator.graph_stream import decode_snapshot, fetch_snapshot
 
@@ -812,26 +798,25 @@ async def cmd_layout(
     *, limit: int | None = None, physics: bool = False, verify_only: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris layout --migrate — THE MIGRATION ENTRY POINT (Thoth mail 10609, product law:
-    every action has an entry point): loops the SAME `graph_layout.layout_batch` the cron
+    """osiris layout --migrate: THE MIGRATION ENTRY POINT, following the product rule that
+    every action has an entry point. Loops the SAME `graph_layout.layout_batch` the cron
     heartbeat calls until every object carries the current `graph_layout_v`, printing
     one receipt per batch as it runs rather than waiting on the cron's own 5-minute
     cadence (a real migration otherwise takes hours). Refuses cleanly (exit 1) if the
-    heartbeat is mid-tick and already holds the layout lock — direct-to-Postgres,
+    heartbeat is mid-tick and already holds the layout lock. Direct-to-Postgres,
     headless, same Pattern B shape as `osiris lint`/`osiris graph-export`, since this
     is a bulk operator act, not an MCP round trip.
 
-    osiris layout --physics (THE PHYSICS LAYOUT, Thoth mail 11047):
-    `graph_physics.run_physics_migrate` instead — a SINGLE global force simulation
-    over the whole active graph, never a batch loop (springs pull across the entire
-    graph, not just within a batch, so this genuinely cannot be sliced the way the
-    old sunflower scheme could be) — `limit` is meaningless here and ignored.
+    osiris layout --physics (THE PHYSICS LAYOUT): `graph_physics.run_physics_migrate`
+    instead, a SINGLE global force simulation over the whole active graph, never a batch
+    loop (springs pull across the entire graph, not just within a batch, so this
+    genuinely cannot be sliced the way the old sunflower scheme could be). `limit` is
+    meaningless here and ignored.
 
-    osiris layout --physics --verify-only (ruling 6befd2a5, Thoth mail 11178):
-    `verify_only=True` passed straight through to `run_physics_migrate` — computes
-    and verifies, WRITES NOTHING. Read-only by construction, so unlike a plain
-    `--physics` run this one may run from an undeployed branch against the live
-    population."""
+    osiris layout --physics --verify-only: `verify_only=True` passed straight through to
+    `run_physics_migrate`, computes and verifies, WRITES NOTHING. Read-only by
+    construction, so unlike a plain `--physics` run this one may run from an undeployed
+    branch against the live population."""
     from src.actions.core import Actions
     from src.orchestrator.graph_layout import run_layout_migrate
     from src.orchestrator.graph_physics import run_physics_migrate
@@ -947,11 +932,11 @@ async def cmd_layout(
 
 # --- audit -------------------------------------------------------------------------------------
 
-# The 5 audit-shaped siblings graph_lint keeps beside it in the CMD-K palette (WAVE 22 scope
-# note, thread bf10608b — console.js's own POWER_TOOLS, lines 840-857), EXCLUDING graph_lint
-# itself (its own entry point, `osiris lint`) and the palette's non-audit analysis tools (Who
-# Is This/Co-Investment Ties/Screen Financing/Op vs Disclosed Geo/LAP/Overhead/Echoes — reporting
-# lenses, not health checks). Each name is a DEFAULT_COMPOSITIONS entry already, resolved by
+# The 5 audit-shaped siblings graph_lint keeps beside it in the CMD-K palette
+# (console.js's own POWER_TOOLS list), EXCLUDING graph_lint itself (its own entry point,
+# `osiris lint`) and the palette's non-audit analysis tools (Who Is This/Co-Investment
+# Ties/Screen Financing/Op vs Disclosed Geo/LAP/Overhead/Echoes: reporting lenses, not
+# health checks). Each name is a DEFAULT_COMPOSITIONS entry already, resolved by
 # `comp.run_composition` exactly as the `composition(action='run')` MCP route resolves it.
 AUDIT_NAMES: tuple[str, ...] = (
     "closure-health", "the-wall", "type-census", "family-consistency", "family-drift",
@@ -961,17 +946,17 @@ AUDIT_NAMES: tuple[str, ...] = (
 async def cmd_audit(
     name: str, *, as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris audit <name> [--json] — one console-script entry point onto graph_lint's audit
+    """osiris audit <name> [--json]: one console-script entry point onto graph_lint's audit
     siblings (see `AUDIT_NAMES`), calling `comp.run_composition` directly, the SAME
     function the `composition(action='run', name=...)` MCP route calls (mcp_server.py's
-    `_composition_impl`) — never a second implementation, and never one subcommand per
-    audit (five near-identical CLI entry points drifting independently is exactly the class of
-    bug graph_lint's own history (#48) already taught this house to avoid).
+    `_composition_impl`), never a second implementation, and never one subcommand per
+    audit (five near-identical CLI entry points drifting independently is exactly the
+    class of bug graph_lint's own history already taught this house to avoid).
 
     No subject binding (every one of these five runs fleet-wide, matching what the CMD-K
-    palette itself invokes — `runTool(name)` with no subject argument). Exit 1 only when
+    palette itself invokes: `runTool(name)` with no subject argument). Exit 1 only when
     the composition itself reports an error (an unknown name, a query failure); these are
-    read-only lenses, not a pass/fail gate like `osiris lint` — a clean run and a run
+    read-only lenses, not a pass/fail gate like `osiris lint`, a clean run and a run
     surfacing real findings both exit 0, the same way the palette itself never turns red
     on content."""
     from src.orchestrator import compositions as comp
@@ -1035,15 +1020,15 @@ async def cmd_seed(*, compositions_only: bool, pool: asyncpg.Pool | None = None)
 
 # --- soul-key ---------------------------------------------------------------------------------
 
-# THE ONE genuinely pool-free action — `init` never needs a live setting, just the
-# filesystem. `enroll-recovery`/`recover` moved OUT of this bucket (Thoth mail 13006):
-# both now need `soul_key.rp_id` off the settings table (the WebAuthn RP id must match
-# the console's own origin, "localhost", to interoperate with a future browser
-# enrollment — see settings_registry.py's own comment) before calling into
-# `soul_crypto`, so both compose a short-lived pool JUST for that one read, same as
-# status/rotate/restore-drill below, even though the underlying `soul_crypto`
-# functions themselves remain pool-free (never touch Postgres for anything but that
-# one setting fetch, done here in the CLI layer, not inside soul_crypto.py itself).
+# THE ONE genuinely pool-free action: `init` never needs a live setting, just the
+# filesystem. `enroll-recovery`/`recover` moved OUT of this bucket because both now need
+# `soul_key.rp_id` off the settings table (the WebAuthn RP id must match the console's
+# own origin, "localhost", to interoperate with a future browser enrollment, see
+# settings_registry.py's own comment) before calling into `soul_crypto`, so both compose
+# a short-lived pool JUST for that one read, same as status/rotate/restore-drill below,
+# even though the underlying `soul_crypto` functions themselves remain pool-free (never
+# touch Postgres for anything but that one setting fetch, done here in the CLI layer,
+# not inside soul_crypto.py itself).
 _SOUL_KEY_POOL_FREE_ACTIONS = ("init",)
 _SOUL_KEY_ACTIONS = (
     "status", "init", "rotate", "restore-drill", "enroll-recovery", "recover")
@@ -1058,31 +1043,29 @@ async def cmd_soul_key(
     repo_url: str | None = None, restart: bool = False, as_json: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris soul-key <status|init|rotate|restore-drill|enroll-recovery|recover> —
-    THE KEY ENTRY POINT (Thoth mail 12810/12836, operator's word "keys and backup setup
-    configurable from UI or CLI so a user does not need an agent"; KEY CUSTODY
-    REWRITTEN, ruling e0b98ff2). A thin console-script entry point, matching `osiris
+    """osiris soul-key <status|init|rotate|restore-drill|enroll-recovery|recover>:
+    THE KEY ENTRY POINT, so that key and backup setup are configurable from the UI or the
+    CLI without needing an agent. A thin console-script entry point, matching `osiris
     composition <action>`'s own shape.
 
     `init` stays POOL-FREE and calls `src.ingest.soul_crypto` directly.
     `enroll-recovery`/`recover` ALSO call `src.ingest.soul_crypto` directly (both stay
-    CLI-ONLY — never REST, see `src.orchestrator.soul_key`'s own module docstring:
+    CLI-ONLY, never REST, see `src.orchestrator.soul_key`'s own module docstring:
     minting or unwrapping a recovery blob from a non-interactive HTTP call makes no
     sense, both need a human's own PIN and touch right there in the terminal) but DO
-    compose a short-lived pool now, solely to read `soul_key.rp_id` (Thoth mail 13006)
-    before the FIDO2 ceremony.
+    compose a short-lived pool now, solely to read `soul_key.rp_id` before the FIDO2
+    ceremony.
 
     status/rotate/restore-drill compose a pool and call `src.orchestrator.
-    soul_key` — the SAME three functions the `/soul-key/*` REST routes call,
+    soul_key`, the SAME three functions the `/soul-key/*` REST routes call,
     never a duplicated implementation between the two entry points.
 
-    `restart` (THE FIRST KEY MUST COME FROM THE NORMAL CLI, Thoth mail 13065):
-    `init` only — both daemons start in a loudly-degraded state with no key
-    (mcp_server.py/arq_worker.py's own boot gates), so minting the key alone
-    changes nothing until they restart and pick it up. Without `--restart`, the
-    return dict's own `restart_units`/`restart_hint` name the exact `systemctl
-    --user restart ...` to run by hand; with it, this command runs that itself —
-    `_real_restart_services`, the SAME primitive `osiris deploy` already uses,
+    `restart` (THE FIRST KEY MUST COME FROM THE NORMAL CLI): `init` only, both daemons
+    start in a loudly-degraded state with no key (mcp_server.py/arq_worker.py's own boot
+    gates), so minting the key alone changes nothing until they restart and pick it up.
+    Without `--restart`, the return dict's own `restart_units`/`restart_hint` name the
+    exact `systemctl --user restart ...` to run by hand; with it, this command runs that
+    itself, `_real_restart_services`, the SAME primitive `osiris deploy` already uses,
     never a second restart implementation. `--restart` is a no-op on any other
     action (only `init` ever needs a restart to take effect)."""
     from src import cli_render as render
@@ -1141,7 +1124,7 @@ async def cmd_soul_key(
                 pool, path=path, finish=finish, print_recovery=print_recovery)
         elif action == "restore-drill":
             out = await soul_key_orchestrator.soul_key_restore_drill(pool, repo_url=repo_url)
-        else:  # enroll-recovery / recover — pool-free soul_crypto calls, rp_id off settings
+        else:  # enroll-recovery / recover: pool-free soul_crypto calls, rp_id off settings
             from src.orchestrator.settings_service import get_setting
 
             rp_id = (await get_setting(pool, "soul_key.rp_id"))["value"]
@@ -1169,12 +1152,12 @@ async def cmd_restic_key(
     action: str, *, path: str | None = None, backend: str | None = None,
     as_json: bool = False,
 ) -> int:
-    """osiris restic-key <status|init> — THE OFFLOAD RUNNER's own credential entry point (Thoth
-    mail 12813, KEY CUSTODY REWRITTEN ruling e0b98ff2's "same shape for the restic
-    repository password"), mirroring `osiris soul-key`'s init/status shape. Pool-free
-    (the restic password never touches Postgres) — a smaller entry point than soul-key's:
-    no rotate/enroll-recovery/recover yet, a deliberate scope cut named in `src.
-    orchestrator.restic_credential`'s own module docstring, not an oversight."""
+    """osiris restic-key <status|init>: THE OFFLOAD RUNNER's own credential entry point
+    (the same custody shape as the restic repository password), mirroring `osiris
+    soul-key`'s init/status shape. Pool-free (the restic password never touches
+    Postgres), a smaller entry point than soul-key's: no rotate/enroll-recovery/recover
+    yet, a deliberate scope cut named in `src.orchestrator.restic_credential`'s own
+    module docstring, not an oversight."""
     from src import cli_render as render
     from src.orchestrator import restic_credential
 
@@ -1200,12 +1183,11 @@ async def cmd_offload_runner(
     action: str, *, vault: str | None = None, as_json: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris offload-runner tick — ONE tick of THE OPPORTUNISTIC OFFLOAD RUNNER
-    (ruling be21384a, Thoth mail 12813), meant as `osiris-offload.timer`'s own
-    `ExecStart` but safe to run by hand any time (idempotent, never blocks on an
-    absent target). `action` stays a real parameter (matching `soul-key`'s own
-    shape) even though `tick` is the only one today — the natural slot for a
-    future `status`/`history` action reading `offload_runner.offload_receipts()`
+    """osiris offload-runner tick: ONE tick of THE OPPORTUNISTIC OFFLOAD RUNNER, meant as
+    `osiris-offload.timer`'s own `ExecStart` but safe to run by hand any time (idempotent,
+    never blocks on an absent target). `action` stays a real parameter (matching
+    `soul-key`'s own shape) even though `tick` is the only one today: the natural slot for
+    a future `status`/`history` action reading `offload_runner.offload_receipts()`
     directly, without a second CLI command to remember."""
     from src import cli_render as render
     from src.orchestrator.offload_runner import run_offload_tick
@@ -1254,7 +1236,7 @@ async def _await_launch_confirmation(
 ) -> tuple[bool, str | None]:
     """A short, BOUNDED poll (never an indefinite block) for two honest facts: is the window
     alive, and has a fresh body actually mounted at the office and self-reported a model. This
-    is the exact by-hand check decision 8e9c48d9 did for Imhotep's own respawn, built in so a
+    is the exact by-hand check an engineer once had to do for a seat's respawn, built in so a
     launch's own receipt says it up front instead of a human excavating it after the fact."""
     alive = False
     mounted_model: str | None = None
@@ -1287,8 +1269,8 @@ async def _resolve_launch_target(
     pool: asyncpg.Pool, handle: str, *, verb: str = "launch",
 ) -> dict[str, Any] | None:
     """Handle -> seat facts (with `seat_id` folded in), or None with an honest stderr message
-    already printed. Shared by launch AND resume (thread 60c78788, the operator's verb
-    split) — the seat lookup and its error cases don't change with the command, only what
+    already printed. Shared by launch AND resume (they were split into separate verbs) since
+    the seat lookup and its error cases don't change with the command, only what
     happens once a target is found. `verb` names the actual caller in every printed line
     ('launch' or 'resume') so one function serves both without a second copy."""
     from src.orchestrator.seats import seat_facts, seats_by_handle
@@ -1316,16 +1298,16 @@ async def _resolve_launch_target(
 
 
 def _collapse_resume_log(log: list[str]) -> str:
-    """#153 (Thoth msg 3802, live specimen: `osiris launch metron` printing seven
-    near-identical refusal clauses for four distinct sessions): `_lineage_resume_
-    candidate` reports one entry PER GENERATION it walks, but the distinguishing fact
-    is per-SESSION — a lineage that compacted repeatedly inside one session reports the
-    identical verdict once per generation. Collapse RUNS of adjacent entries whose text
-    past their leading `gen N` is byte-identical (== the same session, same verdict)
-    into one `gens N-M (...) (kx)` line, then rank every entry that DIDN'T collapse —
-    a resumable hop, a crossed-registry refusal, anything genuinely distinct — ABOVE the
-    collapsed repeats, so the one line that actually matters is never buried under a
-    wall of near-duplicate prose ('a wall of near-duplicate prose IS a rune', #135)."""
+    """Fixes a live specimen where a launch command printed seven near-identical refusal
+    clauses for four distinct sessions: `_lineage_resume_candidate` reports one entry PER
+    GENERATION it walks, but the distinguishing fact is per-SESSION. A lineage that
+    compacted repeatedly inside one session reports the identical verdict once per
+    generation. Collapse RUNS of adjacent entries whose text past their leading `gen N` is
+    byte-identical (== the same session, same verdict) into one `gens N-M (...) (kx)`
+    line, then rank every entry that DIDN'T collapse (a resumable hop, a crossed-registry
+    refusal, anything genuinely distinct) ABOVE the collapsed repeats, so the one line
+    that actually matters is never buried under a wall of near-duplicate prose, since a
+    wall of near-duplicate prose defeats the point of a status message."""
     gen_re = re.compile(r"^gen (\S+)(.*)$")
     groups: list[tuple[list[str], str]] = []
     for entry in log:
@@ -1357,20 +1339,19 @@ def _collapse_resume_log(log: list[str]) -> str:
 async def _resolve_and_guard_launch(
     handle: str, *, pool: asyncpg.Pool, agents_json: AgentsJson, verb: str,
 ) -> tuple[dict[str, Any], str] | int:
-    """`osiris resume`'s OWN GUARDS NOW (thread 60c78788, the operator's verb split —
-    `osiris launch` always mints fresh, `osiris resume` always continues, no flag, no
-    automatic guess — the VERB is the property): resolve the seat, refuse a missing
-    anchor_cwd/tree_cwd BY NAME with the exact remedy (decision 27259e4d, thread
-    bc11a2d3), and refuse (as a SUCCESS, exit 0) when a body already holds this seat.
+    """`osiris resume`'s OWN GUARDS NOW: `osiris launch` always mints fresh, `osiris
+    resume` always continues, no flag, no automatic guess, the VERB is the property.
+    Resolve the seat, refuse a missing anchor_cwd/tree_cwd BY NAME with the exact remedy,
+    and refuse (as a SUCCESS, exit 0) when a body already holds this seat.
 
-    NO LONGER SHARED WITH `osiris launch` (WAVE 21 item 3, a793b01b, "UNIFY LAUNCH"):
-    `_cmd_launch_harness` now calls `trigger.launch_seat` directly instead of this
-    function — its own docstring names which of these guards it kept CLI-side and why.
-    This function's own name and `verb` parameter are left as-is (still meaningful for
-    resume's one remaining caller, and renaming risks a drive-by rewrite of a working,
-    tested function for cosmetics alone). `verb` names the actual caller in every printed
-    line so this stays ONE
-    implementation, never a second copy drifting from the first (#48's own lesson).
+    NO LONGER SHARED WITH `osiris launch` ("UNIFY LAUNCH", closing the "two entry points,
+    one receipt" lesson for launch itself, not just its sub-pieces): `_cmd_launch_harness`
+    now calls `trigger.launch_seat` directly instead of this function; its own docstring
+    names which of these guards it kept CLI-side and why. This function's own name and
+    `verb` parameter are left as-is (still meaningful for resume's one remaining caller,
+    and renaming risks a drive-by rewrite of a working, tested function for cosmetics
+    alone). `verb` names the actual caller in every printed line so this stays ONE
+    implementation, never a second copy drifting from the first.
     Returns `(facts, launch_cwd)` to proceed, or an int to return immediately."""
     from src.orchestrator.trigger import (
         _launch_twin_check,
@@ -1383,17 +1364,17 @@ async def _resolve_and_guard_launch(
         return 1
     office = facts["anchor_cwd"]
     tree_cwd = facts["tree_cwd"]
-    # THE ONE-SIDED GUARD FAMILY, NEXT SPECIMEN (decision 27259e4d, thread bc11a2d3):
-    # tree_cwd got an existence check and a named refusal below; office/anchor_cwd got
-    # neither, so a stale or wrong anchor (pin drift, a renamed directory) flowed straight
-    # into create_subprocess_exec(cwd=...) as a raw, uncaught FileNotFoundError. Checked
-    # UNCONDITIONALLY, not just in the tree_cwd-absent fallback branch below: office is
-    # ALSO the identity `_bg_boot_prompt` hands the spawned session for its own mount(cwd=)
-    # call, regardless of which path becomes the subprocess's actual OS cwd — a bad anchor
-    # is a real problem even when tree_cwd happens to save this call's own subprocess spawn.
-    # NEVER derived-by-convention or silently repointed (Thoth's own instruction): which of
-    # anchor_cwd/the on-disk path is the truth is an operator decision, not a guess either
-    # side should make — this only refuses loudly and names which field disagrees.
+    # THE ONE-SIDED GUARD FAMILY, NEXT SPECIMEN: tree_cwd got an existence check and a
+    # named refusal below; office/anchor_cwd got neither, so a stale or wrong anchor (pin
+    # drift, a renamed directory) flowed straight into create_subprocess_exec(cwd=...) as a
+    # raw, uncaught FileNotFoundError. Checked UNCONDITIONALLY, not just in the
+    # tree_cwd-absent fallback branch below: office is ALSO the identity `_bg_boot_prompt`
+    # hands the spawned session for its own mount(cwd=) call, regardless of which path
+    # becomes the subprocess's actual OS cwd, so a bad anchor is a real problem even when
+    # tree_cwd happens to save this call's own subprocess spawn. NEVER derived-by-convention
+    # or silently repointed: which of anchor_cwd/the on-disk path is the truth is an
+    # operator decision, not a guess either side should make; this only refuses loudly and
+    # names which field disagrees.
     if not _tree_exists(office):
         print(f"osiris {verb}: {handle!r} names anchor_cwd={office!r} but it does not "
               "exist on disk. Repoint it or create the directory before launch; osiris "
@@ -1413,10 +1394,10 @@ async def _resolve_and_guard_launch(
                   "via the osiris MCP tools, or by creating it at that exact path.",
                   file=sys.stderr)
             return 1
-        # THE #199 FABRICATION (operator, 2026-09-03: "launch lands the agent in the wrong
-        # cwd"): a mint-time ~/code/<handle> with no git tree while the charter governs a
-        # real tree elsewhere. Same check launch_seat runs (one implementation, 983ec87a);
-        # refused BY NAME with the one-line remedy, never silently repointed.
+        # THE FABRICATED-TREE CASE: launch could land the agent in the wrong cwd via a
+        # mint-time ~/code/<handle> with no git tree while the charter governs a real tree
+        # elsewhere. Same check launch_seat runs (one implementation); refused BY NAME
+        # with the one-line remedy, never silently repointed.
         fabricated = await fabricated_tree_verdict(pool, facts["seat_id"], tree_cwd)
         if fabricated is not None:
             repo, real_path = fabricated
@@ -1429,11 +1410,11 @@ async def _resolve_and_guard_launch(
             return 1
         launch_cwd = tree_cwd
 
-    # THE SHARED TWIN GUARD (task #148's contested seam 4, ruling 983ec87a "two entry points, one
-    # receipt"): reads BOTH claude agents --json (the harness's own, known-incomplete roster
-    # — invisible to a resumed non-bg body by construction) AND agent_mounts (osiris's own
-    # registry, which a resumed body's mid-turn mount() call DOES reach), same helper
-    # launch_seat's own harness-native lane calls, so the two entry points can never drift.
+    # THE SHARED TWIN GUARD ("two entry points, one receipt"): reads BOTH claude agents
+    # --json (the harness's own, known-incomplete roster, invisible to a resumed non-bg
+    # body by construction) AND agent_mounts (osiris's own registry, which a resumed
+    # body's mid-turn mount() call DOES reach), same helper launch_seat's own
+    # harness-native lane calls, so the two entry points can never drift.
     twin = await _launch_twin_check(pool, agents_json, launch_cwd, seat_id=facts["seat_id"])
     if twin["harness"] or twin["mounts"]:
         seen_via = [s for s in (
@@ -1442,13 +1423,12 @@ async def _resolve_and_guard_launch(
             f"agent_mounts ({twin['mounts']['agent_id']}, last_seen "
             f"{twin['mounts']['last_seen']})" if twin["mounts"] else None,
         ) if s]
-        # ALREADY-LIVE IS THE GOAL STATE, NOT A REFUSAL — exit 0, and say so in success
-        # language. Diagnosed live 2026-08-28 (operator: "osiris launch complains about a
-        # lot of things"): this was the ONLY outcome in this function printing a
+        # ALREADY-LIVE IS THE GOAL STATE, NOT A REFUSAL: exit 0, and say so in success
+        # language. This was previously the ONLY outcome in this function printing a
         # refusal-shaped line to STDOUT and returning 0, while its two siblings
         # (missing tree_cwd, resident-unknown) both print to stderr and return 1. So it
-        # read as a complaint to a human AND as a plain success to a script, which is the
-        # #151 disease — one channel that cannot distinguish what actually happened.
+        # read as a complaint to a human AND as a plain success to a script: a channel
+        # that could not distinguish what actually happened.
         #
         # THE LAW, symmetric with `osiris stop`: each verb exits 0 when the world is
         # already in the state it was asked for. launch => a body exists. stop => none
@@ -1459,11 +1439,10 @@ async def _resolve_and_guard_launch(
         print(f"osiris {verb}: seen via {', '.join(seen_via)}", file=sys.stderr)
         return 0
     if twin["stale_harness_row"] is not None:
-        # A DEAD ROW THE TWIN GUARD SAW AND IGNORED (Nebbercracker's monsterhouse
-        # report, DM 13237/13239): `claude agents --json` still lists this seat's OLD
-        # body — failed state, dead pid — never trusted as a twin, but named here so a
-        # human running `osiris launch` by hand sees the harness's own roster hasn't
-        # reaped it, rather than wondering why a "stale" row keeps appearing.
+        # A DEAD ROW THE TWIN GUARD SAW AND IGNORED: `claude agents --json` still lists
+        # this seat's OLD body (failed state, dead pid), never trusted as a twin, but
+        # named here so a human running `osiris launch` by hand sees the harness's own
+        # roster hasn't reaped it, rather than wondering why a "stale" row keeps appearing.
         row = twin["stale_harness_row"]
         print(f"osiris {verb}: ignoring a stale claude agents --json row for "
               f"{handle} ({row.get('name')!r}, state={row.get('state')!r}, "
@@ -1476,33 +1455,32 @@ async def _cmd_launch_harness(
     spawn: SpawnClaudeBg, agents_json: AgentsJson,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> int:
-    """THE DEFAULT LANE (task #72, following trigger.launch_seat's own flip, rulings 0fe36e59
-    + 33d6a2eb clause 3): `claude --bg` + `claude agents --json`, the harness's own front-end
-    surface — every body this creates is visible in the operator's own `claude agents` list
-    BY CONSTRUCTION.
+    """THE DEFAULT LANE, following trigger.launch_seat's own flip: `claude --bg` +
+    `claude agents --json`, the harness's own front-end surface. Every body this creates
+    is visible in the operator's own `claude agents` list BY CONSTRUCTION.
 
-    NO LONGER A SEPARATE IMPLEMENTATION (WAVE 21 item 3, mail 9869 a793b01b, "UNIFY LAUNCH",
-    closing #48's "two entry points, one receipt" lesson for launch itself, not just its
-    sub-pieces): this entry point now calls `trigger.launch_seat` directly, with
-    `operator_authorized=True` — the ONE flag only this CLI's own local-execution trust
-    boundary can set (see `launch_seat`'s own docstring). `wake_default` stays in the
-    signature for the two tests that call this function directly by keyword, but is no
-    longer read here: launch_seat's own `_resolve_launch_model` already resolves the same
-    precedence (explicit -> stamped intended_model -> last holder's own source_model ->
-    the trigger's global default) from the `settings` this call passes through, one tier
-    RICHER than this entry point's own former `resolve_model` call ever was.
+    NO LONGER A SEPARATE IMPLEMENTATION ("UNIFY LAUNCH", closing the "two entry points,
+    one receipt" lesson for launch itself, not just its sub-pieces): this entry point now
+    calls `trigger.launch_seat` directly, with `operator_authorized=True`, the ONE flag
+    only this CLI's own local-execution trust boundary can set (see `launch_seat`'s own
+    docstring). `wake_default` stays in the signature for the two tests that call this
+    function directly by keyword, but is no longer read here: launch_seat's own
+    `_resolve_launch_model` already resolves the same precedence (explicit -> stamped
+    intended_model -> last holder's own source_model -> the trigger's global default)
+    from the `settings` this call passes through, one tier RICHER than this entry point's
+    own former `resolve_model` call ever was.
 
-    ONE GUARD STAYS CLI-SIDE, ON PURPOSE (decision 27259e4d, thread bc11a2d3): office/
-    anchor_cwd existing ON DISK. Porting it into the shared `_launch_target_setup` would
-    newly refuse roughly thirty existing `launch_seat`/`resume_seat` tests that use
-    fabricated (never-created) office paths — real scope beyond this wave's own ask. The
-    CLI keeps its own protection; an MCP-invoked launch/resume is unchanged.
+    ONE GUARD STAYS CLI-SIDE, ON PURPOSE: office/anchor_cwd existing ON DISK. Porting it
+    into the shared `_launch_target_setup` would newly refuse roughly thirty existing
+    `launch_seat`/`resume_seat` tests that use fabricated (never-created) office paths,
+    real scope beyond what this change set out to do. The CLI keeps its own protection;
+    an MCP-invoked launch/resume is unchanged.
 
     THE BOUNDED POST-SPAWN POLL ALSO STAYS CLI-SIDE (a genuine, deliberate divergence found
     during unification, not an oversight): launch_seat's own `can_receive` is a single read
-    taken the instant the spawn returns — right for a receipt that must never lie about the
+    taken the instant the spawn returns, right for a receipt that must never lie about the
     current instant, wrong for a human at a terminal, whom a fresh claude often has not yet
-    self-bound for. Never re-invokes launch_seat (that would risk a second real spawn) —
+    self-bound for. Never re-invokes launch_seat (that would risk a second real spawn),
     only re-polls the SAME already-injected `agents_json` this call already holds, the exact
     8x/1s bound this entry point has always used."""
     from src.actions.core import Actions
@@ -1512,8 +1490,8 @@ async def _cmd_launch_harness(
     if facts is None:
         return 1
     office = facts["anchor_cwd"]
-    # THE ONE-SIDED GUARD FAMILY (decision 27259e4d, thread bc11a2d3) — see this function's
-    # own docstring for why this stays here rather than in the shared trigger.py shell.
+    # THE ONE-SIDED GUARD FAMILY: see this function's own docstring for why this stays
+    # here rather than in the shared trigger.py shell.
     if not _tree_exists(office):
         print(f"osiris launch: {handle!r} names anchor_cwd={office!r} but it does not "
               "exist on disk. Repoint it or create the directory before launch; osiris "
@@ -1581,10 +1559,10 @@ async def _cmd_launch_pty(
     wake_default: str | None,
 ) -> int:
     """`--debug`'s FALLBACK LANE: bodies a seat via the manager daemon DIRECTLY (pty_spawn),
-    never trigger.py's launch_seat() — same trust-boundary reasoning as the harness lane
-    above. Kept alive for an incident, or a build with no `claude --bg` — attachable via
+    never trigger.py's launch_seat(), same trust-boundary reasoning as the harness lane
+    above. Kept alive for an incident, or a build with no `claude --bg`, attachable via
     `osiris attach`, which the harness-native lane's own body is not. Reports the model it
-    actually confirms mounted, honestly and within a bounded wait — never a bare
+    actually confirms mounted, honestly and within a bounded wait, never a bare
     'launched: true'."""
     facts = await _resolve_launch_target(pool, handle)
     if facts is None:
@@ -1604,9 +1582,9 @@ async def _cmd_launch_pty(
               f"minting a twin (attach to it: `osiris attach {handle}`).")
         return 0
 
-    # THE SPEND GAP (Thoth dispatch 9378, lane B design's own finding on 9d2aaf4d) — see
-    # _cmd_launch_harness's own comment on this same check, above: a separate entry point, an
-    # independent gate, placed after the idempotency check and before the real spawn.
+    # THE SPEND GAP: see _cmd_launch_harness's own comment on this same check, above: a
+    # separate entry point, an independent gate, placed after the idempotency check and
+    # before the real spawn.
     from src.config.settings import get_settings
     from src.ingest.providers import spend_is_metered
     from src.orchestrator.ceiling import may_spend
@@ -1674,13 +1652,13 @@ async def cmd_launch(
     debug: bool = False, spawn: SpawnClaudeBg | None = None,
     agents_json: AgentsJson | None = None,
 ) -> int:
-    """Bodies a seat: ALWAYS a fresh, persistent `claude --bg` mint (operator ruling
-    60c78788 — the launch/resume verb split; see `_cmd_launch_harness`'s own docstring
-    for why). `debug=True` (the CLI's `--debug`) keeps the original osiris PTY-broker
-    lane alive as an explicit fallback for an incident or a build with no `claude --bg` —
+    """Bodies a seat: ALWAYS a fresh, persistent `claude --bg` mint (see the
+    launch/resume verb split and `_cmd_launch_harness`'s own docstring for why).
+    `debug=True` (the CLI's `--debug`) keeps the original osiris PTY-broker
+    lane alive as an explicit fallback for an incident or a build with no `claude --bg`,
     attachable via `osiris attach`, which the default lane's body is not.
     `pool`/`manager`/`wake_default`/`spawn`/`agents_json` are all injectable (mirrors
-    launch_seat's own test seam) — production callers (main()) leave them at their real
+    launch_seat's own test seam); production callers (main()) leave them at their real
     defaults. For continuing a seat's last session instead, see `cmd_resume`."""
     from src.orchestrator.trigger import _claude_agents_json, _spawn_claude_bg
     spawn = spawn or _spawn_claude_bg
@@ -1722,30 +1700,29 @@ async def _cmd_resume_harness(
     agents_json: AgentsJson, resume_spawn: ResumeSpawn, settings: Settings | None = None,
     clear_stale_record: ClearStaleRecord | None = None,
 ) -> int:
-    """A PERSISTENT `--bg --resume` TURN (Thoth dispatch 6484/6515, superseding the old
-    one-shot `-p --resume` lane): same `_lineage_resume_candidate` + `_resume_guard` +
-    `resume_spawn` primitives, same order, never a second implementation (#48's lesson).
-    Refuses if there is no seat holder, no resumable session, or the gate declines it —
-    `osiris resume` never falls through to a fresh mint; that is `osiris launch`'s job,
-    a deliberate, separate act (ruling 60c78788: the verb, not a flag, is the property —
-    launch always mints fresh, resume always continues; this only changes HOW resume
-    continues, never what it means to launch).
+    """A PERSISTENT `--bg --resume` TURN, superseding the old one-shot `-p --resume`
+    lane: same `_lineage_resume_candidate` + `_resume_guard` + `resume_spawn` primitives,
+    same order, never a second implementation. Refuses if there is no seat holder, no
+    resumable session, or the gate declines it: `osiris resume` never falls through to a
+    fresh mint; that is `osiris launch`'s job, a deliberate, separate act (the verb, not a
+    flag, is the property: launch always mints fresh, resume always continues; this only
+    changes HOW resume continues, never what it means to launch).
 
-    VISIBILITY NOW RIDES `claude agents --json` TOO (the operator's own live complaint —
-    "these discrepancies make it impossible to actually resume agents" — fixed at the
-    root): decision 536de12f/a829a15d's "a resumed body cannot appear in claude agents"
-    was TRUE of the old `-p --resume` one-shot lane and is FALSE of `--bg --resume`,
-    confirmed live against the currently installed harness (2.1.258) with a real
-    disposable probe session, not inferred from --help text — see `_spawn_claude_bg`'s
-    own docstring for the exact verification. A resumed session now genuinely persists:
-    it idles after this turn rather than exiting, stays reachable by `claude attach`,
-    and is visible to the exact roster the operator was complaining could never see it.
+    VISIBILITY NOW RIDES `claude agents --json` TOO, fixed at the root after reports that
+    these discrepancies made it impossible to actually resume agents: a resumed body used
+    to be unable to appear in claude agents at all. That was TRUE of the old `-p --resume`
+    one-shot lane and is FALSE of `--bg --resume`, confirmed live against the currently
+    installed harness (2.1.258) with a real disposable probe session, not inferred from
+    --help text, see `_spawn_claude_bg`'s own docstring for the exact verification. A
+    resumed session now genuinely persists: it idles after this turn rather than exiting,
+    stays reachable by `claude attach`, and is visible to the roster that previously
+    could never see it.
 
-    CLEARS A STALE STOPPED RECORD BEFORE SPAWNING (Thoth dispatch 7543 item 1, mirrors
-    `resume_seat`'s own identical fix, trigger.py): `claude rm <sid[:8]>` runs right
-    before `resume_spawn`, pre-empting the copy quirk (a leftover harness "stopped"
-    record turning `--bg --resume` into a copy) instead of only detecting and adopting
-    one after it already happened. The post-spawn NOTE below stays as the safety net."""
+    CLEARS A STALE STOPPED RECORD BEFORE SPAWNING (mirrors `resume_seat`'s own identical
+    fix, trigger.py): `claude rm <sid[:8]>` runs right before `resume_spawn`, pre-empting
+    the copy quirk (a leftover harness "stopped" record turning `--bg --resume` into a
+    copy) instead of only detecting and adopting one after it already happened. The
+    post-spawn NOTE below stays as the safety net."""
     from src.orchestrator.agents import _generation
     from src.orchestrator.seats import seat_receipt
     from src.orchestrator.trigger import (
@@ -1774,14 +1751,13 @@ async def _cmd_resume_harness(
     resume_log = resume_outcome[1] if isinstance(resume_outcome, tuple) else resume_outcome
     resume = resume_outcome[0] if isinstance(resume_outcome, tuple) else None
     if resume is not None:
-        # holder is truthy whenever resume is set — resume_outcome only comes from
+        # holder is truthy whenever resume is set: resume_outcome only comes from
         # _lineage_resume_candidate(holder, ...), never the bare-string branch, when
         # holder was falsy. Asserted, not silently narrowed: a violated invariant here
         # should be loud, never a quiet skip of the identity gate.
         assert holder is not None
-        # hop count (#173a, mirrored from launch_seat's own identical wiring — ruling
-        # 983ec87a, two entry points must return the same receipt): READ DIRECTLY off `resume`'s
-        # own 6th field now (task #200 residual, decision 6a0b1236/6d6bf4e8) — never
+        # hop count (mirrored from launch_seat's own identical wiring so both entry points
+        # return the same receipt): READ DIRECTLY off `resume`'s own 6th field now, never
         # re-derived from `len(resume_log) - 1`, which silently miscounts whenever
         # `_lineage_resume_candidate` appends a second log line for the winning hop (e.g.
         # a materialize refusal).
@@ -1789,13 +1765,12 @@ async def _cmd_resume_harness(
             pool, (resume[0], resume[1], resume[2], resume[3]), _generation(holder)[0],
             seat_id=facts["seat_id"], st=st, hop=resume[5], launch_cwd=launch_cwd)
         if gate == "resident-unknown":
-            # THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb) — mirrors
-            # launch_seat's own fix exactly (ruling 983ec87a, two entry points one receipt): an
-            # ABSENCE of signed testimony is not evidence this head belongs to someone
-            # else. "crossed-registry" (a POSITIVE finding) still refuses too (below) —
-            # osiris resume never mints, whatever the registry finding is; "resident-
-            # unknown" gets the SHARPER message naming the exact resume command a human
-            # can run to confirm the session themselves.
+            # A fix mirroring launch_seat's own fix exactly (so the two entry points return
+            # the same receipt): an ABSENCE of signed testimony is not evidence this head
+            # belongs to someone else. "crossed-registry" (a POSITIVE finding) still
+            # refuses too (below); osiris resume never mints, whatever the registry finding
+            # is. "resident-unknown" gets the SHARPER message naming the exact resume
+            # command a human can run to confirm the session themselves.
             print(f"osiris resume: refusing. {handle!r} has a possibly-resumable "
                   f"session {resume[0][:8]} but {refusal}. Run `claude -p --resume "
                   f"{resume[0]}` by hand to confirm it yourself; osiris will not resume "
@@ -1805,8 +1780,8 @@ async def _cmd_resume_harness(
             resume_log = [*resume_log, f"{gate} guard refused it: {refusal}"]
             resume = None
     if resume is None:
-        # NEVER FALLS THROUGH TO FRESH (the whole point of the split, operator ruling
-        # 60c78788): `osiris launch` mints fresh; `osiris resume` either resumes or
+        # NEVER FALLS THROUGH TO FRESH (the whole point of the launch/resume split):
+        # `osiris launch` mints fresh; `osiris resume` either resumes or
         # refuses, cleanly, nothing spawned either way.
         print(f"osiris resume: {handle!r} has nothing resumable. "
               f"{_collapse_resume_log(resume_log)} (gate: "
@@ -1815,10 +1790,10 @@ async def _cmd_resume_harness(
         return 1
 
     resumed_session_id, materialized_at = resume[0], resume[4]
-    # THE SPAWN CWD IS THE OFFICE, ALWAYS — never the tree/launch cwd (operator, 2026-09-03:
-    # ~/.osiris is the anchor; the harness resumes the copy in the SPAWN cwd's own slug, so
-    # spawning anywhere the canon was not emitted resumes a stale partial). Mirrors
-    # trigger.py's dispatch_dm/launch_seat lines exactly (two entry points, one receipt).
+    # THE SPAWN CWD IS THE OFFICE, ALWAYS, never the tree/launch cwd: ~/.osiris is the
+    # anchor, and the harness resumes the copy in the SPAWN cwd's own slug, so spawning
+    # anywhere the canon was not emitted resumes a stale partial. Mirrors trigger.py's
+    # dispatch_dm/launch_seat lines exactly (two entry points, one receipt).
     spawn_cwd = materialized_at or await _resume_office(
         pool, facts["seat_id"], fallback=facts["anchor_cwd"])
     from src.orchestrator.trigger import _governed_project_name, _window_name
@@ -1829,9 +1804,10 @@ async def _cmd_resume_harness(
     await resume_spawn(spawn_cwd, prompt=_DM_RESUME_PROMPT,
                        resume_session=resumed_session_id, name=name, model=resolved_model,
                        allowed_tools=st.osiris_wake_allowed_tools or None)
-    # WHAT THE HARNESS ACTUALLY STARTED (2026-09-03): a stopped record still on file makes
-    # `--bg --resume` start a COPY under a new id. Read the body back and say so — and
-    # adopt the copy as the seat's own continuation before its first act mints a stranger.
+    # WHAT THE HARNESS ACTUALLY STARTED: a stopped record still on file makes
+    # `--bg --resume` start a COPY under a new id. Read the body back and say so, and
+    # adopt the copy as the seat's own continuation before its first act mints an
+    # unattributed session.
     adoption = await _adopt_resumed_body(
         pool, agents_json=agents_json, office=spawn_cwd, requested_sid=resumed_session_id,
         holder=str(holder), project=facts.get("house"))
@@ -1869,13 +1845,13 @@ async def cmd_resume(
     wake_default: str | None = None, agents_json: AgentsJson | None = None,
     resume_spawn: ResumeSpawn | None = None, settings: Settings | None = None,
 ) -> int:
-    """Continue a seat's last session PERSISTENTLY via `claude --bg --resume` (Thoth
-    dispatch 6484/6515): idles after this turn rather than exiting, visible in `claude
-    agents`, reachable again by sending it mail OR by `claude attach`. Never falls
-    through to a fresh mint; that is `osiris launch`'s own, separate job (ruling
-    60c78788: the verb is the property). `pool`/`agents_json`/`resume_spawn`/`settings`
-    are all injectable (mirrors `cmd_launch`'s own test seam) — production callers
-    (main()) leave them at their real defaults."""
+    """Continue a seat's last session PERSISTENTLY via `claude --bg --resume`: idles
+    after this turn rather than exiting, visible in `claude agents`, reachable again by
+    sending it mail OR by `claude attach`. Never falls through to a fresh mint; that is
+    `osiris launch`'s own, separate job (the verb is the property).
+    `pool`/`agents_json`/`resume_spawn`/`settings` are all injectable (mirrors
+    `cmd_launch`'s own test seam); production callers (main()) leave them at their real
+    defaults."""
     from src.orchestrator.trigger import _claude_agents_json, _spawn_claude_bg
     agents_json = agents_json or _claude_agents_json
     resume_spawn = resume_spawn or _spawn_claude_bg
@@ -1911,11 +1887,11 @@ async def cmd_resume(
 async def cmd_stop(handle: str, *, reason: str = "", as_json: bool = False,
                    pool: asyncpg.Pool | None = None) -> int:
     """`osiris launch`'s INVERSE, and the reason it exists: launch has had a terminal command
-    since task #72 and stop had none, so a human could start a body from the shell and had
-    no way to end one from the shell. Every other exit was a raw kill by hand — untracked,
-    unaudited, and exactly the "dead ends and corpses" the operator named.
+    for a while and stop had none, so a human could start a body from the shell and had
+    no way to end one from the shell. Every other exit was a raw kill by hand: untracked,
+    unaudited, and exactly the dead ends and orphaned processes this closes.
 
-    Calls trigger.stop_seat DIRECTLY as caller='operator' — the same function the MCP
+    Calls trigger.stop_seat DIRECTLY as caller='operator', the same function the MCP
     `stop` tool calls, never a second implementation. The operator lane skips ONE check
     (the managed_by edge, which governs agent-to-agent authority and has nothing to say
     about the human); the seat must still resolve, still have a holder, and the body must
@@ -1949,7 +1925,7 @@ async def cmd_stop(handle: str, *, reason: str = "", as_json: bool = False,
     render.emit(out, as_json=as_json, title=f"stop · {handle}")
     # EXIT CODE CARRIES THE VERDICT so a script can branch on it. `no-live-body` is exit 0
     # ON PURPOSE: "there is nothing running there" is a SUCCESSFUL outcome for anyone
-    # cleaning up — a teardown loop must not treat an already-dead body as a failure, or
+    # cleaning up. A teardown loop must not treat an already-dead body as a failure, or
     # every clean run ends red and nobody trusts the signal.
     status = out.get("status")
     if status in ("stopped", "no-live-body"):
@@ -1958,7 +1934,7 @@ async def cmd_stop(handle: str, *, reason: str = "", as_json: bool = False,
     return 1
 
 
-# --- status (thread 68f1bafa/3703a3a9, the read triangle's own new verb) ---------------------
+# --- status (the read triangle's own new verb) ------------------------------------------------
 
 async def cmd_status(*, as_json: bool = False, text: bool = False) -> int:
     url = await _mcp_url()
@@ -1967,7 +1943,7 @@ async def cmd_status(*, as_json: bool = False, text: bool = False) -> int:
         text_only=text)
 
 
-# --- search (thread 68f1bafa/3703a3a9, the read triangle's own new verb) ---------------------
+# --- search (the read triangle's own new verb) ------------------------------------------------
 
 async def cmd_search(query: str, *, limit: int = 15, as_json: bool = False,
                      text: bool = False) -> int:
@@ -1981,23 +1957,23 @@ async def cmd_search(query: str, *, limit: int = 15, as_json: bool = False,
               "Check with: systemctl --user status osiris-mcp", file=sys.stderr)
         return 1
     # search() has no server-side render='text' shape (no single-string form exists to ask
-    # for) — `--text` falls back to the same human render `--text`-less mode already gives
+    # for): `--text` falls back to the same human render `--text`-less mode already gives
     # (box included), still terminal-clean since color auto-disables off a real tty.
     render.emit(result, as_json=as_json and not text, title=f"search · {query}")
     return 0
 
 
-# --- CLI PARITY, THE NEXT CENSUS GAPS (Thoth mail 10441, thread 163c6832) --------------------
-# Four read entry points over the wire (dossier/object_events/succession_chain/candidates — no
+# --- CLI PARITY, THE NEXT CENSUS GAPS -----------------------------------------------------
+# Four read entry points over the wire (dossier/object_events/succession_chain/candidates: no
 # single MCP tool named "inspect" exists to mirror, and candidates() has no ref param at
 # all, so this ships as four flat 1:1 mirrors rather than one dispatcher entry point), plus
 # composition's own CLI face, plus the two genuinely-uncovered write entry points
-# (retire-assertion/retire-link) and the two short citation names Thoth's dispatch asked
-# for by name (cite/citation, CLI_TO_MCP_NAME-mapped onto cite_transcript/read_citation).
+# (retire-assertion/retire-link) and the two short citation names requested by name
+# (cite/citation, CLI_TO_MCP_NAME-mapped onto cite_transcript/read_citation).
 
 async def cmd_dossier(object_ref: str, *, want_relationships: bool = False,
                       as_json: bool = False, text: bool = False) -> int:
-    """osiris dossier <ref> [--want-relationships] — the console-script entry point onto the
+    """osiris dossier <ref> [--want-relationships]: the console-script entry point onto the
     dossier MCP tool, called over the wire (same object_ref/want_relationships params,
     no duplicated resolve/relationship logic)."""
     from src import cli_render as render
@@ -2010,7 +1986,7 @@ async def cmd_dossier(object_ref: str, *, want_relationships: bool = False,
         print(f"osiris dossier: {result}. Is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
-    # dossier() has no server-side render='text' shape — `--text` falls back to the same
+    # dossier() has no server-side render='text' shape: `--text` falls back to the same
     # human render (box included, color-free off a real tty), same as cmd_search's own note.
     render.emit(result, as_json=as_json and not text, title=f"dossier · {object_ref}")
     return 1 if isinstance(result, dict) and result.get("error") else 0
@@ -2018,7 +1994,7 @@ async def cmd_dossier(object_ref: str, *, want_relationships: bool = False,
 
 async def cmd_object_events(object_ref: str, *, event_type: str | None = None,
                             as_json: bool = False) -> int:
-    """osiris object-events <ref> [--event-type T] — the console-script entry point onto the
+    """osiris object-events <ref> [--event-type T]: the console-script entry point onto the
     object_events MCP tool, called over the wire (same object_ref/event_type params)."""
     from src import cli_render as render
     from src.orchestrator.mcp_client import call_mcp_tool
@@ -2036,7 +2012,7 @@ async def cmd_object_events(object_ref: str, *, event_type: str | None = None,
 
 async def cmd_succession_chain(ref: str, *, max_hops: int = 10,
                                as_json: bool = False) -> int:
-    """osiris succession-chain <ref> [--max-hops N] — the console-script entry point onto the
+    """osiris succession-chain <ref> [--max-hops N]: the console-script entry point onto the
     succession_chain MCP tool, called over the wire (same ref/max_hops params)."""
     from src import cli_render as render
     from src.orchestrator.mcp_client import call_mcp_tool
@@ -2053,7 +2029,7 @@ async def cmd_succession_chain(ref: str, *, max_hops: int = 10,
 
 async def cmd_candidates(*, project: str | None = None, limit: int = 50,
                          as_json: bool = False) -> int:
-    """osiris candidates [--project P] [--limit N] — the console-script entry point onto the
+    """osiris candidates [--project P] [--limit N]: the console-script entry point onto the
     candidates MCP tool, called over the wire (same project/limit params). Omitting
     --project matches the orchestrator's own fleet-wide default: a COUNT you may look
     at, not a pile a bare terminal can act on."""
@@ -2076,13 +2052,13 @@ async def cmd_inspect(
     as_json: bool = False, text: bool = False,
 ) -> int:
     """osiris inspect <ref> [--events] [--chain] [--candidates] [--relationships]
-    [--json] — WAVE 27, PARITY GAP 5 (Thoth mail 11752): the generic "look at this
-    object" convenience over dossier / object_events / succession_chain / candidates.
-    NOT a fifth MCP tool -- an earlier pass at this exact gap (the block comment
+    [--json]: the generic "look at this object" convenience over dossier /
+    object_events / succession_chain / candidates.
+    NOT a fifth MCP tool: an earlier pass at this exact gap (the block comment
     above this function) found no single tool named "inspect" to mirror and shipped
     four flat 1:1 entry points instead; this is a CLI-side aggregator sitting on top of
     those same four wire calls (dossier always, the other three opt-in), never a
-    second implementation and never requiring a new MCP tool of its own -- the
+    second implementation and never requiring a new MCP tool of its own. The
     concern that stopped the earlier attempt doesn't apply to a pure client-side
     fan-out. `--candidates` passes `ref` straight through as `candidates`' own
     `project` param (that tool has no per-object ref at all, dossier() docstring's
@@ -2128,19 +2104,19 @@ async def cmd_inspect(
             rc = 1
 
     # inspect() has no server-side render='text' shape (it's a client-side fan-out over
-    # four wire calls, none of which is a single string) — `--text` falls back to the
+    # four wire calls, none of which is a single string): `--text` falls back to the
     # same human render `--text`-less mode already gives, same as dossier/search's own note.
     render.emit(out, as_json=as_json and not text, title=f"inspect · {ref}")
     return rc
 
 
-# --- digest (#92, THE ZERO-TOKEN READ HOOK, Thoth mail 11780 item B): fleet_digest had no
-# CLI entry point at all until now — needed so the hook's static `osiris digest --text` invocation
+# --- digest (THE ZERO-TOKEN READ HOOK): fleet_digest had no
+# CLI entry point at all until now, needed so the hook's static `osiris digest --text` invocation
 # has a real subcommand to shell out to, same as every other verb it serves.
 
 async def cmd_digest(*, hours: int | None = None, mark_seen: bool = False,
                      as_json: bool = False, text: bool = False) -> int:
-    """osiris digest [--hours N] [--mark-seen] — the console-script entry point onto the
+    """osiris digest [--hours N] [--mark-seen]: the console-script entry point onto the
     fleet_digest MCP tool, called over the wire (same hours/mark_seen params). Omitting
     --hours matches the tool's own watermark-mode default: what's new since the operator
     last looked, never advancing the watermark unless --mark-seen says so explicitly."""
@@ -2154,7 +2130,7 @@ async def cmd_digest(*, hours: int | None = None, mark_seen: bool = False,
         print(f"osiris digest: {result}. Is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
-    # fleet_digest() has no server-side render='text' shape — same fallback note as
+    # fleet_digest() has no server-side render='text' shape, same fallback note as
     # cmd_search/cmd_dossier/cmd_show above.
     render.emit(result, as_json=as_json and not text, title="digest")
     return 0
@@ -2166,19 +2142,18 @@ async def cmd_composition(
     take: int | None = None, depth: int | None = None, offset: int | None = None,
     actor: str = _CONSOLE_ACTOR, as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris composition <save|run|list|run-spec> [name] ... — Thoth's dispatch (mail
-    10441) named "list|run|run-spec|author"; the composition MCP tool's own action
-    table (COMPOSITION_INPUT_SCHEMA) only ever declared save/run/list — flagged on
-    thread 163c6832 before building "author"/"run-spec" as inventions. Thoth's
-    correction (mail 10448): "author" was his own error for `save`; `run-spec` IS
-    legitimate as a FOURTH, CLI-only mirror straight onto compositions.run_spec — a
-    plain orchestrator function with no MCP tool of its own, the SAME one
-    `osiris lint`/`osiris audit`'s own CLI entry points already call directly (no duplicated
-    implementation, same class as lint/audit's own NO_MCP_EQUIVALENT entries).
+    """osiris composition <save|run|list|run-spec> [name] ...: the composition MCP tool's
+    own action table (COMPOSITION_INPUT_SCHEMA) only ever declared save/run/list. An
+    earlier design mistakenly assumed "author" was a real action before catching that it
+    was just an error for `save`; `run-spec` IS legitimate as a FOURTH, CLI-only mirror
+    straight onto compositions.run_spec, a plain orchestrator function with no MCP tool
+    of its own, the SAME one `osiris lint`/`osiris audit`'s own CLI entry points already
+    call directly (no duplicated implementation, same class as lint/audit's own
+    NO_MCP_EQUIVALENT entries).
 
     save/run/list go over the wire (call_mcp_tool), the same composition MCP tool a
-    session already reaches. run-spec evaluates an EPHEMERAL spec with its own pool —
-    never saved, same "no save" semantics run_spec's own docstring states — since no
+    session already reaches. run-spec evaluates an EPHEMERAL spec with its own pool,
+    never saved, same "no save" semantics run_spec's own docstring states, since no
     MCP tool wraps it to call over the wire. `--spec` is a JSON string (same
     convention as `osiris settings set`'s own --value); required for save and
     run-spec."""
@@ -2247,7 +2222,7 @@ async def cmd_retire_assertion(
     ref: str, name: str, superseded_id: int, value: str, because: str, *, actor: str,
     as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris retire-assertion <ref> <name> <superseded_id> <value> <because> --actor W —
+    """osiris retire-assertion <ref> <name> <superseded_id> <value> <because> --actor W:
     the console-script entry point onto orchestrator.retirement.retire_assertion, the SAME
     function the retire_assertion MCP tool wraps (no duplicated guard: the blank-because,
     blank-name, unresolved-ref, and superseded_id-mismatch refusals are exactly
@@ -2291,7 +2266,7 @@ async def cmd_retire_link(
     from_ref: str, to_ref: str, link_type: str, because: str, *, actor: str,
     as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris retire-link <from_ref> <to_ref> <link_type> <because> --actor W — the
+    """osiris retire-link <from_ref> <to_ref> <link_type> <because> --actor W: the
     console-script entry point onto orchestrator.retirement.retire_link, the SAME function the
     retire_link MCP tool wraps (no duplicated guard: the blank-because, blank-link_type,
     unresolved-ref, and no-active-link refusals are exactly retire_link's own, all
@@ -2335,10 +2310,10 @@ async def cmd_cite(
     ref: str, agent: str, line_idx: int, because: str, *, actor: str,
     as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris cite <ref> <agent> <line_idx> <because> --actor W — the console-script entry point
+    """osiris cite <ref> <agent> <line_idx> <because> --actor W: the console-script entry point
     onto capture.mint_transcript_citation, the SAME function the cite_transcript MCP tool
-    wraps. Thoth's dispatch (mail 10441) named this command "cite" rather than
-    "cite-transcript" — real target declared in CLI_TO_MCP_NAME. Resolves `ref` via the
+    wraps. This command is named "cite" rather than
+    "cite-transcript"; real target declared in CLI_TO_MCP_NAME. Resolves `ref` via the
     shared resolve_ref the MCP tool itself uses before minting, so an unresolved ref
     refuses before any write, same as the MCP tool's own {"error": ...} shape."""
     from src.actions.core import Actions
@@ -2384,10 +2359,10 @@ async def cmd_cite(
 async def cmd_citation(
     ref: str, agent: str, *, as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris citation <ref> <agent> — the console-script entry point onto
+    """osiris citation <ref> <agent>: the console-script entry point onto
     capture.read_transcript_citation, the SAME function the read_citation MCP tool
-    wraps. Thoth's dispatch (mail 10441) named this command "citation" rather than
-    "read-citation" — real target declared in CLI_TO_MCP_NAME. Pure read: never
+    wraps. This command is named "citation" rather than
+    "read-citation"; real target declared in CLI_TO_MCP_NAME. Pure read: never
     writes."""
     from src.orchestrator.capture import read_transcript_citation
     from src.orchestrator.compositions import resolve_ref
@@ -2445,15 +2420,15 @@ async def cmd_fleet(*, full: bool, as_json: bool = False) -> int:
         render.emit(result, as_json=True)
         return 0
 
-    # HUMAN MODE (ruling f6b758fc, requirement 3 — SPLIT AFTER A LIVE REGRESSION, Thoth msg
-    # 8159): the first cut of this rebuilt the tree CLIENT-SIDE from `fleet()`'s own
-    # `registered` rows — but that list is the receipt diet's own capped sample (a handful
-    # of rows), never the full node set `render_fleet_tree` needs to fold/group correctly.
-    # Live result: 3 sections where the server's own full-data tree carried 36. ONE
-    # renderer now: the server's plain `tree` (always computed over the complete node set,
-    # `render_fleet_tree`'s only caller shape) is printed as-is, recolored by
-    # `paint_fleet_text` — a pure text pass, never a second tree computation. Color depends
-    # on THIS terminal (`cli_render.supports_color()`), which the server can never know.
+    # HUMAN MODE was split out after a live regression: the first cut of this rebuilt the
+    # tree CLIENT-SIDE from `fleet()`'s own `registered` rows, but that list is the receipt
+    # diet's own capped sample (a handful of rows), never the full node set
+    # `render_fleet_tree` needs to fold/group correctly. Live result: 3 sections where the
+    # server's own full-data tree carried 36. ONE renderer now: the server's plain `tree`
+    # (always computed over the complete node set, `render_fleet_tree`'s only caller shape)
+    # is printed as-is, recolored by `paint_fleet_text`, a pure text pass, never a second
+    # tree computation. Color depends on THIS terminal (`cli_render.supports_color()`),
+    # which the server can never know.
     result = await call_mcp_tool(url, "fleet", {"full": full})
     if isinstance(result, str):
         print(f"osiris fleet: {result}. Is osiris-mcp running? "
@@ -2475,17 +2450,16 @@ async def _call_and_emit_text(
     url: str, tool: str, params: dict[str, Any], *, as_json: bool, title: str,
     error_prefix: str, text_only: bool = False,
 ) -> int:
-    """Shared body for the read triangle's human-paint commands (thread bad45d61, wave 10:
-    backlog/threads/roster/team). `--json` gets the full structured response, unchanged.
-    Human mode asks the server for its OWN `render='text'` shape and paints that verbatim
-    (cli_render.emit's own `text=` path) — never re-derives grouping from the structured
-    rows client-side, the exact fleet-render regression (msg 8160: 3 sections where the
-    server tree has 36, from re-deriving off a capped field) this thread names by way of
-    the rule it exists to generalize.
+    """Shared body for the human-paint read commands (backlog/threads/roster/team).
+    `--json` gets the full structured response, unchanged. Human mode asks the server for
+    its OWN `render='text'` shape and paints that verbatim (cli_render.emit's own `text=`
+    path), never re-derives grouping from the structured rows client-side: re-deriving off
+    a capped field previously produced a fleet-render regression (3 sections shown where
+    the server's own tree had 36), and this function exists to keep that from recurring.
 
-    `text_only` (the zero-token read hook, Thoth mail 11780 item B): print the server's own
-    `text` field VERBATIM, no box, no title, no color — the same string a slash face already
-    prints inside a code block. Takes priority over `as_json` (a hook never wants JSON)."""
+    `text_only` (the zero-token read hook): print the server's own `text` field VERBATIM,
+    no box, no title, no color, the same string a slash command already prints inside a
+    code block. Takes priority over `as_json` (a hook never wants JSON)."""
     from src import cli_render as render
     from src.orchestrator.mcp_client import call_mcp_tool
 
@@ -2504,7 +2478,7 @@ async def _call_and_emit_text(
         render.emit(result, as_json=True)
         return 0
     text = result.get("text") if isinstance(result, dict) else None
-    if text is None:  # an old/odd server shape — fall back to the generic reconstruction
+    if text is None:  # an old/odd server shape: fall back to the generic reconstruction
         render.emit(result, as_json=False, title=title)
         return 0
     render.emit(result, as_json=False, title=title, text=text)
@@ -2520,7 +2494,7 @@ async def cmd_roster(*, repo: str | None, want_caveats: bool = False, as_json: b
         text_only=text)
 
 
-# --- backlog (thread 68f1bafa/3703a3a9, the read triangle's own new verb) --------------------
+# --- backlog -----------------------------------------------------------------------------
 
 async def cmd_backlog(*, all_projects: bool, fleet: bool = False, as_json: bool = False,
                       text: bool = False) -> int:
@@ -2531,7 +2505,7 @@ async def cmd_backlog(*, all_projects: bool, fleet: bool = False, as_json: bool 
         text_only=text)
 
 
-# --- threads (thread 68f1bafa/3703a3a9, the read triangle's own new verb) --------------------
+# --- threads -----------------------------------------------------------------------------
 
 async def cmd_threads(*, project: str | None, as_json: bool = False, text: bool = False) -> int:
     url = await _mcp_url()
@@ -2541,18 +2515,17 @@ async def cmd_threads(*, project: str | None, as_json: bool = False, text: bool 
         text_only=text)
 
 
-# --- team (thread 68f1bafa/3703a3a9, the read triangle's own new verb) -----------------------
+# --- team --------------------------------------------------------------------------------
 
 async def cmd_team(*, seat: str | None = None, as_json: bool = False, text: bool = False,
                    pool: asyncpg.Pool | None = None) -> int:
     """osiris team [--seat <handle>]: a manager's own seats. WITHOUT --seat, calls the MCP
-    tool over the wire, self-scoped off the caller's own held seat -- a bare terminal
-    session (no mount of its own) gets team()'s own "mount first" refusal, the named gap
-    from the read triangle (decision f49d8803). WITH --seat: the gap's own fix (thread
-    68f1bafa/642c4754) -- resolves the handle to a seat DIRECTLY against postgres (same
-    "resolve then call the shared logic" shape cmd_stop's own operator lane already uses
-    for trigger.stop_seat) and calls seats.team_roster, the identical query team() itself
-    calls, never a second copy -- WITHOUT changing team()'s own self-scoped MCP contract."""
+    tool over the wire, self-scoped off the caller's own held seat: a bare terminal
+    session (no mount of its own) gets team()'s own "mount first" refusal. WITH --seat,
+    resolves the handle to a seat DIRECTLY against postgres (the same "resolve then call
+    the shared logic" shape cmd_stop's own operator lane already uses for
+    trigger.stop_seat) and calls seats.team_roster, the identical query team() itself
+    calls, never a second copy, without changing team()'s own self-scoped MCP contract."""
     from src import cli_render as render
 
     if seat is None:
@@ -2592,9 +2565,9 @@ async def cmd_team(*, seat: str | None = None, as_json: bool = False, text: bool
     if not rows:
         print(f"osiris team: {mgr['handle']} manages no seats", file=sys.stderr)
         return 1
-    # SAME TEXT SHAPE THE MCP ROUTE RENDERS (thread bad45d61): render_team_text is the one
-    # hand-designed shape for this row set, called from mcp_server.py's own team() — reused
-    # here verbatim rather than re-derived, exactly the discipline this thread names.
+    # SAME TEXT SHAPE THE MCP ROUTE RENDERS: render_team_text is the one hand-designed
+    # shape for this row set, called from mcp_server.py's own team(), reused here verbatim
+    # rather than re-derived.
     from src.orchestrator.textrender import render_team_text
 
     rendered = render_team_text(rows)
@@ -2607,12 +2580,12 @@ async def cmd_team(*, seat: str | None = None, as_json: bool = False, text: bool
     return 0
 
 
-# --- inbox (thread 68f1bafa/3703a3a9, the read triangle's own new console face; `desk` is
-# the operator's own organized queue, this is an ORDINARY project's mailbox) -----------------
+# --- inbox (`desk` is the operator's own organized queue; this is an ORDINARY project's
+# mailbox) --------------------------------------------------------------------------------
 
 async def cmd_inbox(*, project: str, as_json: bool = False, text: bool = False) -> int:
     """osiris inbox --project <repo>: a peek at a project's own mailbox, terminal-native.
-    Always a peek (never leases) -- settling mail is an agent's own act mid-session, not
+    Always a peek (never leases): settling mail is an agent's own act mid-session, not
     a human glancing from a terminal."""
     url = await _mcp_url()
     return await _call_and_emit_text(
@@ -2620,24 +2593,23 @@ async def cmd_inbox(*, project: str, as_json: bool = False, text: bool = False) 
         title=f"inbox · {project}", error_prefix="osiris inbox", text_only=text)
 
 
-# --- desk / show — READING THE RECORD (thread 00913be9, Thoth's CLI-surface audit): the
-# CLI shipped 22 write-shaped subcommands and zero read-shaped ones over the record itself
-# (mail, threads, decisions) — a human at his own terminal could WRITE annotate-thread but
-# could not read his own desk. #138's own lesson applied: both capabilities already existed
-# as MCP tools (inbox(project='operator', peek=True) already IS the organized desk;
-# recall(ref) already IS the untruncated single-object read) — this only NAMES them as CLI
-# entry points, the same call_mcp_tool + render.emit shape fleet/roster already use. Nothing new
-# was built underneath; the surface decision was which two, not which seven. --------------
+# --- desk / show: READING THE RECORD. A CLI-surface audit found it had shipped many
+# write-shaped subcommands and zero read-shaped ones over the record itself (mail,
+# threads, decisions): a human at their own terminal could WRITE annotate-thread but
+# could not read their own desk. Both capabilities already existed as MCP tools
+# (inbox(project='operator', peek=True) already IS the organized desk; recall(ref) already
+# IS the untruncated single-object read); this only NAMES them as CLI entry points, the
+# same call_mcp_tool + render.emit shape fleet/roster already use. Nothing new was built
+# underneath; the surface decision was which two to expose. -------------------------------
 
 async def cmd_desk(*, as_json: bool = False, text: bool = False) -> int:
-    """osiris desk — the operator's own organized queue, read at a terminal instead of only
-    the web console or an agent peeking on his behalf. Always a peek: reading the desk never
-    leases a brief, and settling one is only ever the operator's own explicit word.
+    """osiris desk: the operator's own organized queue, read at a terminal instead of only
+    the web console or an agent peeking on their behalf. Always a peek: reading the desk
+    never leases a brief, and settling one is only ever the operator's own explicit word.
 
-    Routed through `_call_and_emit_text` (thread bad45d61's own discipline, previously
-    missed here): human mode now asks the server for its own `render='text'` shape and
-    paints THAT, the same fix roster/threads/backlog/team already carry — needed for
-    `--text` (the zero-token read hook, Thoth mail 11780 item B) to have a real server
+    Routed through `_call_and_emit_text`: human mode asks the server for its own
+    `render='text'` shape and paints THAT, the same fix roster/threads/backlog/team
+    already carry, needed for `--text` (the zero-token read hook) to have a real server
     string to print verbatim rather than reconstructing one client-side."""
     url = await _mcp_url()
     return await _call_and_emit_text(
@@ -2646,8 +2618,8 @@ async def cmd_desk(*, as_json: bool = False, text: bool = False) -> int:
 
 
 async def cmd_show(ref: str, *, as_json: bool = False, text: bool = False) -> int:
-    """osiris show <ref> — the full, untruncated record for one Thread or Decision, by
-    UUID, 8-char short id, or summary substring — the same recall() an agent already reads.
+    """osiris show <ref>: the full, untruncated record for one Thread or Decision, by
+    UUID, short id, or summary substring, the same recall() an agent already reads.
     Refuses loudly (never guesses) when nothing matches; exits nonzero either way a script
     can check."""
     from src import cli_render as render
@@ -2659,7 +2631,7 @@ async def cmd_show(ref: str, *, as_json: bool = False, text: bool = False) -> in
         print(f"osiris show: {result}. Is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
-    # recall() has no server-side render='text' shape — same fallback note as cmd_search.
+    # recall() has no server-side render='text' shape: same fallback note as cmd_search.
     render.emit(result, as_json=as_json and not text, title=f"show · {ref}")
     return 1 if result.get("error") else 0
 
@@ -2673,10 +2645,10 @@ UnitStartTimestamps = Callable[[list[str]], Awaitable[dict[str, str]]]
 
 
 def user_unit_sources(repo_root: Path) -> list[Path]:
-    """Every dev-box systemd USER unit `osiris deploy` owns — deploy/user/*.service (thread
-    e6fd3772 piece 3-infra). These were, before this, five hand-installed units this box's own
-    operator diverged by hand from deploy/{osiris-mcp,osiris-worker}.service (the /opt SYSTEM
-    templates, a different shape entirely: User=/EnvironmentFile=/opt paths) — nothing in git
+    """Every dev-box systemd USER unit `osiris deploy` owns: deploy/user/*.service.
+    These were, before this, five hand-installed units this box's own operator diverged by
+    hand from deploy/{osiris-mcp,osiris-worker}.service (the /opt SYSTEM templates, a
+    different shape entirely: User=/EnvironmentFile=/opt paths), so nothing in git
     was ever the box's actual running config. deploy/user/ is the single source of truth now;
     a fresh name here is picked up automatically, same as `oneshot_deployed_scripts` above."""
     d = repo_root / "deploy" / "user"
@@ -2686,35 +2658,33 @@ def user_unit_sources(repo_root: Path) -> list[Path]:
 
 
 def deploy_unit_names(repo_root: Path) -> list[str]:
-    """The units `osiris deploy` restarts — DERIVED from `user_unit_sources` (deploy/
-    user/*.service), NEVER hand-listed (Thoth's ruling, thread 2a280e07's own follow-up):
-    a unit that owns `deploy/user/<name>.service` and never appears in a SEPARATE,
-    hand-maintained restart list can silently keep running whatever code was loaded at
-    its own last restart — however many `osiris deploy` runs land on main after it. Live
-    specimen: `osiris-pulse` was already installed via `deploy/user/osiris-pulse.service`
-    (and covered by `install_units`, `_REQUIRED_UNIT_ENV`'s own contract test) but was
-    NEVER in the old hand-typed `DEPLOY_UNITS` tuple this function replaces — two full
-    days and two separate merged fixes (the reassertion kernel guard, the four
-    reasserting sources) ran against its resident, pre-fix process before anyone noticed,
-    found only by chasing a live measurement that didn't move. Every unit this repo
-    installs is now, structurally, a unit this repo restarts — there is no second list
-    to fall out of sync with the first."""
+    """The units `osiris deploy` restarts: DERIVED from `user_unit_sources` (deploy/
+    user/*.service), NEVER hand-listed. A unit that owns `deploy/user/<name>.service` and
+    never appears in a SEPARATE, hand-maintained restart list can silently keep running
+    whatever code was loaded at its own last restart, however many `osiris deploy` runs
+    land on main after it. Live specimen: `osiris-pulse` was already installed via
+    `deploy/user/osiris-pulse.service` (and covered by `install_units`,
+    `_REQUIRED_UNIT_ENV`'s own contract test) but was NEVER in the old hand-typed
+    `DEPLOY_UNITS` tuple this function replaces: two full days and two separate merged
+    fixes ran against its resident, pre-fix process before anyone noticed, found only by
+    chasing a live measurement that didn't move. Every unit this repo installs is now,
+    structurally, a unit this repo restarts; there is no second list to fall out of sync
+    with the first."""
     return [p.stem for p in user_unit_sources(repo_root)]
 
 
 def _placeholder_unit_reason(text: str, repo_root: Path) -> str | None:
     """A reason string when a unit file's own content looks like a stand-in rather than
-    a real unit — the exact shape of a live incident (Thoth mail 10242): a test's own
-    30-byte fixture (`[Service]\\nExecStart=/bin/true\\n`), run through the REAL
-    installer with `Path.home` unpatched, silently overwrote this box's actual
-    osiris-mcp/osiris-pulse units and left them dead across a reboot. None when the
-    unit looks real.
+    a real unit: this is the exact shape of a live incident where a test's own 30-byte
+    fixture (`[Service]\\nExecStart=/bin/true\\n`), run through the REAL installer with
+    `Path.home` unpatched, silently overwrote this box's actual osiris-mcp/osiris-pulse
+    units and left them dead across a reboot. None when the unit looks real.
 
     Two checks, either one enough to refuse: no `[Unit]` `Description=` line (every
     real unit in deploy/user/ has one, a bare `[Service]` stub never does); or an
-    `ExecStart=` that names neither `%h` (systemd's own home specifier — every real
+    `ExecStart=` that names neither `%h` (systemd's own home specifier: every real
     unit here points ExecStart at `%h/code/osiris/...`) nor this repo's own checkout
-    path — `/bin/true` or any other bare system binary matches neither."""
+    path, since `/bin/true` or any other bare system binary matches neither."""
     if "Description=" not in text:
         return "no [Unit] Description= line"
     execstart = next(
@@ -2731,15 +2701,15 @@ def _placeholder_unit_reason(text: str, repo_root: Path) -> str | None:
 
 
 async def _rendered_user_unit_contents(repo_root: Path) -> dict[str, str]:
-    """Stage deploy/user/*.service through scripts/render_units.py first (WAVE 22, ruling
-    7be61879, thread 40d6eef3) — a SUBPROCESS call against `repo_root`'s own venv/script,
-    same shape install_prune_timers.sh's own RENDER_DIR pattern already uses for the timer
-    lane, deliberately NOT an in-process import: a synthetic test repo_root with no .venv/
-    or no scripts/render_units.py (predating this wave) then fails the subprocess exec
-    itself, naturally falling back — no live DB is ever reached from a repo that never
-    shipped this script, the same isolation the timer lane's own tests already rely on.
-    ANY failure returns an EMPTY dict; the caller falls back to the raw shipped file
-    untouched — a config-layer hiccup must never block a deploy's own unit install."""
+    """Stage deploy/user/*.service through scripts/render_units.py first: a SUBPROCESS call
+    against `repo_root`'s own venv/script, the same shape install_prune_timers.sh's own
+    RENDER_DIR pattern already uses for the timer lane, deliberately NOT an in-process
+    import: a synthetic test repo_root with no .venv/ or no scripts/render_units.py then
+    fails the subprocess exec itself, naturally falling back, so no live DB is ever reached
+    from a repo that never shipped this script, the same isolation the timer lane's own
+    tests already rely on. ANY failure returns an EMPTY dict; the caller falls back to the
+    raw shipped file untouched, since a config-layer hiccup must never block a deploy's own
+    unit install."""
     import tempfile
 
     try:
@@ -2769,31 +2739,30 @@ async def _rendered_user_unit_contents(repo_root: Path) -> dict[str, str]:
 
 async def _real_install_user_units(repo_root: Path) -> list[str]:
     """Copies deploy/user/*.service over ~/.config/systemd/user/ (creating the dir if this is
-    a fresh box) and daemon-reloads ONLY if something actually changed — an idle box's every
+    a fresh box) and daemon-reloads ONLY if something actually changed: an idle box's every
     deploy should not spam a reload it doesn't need. The RENDERED content is the source of
-    truth when rendering succeeds (WAVE 22: MemoryMax/--watch/--host/--port substituted in
-    from the settings registry, same "the panel writes it, deploy makes it real" shape the
-    timer lane already has); systemd's own %h/%u specifiers still resolve at activation
+    truth when rendering succeeds (MemoryMax/--watch/--host/--port substituted in
+    from the settings registry, the same "the panel writes it, deploy makes it real" shape
+    the timer lane already has); systemd's own %h/%u specifiers still resolve at activation
     time regardless, untouched by this step.
 
     A `repo_root` with no deploy/user/ (a test's own tmp_path, or a checkout that predates
-    this) touches NOTHING outside itself — no directory created, no real ~/.config read —
+    this) touches NOTHING outside itself, no directory created, no real ~/.config read,
     rather than silently mkdir-ing into the real caller's home on every such call.
 
-    REFUSES THE WHOLE BATCH (Thoth mail 10242, a live incident — see
-    `_placeholder_unit_reason`'s own docstring) rather than installing any of it the
-    moment ONE source file looks like a placeholder: notes named `unit: REFUSED ...`
-    are the signal `cmd_deploy` gates the restart on, same law as its own silent-no-op
-    guard. Every real unit this repo ships passes both checks today.
+    REFUSES THE WHOLE BATCH (see `_placeholder_unit_reason`'s own docstring for the live
+    incident this guards against) rather than installing any of it the moment ONE source
+    file looks like a placeholder: notes named `unit: REFUSED ...` are the signal
+    `cmd_deploy` gates the restart on, same law as its own silent-no-op guard. Every real
+    unit this repo ships passes both checks today.
 
-    THE PLACEHOLDER CHECK RUNS ON THE RENDERED CONTENT (Thoth's own ruling, mail
-    10247/10261/10284, WAVE 22): render_units.py's own `_looks_like_a_real_unit` guard
-    already refuses a corrupting substitution at ITS layer, but this refusal is the
-    LAST line of defense before anything actually reaches disk — checking the raw
-    shipped source instead of what render actually produced would let a future
-    rendering bug (in this script, or a new substitution added later) slip a stub
+    THE PLACEHOLDER CHECK RUNS ON THE RENDERED CONTENT: render_units.py's own
+    `_looks_like_a_real_unit` guard already refuses a corrupting substitution at ITS layer,
+    but this refusal is the LAST line of defense before anything actually reaches disk.
+    Checking the raw shipped source instead of what render actually produced would let a
+    future rendering bug (in this script, or a new substitution added later) slip a stub
     unit past both guards. `rendered.get(name, src.read_text())` is computed ONCE and
-    reused for both the placeholder check and the install below — never re-rendered,
+    reused for both the placeholder check and the install below, never re-rendered,
     never re-read."""
     sources = user_unit_sources(repo_root)
     if not sources:
@@ -2837,13 +2806,13 @@ async def _real_install_user_units(repo_root: Path) -> list[str]:
 
 def unit_install_drift(repo_root: Path) -> dict[str, str]:
     """Per-unit drift between deploy/user/<name> (source of truth) and whatever is
-    actually installed at ~/.config/systemd/user/<name> right now — Khnum's own
-    boot-heal oneshot and `osiris boot-status` (ruling aaa8e841, REBOOT SURVIVAL
-    RULED) call this directly rather than re-deriving the comparison this installer
-    already knows how to make. One entry per unit named by `user_unit_sources`:
-    'missing' (not installed at all), 'drifted' (installed but byte-different from
-    source), or 'ok' (installed, byte-identical). Pure and read-only — never writes,
-    never daemon-reloads; `_real_install_user_units` is the only writer."""
+    actually installed at ~/.config/systemd/user/<name> right now. The boot-heal
+    oneshot and `osiris boot-status` call this directly rather than re-deriving the
+    comparison this installer already knows how to make. One entry per unit named by
+    `user_unit_sources`: 'missing' (not installed at all), 'drifted' (installed but
+    byte-different from source), or 'ok' (installed, byte-identical). Pure and
+    read-only: never writes, never daemon-reloads; `_real_install_user_units` is the
+    only writer."""
     target_dir = Path.home() / ".config" / "systemd" / "user"
     out: dict[str, str] = {}
     for src in user_unit_sources(repo_root):
@@ -2858,12 +2827,12 @@ def unit_install_drift(repo_root: Path) -> dict[str, str]:
 
 
 def _find_repo_root(start: Path | None = None) -> Path | None:
-    """`git rev-parse --show-toplevel` from `start` (default CWD) — reuses git's own worktree
+    """`git rev-parse --show-toplevel` from `start` (default CWD): reuses git's own worktree
     resolution rather than hand-walking for `.git`, so it works from any subdirectory of the
     checkout, not just its root. None (never a raised exception) when CWD isn't inside a git
-    repo at all — deploy is inherently tied to a specific checkout, unlike the DB/daemon/MCP-
+    repo at all. Deploy is inherently tied to a specific checkout, unlike the DB/daemon/MCP-
     backed subcommands above, which is why this is the one place a bare CWD dependency is
-    correct rather than the bug task #69 otherwise closes."""
+    correct rather than a bug."""
     import subprocess
 
     try:
@@ -2879,7 +2848,7 @@ def _find_repo_root(start: Path | None = None) -> Path | None:
 
 def _real_git_status(repo_root: Path) -> list[tuple[str, str]]:
     """(status_code, path) for every line of `git status --porcelain`, path relative to
-    `repo_root`. `--porcelain` is stable, script-friendly output — not `git status`'s own
+    `repo_root`. `--porcelain` is stable, script-friendly output, not `git status`'s own
     human-formatted default."""
     import subprocess
 
@@ -2895,21 +2864,21 @@ def _real_git_status(repo_root: Path) -> list[tuple[str, str]]:
 
 
 def dirty_tracked_src_files(status: list[tuple[str, str]]) -> list[str]:
-    """Tracked (never `??` — a brand-new untracked file is imported by nothing yet, so it
+    """Tracked (never `??`: a brand-new untracked file is imported by nothing yet, so it
     cannot be a half-shipped edit to already-running code) src/ files with a staged or
     unstaged modification. This is the exact shape of the near-miss the guard exists for:
-    src/orchestrator/handshake.py carrying another agent's uncommitted WIP while the three
-    services import straight from the working tree."""
+    src/orchestrator/handshake.py carrying uncommitted WIP while the three services
+    import straight from the working tree."""
     return sorted(path for code, path in status if path.startswith("src/") and code != "??")
 
 
 def oneshot_deployed_scripts(repo_root: Path) -> dict[str, str]:
     """script path (repo-relative) -> unit name, for every `Type=oneshot` unit under deploy/
-    whose ExecStart names a scripts/ file — the COMMIT-DEPLOYED class (operator ruling via
-    Thoth, msg 1481): a oneshot timer reads its script fresh off disk at every fire, so
-    nothing about a restart (or a hold) gates it — the commit (or even just the working
-    tree, if uncommitted) IS the deploy. Derived from deploy/*.service rather than a
-    hardcoded list, so a newly added oneshot unit is picked up automatically."""
+    whose ExecStart names a scripts/ file: the COMMIT-DEPLOYED class. A oneshot timer reads
+    its script fresh off disk at every fire, so nothing about a restart (or a hold) gates
+    it; the commit (or even just the working tree, if uncommitted) IS the deploy. Derived
+    from deploy/*.service rather than a hardcoded list, so a newly added oneshot unit is
+    picked up automatically."""
     import re
 
     out: dict[str, str] = {}
@@ -2927,7 +2896,7 @@ def oneshot_deployed_scripts(repo_root: Path) -> dict[str, str]:
 
 
 def commit_deployed_notes(status: list[tuple[str, str]], oneshot: dict[str, str]) -> list[str]:
-    """For every dirty (staged OR unstaged, `??` included — an uncommitted NEW oneshot script
+    """For every dirty (staged OR unstaged, `??` included: an uncommitted NEW oneshot script
     is just as immediately live as a modified one) path that backs a known oneshot unit, name
     it plainly: this is not gated by anything `osiris deploy` does."""
     notes = []
@@ -2942,7 +2911,7 @@ def commit_deployed_notes(status: list[tuple[str, str]], oneshot: dict[str, str]
 
 
 async def _real_restart_services(units: list[str]) -> tuple[int, str]:
-    """The one place this module ever actually restarts a service — `systemctl --user
+    """The one place this module ever actually restarts a service: `systemctl --user
     restart`. Every test of the surrounding deploy logic injects a fake here instead."""
     proc = await asyncio.create_subprocess_exec(
         "systemctl", "--user", "restart", *units,
@@ -2951,10 +2920,10 @@ async def _real_restart_services(units: list[str]) -> tuple[int, str]:
     return proc.returncode or 0, out.decode(errors="replace")
 
 
-# --- smoke --reboot: REBOOT SURVIVAL's own drill (thread 194eac83, operator ruling aaa8e841) --
+# --- smoke --reboot: the REBOOT SURVIVAL drill ---------------------------------------------
 
-# Dependency order: boot-heal repairs unit drift first (never blocks the daemons — it
-# carries no Requires=, only Before= — but restarting it FIRST here mirrors what a real
+# Dependency order: boot-heal repairs unit drift first (never blocks the daemons: it
+# carries no Requires=, only Before=, but restarting it FIRST here mirrors what a real
 # boot does), then the daemons whose own :5601 ExecStartPre wait already makes them
 # tolerant of postgres answering late.
 _REBOOT_UNITS_ORDER = (
@@ -2963,10 +2932,10 @@ _REBOOT_UNITS_ORDER = (
 
 
 def _port_open_probe(host: str, port: int) -> Callable[[], Awaitable[bool]]:
-    """A zero-arg bool probe for `_wait_for_health`'s own generic bounded-backoff poll —
+    """A zero-arg bool probe for `_wait_for_health`'s own generic bounded-backoff poll,
     reused here rather than a second poll loop, parametrized to a bare TCP connect
-    instead of console's own /health GET. False on ANY failure (refused, timed out) —
-    not up yet, same discipline `_health_probe` already holds."""
+    instead of console's own /health GET. False on ANY failure (refused, timed out)
+    means not up yet, the same discipline `_health_probe` already holds."""
     async def _probe() -> bool:
         try:
             _, writer = await asyncio.wait_for(
@@ -2984,7 +2953,7 @@ def _worker_heartbeat_probe(
     pool: asyncpg.Pool, *, fresh_within_secs: float,
 ) -> Callable[[], Awaitable[bool]]:
     """A zero-arg bool probe reading the SAME dead-man's-switch watermark
-    `monitor.heartbeat_age_secs` already exposes — never a second liveness read for the
+    `monitor.heartbeat_age_secs` already exposes, never a second liveness read for the
     worker. Fresh means the worker ticked at least once inside the budget since this
     drill started restarting it, not merely that a stale pre-restart beat still exists."""
     async def _probe() -> bool:
@@ -3000,15 +2969,14 @@ async def cmd_smoke_reboot(
     port_open_probe: Callable[[str, int], Callable[[], Awaitable[bool]]] = _port_open_probe,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> int:
-    """osiris smoke --reboot — the reboot drill (REBOOT SURVIVAL, thread 194eac83,
-    operator ruling aaa8e841): restarts every unit in dependency order
+    """osiris smoke --reboot: the reboot drill. Restarts every unit in dependency order
     (`_REBOOT_UNITS_ORDER`) via the SAME `systemctl --user restart` `osiris deploy`
     itself uses, then asserts pg :5601, mcp :8790, and console :8011 each answer within
     `budget_secs`, plus the worker's own heartbeat watermark going fresh within the same
-    budget — exit 1 on any miss, naming which one. A REAL restart of REAL daemons
+    budget: exit 1 on any miss, naming which one. A REAL restart of REAL daemons
     (matching `osiris smoke --chaos`'s own already-established precedent for a
-    deliberate, operator-invoked disruptive drill) — "the drill runs live only by the
-    operator's hand" (thread 194eac83's own words), never run automatically."""
+    deliberate, operator-invoked disruptive drill), run live only by explicit operator
+    action, never run automatically."""
     print(f"osiris smoke --reboot: restarting {', '.join(_REBOOT_UNITS_ORDER)} in "
           "dependency order...")
     rc, out = await restart(list(_REBOOT_UNITS_ORDER))
@@ -3066,13 +3034,13 @@ async def cmd_smoke_reboot(
 
 
 async def _real_unit_start_timestamps(units: list[str]) -> dict[str, str]:
-    """`ExecMainStartTimestamp` for each just-restarted unit, straight from systemd — the
+    """`ExecMainStartTimestamp` for each just-restarted unit, straight from systemd: the
     deploy receipt's own PROOF a restart actually replaced the running process (a fresh
     timestamp), not merely that `systemctl restart` exited 0 (which it does even when a
     unit was already stopped, or restarts onto a crash-looping process). Named per unit
-    on the receipt so a stale-process gap (osiris-pulse's own two-day specimen, thread
-    2a280e07) is visible in the deploy log itself rather than requiring a live
-    `systemctl --user show` chase after the fact to notice."""
+    on the receipt so a stale-process gap (osiris-pulse ran on a two-day-old resident
+    process before this was caught) is visible in the deploy log itself rather than
+    requiring a live `systemctl --user show` chase after the fact to notice."""
     out: dict[str, str] = {}
     for unit in units:
         proc = await asyncio.create_subprocess_exec(
@@ -3087,14 +3055,14 @@ async def _real_unit_start_timestamps(units: list[str]) -> dict[str, str]:
 
 
 def unit_drift_notes(repo_root: Path, systemd_user_dir: Path) -> list[str]:
-    """REBOOT SURVIVAL, the units half (thread 194eac83, operator ruling aaa8e841): every
-    deploy/user/*.service source compared byte-for-byte against what's actually installed
-    at `systemd_user_dir/<name>` — the exact class of fault that took osiris-mcp and
-    osiris-pulse down after the 2026-09-13 17:26 CDT reboot (a 30-byte test stub sat
-    installed while the real unit sat correct in git, untouched since the last real
-    `osiris deploy`). Pure filesystem read, no systemctl involved — this question never
-    needs a live daemon to answer it. A source with no installed counterpart at all is
-    named NOT INSTALLED, never silently skipped."""
+    """REBOOT SURVIVAL, the units half: every deploy/user/*.service source compared
+    byte-for-byte against what's actually installed at `systemd_user_dir/<name>`, the
+    exact class of fault that took osiris-mcp and osiris-pulse down after the
+    2026-09-13 17:26 CDT reboot (a 30-byte test stub sat installed while the real unit
+    sat correct in git, untouched since the last real `osiris deploy`). Pure filesystem
+    read, no systemctl involved: this question never needs a live daemon to answer it.
+    A source with no installed counterpart at all is named NOT INSTALLED, never silently
+    skipped."""
     notes: list[str] = []
     for src in user_unit_sources(repo_root):
         dest = systemd_user_dir / src.name
@@ -3108,13 +3076,12 @@ def unit_drift_notes(repo_root: Path, systemd_user_dir: Path) -> list[str]:
 
 
 async def _real_unit_health(units: list[str]) -> dict[str, dict[str, str]]:
-    """{unit_stem: {"is-enabled": ..., "is-failed": ...}} — the two systemctl reads
+    """{unit_stem: {"is-enabled": ..., "is-failed": ...}}: the two systemctl reads
     `osiris boot-status --units` needs to name an ENABLED unit that is currently FAILED
-    (Thoth's own "enabled-but-dead" population, thread 194eac83), without assuming a
-    long-running daemon's own idle 'inactive' state means anything is wrong: a
-    successfully-completed oneshot (osiris-boot-heal) reports 'inactive', never 'failed',
-    so `is-failed` alone (never `is-active`) is the correct discriminator across both unit
-    shapes this repo ships."""
+    (the "enabled-but-dead" population), without assuming a long-running daemon's own
+    idle 'inactive' state means anything is wrong: a successfully-completed oneshot
+    (osiris-boot-heal) reports 'inactive', never 'failed', so `is-failed` alone (never
+    `is-active`) is the correct discriminator across both unit shapes this repo ships."""
     out: dict[str, dict[str, str]] = {}
     for unit in units:
         row: dict[str, str] = {}
@@ -3130,11 +3097,11 @@ async def _real_unit_health(units: list[str]) -> dict[str, dict[str, str]]:
 
 
 def enabled_but_dead_notes(health: dict[str, dict[str, str]]) -> list[str]:
-    """Named per Thoth's own phrase (thread 194eac83): enabled=true but failed=true — the
-    systemd state a unit reaches when it never even attempted to run this boot (or tried
-    and gave up). StartLimitIntervalSec=0 on every daemon unit (this same wave) prevents
-    the crash-loop-into-permanent-failure half of that; this names the state directly
-    rather than assuming the ratchet alone is proof nothing can still land here."""
+    """Named "enabled-but-dead": enabled=true but failed=true, the systemd state a unit
+    reaches when it never even attempted to run this boot (or tried and gave up).
+    StartLimitIntervalSec=0 on every daemon unit prevents the crash-loop-into-permanent-
+    failure half of that; this names the state directly rather than assuming the ratchet
+    alone is proof nothing can still land here."""
     notes: list[str] = []
     for unit, row in health.items():
         if row.get("is-enabled") == "enabled" and row.get("is-failed") == "failed":
@@ -3143,7 +3110,7 @@ def enabled_but_dead_notes(health: dict[str, dict[str, str]]) -> list[str]:
 
 
 async def _cmd_boot_status_units(*, as_json: bool = False) -> int:
-    """`osiris boot-status --units` — see `unit_drift_notes`/`enabled_but_dead_notes` for
+    """`osiris boot-status --units`: see `unit_drift_notes`/`enabled_but_dead_notes` for
     the two checks this composes. An ADDITIVE new report, never a replacement for the
     existing rollout-gap check `cmd_boot_status` already runs: a different axis (unit
     files on disk + systemctl state, no pool needed) over the same CLI verb."""
@@ -3173,7 +3140,7 @@ async def _cmd_boot_status_units(*, as_json: bool = False) -> int:
 
 def _alembic_config(repo_root: Path) -> Any | None:
     """The alembic.ini Config this repo's migrations use, or None when `repo_root` carries no
-    alembic.ini/alembic/ at all — a repo_root that isn't this project's own checkout shape.
+    alembic.ini/alembic/ at all: a repo_root that isn't this project's own checkout shape.
     Shared by `_alembic_head` (disk-only, no DB) and `_real_run_migrations` (actually applies
     them) so both read the exact same script_location."""
     from alembic.config import Config
@@ -3186,9 +3153,9 @@ def _alembic_config(repo_root: Path) -> Any | None:
 
 
 def _alembic_head(repo_root: Path) -> str | None:
-    """The latest migration's own revision id, read off the version files on disk — no DB
+    """The latest migration's own revision id, read off the version files on disk: no DB
     connection needed for this half of the comparison. None (never a raised CommandError)
-    when `repo_root` carries no alembic.ini/alembic/ at all — a repo_root that isn't this
+    when `repo_root` carries no alembic.ini/alembic/ at all: a repo_root that isn't this
     project's own checkout shape is a different problem than a migration gap, and
     alembic_gap_note treats None as 'could not be determined', never as a false mismatch."""
     from alembic.script import ScriptDirectory
@@ -3204,13 +3171,13 @@ def _alembic_head(repo_root: Path) -> str | None:
 
 
 def composition_gap_notes(have: set[str], expected: set[str]) -> list[str]:
-    """NAME-set difference, never a count (thread a25365a9): a `db_count >= expected`
+    """NAME-set difference, never a count: a `db_count >= expected`
     comparison cannot fail in the direction it exists to detect, because the same table
-    also holds user-saved compositions — eleven of them, measured live, alongside the 24
+    also holds user-saved compositions, eleven of them, measured live, alongside the 24
     defaults. Up to eleven vanished defaults would still read "up to date" under a count
     check, and it silently did, on two consecutive deploys. One note per missing default,
     naming it, so `osiris seed --compositions-only` is an instruction a reader can act on
-    rather than a hope. Extra rows (user-saved or otherwise) never mask a gap here — only
+    rather than a hope. Extra rows (user-saved or otherwise) never mask a gap here: only
     a name present in `expected` and absent from `have` counts as one."""
     return [f"compositions: default {name!r} missing from the DB, run `osiris seed` "
             "(or `osiris seed --compositions-only`)." for name in sorted(expected - have)]
@@ -3219,21 +3186,20 @@ def composition_gap_notes(have: set[str], expected: set[str]) -> list[str]:
 def composition_drift_notes(
     live_specs: dict[str, Any], expected: dict[str, dict[str, Any]],
 ) -> list[str]:
-    """MISSING-OR-DIFFERENT, not just missing (obligation e4612853, ruling 38c71544 — "two
-    records of one truth with no reconciler": DEFAULT_COMPOSITIONS's Python constant and a
+    """MISSING-OR-DIFFERENT, not just missing: DEFAULT_COMPOSITIONS's Python constant and a
     composition's own DB row are synced ONLY by someone remembering the separate manual
     `osiris seed --compositions-only` step; nothing enforces it and, until this, nothing
-    detected skipping it). A real instance: a346a0d edited PROJECT_BRIEFING's columns in
-    source, the commit landed, the deploy was green, and the live 'project-briefing' row
-    kept serving the pre-edit spec for hours — every instrument said success; the read was
-    stale (fixed live, ruling 143899e1).
+    detected skipping it. This is "two records of one truth with no reconciler" in practice.
+    A real instance: a commit edited PROJECT_BRIEFING's columns in source, the deploy was
+    green, and the live 'project-briefing' row kept serving the pre-edit spec for hours;
+    every instrument said success, but the read was stale.
 
     NAME every drifted composition, never a bare count (same law composition_gap_notes
-    already established, thread a25365a9) — a count can't be acted on; a name can.
+    already established): a count can't be acted on; a name can.
 
     CANNOT DISTINGUISH a forgotten re-save from a DELIBERATE live hand-edit in the composer
     (both travel through the identical save_composition() write path, and the DB row carries
-    no marker of which happened) — stated here rather than guessed at with a heuristic that
+    no marker of which happened): stated here rather than guessed at with a heuristic that
     would eventually cry wolf on legitimate forks and get ignored. A composition present in
     `expected` but absent from `live_specs` is composition_gap_notes' own job, silently
     skipped here to keep the two checks from double-reporting the same row."""
@@ -3258,12 +3224,12 @@ def alembic_gap_note(current: str | None, head: str | None) -> str | None:
 
 
 def _alembic_revision_known(repo_root: Path, revision: str) -> bool | None:
-    """Whether `revision` exists as a script anywhere in THIS TREE's own alembic chain —
+    """Whether `revision` exists as a script anywhere in THIS TREE's own alembic chain.
     None (undeterminable, e.g. no alembic.ini here) on any load failure, never a false
     confident answer, same fail-open discipline as `_alembic_head`. This is the disk-only
-    half of the exact question decision 8d3f5e2d names: a revision the live DB carries but
-    this tree's script directory has never heard of means some OTHER branch's migration ran
-    against shared DATABASE_URL before merging."""
+    half of a broader question: a revision the live DB carries but this tree's script
+    directory has never heard of means some OTHER branch's migration ran against shared
+    DATABASE_URL before merging."""
     from alembic.script import ScriptDirectory
     from alembic.util.exc import CommandError
 
@@ -3278,34 +3244,33 @@ def _alembic_revision_known(repo_root: Path, revision: str) -> bool | None:
 
 
 async def _composition_gaps(pool: asyncpg.Pool) -> list[str]:
-    """Composition seeding only — the alembic half moved to `_apply_pending_migrations`
-    (thread c4681c38 leg 2), which now runs BEFORE the restart rather than being reported
-    alongside this end-of-deploy note. REPORTS by name, never AUTO-SEEDS (thread a25365a9's
-    own ask, argued in the commit this lands with): `seed_default_compositions` upserts
-    every default's spec unconditionally, including ones already present — running it
-    automatically on every deploy would silently overwrite a default a human hand-edited
-    live in the composer (the whole point of a composition being forkable/savable), trading
-    today's dishonest-but-passive miscount for a silent, active clobber. A migration auto-
-    applies safely because it replays a reviewed, versioned script; a composition auto-seed
-    would replay code OVER whatever the DB now holds under that name. Reporting by name
-    keeps the fix in the same class as the ratchet: name what's missing, let a human decide.
+    """Composition seeding only: the alembic half moved to `_apply_pending_migrations`,
+    which now runs BEFORE the restart rather than being reported alongside this
+    end-of-deploy note. REPORTS by name, never AUTO-SEEDS: `seed_default_compositions`
+    upserts every default's spec unconditionally, including ones already present, so
+    running it automatically on every deploy would silently overwrite a default a human
+    hand-edited live in the composer (the whole point of a composition being
+    forkable/savable), trading today's dishonest-but-passive miscount for a silent, active
+    clobber. A migration auto-applies safely because it replays a reviewed, versioned
+    script; a composition auto-seed would replay code OVER whatever the DB now holds under
+    that name. Reporting by name keeps the fix in the same class as the ratchet: name
+    what's missing, let a human decide.
 
-    ALSO CHECKS DRIFT, NOT ONLY ABSENCE (obligation e4612853, ruling 38c71544) — a composition
-    can EXIST under the right name and still be silently stale: `composition_drift_notes`
-    compares each DEFAULT_COMPOSITIONS entry's spec against the live DB row's own spec,
-    exhaustively, name by name. Measured live before this shipped: 0/29 currently drifted —
-    but that baseline is the CHEAPEST moment this check will ever have (any future nonzero
-    reading is unambiguous new drift, not archaeology through a pre-existing backlog). Same
-    ALARM-not-refuse posture as every other note this function returns: `cmd_deploy` prints
-    these under "UN-RUN STEPS:" and never touches its own exit code over them — a drifted
-    composition is a stale READ, not corruption, and refusing an unrelated deploy over it
-    would repeat the exact false-refusal cost core.hooksPath's own finding (ruling d4e65da0)
-    already proved real tonight.
+    ALSO CHECKS DRIFT, NOT ONLY ABSENCE: a composition can EXIST under the right name and
+    still be silently stale: `composition_drift_notes` compares each DEFAULT_COMPOSITIONS
+    entry's spec against the live DB row's own spec, exhaustively, name by name. Measured
+    live before this shipped: 0/29 currently drifted, but that baseline is the CHEAPEST
+    moment this check will ever have (any future nonzero reading is unambiguous new drift,
+    not archaeology through a pre-existing backlog). Same ALARM-not-refuse posture as every
+    other note this function returns: `cmd_deploy` prints these under "UN-RUN STEPS:" and
+    never touches its own exit code over them: a drifted composition is a stale READ, not
+    corruption, and refusing an unrelated deploy over it would repeat a false-refusal cost
+    already proved real elsewhere in this codebase (core.hooksPath's own finding).
 
-    ROOM RETIREMENT (decision 31717ca7): this used to also name every composition with
-    room_id IS NULL (ruling 89e67c49) — a NULL room_id was a defect back when rooms scoped
-    visibility. Rooms are retired now: room_id IS NULL is the correct, universal state for
-    every composition, not a gap to report."""
+    ROOM RETIREMENT: this used to also name every composition with room_id IS NULL, since a
+    NULL room_id was a defect back when rooms scoped visibility. Rooms are retired now:
+    room_id IS NULL is the correct, universal state for every composition, not a gap to
+    report."""
     from src.orchestrator.compositions import DEFAULT_COMPOSITIONS
 
     rows = await pool.fetch("SELECT name, spec FROM compositions")
@@ -3318,20 +3283,20 @@ async def _composition_gaps(pool: asyncpg.Pool) -> list[str]:
 
 
 async def _run_casefold_automerge(pool: asyncpg.Pool) -> list[str]:
-    """#108 PIECE 2 WIRING (obligation 5f7dfebb, operator ruling 22d47acb + the standing
-    word "capitalization merging should be automatic not bottlenecked by me") — the ONE
-    trigger site casefold_auto_merge_candidates' own docstring said nobody had built yet.
-    A post-migration deploy step, not tied to the restart: this only ever touches the
+    """Automatic casefold-duplicate merging on deploy: the ONE trigger site
+    casefold_auto_merge_candidates' own docstring said nobody had built yet. A
+    post-migration deploy step, not tied to the restart: this only ever touches the
     graph (SoftwareProject casefold twins), never code or a running service, so it runs
     once migrations are confirmed applied and well before anything restarts.
 
-    ALWAYS surveys (dry-run report, every candidate and every skip named — never a
-    silent drop, matching the underlying verb's own law). EXECUTES BY DEFAULT — the
-    operator's own word: "automatic, not bottlenecked by me". `osiris deploy` is hand-
-    invoked with no wrapper/cron to hang a "set it in the deploy env" on, so the flip is
-    the default itself: OSIRIS_CASEFOLD_AUTOMERGE=0 opts a run OUT (any other value,
-    including unset, executes). Either way every candidate goes through the SAME
-    normalize_project_casing/merge() call with its own belief-gate — this function never
+    ALWAYS surveys (dry-run report, every candidate and every skip named, never a
+    silent drop, matching the underlying verb's own law). EXECUTES BY DEFAULT, per the
+    standing requirement that capitalization merging be automatic rather than
+    bottlenecked on a human. `osiris deploy` is hand-invoked with no wrapper/cron to hang
+    a "set it in the deploy env" on, so the flip is the default itself:
+    OSIRIS_CASEFOLD_AUTOMERGE=0 opts a run OUT (any other value, including unset,
+    executes). Either way every candidate goes through the SAME
+    normalize_project_casing/merge() call with its own belief-gate: this function never
     re-derives that logic, only decides whether to pass execute."""
     from src.actions.core import Actions
     from src.orchestrator.projects import casefold_auto_merge_candidates
@@ -3348,9 +3313,9 @@ async def _run_casefold_automerge(pool: asyncpg.Pool) -> list[str]:
                      f"{c['correct_case']!r})")
         live = c.get("result", {}).get("live_session_repointed")
         if live:
-            # THE EXCEPTION'S PRICE (decision 7fe20cc5): this call runs force=True
+            # THE EXCEPTION'S PRICE: this call runs force=True
             # permanently, so a live session's own agent_mounts.project row getting
-            # re-pointed is never silent — it lands in deploy output, every time.
+            # re-pointed is never silent: it lands in deploy output, every time.
             notes.append(f"    NOTE: live session {live} was mounted on the phantom "
                          "side and had its project attribution re-pointed by this "
                          "automatic merge")
@@ -3360,7 +3325,7 @@ async def _run_casefold_automerge(pool: asyncpg.Pool) -> list[str]:
 
 
 async def _run_pg_autotune_on_deploy(pool: asyncpg.Pool) -> str:
-    """Ruling 45b251ed leg (a) - recomputes Postgres GUCs from THIS host's live RAM/CPU
+    """Recomputes Postgres GUCs from THIS host's live RAM/CPU
     and the measured daemon envelope on every deploy, not just on the daily timer
     (deploy/osiris-pg-autotune.timer). Fail-open like every other deploy-time check
     beside it: a tuning failure degrades to a printed note, never blocks or fails the
@@ -3389,15 +3354,14 @@ async def _run_pg_autotune_on_deploy(pool: asyncpg.Pool) -> str:
 
 
 async def _run_remote_url_automerge(pool: asyncpg.Pool) -> list[str]:
-    """#108 PIECE 3 WIRING, conservative first cut (scope: decision 2ee34a9d; build:
-    Thoth's dispatch msg 4990/4973/4975) — a second post-migration deploy step beside
-    casefold's, same shape: ALWAYS surveys (every candidate/skip named, never silent).
-    EXECUTES under the SAME OSIRIS_CASEFOLD_AUTOMERGE default as piece 2 (0 opts out,
-    anything else — including unset — executes) rather than a second env var: both are
-    the same standing autonomy ruling (22d47acb) over the same class of act (a
+    """Remote-url-matched automerge, a conservative first cut: a second post-migration
+    deploy step beside casefold's, same shape: ALWAYS surveys (every candidate/skip named,
+    never silent). EXECUTES under the SAME OSIRIS_CASEFOLD_AUTOMERGE default (0 opts out,
+    anything else, including unset, executes) rather than a second env var: both are
+    the same standing autonomy policy over the same class of act (a
     deterministic-signal SoftwareProject merge with its own belief-gate), so a second
     knob would only be a second thing to forget to set. Every candidate still goes
-    through the SAME fold_project call with its own contradiction gate — this wiring
+    through the SAME fold_project call with its own contradiction gate; this wiring
     never re-derives that logic, only decides whether to pass execute."""
     from src.actions.core import Actions
     from src.orchestrator.projects import remote_url_duplicate_candidates
@@ -3417,19 +3381,18 @@ async def _run_remote_url_automerge(pool: asyncpg.Pool) -> list[str]:
 
 
 async def _run_name_alias_automerge(pool: asyncpg.Pool) -> list[str]:
-    """#108 PIECE 4 WIRING (Thoth dispatch 6547, addendum to 118a98da) — a third
-    post-migration deploy step beside casefold's and remote_url's, same shape and same
-    OSIRIS_CASEFOLD_AUTOMERGE default (0 opts out; every other value, including unset,
-    executes) — one standing autonomy ruling (22d47acb) over one class of act, never a
-    third env var to forget. Every candidate still goes through the SAME fold_project
-    call with its own contradiction gate.
+    """Name-alias-matched automerge: a third post-migration deploy step beside casefold's
+    and remote_url's, same shape and same OSIRIS_CASEFOLD_AUTOMERGE default (0 opts out;
+    every other value, including unset, executes): one standing autonomy policy over one
+    class of act, never a third env var to forget. Every candidate still goes through the
+    SAME fold_project call with its own contradiction gate.
 
-    THE RECEIPT NAMES THE STANDING PROCEDURE (item 4, Thoth's own ask): a fold that
-    executes here is also the specimen that would have made dsh00001's own
-    self-service fold (2026-08-21, ruling 31e5bae1) findable in one query instead of
-    the four this lane's own scoping took — so every executed candidate's note points
-    at 31e5bae1 directly, and names the alias that grounded it, the same way
-    dsh00001's own justification named its reason on the record."""
+    THE RECEIPT NAMES THE STANDING PROCEDURE: a fold that executes here is also the
+    specimen that would have made a prior self-service fold (2026-08-21) findable in
+    one query instead of the several this lane's own scoping took, so every executed
+    candidate's note points at that precedent directly, and names the alias that
+    grounded it, the same way that earlier fold's own justification named its reason
+    on the record."""
     from src.actions.core import Actions
     from src.orchestrator.projects import name_alias_duplicate_candidates
 
@@ -3462,16 +3425,16 @@ async def _real_migration_state(
 
 
 async def _real_run_migrations(repo_root: Path) -> None:
-    """The one place this module ever actually runs `alembic upgrade head` — IN-PROCESS via
+    """The one place this module ever actually runs `alembic upgrade head`: IN-PROCESS via
     alembic's own command API (`tests/conftest.py`'s own pattern for the test DB), never a
-    subprocess `alembic` rune: a bare `alembic` invocation connects to the prod-shaped 5432
+    subprocess `alembic` invocation: a bare `alembic` call connects to the prod-shaped 5432
     default because alembic/env.py's `os.environ.get("DATABASE_URL", ...)` sees whatever the
-    CALLING shell happened to export (usually nothing on this dev box) — exactly the class
-    ruling 45b074bf bans. Running it in-process means `apply_dev_fallback()` (already called
-    by whichever command reached here — `cmd_migrate`/`cmd_deploy`) has ALREADY set
-    os.environ["DATABASE_URL"] before this ever executes, so env.py reads the right value
-    with no rune, no passthrough, nothing for a human to get wrong. `command.upgrade` is
-    synchronous (real DDL, not worth a fake async wrapper) — off the event loop via
+    CALLING shell happened to export (usually nothing on this dev box), exactly the class
+    of environment leak this codebase bans. Running it in-process means `apply_dev_fallback()`
+    (already called by whichever command reached here, `cmd_migrate`/`cmd_deploy`) has
+    ALREADY set os.environ["DATABASE_URL"] before this ever executes, so env.py reads the
+    right value with no passthrough, nothing for a human to get wrong. `command.upgrade` is
+    synchronous (real DDL, not worth a fake async wrapper), off the event loop via
     to_thread, same discipline as every other blocking call this module makes."""
     from alembic import command
 
@@ -3486,14 +3449,14 @@ async def _apply_pending_migrations(
     state: MigrationState = _real_migration_state,
     run_migrations: MigrateRunner = _real_run_migrations,
 ) -> tuple[bool, str]:
-    """THE MIGRATION GATE (thread c4681c38 leg 2): compares FIRST and refuses-or-runs BEFORE
-    any restart, so a deploy is atomic from the schema's point of view. Batch 6's own near
+    """THE MIGRATION GATE: compares FIRST and refuses-or-runs BEFORE
+    any restart, so a deploy is atomic from the schema's point of view. A previous near
     miss is exactly what this closes: the old order restarted services onto new code, THEN
-    reported the pending migration as an end-of-deploy note — a window where new code ran
+    reported the pending migration as an end-of-deploy note, a window where new code ran
     against the old schema, surviving only because the new writes happened to be fail-open.
-    Returns (ok, note); ok=False means REFUSE — the caller must not restart anything past
-    this point. head=None (no alembic.ini under this repo_root — e.g. a test fixture's
-    tmp_path) is undeterminable, not a mismatch, and never gates — same non-blocking
+    Returns (ok, note); ok=False means REFUSE: the caller must not restart anything past
+    this point. head=None (no alembic.ini under this repo_root, e.g. a test fixture's
+    tmp_path) is undeterminable, not a mismatch, and never gates, same non-blocking
     discipline `alembic_gap_note` already establishes."""
     current, head = await state(pool, repo_root)
     gap = alembic_gap_note(current, head)
@@ -3501,13 +3464,13 @@ async def _apply_pending_migrations(
         return True, ("migrations: up to date" if head is not None else
                       "migrations: undeterminable here (no alembic.ini under this repo_root), "
                       "not gating")
-    # NAME THE ACCIDENTAL CONTROL (decision 8d3f5e2d, task #142 follow-up): this exact
-    # refusal already happened once by luck — `command.upgrade(cfg, "head")` errors when
+    # NAME THE ACCIDENTAL CONTROL: this exact
+    # refusal already happened once by luck: `command.upgrade(cfg, "head")` errors when
     # `current` isn't reachable from the tree's own alembic chain, and the generic except
     # below caught that and reported it as an opaque upgrade failure. Checking it here
     # FIRST makes the same refusal deliberate, with the real reason named, instead of
     # depending on alembic's own exception text to explain it. `known is False` is the ONLY
-    # new branch — True or None (undeterminable, e.g. no alembic.ini here) fall through to
+    # new branch: True or None (undeterminable, e.g. no alembic.ini here) fall through to
     # the unchanged path below, so every existing caller's behavior is preserved exactly.
     known = _alembic_revision_known(repo_root, current) if current is not None else None
     if known is False:
@@ -3528,12 +3491,12 @@ async def cmd_migrate(
     state: MigrationState = _real_migration_state,
     run_migrations: MigrateRunner = _real_run_migrations,
 ) -> int:
-    """osiris migrate [--check] (thread c4681c38 leg 1): the ENV-CORRECT migration verb —
+    """osiris migrate [--check]: the ENV-CORRECT migration verb.
     `apply_dev_fallback()` runs before alembic ever reads DATABASE_URL (see
     `_real_run_migrations`'s own docstring for the exact footgun this closes: a bare
     `alembic upgrade head` silently targeting the prod-shaped 5432 default). `--check` only
-    REPORTS a pending revision — never applies — for a human (or `osiris deploy`'s own gate,
-    leg 2) who wants to know without acting."""
+    REPORTS a pending revision, never applies, for a human (or `osiris deploy`'s own gate)
+    who wants to know without acting."""
     root = repo_root if repo_root is not None else _find_repo_root()
     if root is None:
         print("osiris migrate: not inside a git repository. cd into the osiris checkout "
@@ -3591,13 +3554,13 @@ ListTools = Callable[[], Awaitable[dict[str, str] | str]]
 
 
 async def _real_record_deploy(pool: asyncpg.Pool, repo_root: Path) -> str | None:
-    """The write half of the reboot-is-a-deploy confession (thread 489a39d0): the boot-time
-    guard (deploy_guard.check_unreviewed_boot) needs a ground truth to confess against, and
-    none existed — this is it. A watermark (the same generic cursor store pulse.py's own
+    """The write half of the reboot-is-a-deploy record: the boot-time
+    guard (deploy_guard.check_unreviewed_boot) needs a ground truth to check against, and
+    none existed; this is it. A watermark (the same generic cursor store pulse.py's own
     `devhead:` already uses, not a new table): the ONLY place this repo's HEAD is meant to
     reach a running service is a successful `osiris deploy` restart, so recording it here IS
     the ledger. Returns the head it recorded (or None on a read failure, which is also a
-    no-op — never a deploy failure, the write side stays as fail-open as the read side)."""
+    no-op, never a deploy failure; the write side stays as fail-open as the read side)."""
     from src.orchestrator.deploy_guard import (
         _DEPLOY_CURSOR_KEY,
         _git_head,
@@ -3608,9 +3571,8 @@ async def _real_record_deploy(pool: asyncpg.Pool, repo_root: Path) -> str | None
     head = _git_head(repo_root)
     if head is not None:
         await set_cursor(pool, _DEPLOY_CURSOR_KEY, head)
-        # THE DEPLOY LEG of the boot-watchdog supersession mechanism (operator ruling, DM
-        # 7032, following the backlog measurement decision 6354c424): this recorded deploy
-        # is itself the ground truth that closes every alarm it now supersedes. Fail-open —
+        # THE DEPLOY LEG of the boot-watchdog supersession mechanism: this recorded deploy
+        # is itself the ground truth that closes every alarm it now supersedes. Fail-open:
         # the resolver's own internal try/except already guards this, never a deploy failure.
         with contextlib.suppress(Exception):
             await resolve_alarms_superseded_by_deploy(
@@ -3627,12 +3589,12 @@ FullSuiteGate = Callable[[Path], Awaitable[dict[str, Any]]]
 CheckFalseMintLive = Callable[[asyncpg.Pool], Awaitable[list[dict[str, Any]]]]
 WaitForPgDump = Callable[[asyncpg.Pool], Awaitable[tuple[bool, float]]]
 
-_PG_DUMP_WAIT_CEILING_SECS = 900.0  # 15 min — Thoth's own bound, mail 10214
+_PG_DUMP_WAIT_CEILING_SECS = 900.0  # 15 min ceiling
 
 
 async def _pg_dump_active(pool: asyncpg.Pool) -> bool:
     """`application_name='pg_dump'` is pg_dump's own client identity, stamped by the
-    tool itself — no query-text pattern-matching, no false positives from something
+    tool itself, no query-text pattern-matching, no false positives from something
     that merely mentions the string."""
     n = await pool.fetchval(
         "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'pg_dump'")
@@ -3646,12 +3608,12 @@ async def _real_wait_for_pg_dump(
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> tuple[bool, float]:
     """A BOUNDED wait (never indefinite, 15 min ceiling) for a concurrent pg_dump to
-    finish BEFORE restarting units — a live incident (Thoth mail 10214): the console
-    restarted straight into a pg_dump's own lock on `triggers`, hung at startup behind
-    it, and the deploy's own health/smoke poller burned its OWN timeout reporting a
+    finish BEFORE restarting units: a live incident showed the console
+    restarting straight into a pg_dump's own lock on `triggers`, hanging at startup behind
+    it, while the deploy's own health/smoke poller burned its OWN timeout reporting a
     console failure that was really "a backup is running." This waits for the actual
     cause instead of probing a console that cannot come up. Same backoff shape
-    `_wait_for_health`/`_wait_for_smoke` already use. Returns (clear, elapsed) —
+    `_wait_for_health`/`_wait_for_smoke` already use. Returns (clear, elapsed):
     clear=False past the ceiling means deploy proceeds anyway regardless
     (project_triggers' own `lock_timeout` is the last line of defense, not this wait)."""
     elapsed = 0.0
@@ -3667,13 +3629,13 @@ async def _real_wait_for_pg_dump(
 
 async def _synthetic_automount_probe(client: Any) -> tuple[bool, str]:
     """The pure verdict logic, `client`-injected (same pattern `smoke_chrome` uses) so it's
-    testable against an `httpx.MockTransport` with no live server — `_real_check_whisper_
+    testable against an `httpx.MockTransport` with no live server: `_real_check_whisper_
     probe` is the thin real-client wrapper cmd_deploy actually calls. POSTs a THROWAWAY
-    /automount call, then immediately /session-end to release whatever row it minted —
-    this probe leaves nothing behind. Non-200, a network failure, OR a 200 whose own body
-    carries `{"error": ...}` (the exact silent-failure shape 33a3573 fixed once already,
-    task #179's own headline) all refuse — the route degrading gracefully to a 200-with-
-    error would defeat the entire point of this gate."""
+    /automount call, then immediately /session-end to release whatever row it minted,
+    so this probe leaves nothing behind. Non-200, a network failure, OR a 200 whose own body
+    carries `{"error": ...}` (a silent-failure shape fixed once already) all refuse: the
+    route degrading gracefully to a 200-with-error would defeat the entire point of this
+    gate."""
     import uuid as _uuid
 
     sid = f"deploy-probe-{_uuid.uuid4().hex[:12]}"
@@ -3681,7 +3643,7 @@ async def _synthetic_automount_probe(client: Any) -> tuple[bool, str]:
         r = await client.post("/automount", json={"session_id": sid, "cwd": "/tmp"})
         try:
             await client.post("/session-end", json={"session_id": sid})
-        except Exception:  # noqa: BLE001 — best-effort cleanup, never the gate's own verdict
+        except Exception:  # noqa: BLE001 - best-effort cleanup, never the gate's own verdict
             pass
         if r.status_code != 200:
             return False, (f"whisper probe: REFUSED. /automount returned "
@@ -3699,43 +3661,40 @@ async def _real_check_false_mint_live(
     pool: asyncpg.Pool, *, agents_json: Any = None, read_exe: Any = None,
     read_cwd: Any = None, read_cmdline: Any = None,
 ) -> list[dict[str, Any]]:
-    """DEPLOY GATE (operator ruling 921eabcf, addendum to obligation 6b1efacb, 2026-08-18:
-    "prevent weird forking like that and reject it architecturally"): a generation
-    carrying false_mint=true with a LIVE mount is a candidate for the exact zero-turn
-    phantom fold blindness the halcyon incident named — this must read ZERO harness-
-    confirmed specimens before a deploy is recorded. Same base query graph_lint's own
-    `false-mint-live` check runs (compositions.py's `_fn_lint`), duplicated here as a
-    plain, fast, single-purpose query rather than routing a deploy gate through the full
-    lint composition machinery for one check.
+    """DEPLOY GATE: intended to "prevent weird forking like that and reject it
+    architecturally." A generation carrying false_mint=true with a LIVE mount is a
+    candidate for the exact zero-turn phantom-fold blindness a prior incident named; this
+    must read ZERO harness-confirmed specimens before a deploy is recorded. Same base
+    query graph_lint's own `false-mint-live` check runs (compositions.py's `_fn_lint`),
+    duplicated here as a plain, fast, single-purpose query rather than routing a deploy
+    gate through the full lint composition machinery for one check.
 
-    ONE LIVENESS AUTHORITY, FOURTH ENTRY POINT (Thoth msg 5719, 2026-08-26, thread 2c3c2b9a): a
-    fresh/refreshing `agent_mounts` row is NOT proof of a live body — the SAME "cache in
-    both directions" law `is_occupied_by_a_live_body` exists to enforce everywhere else
-    (register_agent/mount, FleetView claim, launch_seat, mailbox's send-to-lineage check,
-    phantom_fold_reap's own reinstate bucket). This check used to trust the mount row
-    alone; a real incident (agent:0123dec2-ii, project atlas) proved that wrong — the
-    flagged id's own mount row was fresh, but registry_census showed NO body under it;
-    the real live body sat under a DIFFERENT generation id entirely. Each candidate is now
-    cross-checked against that SAME authority: `harness_confirmed_live=True` is the actual
-    halcyon shape (a genuinely live body wrongly folded — `reinstate_generation` is the
-    correct repair); `harness_confirmed_live=False` is a DIFFERENT anomaly this check must
-    still refuse on, but must NEVER recommend `reinstate_generation` for — doing so would
-    resurrect a bodiless generation, manufacturing the exact phantom a correct fold
-    already cleaned up (the inverse of #190's Deckard case). Returns one dict per
-    offending canonical (empty = clean); `cmd_deploy` owns picking the remedy text per
+    ONE LIVENESS AUTHORITY, FOURTH ENTRY POINT: a fresh/refreshing `agent_mounts` row is
+    NOT proof of a live body, the SAME "cache in both directions" law
+    `is_occupied_by_a_live_body` exists to enforce everywhere else (register_agent/mount,
+    FleetView claim, launch_seat, mailbox's send-to-lineage check, phantom_fold_reap's own
+    reinstate bucket). This check used to trust the mount row alone; a real incident
+    proved that wrong: the flagged generation's own mount row was fresh, but
+    registry_census showed NO body under it, while the real live body sat under a
+    DIFFERENT generation id entirely. Each candidate is now cross-checked against that
+    SAME authority: `harness_confirmed_live=True` is a genuinely live body wrongly folded,
+    where `reinstate_generation` is the correct repair; `harness_confirmed_live=False` is
+    a DIFFERENT anomaly this check must still refuse on, but must NEVER recommend
+    `reinstate_generation` for, since doing so would resurrect a bodiless generation,
+    manufacturing the exact phantom a correct fold already cleaned up. Returns one dict
+    per offending canonical (empty = clean); `cmd_deploy` owns picking the remedy text per
     bucket, never this function (a query has no business writing prose).
 
-    TWO SPECIMENS THAT MUST NEVER BLOCK (Thoth msg 7542 item 3 — five deploys,
-    abc056a/89d4605/cc3e4a3/eda0459/f66654a, ran unrecorded over agent:2464d3ad-ii): the
-    bg-spare mount-row heartbeat bug (task #204, msg 6997, test_osiris_hook.py's own
-    comment) left a false_mint=true generation's `agent_mounts` row refreshing for a
-    while after phantom-fold had ALREADY correctly retired it — a heartbeat earned by a
-    process that was never the mind it claimed to be. (1) A candidate already carrying
-    `retired=true` is a generation the fleet deliberately closed; whatever its stale
-    mount row still says, it can never be the halcyon "genuinely live body wrongly
-    folded" shape this gate exists to catch, so it is excluded from the query itself.
-    (2) Independently — for a candidate that isn't (yet) retired — if EVERY harness body
-    `registry_census` matches to it is itself a `claude bg-spare` pre-warm process
+    TWO SPECIMENS THAT MUST NEVER BLOCK, found after five deploys ran unrecorded over
+    one generation: the bg-spare mount-row heartbeat bug (documented in
+    test_osiris_hook.py's own comment) left a false_mint=true generation's
+    `agent_mounts` row refreshing for a while after phantom-fold had ALREADY correctly
+    retired it, a heartbeat earned by a process that was never the body it claimed to be.
+    (1) A candidate already carrying `retired=true` is a generation the fleet deliberately
+    closed; whatever its stale mount row still says, it can never be the "genuinely live
+    body wrongly folded" shape this gate exists to catch, so it is excluded from the query
+    itself. (2) Independently, for a candidate that isn't (yet) retired, if EVERY harness
+    body `registry_census` matches to it is itself a `claude bg-spare` pre-warm process
     (checked the same way the whisper hook checks itself, `_is_bg_spare_process`'s own
     `/proc/<pid>/cmdline` probe, just server-side against an arbitrary pid instead of
     self), it is excluded too: a spare backing the row is never a genuine occupant, no
@@ -3776,8 +3735,8 @@ async def _real_check_false_mint_live(
 
 
 async def _real_check_whisper_probe() -> tuple[bool, str]:
-    """POST a THROWAWAY /automount call against the just-restarted server (task #179) —
-    the same law as the migration gate: a deploy that cannot prove the whisper's own
+    """POST a THROWAWAY /automount call against the just-restarted server, the same law
+    as the migration gate: a deploy that cannot prove the whisper's own
     server half actually works must not be recorded as a success, only reported."""
     import httpx
 
@@ -3790,12 +3749,12 @@ async def _real_check_whisper_probe() -> tuple[bool, str]:
 
 
 def _run_install_script(script_rel: str, root: Path) -> str:
-    """Run one of this repo's idempotent install-*.sh scripts (task #204, Thoth ruling msg
-    6949: "deploy is the one sanctioned hand that writes machine files" — a read-only
-    status line that can only ever report STALE was half a mechanism). Every install
+    """Run one of this repo's idempotent install-*.sh scripts: deploy is the one
+    sanctioned hand that writes machine files, since a read-only status line that can
+    only ever report STALE was half a mechanism. Every install
     script here (install_gate_hook.sh, install_push_guard_hook.sh, install_commands.sh)
     already follows the SAME idempotent copy-and-compare convention and prints its own
-    one-line summary on success — this just runs it and surfaces that line, or a clear
+    one-line summary on success; this just runs it and surfaces that line, or a clear
     failure, never raising past this wrapper (a broken installer must not crash the rest
     of deploy's own report)."""
     import subprocess
@@ -3818,20 +3777,20 @@ UpdateDeploySnapshot = Callable[[Path, str], Awaitable[str]]
 
 
 async def _real_update_deploy_snapshot(root: Path, sha: str) -> str:
-    """THE DEPLOY SNAPSHOT (thread e29b260c, Thoth mail 12947): pins ~/.local/bin/osiris at
+    """THE DEPLOY SNAPSHOT: pins ~/.local/bin/osiris at
     a worktree checked out to `sha` (scripts/update_deploy_snapshot.sh) rather than the main
-    checkout `root` itself — the live incident this closes is `osiris resume` dying with
+    checkout `root` itself. The live incident this closes is `osiris resume` dying with
     SoulKeyMissing because the operator's CLI shim was an editable install reading straight
     out of `root` while a gate had a candidate branch merged into it for a test run. Runs
-    only after a green restart+smoke, same as `osiris deploy`'s own install_*.sh scripts —
-    a 300s ceiling (an uv sync against a fresh worktree, first run, can genuinely take a
+    only after a green restart+smoke, same as `osiris deploy`'s own install_*.sh scripts,
+    with a 300s ceiling (an uv sync against a fresh worktree, first run, can genuinely take a
     while; a git worktree add/checkout alone is seconds) rather than the 30s
     `_run_install_script` uses for its own much lighter idempotent copies. A missing
     scripts/update_deploy_snapshot.sh (a synthetic tmp_path repo_root, or a checkout
     predating this) is reported, never crashes the rest of the deploy report. Genuinely
-    async (asyncio subprocess, not a blocking subprocess.run) — up to 300s of `uv sync`
+    async (asyncio subprocess, not a blocking subprocess.run): up to 300s of `uv sync`
     against a fresh worktree must not stall the event loop `cmd_deploy` otherwise shares
-    with its own httpx/asyncpg calls earlier in the same ritual."""
+    with its own httpx/asyncpg calls earlier in the same sequence."""
     script = root / "scripts" / "update_deploy_snapshot.sh"
     if not script.is_file():
         return "deploy snapshot: SOURCE MISSING (scripts/update_deploy_snapshot.sh), skipped"
@@ -3874,56 +3833,56 @@ async def cmd_deploy(
     update_deploy_snapshot: UpdateDeploySnapshot = _real_update_deploy_snapshot,
     deploy_settings: Settings | None = None,
 ) -> int:
-    """The deploy ritual as one verb (thread e51a841c): a live near-miss held batch 3 because
-    src/orchestrator/handshake.py carried another agent's uncommitted WIP and the three
-    services import straight from the working tree — only a by-hand `git status` caught it
+    """The deploy sequence as one verb: a live near-miss once held up a batch because
+    src/orchestrator/handshake.py carried another agent's uncommitted WIP while the three
+    services import straight from the working tree; only a by-hand `git status` caught it
     before a restart would have shipped a half-written identity edit. Replaces that by-hand
     protocol: (1) refuse on a dirty tracked src/ tree, naming the files (never guesses whose
-    WIP it is — check project mail for a collision-watch broadcast instead of trusting a
+    WIP it is; check project mail for a collision-watch broadcast instead of trusting a
     fragile heuristic); (2) compare migrations and refuse-or-run them BEFORE anything
-    restarts (thread c4681c38 leg 2 — batch 6's own near miss: the old order restarted onto
+    restarts (a prior near miss: the old order restarted onto
     new code, then only reported the pending migration AFTER, a window where new code ran
     against the old schema); (3) restart osiris-mcp/worker/console; (4) run smoke,
     per-surface, with a bounded wait-for-up so a still-binding uvicorn never reads as a false
     failure; (5) name any un-run seeder step by comparison, never by assumption. Just before
     the restart, installs every deploy/user/*.service file over ~/.config/systemd/user/ and
-    daemon-reloads if anything changed (thread e6fd3772 piece 3-infra) — this box's dev-unit
+    daemon-reloads if anything changed; this box's dev-unit
     config rides the deploy instead of a hand-authored divergence from deploy/. REFUSES (before
-    restarting) if deploy/user/ carries files but install_units reports NOTHING — a live
+    restarting) if deploy/user/ carries files but install_units reports NOTHING: a live
     specimen restarted onto a stale unit set while the deploy log showed zero `unit:` lines
     and still exited 0; loud failure beats a quiet one restarting onto whatever was already
     there. Also names
-    (informationally, never gating) any dirty COMMIT-DEPLOYED script — a oneshot timer unit
-    reads straight off disk, so nothing here can hold it back (msg 1481) — and (thread
-    6a78e64b leg 2) diffs the MCP tool list before vs after the restart, so a deploy names
+    (informationally, never gating) any dirty COMMIT-DEPLOYED script, since a oneshot timer unit
+    reads straight off disk, so nothing here can hold it back, and
+    diffs the MCP tool list before vs after the restart, so a deploy names
     exactly which verbs are arriving rather than leaving that to be discovered by accident.
-    (6) POSTs a THROWAWAY /automount to the just-restarted server (task #179) and REFUSES to
-    record the deploy on anything but a clean round-trip — same law as the migration gate:
+    (6) POSTs a THROWAWAY /automount to the just-restarted server and REFUSES to
+    record the deploy on anything but a clean round-trip, same law as the migration gate:
     the ledger must never claim a deploy the whisper's own server half cannot actually serve.
-    (7) records the deployed HEAD (thread 489a39d0) — the ground truth the reboot-is-a-deploy
-    boot guard confesses against; a raw restart or a reboot never calls this, so the ledger
-    and reality staying in sync is itself evidence the deploy went through this ritual.
+    (7) records the deployed HEAD, the ground truth the reboot-is-a-deploy
+    boot guard checks against; a raw restart or a reboot never calls this, so the ledger
+    and reality staying in sync is itself evidence the deploy went through this sequence.
     Also prints (never gates) a NOTE when any seat carries a current `anchor_cwd` outside
-    the office root alongside the correct one (ruling 23771416) — this population was
+    the office root alongside the correct one; this population was
     found by an operator hitting a broken resume, and should never be found that way again.
 
-    (8) THE DEPLOY SNAPSHOT (thread e29b260c, Thoth mail 12947): on a green deploy (smoke
+    (8) THE DEPLOY SNAPSHOT: on a green deploy (smoke
     all clear, `deployed_head` known) only, pins ~/.local/bin/osiris at a worktree checked
     out to `deployed_head` (scripts/update_deploy_snapshot.sh) instead of the main checkout
     `root` itself. The services already survive a gate untouched (they run in-process from
-    their own last restart); this closes the one door that didn't — the operator's own CLI
+    their own last restart); this closes the one door that didn't: the operator's own CLI
     was an editable install reading straight out of `root`, so `osiris resume` mid-gate ran
     whatever candidate branch a gate had merged into that checkout for its test run
-    (SoulKeyMissing, a live incident this closes). NEVER runs on smoke failure — a broken
+    (SoulKeyMissing, a live incident this closes). NEVER runs on smoke failure: a broken
     deploy must not become the operator's next CLI. `osiris deploy` itself stays runnable
     from the checkout either way; only the operator-facing shim moves.
 
     `wait_for_health`/`wait_for_smoke` default to the REAL bounded pollers (120s/30s
-    ceilings, real network round-trips against the live console/MCP) — injectable for the
+    ceilings, real network round-trips against the live console/MCP), injectable for the
     same reason every other side-effecting dependency here is: a test exercising cmd_deploy's
     own control flow (order of operations, what it prints, what it returns) has no reason to
-    also pay for a live round-trip against production services it isn't testing (task #165,
-    2026-08-09 — seven tests were doing exactly that, unmocked, 565s of a 1160s suite)."""
+    also pay for a live round-trip against production services it isn't testing (seven tests
+    were once doing exactly that, unmocked, 565s of a 1160s suite)."""
     root = repo_root if repo_root is not None else _find_repo_root()
     if root is None:
         print("osiris deploy: not inside a git repository. cd into the osiris checkout "
@@ -3971,7 +3930,7 @@ async def cmd_deploy(
         from src.orchestrator.monitor import get_cursor
 
         # Captured BEFORE `record_deploy` below overwrites this same cursor to the NEW
-        # HEAD (obligation 8752024d) — merge_claim_hygiene needs the ref THIS deploy is
+        # HEAD: merge_claim_hygiene needs the ref THIS deploy is
         # walking FROM, not the one it's about to record itself as having reached.
         previously_deployed = await get_cursor(pool, _DEPLOY_CURSOR_KEY)
 
@@ -4004,12 +3963,12 @@ async def cmd_deploy(
                   file=sys.stderr)
             return 1
         if any(note.startswith("unit: REFUSED") for note in unit_notes):
-            # A live incident (Thoth mail 10242): a test's own 30-byte stub unit, run
+            # A live incident: a test's own 30-byte stub unit, run
             # through the real installer with Path.home unpatched, silently overwrote
             # osiris-mcp/osiris-pulse's actual units and left them dead across a
             # reboot. install_units (`_placeholder_unit_reason`) now refuses the whole
             # batch rather than writing any of it the moment one source file looks
-            # like a placeholder — never restart onto whatever partial install just
+            # like a placeholder: never restart onto whatever partial install just
             # happened, or didn't.
             print("osiris deploy: refused. One or more unit files look like "
                   "placeholders, not real units (see the `unit: REFUSED` line(s) "
@@ -4018,13 +3977,13 @@ async def cmd_deploy(
 
         tools_before = await list_tools()
 
-        # THE DISCONNECT WARNING (Thoth's plan, thread d96167c6, 2026-09-05): a live
-        # specimen (2026-09-01 19:10:57) restarted osiris-mcp with 15 agents live —
+        # THE DISCONNECT WARNING: a live
+        # specimen (2026-09-01 19:10:57) restarted osiris-mcp with 15 agents live,
         # every streamable-HTTP session died silently, 22 requests came back 404, and the
-        # OPERATOR's first symptom was "graph unreachable." health/smoke probe a FRESH
+        # operator's first symptom was "graph unreachable." health/smoke probe a FRESH
         # connection and can never see a stale one, so the deploy ledger read clean while
         # every live session was in fact broken. Reconnect itself is the harness client's
-        # own job (automount re-adopts on the next mount()) — the warning is the whole
+        # own job (automount re-adopts on the next mount()); the warning is the whole
         # fix. A mail hiccup here must never block or fail the deploy itself.
         deploy_sha = _git_head(root)
         try:
@@ -4038,11 +3997,11 @@ async def cmd_deploy(
         except Exception as exc:  # noqa: BLE001
             print(f"NOTE: pre-restart disconnect warning failed to send: {exc}")
 
-        # A LIVE INCIDENT (Thoth mail 10214): restarting straight into a running
+        # A LIVE INCIDENT: restarting straight into a running
         # pg_dump made the console hang at startup behind the dump's own lock on
         # `triggers`, and the health/smoke poller burned its OWN timeout reporting a
         # console failure that was really "a backup is running." Wait for the actual
-        # cause instead of probing a console that cannot come up — bounded at 15
+        # cause instead of probing a console that cannot come up, bounded at 15
         # minutes; past that, deploy proceeds anyway (project_triggers' own
         # `lock_timeout` is the real last line of defense, not this wait).
         pg_dump_clear, pg_dump_waited = await wait_for_pg_dump(pool)
@@ -4061,8 +4020,8 @@ async def cmd_deploy(
             print(f"osiris deploy: restart failed (exit {rc}): {out}", file=sys.stderr)
             return 1
         print(f"osiris deploy: restarted {', '.join(units)}")
-        # THE RECEIPT'S OWN PROOF (thread 2a280e07 follow-up): a per-unit start timestamp,
-        # not just an exit-0 from `systemctl restart` — osiris-pulse's own two-day-stale
+        # THE RECEIPT'S OWN PROOF: a per-unit start timestamp,
+        # not just an exit-0 from `systemctl restart`; osiris-pulse's own two-day-stale
         # process is exactly the gap a receipt with no timestamp per unit couldn't have
         # caught even after the fact.
         for unit, ts in (await unit_start_timestamps(units)).items():
@@ -4092,10 +4051,10 @@ async def cmd_deploy(
                   "server half cannot be trusted after a restart it cannot itself verify.")
             return 1
 
-        # THE HALCYON GATE (operator ruling 921eabcf, addendum to obligation 6b1efacb,
-        # 2026-08-18): "prevent weird forking like that and reject it architecturally" —
-        # a false_mint generation with a LIVE mount must read ZERO before a deploy is
-        # recorded, always on (no kill switch — this is a cheap read, not a SIGKILL).
+        # THE FALSE-MINT-LIVE GATE: intended to prevent weird forking and reject it
+        # architecturally. A false_mint generation with a LIVE mount must read ZERO before
+        # a deploy is recorded, always on (no kill switch: this is a cheap read, not a
+        # SIGKILL).
         false_mint_live = await check_false_mint_live(pool)
         if false_mint_live:
             confirmed = [r["agent_id"] for r in false_mint_live if r["harness_confirmed_live"]]
@@ -4120,8 +4079,8 @@ async def cmd_deploy(
                 print(f"  {line}")
                 reason_lines.append(line)
             print("osiris deploy: NOT recording this deploy.")
-            # THE WITHHELD-RECORD CONFESSION (thread 3b34f6c5, #52's own law): the refusal
-            # above is correct, but recording nothing leaves the ledger silently stale — a
+            # THE WITHHELD-RECORD CONFESSION: the refusal
+            # above is correct, but recording nothing leaves the ledger silently stale, a
             # mechanism producing "unrecorded completion" on purpose. The code IS deployed
             # and healthy at this point (restart/health/whisper already passed); only the
             # ledger write was withheld.
@@ -4133,13 +4092,13 @@ async def cmd_deploy(
                         reason="false-mint-live: " + " ".join(reason_lines))
             return 1
 
-        # THE ANCHOR INVARIANT (ruling 23771416, msg 6546/6577) — INFORMATIONAL ONLY,
-        # never gating: unlike the halcyon gate above (an architectural-safety refusal),
-        # a seat's own stray anchor_cwd is an identity-hygiene defect with no deploy-time
-        # blast radius, so this only surfaces what the standalone detector would show,
-        # armed here so the population is discovered by routine deploy traffic rather than
-        # by an operator hitting a broken `osiris resume` again (the root cause of THIS
-        # session's own specimens). `heal-seat-anchor` is the repair command, named in the note.
+        # THE ANCHOR INVARIANT: INFORMATIONAL ONLY,
+        # never gating: unlike the false-mint-live gate above (an architectural-safety
+        # refusal), a seat's own stray anchor_cwd is an identity-hygiene defect with no
+        # deploy-time blast radius, so this only surfaces what the standalone detector
+        # would show, armed here so the population is discovered by routine deploy traffic
+        # rather than by an operator hitting a broken `osiris resume` again.
+        # `heal-seat-anchor` is the repair command, named in the note.
         with contextlib.suppress(Exception):  # an advisory note must never crash a deploy
             from src.actions.core import Actions
             from src.orchestrator.identity_heal import detect_anchor_invariant_violations
@@ -4153,20 +4112,20 @@ async def cmd_deploy(
                       f"{sorted(both_axes)}. `osiris heal-seat-anchor <handle> --because "
                       "... [--apply]` repairs one seat at a time; never auto-run here.")
 
-        # THE FULL SUITE ON THE MERGED TREE (task #186, Thoth DM 5637, 2026-08-25) — OFF
+        # THE FULL SUITE ON THE MERGED TREE: OFF
         # by default, same law as the chaos gate below it. Runs BEFORE the chaos gate: a
-        # suite that doesn't even pass makes a slow SIGKILL replay pointless. Neither of
-        # tonight's two live incidents (a branch's own scoped-gate green, false once
-        # merged; an auto-merged capture.py only proven correct by a full re-run) was a
-        # daemon-crash-resilience gap — this is the gate that actually covers them.
+        # suite that doesn't even pass makes a slow SIGKILL replay pointless. Two prior live
+        # incidents (a branch's own scoped-gate green, false once
+        # merged; an auto-merged capture.py only proven correct by a full re-run) were not
+        # daemon-crash-resilience gaps; this is the gate that actually covers them.
         #
-        # `deploy_settings` IS INJECTABLE, DELIBERATELY (thread be24817b, the self-refuting
-        # gate): arming this flag via env makes `full_suite_gate` spawn pytest as a
-        # subprocess that INHERITS that same env — including onto
+        # `deploy_settings` IS INJECTABLE, DELIBERATELY, to avoid a self-refuting
+        # gate: arming this flag via env makes `full_suite_gate` spawn pytest as a
+        # subprocess that INHERITS that same env, including onto
         # tests/test_cli.py::test_cmd_deploy_skips_the_full_suite_gate_by_default, which
         # calls THIS function again to assert the flag is off "by default." Reading ambient
         # `get_settings()` there was testing the environment the gate itself had just set,
-        # never the actual default in source — arming was guaranteed to refuse itself. A
+        # never the actual default in source: arming was guaranteed to refuse itself. A
         # "skips by default" test now passes an EXPLICITLY CONSTRUCTED `Settings` object
         # instead, so its claim is about the field's real default, not about whatever
         # happens to be armed in the process that is running it.
@@ -4184,13 +4143,14 @@ async def cmd_deploy(
                 print("NOT recording this deploy.")
                 return 1
 
-        # CRASH REPLAY AS A GATE (Thoth msg 5338, 2026-08-18) — OFF by default, the same
+        # CRASH REPLAY AS A GATE: OFF by default, the same
         # law as osiris_trigger_enabled/osiris_pit_watch_enabled: a mechanism that SIGKILLs
         # a live service earns its own kill switch, never inherits one. When on, runs a
         # SECOND, harsher restart cycle (kill -9 + a concurrent session-end storm, not the
-        # graceful `restart` above) and refuses the deploy outright on any finding — this
-        # is a GATE (577988ed's fail-open clause is for infrastructure this can't control,
-        # never for a genuine invariant violation this module exists to catch).
+        # graceful `restart` above) and refuses the deploy outright on any finding: this
+        # is a GATE (the fail-open clause elsewhere in this module is for infrastructure
+        # this can't control, never for a genuine invariant violation this module exists
+        # to catch).
         if active_settings.osiris_deploy_chaos_gate:
             import json
 
@@ -4214,11 +4174,11 @@ async def cmd_deploy(
         print(f"deploy ledger: recorded {deployed_head}" if deployed_head else
               "deploy ledger: HEAD unknown, not recorded (repo_root isn't a git checkout)")
 
-        # #189 ADOPTION METER (Thoth msg 5825, ruling d68c57e5) — an INSTRUMENT, never a
+        # ADOPTION METER: an INSTRUMENT, never a
         # gate: read-only against the graph (its one write is a baseline watermark, seeded
         # at most once), printed on every deploy so nobody has to remember to run
         # triage(mode='census') by hand and compare against a number quoted in a decision's
-        # prose — exactly the shape that let #189's own diagnosis (5169686b) sit unmeasured
+        # prose, exactly the shape that once let a diagnosis sit unmeasured
         # for 24 days while the population it named grew ~1,800.
         from src.orchestrator.adoption_meter import adoption_meter, render_adoption_line
 
@@ -4294,7 +4254,7 @@ async def cmd_deploy(
 
         print(_run_install_script("scripts/install_prune_timers.sh", root))
 
-        # THE DEPLOY SNAPSHOT (thread e29b260c) — only on a genuinely green deploy: smoke
+        # THE DEPLOY SNAPSHOT: only on a genuinely green deploy: smoke
         # came back clean AND the HEAD it's pinning to is actually known (a non-git
         # repo_root, or record_deploy's own failure, both already left deployed_head None).
         if not fails and deployed_head:
@@ -4312,24 +4272,24 @@ async def cmd_merge(
     dupe: str, into: str, evidence: str, *, actor: str, force: bool = False,
     because: str = "", pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris merge <dupe> <into> --evidence <text> [--actor <who>] — the console-script
+    """osiris merge <dupe> <into> --evidence <text> [--actor <who>]: the console-script
     entry point onto orchestrator.merge.merge, the SAME function the merge MCP tool wraps (no
     duplicated logic, no softened gate). SELF-TYPING, exactly like the MCP tool: `dupe`'s
-    own form picks Agent/Seat/SoftwareProject (agent:.../seat:.../else) — this is NOT
+    own form picks Agent/Seat/SoftwareProject (agent:.../seat:.../else). This is NOT
     fold-project's old SoftwareProject-only behavior wearing a new name, it is the full
-    merge surface, dispatch 3683's own finding that the two entry points had drifted apart.
+    merge surface, found when the two entry points had drifted apart.
 
-    THE SANCTIONED SECOND ENTRY POINT (thread 2446, formerly fold-project's): the MCP tool can
+    THE SANCTIONED SECOND ENTRY POINT (formerly fold-project's): the MCP tool can
     sit invisible in a live client's stale deferred-tool index across a deploy, or be
-    unreachable to a worker whose sandbox classifier refuses a raw DATABASE_URL script —
+    unreachable to a worker whose sandbox classifier refuses a raw DATABASE_URL script;
     an installed entrypoint is a path that isn't the MCP index at all.
 
-    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474): the
-    merge-event/same_as witness the MCP wrapper queries after the fact — SoftwareProject
-    merges only, matching the MCP tool's own conditional exactly — is queried here too.
+    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT: the
+    merge-event/same_as witness the MCP wrapper queries after the fact (SoftwareProject
+    merges only, matching the MCP tool's own conditional exactly) is queried here too.
 
-    `--force` (+ `--because`): decision 7fe20cc5's liveness guard override, SoftwareProject
-    folds only — self stays open by default, a different lineage's live target refuses
+    `--force` (+ `--because`): a liveness guard override, SoftwareProject
+    folds only. Self stays open by default; a different lineage's live target refuses
     unless forced."""
     from src.actions.core import Actions
     from src.orchestrator.merge import _merge_type
@@ -4387,12 +4347,13 @@ async def cmd_fold_project(
     dupe: str, into: str, evidence: str, *, actor: str, force: bool = False,
     because: str = "", pool: asyncpg.Pool | None = None,
 ) -> int:
-    """DEPRECATED ALIAS (dispatch 3683): fold_project no longer exists as an MCP tool —
-    it collapsed into merge() (ruling 31c02dca, decision a926a8d0) and the CLI never
-    followed, the exact "two halves of this house use different words for one act"
-    specimen the operator's own consistency ask named. Kept working, hidden from the
-    front entry-point listing, forwarding straight to cmd_merge with the identical arguments —
-    never break a human's muscle memory silently, but never advertise the old name either."""
+    """DEPRECATED ALIAS: fold_project no longer exists as an MCP tool.
+    It collapsed into merge() and the CLI never
+    followed, an instance of two halves of the same system using different words for one
+    act, which the project's own consistency requirement flags. Kept working, hidden from
+    the front entry-point listing, forwarding straight to cmd_merge with the identical
+    arguments: never break a human's muscle memory silently, but never advertise the old
+    name either."""
     print("osiris fold-project is deprecated. Use `osiris merge` (identical arguments, "
           "same evidence-gated fold). Continuing as merge.", file=sys.stderr)
     return await cmd_merge(dupe, into, evidence, actor=actor, force=force, because=because,
@@ -4403,12 +4364,12 @@ async def cmd_unmerge(
     dupe: str, because: str, *, actor: str, execute: bool = False,
     pool: asyncpg.Pool | None = None, as_json: bool = False,
 ) -> int:
-    """osiris unmerge <dupe> --because <text> [--actor <who>] [--execute] — the console-
+    """osiris unmerge <dupe> --because <text> [--actor <who>] [--execute]: the console-
     script entry point onto orchestrator.merge.unmerge, the SAME function the unmerge MCP tool
     wraps. DRY RUN IS THE DEFAULT, matching the MCP tool's own convention exactly: without
     --execute this returns the reversal PLAN (what would move back) and writes nothing;
     review it, then re-run with --execute. Self-typing off `dupe`'s own form, same rule
-    as merge/cmd_merge. Built alongside merge's own CLI rename (dispatch 3683) — the two
+    as merge/cmd_merge. Built alongside merge's own CLI rename: the two
     verbs are a pair on the MCP side and had no reason to stay asymmetric on this one."""
     from src.actions.core import Actions
     from src.orchestrator.merge import unmerge as _unmerge
@@ -4437,10 +4398,10 @@ async def cmd_unmerge(
             await pool.close()
     from src import cli_render as render
 
-    # THE --json PROMISE HELD ON THE REFUSAL PATH TOO (Thoth dispatch 6746, specimen B):
+    # THE --json PROMISE HELD ON THE REFUSAL PATH TOO:
     # this used to short-circuit with a bare stderr print BEFORE reaching render.emit
     # below, so `--json` was silently ignored on exactly the path a script most needs
-    # it. Same shape as cmd_show's own error handling — emit unconditionally, exit code
+    # it. Same shape as cmd_show's own error handling: emit unconditionally, exit code
     # carries the verdict.
     render.emit(out, as_json=as_json, title="unmerge")
     return 1 if "error" in out else 0
@@ -4450,8 +4411,8 @@ async def cmd_retention(
     table: str, *, days: int | None, execute: bool, batch_size: int = 5000,
     pool: asyncpg.Pool | None = None, as_json: bool = False,
 ) -> int:
-    """osiris retention outbox|audit-log [--days N] [--execute] [--batch-size N] — thread
-    e6fd3772 piece 1. COLD BY DEFAULT: without --execute this only COUNTS what's eligible
+    """osiris retention outbox|audit-log [--days N] [--execute] [--batch-size N].
+    COLD BY DEFAULT: without --execute this only COUNTS what's eligible
     and writes nothing; --execute deletes in batches (default 5000 rows/statement),
     looping until a batch comes back short. `table` selects which retention function
     (src.orchestrator.retention) runs; each has its own default window (outbox 30 days,
@@ -4502,21 +4463,21 @@ async def cmd_charter_for(
     seat_id: str, repos: list[str], because: str, *, actor: str,
     ruling: str | None = None, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris charter-for <seat> --repos a,b,c --because <text> --actor <who> — the
+    """osiris charter-for <seat> --repos a,b,c --because <text> --actor <who>: the
     console-script entry point onto charter.charter_for, the SAME function the charter_for MCP
     tool wraps (no duplicated guard, no softening: the managed_by/operator-actor check is
-    the whole point of this verb and is exactly charter_for's own, untouched here — the
-    one guard tonight that is genuinely ENFORCED rather than merely documented).
+    the whole point of this verb and is exactly charter_for's own, untouched here, the
+    one guard that is genuinely ENFORCED rather than merely documented).
 
-    THE SANCTIONED SECOND ENTRY POINT (thread 2474, the third occurrence of the same shape as
+    THE SANCTIONED SECOND ENTRY POINT (the same recurring shape as
     fold_project/annotate_thread/amend_decision: a verb ships, deploys, and the fleet's
-    live MCP clients cannot see it in their own deferred-tool index — not this module's
-    bug, upstream per ruling 482c3d0f). An installed entrypoint bypasses that index
+    live MCP clients cannot see it in their own deferred-tool index; not this module's
+    bug, an upstream client-caching issue). An installed entrypoint bypasses that index
     entirely, the same class of thing as `osiris deploy`/`osiris fold-project`.
 
-    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (the general rule thread
-    2474 names after fold-project's CLI receipt was found silently weaker than its MCP
-    twin): charter_for's own return dict IS the full receipt already — this command
+    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (the general rule
+    that followed fold-project's CLI receipt being found silently weaker than its MCP
+    twin): charter_for's own return dict IS the full receipt already; this command
     prints it whole, nothing dropped, so there is no second copy of the enrichment logic
     to drift out of sync."""
     from src.actions.core import Actions
@@ -4558,19 +4519,19 @@ async def cmd_charter_for(
     return 0
 
 
-# --- settings (THE SETTINGS MENU, thread f4498ab304e4 piece 1) ---------------------------------
+# --- settings (THE SETTINGS MENU) ---------------------------------------------------------
 
 async def cmd_settings(
     action: str, *, key: str | None = None, value: str | None = None,
     because: str = "", ruling: str | None = None, scope_id: str = "",
     actor: str = _CONSOLE_ACTOR, as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris settings <list|get|set> ... — the console-script entry point onto
+    """osiris settings <list|get|set> ...: the console-script entry point onto
     settings_service.{list_settings,get_setting,write_setting}, the SAME functions the
-    `settings` MCP tool wraps (no duplicated logic — the CLI backup_settings itself
-    never got, per Thoth's own ask on thread f4498ab304e4). `value` is a JSON string
-    for anything beyond a bare number/string (e.g. `'true'`, `'{"a":1}'`, `'["x","y"]'`)
-    — parsed the same way `osiris proposal`'s own `--candidate` flag already is."""
+    `settings` MCP tool wraps (no duplicated logic: the CLI backup_settings itself
+    never got). `value` is a JSON string
+    for anything beyond a bare number/string (e.g. `'true'`, `'{"a":1}'`, `'["x","y"]'`),
+    parsed the same way `osiris proposal`'s own `--candidate` flag already is."""
     import json as _json
 
     from src.orchestrator import settings_service
@@ -4640,20 +4601,20 @@ async def cmd_backup_settings(
     """osiris backup-settings <get|write> [--vault-path P] [--timer UNIT=CAL]...
     [--offload-add NAME --offload-kind local|restic --offload-target PATH_OR_URL
     [--offload-mountpoint P] [--offload-schedule CAL] [--offload-disabled]]
-    [--offload-remove NAME] [--because R] [--ruling REF] [--json] [--actor W] — the
+    [--offload-remove NAME] [--because R] [--ruling REF] [--json] [--actor W]: the
     console-script entry point onto orchestrator.backup_settings.{get_backup_settings,
     write_backup_settings}, the SAME functions the `backup_settings` MCP tool and the
-    CMD-K backup config panel call (PARITY GAPS, WAVE 27 item 3, thread 45aff160;
-    THE BACKUP CLI ENTRY POINT ergonomics, Thoth mail 12809/12812).
+    CMD-K backup config panel call (a parity-gaps fix bringing CLI entry-point ergonomics
+    up to the same level).
 
     `action='get'` reads current settings, no authority needed. `action='write'`
-    changes them — gated like `charter-for`: the operator (a raw terminal call already
+    changes them, gated like `charter-for`: the operator (a raw terminal call already
     carries operator authority, same law every other sanctioned-second-entry-point command
     here holds) writes freely, anyone else must cite a standing `--ruling` naming
     'backup_settings'; `--because` is required to write.
 
     `--timer UNIT=CAL` (repeatable) reads the CURRENT timer_schedules first and
-    overlays only the named unit(s) — the underlying call's own field is still a
+    overlays only the named unit(s): the underlying call's own field is still a
     FULL-REPLACE, this flag just does the merge for you so a one-unit tweak doesn't
     require re-typing all five. `--offload-add`/`--offload-remove` do the same
     read-merge-write dance over offload_targets, upserting or dropping ONE target by
@@ -4661,13 +4622,13 @@ async def cmd_backup_settings(
     `--offload-kind`, `--offload-target`, and `--offload-schedule`, plus
     `--offload-mountpoint` on top of those when `--offload-kind=local` (the presence
     check's own anchor). A target's
-    read-only `presence` field is stripped before any re-submit — it is never a valid
+    read-only `presence` field is stripped before any re-submit: it is never a valid
     write input.
 
     `--timer-schedules`/`--offbox-repositories` (raw JSON strings, same `--value`
     convention `osiris settings set` already uses) remain for a full-replace or a
     scripted bulk write; `--offbox-repositories` writes the now-deprecated legacy
-    field directly (see backup_settings.py's own module docstring) — new callers want
+    field directly (see backup_settings.py's own module docstring); new callers want
     `--offload-add`/`--offload-remove` instead."""
     import json as _json
 
@@ -4728,7 +4689,7 @@ async def cmd_backup_settings(
                 fields["timer_schedules"] = merged
             if offload_add or offload_remove:
                 current = [
-                    {k: v for k, v in t.items() if k != "presence"}  # never a write input
+                    {k: v for k, v in t.items() if k != "presence"}  # not a write input
                     for t in (await get_backup_settings(pool))["offload_targets"]]
                 if offload_add:
                     if not offload_kind or not offload_target or not offload_schedule:
@@ -4771,17 +4732,17 @@ async def cmd_backup_status(
     *, vault: str | None = None, backups: str | None = None, as_json: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris backup-status [--vault PATH] [--backups PATH] [--json] — the live health
+    """osiris backup-status [--vault PATH] [--backups PATH] [--json]: the live health
     panel: timers, vault dump/base-backup counts, disk headroom, prune-ladder tiers,
     manifest state, and configured-vs-shipped schedule per timer. NOT a mirror onto the
     `composition` MCP tool (its own action table has no per-Function args passthrough
-    for backup_status's `vault`/`backups` path overrides — the same NO_MCP_EQUIVALENT
+    for backup_status's `vault`/`backups` path overrides, the same NO_MCP_EQUIVALENT
     shape `osiris lint`/`osiris audit` already document): calls
     compositions._fn_backup_status directly, the identical Function the
     `composition(action='run', name='backup_status')` route and the CMD-K panel both
     already run, own connection, no duplicated logic.
 
-    `--vault`/`--backups` override the production paths — a test or an operator
+    `--vault`/`--backups` override the production paths: a test or an operator
     checking a non-standard layout points these at a different directory; omitted,
     `_fn_backup_status` resolves the real production paths (backup.vault_path setting,
     falling back to its own env-derived default) the same way the panel does."""
@@ -4827,21 +4788,20 @@ async def cmd_practices(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris practices [list|show REF] [--surface S] [--limit N] [--recent] [--json]
-    — WAVE 27, PARITY GAP 6 (Thoth mail 11752): plain READS of the practices
-    composition had no CLI entry point at all (`amend-practice` above covers the one
-    write). `list` (default) is the SAME `comp.run_spec(pool, {"op":"function",
-    "name":"practices","args":{"surface","limit","recent"}}, None, name="practices")`
-    the `practices` MCP tool itself calls. `show REF` goes one step past that public
-    tool's own surface, straight to the composition function's own `id` arg
-    (`_fn_practices`'s own docstring: "the shape amend_practice's own receipt uses
-    so a write is never invisible on its own receipt") — the SAME direct-by-id
-    lookup, never a second implementation, just reached from an entry point the public
-    `practices()` wrapper doesn't expose. `REF` accepts a practice's own uuid or
-    8-char short id (matches a listing row's own `id` field, same convention as
-    `dossier`'s short-id acceptance elsewhere in this file).
+    Plain reads of the practices composition had no CLI entry point at all
+    (`amend-practice` above covers the one write). `list` (default) is the SAME
+    `comp.run_spec(pool, {"op":"function", "name":"practices","args":{"surface","limit",
+    "recent"}}, None, name="practices")` the `practices` MCP tool itself calls. `show REF`
+    goes one step past that public tool's own surface, straight to the composition
+    function's own `id` arg (matching `_fn_practices`'s own docstring, which notes it
+    uses the same shape as amend_practice's receipt so a write is never invisible on its
+    own receipt) - the SAME direct-by-id lookup, never a second implementation, just
+    reached from an entry point the public `practices()` wrapper doesn't expose. `REF`
+    accepts a practice's own uuid or 8-char short id (matches a listing row's own `id`
+    field, same convention as `dossier`'s short-id acceptance elsewhere in this file).
 
     Report-only, exit 0 always unless the underlying composition call itself
-    errors (an unknown ref for `show`) — there is no fleet-agreed "findings
+    errors (an unknown ref for `show`), there is no fleet-agreed "findings
     present" signal for a technique log the way there is for graph_lint."""
     from src.orchestrator import compositions as comp
 
@@ -4902,37 +4862,35 @@ async def cmd_practices(
 async def cmd_amend_practice(
     ref: str, amendment: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris amend-practice <ref> <amendment> --actor <who> — the console-script entry point onto
+    """osiris amend-practice <ref> <amendment> --actor <who> - the console-script entry point onto
     capture.amend_practice, the SAME function the amend_practice MCP tool wraps (no
     duplicated guard: the refuted-practice refusal and the blank-amendment check are
     exactly amend_practice's own, untouched here).
 
-    THE SANCTIONED SECOND ENTRY POINT (thread 06c3529b, the fourth occurrence of the same shape as
-    fold_project/charter_for/annotate_thread/amend_decision: a verb ships, deploys, and the
-    fleet's live MCP clients cannot see it in their own deferred-tool index — not this
-    module's bug, upstream per ruling 482c3d0f rather than worked around).
+    A SANCTIONED SECOND ENTRY POINT, matching the same shape as fold_project/charter_for/
+    annotate_thread/amend_decision: a verb ships, deploys, and the fleet's live MCP clients
+    cannot see it in their own deferred-tool index (not this module's bug, an upstream
+    staleness issue rather than something worked around here).
 
-    CALLS THE ORCHESTRATOR FUNCTION DIRECTLY, not cmd_fleet's call_mcp_tool round-trip
-    (Thoth DM 3126/3127's own open question — recorded here per his instruction): an
+    CALLS THE ORCHESTRATOR FUNCTION DIRECTLY, not cmd_fleet's call_mcp_tool round-trip: an
     amendment is a WRITE, and a call_mcp_tool session is anonymous (no ctx, no mounted
     identity), so the MCP wrapper's own `_actor_for`/`_source_for` fallback would stamp it
-    with the generic "session" bucket — a real provenance loss for a governance-relevant
+    with the generic "session" bucket, a real provenance loss for a governance-relevant
     write. fold-project/charter-for already established the right precedent for exactly
     this class of write-through-CLI-entry-point: own pool, explicit --actor, real attribution.
     (Consequence, named honestly: unlike cmd_fleet, this entry point does NOT prove the frozen
-    tool-index is reachable server-side over the wire — it proves the underlying function
-    works, a narrower claim. Thoth's own three-verbs-in-one-call test already carries the
+    tool-index is reachable server-side over the wire, it proves the underlying function
+    works, a narrower claim. A separate three-verbs-in-one-call test already carries the
     server-vs-client staleness proof; this entry point's job is unblocking the fleet, not
     re-proving that diagnosis.)
 
-    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474's general rule):
-    mirrors the MCP wrapper's own {"id", "amendment", "status"} / {"error": ...} shape by
-    hand, since capture.amend_practice itself returns a bare UUID | None and raises
-    ValueError rather than shaping either receipt itself — the MCP tool's own try/except
-    and None-check are duplicated here on purpose, not softened. Also mirrors the MCP
-    receipt's own `practice` row (thread 55e5ac72, msg 9123, the SAME `practices` Function
-    both entry points read through) — printed after the confirmation line, so this entry
-    point's write is never invisible on its own receipt either."""
+    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT: mirrors the MCP wrapper's
+    own {"id", "amendment", "status"} / {"error": ...} shape by hand, since capture.amend_practice
+    itself returns a bare UUID | None and raises ValueError rather than shaping either receipt
+    itself, the MCP tool's own try/except and None-check are duplicated here on purpose, not
+    softened. Also mirrors the MCP receipt's own `practice` row (read through the SAME
+    `practices` Function both entry points use), printed after the confirmation line, so this
+    entry point's write is never invisible on its own receipt either."""
     from src.actions.core import Actions
     from src.orchestrator.capture import amend_practice
 
@@ -4982,24 +4940,24 @@ async def cmd_amend_practice(
 async def cmd_annotate_thread(
     ref: str, note: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris annotate-thread <ref> <note> --actor <who> — the console-script entry point onto
+    """osiris annotate-thread <ref> <note> --actor <who> - the console-script entry point onto
     capture.annotate_thread, the SAME function the annotate_thread MCP tool wraps (no
     duplicated guard: the blank-note and no-match refusals are exactly annotate_thread's
     own, untouched here).
 
-    NAMED BEFORE IT WAS BUILT: charter_for's own docstring already listed this verb
-    (thread 2474) as sharing fold_project's shape — a verb ships, deploys, and the fleet's
-    live MCP clients cannot see it in their own deferred-tool index (not this module's bug,
-    upstream per ruling 482c3d0f) — but only fold_project/charter_for/amend_practice ever
-    got the second entry point built. This closes that gap.
+    NAMED BEFORE IT WAS BUILT: charter_for's own docstring already listed this verb as
+    sharing fold_project's shape, a verb ships, deploys, and the fleet's live MCP clients
+    cannot see it in their own deferred-tool index (not this module's bug, an upstream
+    staleness issue), but only fold_project/charter_for/amend_practice ever got the second
+    entry point built. This closes that gap.
 
     CALLS THE ORCHESTRATOR FUNCTION DIRECTLY, amend_practice's own precedent: an annotation
-    is a WRITE, and a call_mcp_tool round-trip is anonymous — the MCP wrapper's own
+    is a WRITE, and a call_mcp_tool round-trip is anonymous, the MCP wrapper's own
     `_actor_for` fallback would stamp it with the generic "session" bucket instead of a
     named actor, a real provenance loss for a governance-relevant write.
 
-    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474's general rule):
-    mirrors the MCP wrapper's own {"id", "note", "status"} / {"error": ...} shape by hand."""
+    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT: mirrors the MCP wrapper's
+    own {"id", "note", "status"} / {"error": ...} shape by hand."""
     from src.actions.core import Actions
     from src.orchestrator.capture import annotate_thread
 
@@ -5040,14 +4998,14 @@ async def cmd_rematerialize(
     anchor_sid: str, *, dest: str | None = None, force: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris rematerialize <anchor_sid> [--dest PATH] [--force] — the console-script
+    """osiris rematerialize <anchor_sid> [--dest PATH] [--force] - the console-script
     entry point onto SoulStore.rematerialize_to_disk, the SAME function the rematerialize MCP
     tool wraps (no duplicated guard: the live-transcript refusal and the broken-chain
     report are exactly rematerialize_to_disk's own, untouched here).
 
-    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474's general
-    rule, same as annotate-thread above): mirrors the MCP wrapper's own dict shape by
-    hand rather than a round-trip through the tool itself."""
+    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT, same rule as
+    annotate-thread above: mirrors the MCP wrapper's own dict shape by hand rather than
+    a round-trip through the tool itself."""
     from src.ingest.soul_store import SoulStore
 
     owns_pool = pool is None
@@ -5086,18 +5044,18 @@ async def cmd_rematerialize(
 async def cmd_amend_decision(
     ref: str, addendum: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris amend-decision <ref> <addendum> --actor <who> — the console-script entry point onto
+    """osiris amend-decision <ref> <addendum> --actor <who> - the console-script entry point onto
     capture.amend_decision, the SAME function the amend_decision MCP tool wraps (no
     duplicated guard: the blank-addendum and already-superseded refusals are exactly
     amend_decision's own, untouched here).
 
-    NAMED BEFORE IT WAS BUILT (thread 2474, same gap annotate_thread's own CLI entry point
-    above closes): shipped, deployed, invisible to a stale client's deferred-tool index
-    (ruling 482c3d0f), but never given a second entry point until now.
+    NAMED BEFORE IT WAS BUILT, the same gap annotate_thread's own CLI entry point above
+    closes: shipped, deployed, invisible to a stale client's deferred-tool index, but
+    never given a second entry point until now.
 
     CALLS THE ORCHESTRATOR FUNCTION DIRECTLY (amend_practice's own precedent, same
     reason): a call_mcp_tool round-trip has no mounted identity to stamp the addendum
-    with, only the generic "session" bucket — a real provenance loss.
+    with, only the generic "session" bucket, a real provenance loss.
 
     TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT: mirrors the MCP wrapper's
     own {"id", "addendum", "status"} / {"error": ...} shape by hand."""
@@ -5137,19 +5095,19 @@ async def cmd_amend_decision(
     return 0
 
 
-# --- send / decide / thread (THE WRITE TRIANGLE, dispatch a354ba28, msg 7882 item 2) ------------
+# --- send / decide / thread (the write triangle) --------------------------------------------
 #
-# THE READ TRIANGLE'S OWN COUNTERPART (commit 841fad0 built get_status(render='text') +
-# commands/status.md as "wave 1" of reading the fleet from a bare terminal); these three
-# close the matching gap on the WRITE side — mail, a decision, and closing a thread were
-# each reachable only through an MCP client before this, so an operator (or a script) at a
-# plain shell had no way to post to the fleet's own memory without one. Each calls the SAME
-# orchestrator function its MCP twin wraps (mailbox.send_message / capture.record_decision /
-# capture.resolve_thread(_bulk)), same "no duplicated guard" law annotate-thread/amend-
-# decision above already keep. Named for Khnum's parity gate (5bf6447c): each command's own
-# param set matches its MCP counterpart's exactly (tests/test_cli_mcp_parity.py), via
-# CLI_TO_MCP_NAME for `decide`->`record_decision` and `thread`->`thread:resolve`; `send`
-# needs no override, its name already matches.
+# The counterpart to the read triangle (get_status(render='text') + commands/status.md
+# gave a bare terminal a way to read the fleet); these three close the matching gap on the
+# WRITE side. mail, a decision, and closing a thread were each reachable only through an
+# MCP client before this, so an operator (or a script) at a plain shell had no way to post
+# to the fleet's own memory without one. Each calls the SAME orchestrator function its MCP
+# twin wraps (mailbox.send_message / capture.record_decision / capture.resolve_thread(_bulk)),
+# keeping the same "no duplicated guard" rule annotate-thread/amend-decision above already
+# keep. A parity gate enforces that each command's own param set matches its MCP
+# counterpart's exactly (tests/test_cli_mcp_parity.py), via CLI_TO_MCP_NAME for
+# `decide`->`record_decision` and `thread`->`thread:resolve`; `send` needs no override,
+# its name already matches.
 
 async def cmd_send(
     body: str, *, to: str | None = None, to_agent: str | None = None,
@@ -5159,20 +5117,20 @@ async def cmd_send(
     from_project: str | None = None, actor: str = _CONSOLE_ACTOR,
     as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris send <body> [--to PROJECT | --to-agent AGENT] ... — the console-script entry point
+    """osiris send <body> [--to PROJECT | --to-agent AGENT] ... - the console-script entry point
     onto mailbox.send_message, the SAME function the send MCP tool wraps (no duplicated
     guard: `to`'s unknown-project refusal, the send-entry-point addressing guard on a mismatched
     room, and every seat-resolution refusal below are exactly send_message's own).
 
     `--from-project` is CLI-ONLY (CLI_ONLY_PARAMS, test_cli_mcp_parity.py): the MCP tool
-    derives it from the caller's own mount (`ident.project`) — a bare console caller has
+    derives it from the caller's own mount (`ident.project`), a bare console caller has
     no mount to derive it from, so this names the gap with an explicit flag instead of
     guessing or leaving broadcasts from a console unrouteable.
 
     A NAMED RESIDUAL (not every MCP-side receipt field is reproduced): `dispatch` (the
     immediate wake/poke leg) and `listener` (when `--want-listener`) ARE included, same
     as the MCP receipt; the "crossed-mail" peer-thread warning and the ephemeral-spawn
-    warning are not — a real, bounded gap, not a silent omission, left for whoever next
+    warning are not, a real, bounded gap, not a silent omission, left for whoever next
     finds a console caller actually needs them."""
     from src.orchestrator.mailbox import send_message
 
@@ -5192,21 +5150,19 @@ async def cmd_send(
                   f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
-        # THE TRIGGER-DARK FALSE NEGATIVE (thread bc6a5d455da2, REBOOT SURVIVAL's fleet
-        # half, Thoth mail 10225/10253): dispatch_dm/dispatch_broadcast both default to
-        # `get_settings()` — a bare env read — when no `settings=` is given. The worker's
+        # THE TRIGGER-DARK FALSE NEGATIVE: dispatch_dm/dispatch_broadcast both default to
+        # `get_settings()`, a bare env read, when no `settings=` is given. The worker's
         # own systemd unit carries an environment drop-in setting OSIRIS_TRIGGER_ENABLED;
         # a bare `osiris send` run from an interactive shell has no such drop-in, so this
-        # call reported "trigger-dark" during the 2026-09-13 MCP outage even though the
+        # call reported "trigger-dark" during a past MCP outage even though the
         # operator's actual stored toggle (settings table, key wake.trigger.enabled) was
         # on. `wake.trigger.enabled` is registered effect='next_tick' (settings_registry.
-        # py), so `settings_with_overlay` — opt-in to 'immediate' fields ONLY, a
-        # DELIBERATE risk boundary per that module's own docstring citing Thoth's own
-        # mail 10040 — never surfaces it; widening that shared filter would touch every
-        # one of its other callers for a fix this one call needs. `current_stored_value`
-        # is the narrow escape hatch instead: read this ONE key's current stored value
-        # directly, bypass `effect` filtering entirely, and build the Settings object
-        # this call's own dispatch calls pass in explicitly.
+        # py), so `settings_with_overlay`, which opts in to 'immediate' fields ONLY as a
+        # deliberate risk boundary documented in that module, never surfaces it; widening
+        # that shared filter would touch every one of its other callers for a fix this one
+        # call needs. `current_stored_value` is the narrow escape hatch instead: read this
+        # ONE key's current stored value directly, bypass `effect` filtering entirely, and
+        # build the Settings object this call's own dispatch calls pass in explicitly.
         from src.config.settings import get_settings as _get_settings
         from src.orchestrator.settings_service import current_stored_value
 
@@ -5308,31 +5264,31 @@ async def cmd_decide(
     actor: str = _CONSOLE_ACTOR,
     as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris decide <summary> [--kind K] [--rationale R] ... — the console-script entry point
+    """osiris decide <summary> [--kind K] [--rationale R] ... - the console-script entry point
     onto capture.record_decision, the SAME function the record_decision MCP tool wraps
     (no duplicated guard: idempotent-retry-reuses-the-same-decision, the declare-or-
     refuse link-kind gate, and `supersedes`/`resolves`'s own free-text resolution
-    — `_find_decision`/`_find_thread` — are exactly record_decision's own, untouched
+    (`_find_decision`/`_find_thread`) are exactly record_decision's own, untouched
     here; those two are the only link params it resolves internally).
 
     A NAMED, BOUNDED GAP for the rest: `grounds`/`confirms`/`rediscovers`/`bears_on`/
     `narrows`/`cites`/`implements`/`refutes` are typed as PRE-RESOLVED UUIDs by
     record_decision itself (the MCP wrapper does the free-text/short-id resolution
     BEFORE calling it, via the same `_find_decision`/`_find_thread`/`_find_practice`
-    helpers) — reproducing that whole resolution ladder here would be the exact
-    duplicated-guard risk this entry point's own law forbids, so this console entry point accepts
+    helpers), reproducing that whole resolution ladder here would be the exact
+    duplicated-guard risk this entry point's own rule forbids, so this console entry point accepts
     only an EXACT uuid for each (never a canonical string or short-id prefix), and
-    `--ack-prior-art` is accepted for CLI/MCP name parity but has no effect — no
+    `--ack-prior-art` is accepted for CLI/MCP name parity but has no effect, no
     prior-art search runs from a bare terminal, so there is nothing to acknowledge.
 
-    `--operator-authorized` (decision 12efe065): this decision carries the operator's
-    OWN authority — mints a `ruled_by` edge to the operator's own Person object.
+    `--operator-authorized`: this decision carries the operator's
+    OWN authority, mints a `ruled_by` edge to the operator's own Person object.
     A bare terminal is exactly where a human operator IS typing directly, so this flag
-    is real here, not a stub — set it only when this decision really is the operator's
+    is real here, not a stub, set it only when this decision really is the operator's
     ruling.
 
     TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT, same rule amend-decision/
-    annotate-thread above keep — but this hand-builds a LEANER receipt than the MCP
+    annotate-thread above keep, but this hand-builds a LEANER receipt than the MCP
     wrapper's own (no `content_landed`/`prior_art`/`resolved_thread` echo): a named,
     bounded gap, not a silent one."""
     import uuid as uuid_mod
@@ -5404,13 +5360,13 @@ async def cmd_decide(
     return 0
 
 
-# --- settle (#93, THE MECHANICAL SETTLE, Thoth mail 11789): the console-script entry point onto
-# the settle MCP tool, called OVER THE WIRE — unlike cmd_decide above, settle()'s own logic
-# lives entirely in mcp_server.py, never split into a directly-callable orchestrator
-# function, so this entry point reaches the wire, same shape as osiris backfill/osiris backup-
-# settings (a write entry point with no local orchestrator function to call instead). Built so
-# scripts/osiris_hook.py's own PreCompact fallback (a stdlib-only script with no MCP
-# client) has a real subcommand to mint a machine-handoff decision through.
+# --- settle: the console-script entry point onto the settle MCP tool, called OVER THE
+# WIRE. Unlike cmd_decide above, settle()'s own logic lives entirely in mcp_server.py,
+# never split into a directly-callable orchestrator function, so this entry point reaches
+# the wire, same shape as osiris backfill/osiris backup-settings (a write entry point
+# with no local orchestrator function to call instead). Built so scripts/osiris_hook.py's
+# own PreCompact fallback (a stdlib-only script with no MCP client) has a real
+# subcommand to mint a machine-handoff decision through.
 
 async def cmd_settle(
     *, decisions: str | None = None, threads_open: str | None = None,
@@ -5419,11 +5375,11 @@ async def cmd_settle(
     as_json: bool = False, text: bool = False,
 ) -> int:
     """osiris settle [--decisions JSON] [--threads-open JSON] [--threads-resolve JSON]
-    [--repo-path PATH] [--standing-orders unchanged] [--because R] — no args = the
+    [--repo-path PATH] [--standing-orders unchanged] [--because R] - no args = the
     read-only completeness-boxes surface, same as calling settle() with nothing. Each
     of --decisions/--threads-open/--threads-resolve is a JSON array of objects, each
     object that verb's own kwargs (same convention as `osiris composition run-spec
-    --spec`'s own JSON-blob argument) — `[{"summary": "...", "is_handoff": true}]` for
+    --spec`'s own JSON-blob argument): `[{"summary": "...", "is_handoff": true}]` for
     one handoff decision, for instance."""
     import json as json_mod
 
@@ -5465,18 +5421,18 @@ async def cmd_thread(
     dry_run: bool = True, actor: str = _CONSOLE_ACTOR, as_json: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris thread <ref>... [--because W] [--artifact A] [--dry-run/--no-dry-run] —
+    """osiris thread <ref>... [--because W] [--artifact A] [--dry-run/--no-dry-run] -
     the console-script entry point onto the `thread` MCP tool's own `action='resolve'` branch
     (the terminal-native reading of a bare "thread" verb: closing one). A DELIBERATE
     NARROWING (same shape as `desk`/`show`'s own declared narrowings, NO_MCP_EQUIVALENT's
     reasoning in test_cli_mcp_parity.py): `thread`'s other three actions (annotate/
-    correct_summary/reclassify) have no console entry point here — annotate already has its own
+    correct_summary/reclassify) have no console entry point here, annotate already has its own
     (`annotate-thread`); the other two are a real, left-open gap, not silently dropped.
 
-    ONE ref resolves through capture.resolve_thread directly (no dry_run — the single-ref
+    ONE ref resolves through capture.resolve_thread directly (no dry_run, the single-ref
     primitive has never had one); MORE THAN ONE routes through resolve_threads_bulk,
-    where --dry-run (default True, matching the MCP tool's own default) actually applies
-    — this mirrors `_thread_action_impl`'s own resolve branch exactly, not a
+    where --dry-run (default True, matching the MCP tool's own default) actually applies,
+    this mirrors `_thread_action_impl`'s own resolve branch exactly, not a
     reimplementation of it."""
     from src.actions.core import Actions
     from src.orchestrator.capture import resolve_thread, resolve_threads_bulk
@@ -5517,7 +5473,7 @@ async def cmd_thread(
     return 0
 
 
-# --- proposal (miners as last resort, item 2, decision ac892cd9) -------------------------------
+# --- proposal (miners as a last resort) ---------------------------------------------------------
 
 async def cmd_proposal(
     action: str, *, from_id: str | None = None, link_type: str | None = None,
@@ -5527,9 +5483,9 @@ async def cmd_proposal(
     actor: str = _CONSOLE_ACTOR, as_json: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris proposal <propose|accept|reject> ... — the console-script entry point onto
+    """osiris proposal <propose|accept|reject> ... - the console-script entry point onto
     `_proposal_action_impl`, the SAME function the `proposal` MCP tool wraps (miners as
-    last resort, decision ac892cd9). `--candidate` takes a JSON string
+    a last resort). `--candidate` takes a JSON string
     ('{"kind":"link",...}' or '{"kind":"object",...}') since a graph write's own shape
     has no flat flag equivalent."""
     import json as _json
@@ -5576,30 +5532,29 @@ async def cmd_proposal(
     return 0
 
 
-# --- rebind-seat / correct-pin-value (thread 6437, #199's parity lane) --------------------------
+# --- rebind-seat / correct-pin-value -------------------------------------------------------------
 #
-# THE JESUS/CHAD PATH, FROM A TERMINAL: a seat self-reconciling ran exactly
-# merge(dupe,into) -> rebind_seat(seat,new_cwd) -> correct_pin_value(key,value) through MCP
-# (msg 6374, thread 6369). merge/unmerge already had a console entry point; these two did not, so a
-# human doing the SAME reconciliation by hand — the whole point of a CLI, per the operator's
-# own "cli shared, mcp agent, slash for human" model — had no way to run it. Both below call
-# the SAME orchestrator function their MCP twin wraps (mounts.rebind_seat /
-# offices.correct_own_pin_value), no parallel implementation — #135's parity gate ruling
-# binds here exactly as it did for `osiris bootstrap`.
+# A SEAT SELF-RECONCILING, FROM A TERMINAL: reconciling a seat runs exactly
+# merge(dupe,into) -> rebind_seat(seat,new_cwd) -> correct_pin_value(key,value) through MCP.
+# merge/unmerge already had a console entry point; these two did not, so a human doing the
+# SAME reconciliation by hand, the whole point of having a CLI at all, had no way to run it.
+# Both below call the SAME orchestrator function their MCP twin wraps (mounts.rebind_seat /
+# offices.correct_own_pin_value), no parallel implementation: the parity requirement applies
+# here exactly as it did for `osiris bootstrap`.
 
 
 async def cmd_rebind_seat(
     seat_or_agent: str, new_cwd: str, *, actor: str, extract: bool = False,
     because: str = "", force: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris rebind-seat <seat> <new_cwd> --actor <who> — the console-script entry point
+    """osiris rebind-seat <seat> <new_cwd> --actor <who> - the console-script entry point
     onto mounts.rebind_seat, the SAME function the rebind_seat MCP tool wraps (no duplicated
     resolution: the claimed-name / raw-agent-id / unclaimed-seat-handle fallback chain, and
     the extract=True seat-offices-move shape, are exactly rebind_seat's own, untouched here).
 
     TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT: prints the full result dict
-    the MCP tool would also return, nothing dropped — the same discipline charter-for's own
-    CLI entry point established (thread 2474)."""
+    the MCP tool would also return, nothing dropped, the same discipline charter-for's own
+    CLI entry point established."""
     from src.actions.core import Actions
     from src.orchestrator.mounts import rebind_seat
 
@@ -5639,15 +5594,15 @@ async def cmd_correct_pin_value(
     handle_or_agent: str, key: str, value: str, reason: str, *,
     pool: asyncpg.Pool | None = None, office_root: Path | None = None,
 ) -> int:
-    """osiris correct-pin-value <seat> <key> <value> --because <reason> --actor <who> — the
+    """osiris correct-pin-value <seat> <key> <value> --because <reason> --actor <who> - the
     console-script entry point onto offices.correct_own_pin_value, the SAME function the
     correct_pin_value MCP tool wraps. THE ONE DIFFERENCE FROM ITS MCP TWIN, NAMED HONESTLY:
-    the MCP tool is self-scoped by construction (`ident.agent_id`, the mounted caller — it can
+    the MCP tool is self-scoped by construction (`ident.agent_id`, the mounted caller, it can
     only ever correct ITS OWN seat's pin). A terminal has no mounted identity to be self about,
-    so this entry point takes an EXPLICIT target instead — same shape rebind-seat's own
+    so this entry point takes an EXPLICIT target instead, same shape rebind-seat's own
     console entry point already uses (`seat_or_agent`, resolved the identical way:
     resolve_handle, falling back to a raw agent id that genuinely exists). correct_own_pin_value
-    itself is untouched — its own held_seat resolution, its own refusal on a caller holding no
+    itself is untouched, its own held_seat resolution, its own refusal on a caller holding no
     seat, its own required-reason
     and existing-key-only guards all still apply, now just to a NAMED seat rather than an
     implicit one."""
@@ -5698,12 +5653,12 @@ async def cmd_correct_pin_value(
         print(f"corrected {out.get('seat_id', handle_or_agent)}'s {key}: "
               f"{out['old_value']!r} -> {out['new_value']!r}")
         print(f"  path: {out['path']}  backup: {out['backup']}")
-    # THE OFFICE-ONLY EARLY RETURN WAS A REAL BUG (found live, Jesus's own workspace pin,
-    # 2026-09-04): correct_own_pin_value ALWAYS checks/corrects the anchor and workspace
-    # copies too (ruling b30e2b38/thread 6483-6504), regardless of whether the office copy
-    # itself needed a write -- a caller whose office was already correct but whose second or
-    # third copy genuinely got corrected used to see "already X -- nothing written" with no
-    # mention the write happened. Report each present copy separately, every time.
+    # THE OFFICE-ONLY EARLY RETURN WAS A REAL BUG (found live in a workspace pin):
+    # correct_own_pin_value ALWAYS checks/corrects the anchor and workspace copies too,
+    # regardless of whether the office copy itself needed a write. a caller whose office
+    # was already correct but whose second or third copy genuinely got corrected used to
+    # see "already X, nothing written" with no mention the write happened. Report each
+    # present copy separately, every time.
     for copy in ("anchor", "workspace"):
         detail = out.get(copy)
         if detail is None:
@@ -5724,14 +5679,14 @@ async def cmd_transition_seat_project(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris transition-seat-project <seat> [--fabricated-project P] [--real-project P]
-    [--repos R ...] [--because <reason>] [--apply] — the console-script entry point onto
+    [--repos R ...] [--because <reason>] [--apply] - the console-script entry point onto
     transition.transition_seat_project, the SAME function the transition_seat_project
     MCP tool wraps. THE ONE DIFFERENCE FROM ITS MCP TWIN, NAMED HONESTLY: the MCP tool
-    is self-scoped by construction (the mounted caller's own agent_id) — a terminal has
+    is self-scoped by construction (the mounted caller's own agent_id), a terminal has
     no mounted identity to be self about, so this entry point takes an EXPLICIT target, same
     resolution shape correct-pin-value's own console entry point already uses.
 
-    `--apply` is required to actually write — dry_run=True is the default, matching
+    `--apply` is required to actually write, dry_run=True is the default, matching
     every other repair verb in this house."""
     from src.orchestrator.agents import resolve_handle
     from src.orchestrator.transition import transition_seat_project
@@ -5791,20 +5746,20 @@ async def cmd_heal_seat_anchor(
     seat_or_handle: str, *, because: str, apply: bool = False, actor: str,
     pool: asyncpg.Pool | None = None, office_root: Path | None = None,
 ) -> int:
-    """osiris heal-seat-anchor <seat> --because <reason> [--apply] — the console-script
+    """osiris heal-seat-anchor <seat> --because <reason> [--apply] - the console-script
     entry point onto identity_heal.heal_seat_anchor_third_party, the SAME function the
     heal_seat_anchor_third_party MCP tool wraps. Always the third-party entry point, same
     reasoning as correct-pin-value's own console twin: a terminal has no mounted identity
     to be self-scoped about, so this always names an EXPLICIT target and always requires
-    `--because` — THE ANCHOR INVARIANT (ruling 23771416): a seat's anchor_cwd is identity,
-    always `<office_root>/<handle>`, never wherever a session happened to be sitting.
+    `--because`. THE ANCHOR INVARIANT: a seat's anchor_cwd is identity, always
+    `<office_root>/<handle>`, never wherever a session happened to be sitting.
 
-    `seat_or_handle` accepts either — a bare `seat:...` canonical passes straight through;
+    `seat_or_handle` accepts either, a bare `seat:...` canonical passes straight through;
     anything else resolves via `seats.seats_by_handle` (case-insensitive, house-agnostic,
     the same lookup `osiris launch`'s own target resolution uses), refusing loudly on zero
     or ambiguous (>1) matches rather than guessing.
 
-    `--apply` is required to actually write — dry_run=True is the default, matching every
+    `--apply` is required to actually write, dry_run=True is the default, matching every
     other repair verb in this house (the backfill scripts' own `--apply` convention)."""
     from src.actions.core import Actions
     from src.orchestrator.identity_heal import heal_seat_anchor_third_party
@@ -5864,8 +5819,8 @@ async def cmd_heal_seat_anchor(
 
 
 async def _resolve_target_agent(actions: Any, handle_or_agent: str) -> str | None:
-    """Handle or raw agent id -> a real, existing agent id — the same fallback shape
-    cmd_correct_pin_value already uses (#204: shared here since three new entry points below need
+    """Handle or raw agent id -> a real, existing agent id, the same fallback shape
+    cmd_correct_pin_value already uses (shared here since three new entry points below need
     the identical resolution and a terminal has no mounted identity to be self-scoped
     about, so all of them take an EXPLICIT target)."""
     from src.orchestrator.agents import resolve_handle
@@ -5884,9 +5839,9 @@ async def cmd_correct_agent_house(
     actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris correct-agent-house <agent> [--project P] [--seat-generation N] [--actor W]
-    — DEPRECATED alias for `correct-agent-project`, kept this release only (ONE
-    TAXONOMY, ruling 52a59652/70c001ec). A thin wrapper, never a second
-    implementation — the underlying Agent property was already named `project`."""
+    - DEPRECATED alias for `correct-agent-project`, kept this release only, to keep one
+    taxonomy. A thin wrapper, never a second implementation, the underlying Agent
+    property was already named `project`."""
     print("osiris correct-agent-house: deprecated, use correct-agent-project. Kept as "
           "an alias this release only", file=sys.stderr)
     return await cmd_correct_agent_project(
@@ -5899,12 +5854,11 @@ async def cmd_correct_agent_project(
     actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris correct-agent-project <agent> [--project P] [--seat-generation N] [--actor W]
-    — the console-script entry point onto orchestrator.agents.correct_agent_house, the SAME
-    function the correct_agent_house MCP tool wraps (#204, the #199 lane 3B audit's
-    real gap; the MCP action's own name is Sekhmet's surface, unchanged this wave).
-    UNLIKE correct_house (self-scoped), NOT self-scoped — the target need not be the
-    caller, so this takes an EXPLICIT target, resolved the same handle-or-raw-id way
-    correct-pin-value's own console entry point does."""
+    - the console-script entry point onto orchestrator.agents.correct_agent_house, the SAME
+    function the correct_agent_house MCP tool wraps (the MCP action's own name predates this
+    entry point and is unchanged here). UNLIKE correct_house (self-scoped), NOT self-scoped,
+    the target need not be the caller, so this takes an EXPLICIT target, resolved the same
+    handle-or-raw-id way correct-pin-value's own console entry point does."""
     from src.actions.core import Actions
     from src.orchestrator.agents import correct_agent_house as _correct_agent_house
 
@@ -5947,11 +5901,11 @@ async def cmd_correct_agent_project(
 async def cmd_declare_machine_identity(
     email: str, project: str, *, because: str, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris declare-machine-identity <email> <project> --because W [--actor W] — the
+    """osiris declare-machine-identity <email> <project> --because W [--actor W] - the
     console-script entry point onto ingest.gitlog.declare_machine_identity, the SAME function
-    the declare_machine_identity MCP tool wraps (ruling edb6b0fc): covers what git
-    ingest's own heuristic misses — a bot on a real-looking domain, a local part that
-    doesn't match any ingested repo's own name."""
+    the declare_machine_identity MCP tool wraps: covers what git ingest's own heuristic
+    misses, a bot on a real-looking domain, a local part that doesn't match any ingested
+    repo's own name."""
     from src.actions.core import Actions
     from src.ingest.gitlog import declare_machine_identity as _declare
 
@@ -5988,10 +5942,10 @@ async def cmd_declare_machine_identity(
 async def cmd_reconcile_merge(
     dupe: str, into: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris reconcile-merge <dupe> <into> [--actor W] — the console-script entry point onto
+    """osiris reconcile-merge <dupe> <into> [--actor W] - the console-script entry point onto
     orchestrator.merge.reconcile_merge, the SAME function the reconcile_merge MCP tool
-    wraps (#204). Repairs the estate a partial first fold left stranded on an
-    ALREADY-MERGED dupe — never re-performs the merge itself (that's `merge`'s job)."""
+    wraps. Repairs the records a partial first merge left stranded on an
+    ALREADY-MERGED dupe, never re-performs the merge itself (that's `merge`'s job)."""
     from src.actions.core import Actions
     from src.orchestrator.merge import reconcile_merge as _reconcile_merge
 
@@ -6028,9 +5982,9 @@ async def cmd_retire_agent(
     handle_or_agent: str, because: str, *, override_live: bool = False, actor: str,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris retire-agent <agent> --because <reason> [--override-live] [--actor W] — the
+    """osiris retire-agent <agent> --because <reason> [--override-live] [--actor W] - the
     console-script entry point onto orchestrator.agents.retire_agent, the SAME function the
-    retire_agent MCP tool wraps (#204). Third-party retirement, complementing the
+    retire_agent MCP tool wraps. Third-party retirement, complementing the
     self-scoped `retire` (a raw terminal has no mounted session of its own to retire, so
     this always names an EXPLICIT target). ALWAYS releases the target's held seat and
     mount rows on success; refuses on a target seen live within 15 min unless
@@ -6077,9 +6031,9 @@ async def cmd_retire_agent(
 async def cmd_fleet_reconcile(
     *, execute: bool = False, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris fleet-reconcile [--execute] [--actor W] — the console-script entry point onto
+    """osiris fleet-reconcile [--execute] [--actor W] - the console-script entry point onto
     orchestrator.fleet_reconcile.reconcile_execute, the SAME function the fleet_reconcile
-    MCP tool wraps (#204). Dry run is the default (returns the plan, writes nothing);
+    MCP tool wraps. Dry run is the default (returns the plan, writes nothing);
     --execute performs it, re-reading the tray fresh immediately before acting."""
     from src.actions.core import Actions
     from src.orchestrator.fleet_reconcile import reconcile_execute
@@ -6114,12 +6068,12 @@ async def cmd_fleet_reconcile(
 async def cmd_fleet_prune(
     *, execute: bool = False, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris fleet-prune [--execute] [--actor W] — the console-script entry point onto
-    orchestrator.fleet_prune.prune_execute (thread 07ca68ca, wave 8), the same function
+    """osiris fleet-prune [--execute] [--actor W] - the console-script entry point onto
+    orchestrator.fleet_prune.prune_execute, the same function
     `agent(action='fleet_prune')` wraps. Dry run is the default (returns the plan, writes
     nothing); --execute performs it. Deliberately narrower than fleet-reconcile: only
     dead_transcript (a mount row whose own job_dir is gone from disk) and unclaimed_body
-    (a live OS body bound to its seat when tree_seat_hint resolves one) — fleet-reconcile's
+    (a live OS body bound to its seat when tree_seat_hint resolves one), fleet-reconcile's
     own identity-folding buckets stay behind its own kill switch, untouched here."""
     from src.actions.core import Actions
     from src.orchestrator.fleet_prune import prune_execute
@@ -6158,18 +6112,17 @@ async def cmd_backfill(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris backfill <target> [--apply] [--because R] [--only-bases ID,...]
-    [--limit N] [--newest-first] [--json] [--actor W] — the console-script entry point onto
+    [--limit N] [--newest-first] [--json] [--actor W] - the console-script entry point onto
     orchestrator.backfill.run_backfill, the SAME function the `backfill` MCP tool and
-    the UI's Repairs panel call (thread c89a9873, wave 22, ruling 7be61879). Dry run is
-    the default for every target (returns the receipt, writes nothing); `--apply`
-    performs it.
+    the UI's Repairs panel call. Dry run is the default for every target (returns the
+    receipt, writes nothing); `--apply` performs it.
 
     `agent_project_links` predates the underlying tool's own because-required-to-write
-    convention (a historical exemption) — this entry point does NOT inherit that exemption: a
+    convention (a historical exemption); this entry point does NOT inherit that exemption: a
     `--because` is required to `--apply` regardless of target, a stricter contract this
-    surface imposes on its own, deliberately (thread c89a9873's own scope note).
+    surface imposes on its own, deliberately.
 
-    `--limit`/`--newest-first` (thread e332177f) are consulted only by
+    `--limit`/`--newest-first` are consulted only by
     provenance_possible_upstream, ignored by every other target."""
     from src.orchestrator.backfill import run_backfill
 
@@ -6218,14 +6171,14 @@ async def cmd_graph_migrate(
     only_seat: str | None = None,
 ) -> int:
     """osiris graph-migrate <target> [--apply] [--because R] [--json] [--actor W]
-    [--only SEAT] — the
-    console-script entry point onto orchestrator.graph_migrations.run_migration (DRAWING THE
-    WHOLE GRAPH, thread 325ef660): three graph-shape repairs (repo:seats' phantom
-    project, the unfiled-object fog, the assertion-pair-to-real-link mints) feeding the
-    physics layout and the renderer, the SAME dry-run-default/because-required-to-apply
-    shape `osiris backfill` already established for the identity/provenance population
-    -- a separate entry point, not a new backfill target, because this is a different repair
-    class (graph shape, not identity/provenance). Named `graph-migrate` rather than
+    [--only SEAT] - the
+    console-script entry point onto orchestrator.graph_migrations.run_migration: three
+    graph-shape repairs (repo:seats' phantom project, the unfiled-object fog, the
+    assertion-pair-to-real-link mints) feeding the physics layout and the renderer, the
+    SAME dry-run-default/because-required-to-apply shape `osiris backfill` already
+    established for the identity/provenance population, a separate entry point, not a
+    new backfill target, because this is a different repair class (graph shape, not
+    identity/provenance). Named `graph-migrate` rather than
     `migrate` to avoid colliding with the pre-existing `osiris migrate` (alembic's
     env-correct schema tool, unrelated). Dry run is the default (returns the receipt,
     writes nothing); `--apply` performs it, and REQUIRES `--because`. `--only SEAT`
@@ -6275,10 +6228,10 @@ async def cmd_heal_seat_transcript(
     handle: str, source_paths: list[str], *, apply: bool = False, because: str = "",
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris heal-seat-transcript <handle> <source_paths...> [--because R] [--apply] —
+    """osiris heal-seat-transcript <handle> <source_paths...> [--because R] [--apply] -
     the console-script entry point onto orchestrator.transcript_splice.heal_seat_transcript, the
-    SAME function the heal_seat_transcript MCP tool wraps (#204: THE ORIGINAL specimen
-    this whole lane exists to prevent recurring — it shipped with no CLI entry point at all).
+    SAME function the heal_seat_transcript MCP tool wraps. THE ORIGINAL specimen this
+    whole lane exists to prevent recurring: it shipped with no CLI entry point at all.
     `--apply` is required to actually write, matching every other repair verb in this
     house; dry_run reports clean/refused per pair and where the result would land."""
     from src.orchestrator.transcript_splice import heal_seat_transcript as _heal
@@ -6319,7 +6272,7 @@ async def cmd_heal_seat_transcript(
 
 def _context_project() -> str | None:
     """The project to hunt for a lone manager candidate in: the cwd's own `.osiris` pin
-    (`project = "..."`) only (Thoth mail 12000, implements 70c001ec) — a seat's project
+    (`project = "..."`) only. A seat's project
     is never taken as a second, independently-given value, so there is no `--project`
     override here and no bare-cwd-basename guess either; a caller outside a pinned
     directory must pass `--manager` explicitly."""
@@ -6333,10 +6286,10 @@ async def _infer_manager(
 ) -> tuple[str | None, str | None]:
     """(manager_handle, error). The SOLE existing seat whose own derived project matches
     `project`, never a guess among several and never a fabricated manager for an empty
-    project — crossing into a brand-new project always needs an explicit --manager naming
+    project. Crossing into a brand-new project always needs an explicit --manager naming
     a seat that already exists somewhere else (mint_seat's own cross-house guard requires
     it; an empty project has nothing to infer from by construction, and inventing one here
-    would be exactly the silent-guess failure #135 exists to name)."""
+    would be exactly the kind of silent guess this command avoids elsewhere)."""
     if not project:
         return None, ("no --manager given and no project could be inferred (no .osiris "
                       "pin here). Pass --manager explicitly, or run this from inside a "
@@ -6362,48 +6315,47 @@ async def cmd_mint_seat(
     pool: asyncpg.Pool | None = None, office_root: Path | None = None,
 ) -> int:
     """osiris mint-seat <handle> [--manager <seat>] [--project P] [--model M]
-    [--actor <who>] [--adopt] [--force] — the console-script entry point onto mintseat.mint_seat,
+    [--actor <who>] [--adopt] [--force] - the console-script entry point onto mintseat.mint_seat,
     the SAME function the mint_seat MCP tool wraps (no duplicated guard: the near-miss/
     cross-house/live-adopt refusals are exactly mint_seat's own, untouched here).
 
-    NO SEPARATE --house FLAG (Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY"): a
-    seat's project is never a second, independently-declared value — the new worker's
+    NO SEPARATE --house FLAG, keeping one taxonomy: a
+    seat's project is never a second, independently-declared value, the new worker's
     own project comes from its manager's own project by construction (mint_seat's own
     `resolved_house = house or manager_house`, house always omitted from this entry point now),
     the same "house(seat) IS the manager's own project" convention derive_house's own
     docstring already names. `--project` here is unrelated: it stamps this worker's own
-    `.osiris` pin (never a `governs` charter edge — mint_seat deliberately never mints
-    one, "inventing it on an unlaunched mind's behalf"), a distinct fact from which
+    `.osiris` pin (never a `governs` charter edge, mint_seat deliberately never mints
+    one for a seat that has not yet chosen its own charter), a distinct fact from which
     project it belongs to.
 
     A DIFFERENT SHAPE OF GAP than fold_project/charter_for/amend_practice's stale-tool-
-    index class: mint_seat's own MCP tool has no `manager` parameter at all — it INFERS
-    the manager from the CALLING agent's own held seat ("the calling seat is always the
-    manager... minting into someone else's org is a console act, deliberately absent
-    here", mint_seat's own docstring). A raw terminal has no mounted agent identity to
-    infer from, so this entry point took `manager` explicitly at first — then dispatch 3678 (the
-    operator's own "make the cli friendly") asked for that requirement inferred too, the
+    index class: mint_seat's own MCP tool has no `manager` parameter at all, it INFERS
+    the manager from the CALLING agent's own held seat (mint_seat's own docstring notes
+    the calling seat is always the manager, and minting into someone else's org is a
+    console act, deliberately absent there). A raw terminal has no mounted agent identity to
+    infer from, so this entry point took `manager` explicitly at first, then a later request
+    for a friendlier CLI asked for that requirement inferred too, the
     same way `--actor` already is: when `manager` is omitted, `_infer_manager` looks for
     the SOLE seat in the target project (`_context_project`: the cwd's own .osiris pin
-    only) and refuses loudly — never guesses — if that's zero or several. Closes the
-    exact gap CLI.md's own house law names: an operator standing up a brand-new seat had
-    no entry point but a hand-rolled `python -c` heredoc against the live DB — precisely what
-    ruling 45b074bf bans.
+    only) and refuses loudly, never guesses, if that's zero or several. Closes the
+    gap where an operator standing up a brand-new seat had
+    no entry point but a hand-rolled `python -c` heredoc against the live DB, precisely the
+    kind of raw-DB script this project's own practice bans.
 
     Prints mint_seat's own occupancy-aware `next_step_cli` (vacant: `osiris launch
     <handle>`; occupied/cold: nothing needed) rather than a second, driftable copy of
-    that advice — the terminal-appropriate twin of `next_step`, which stays MCP-native
-    call syntax for the `mint_seat` tool's own agent callers (thread bc11a2d3/msg 6262).
+    that advice, the terminal-appropriate twin of `next_step`, which stays MCP-native
+    call syntax for the `mint_seat` tool's own agent callers.
 
-    `office_root` is TEST-ONLY plumbing (no CLI flag exposes it — a real operator never
+    `office_root` is TEST-ONLY plumbing (no CLI flag exposes it, a real operator never
     wants scaffolding anywhere but the standard `~/.osiris/seats/` location, so this
     stays a keyword-only escape hatch): mint_seat/_scaffold_office already accept an
     injectable office_root for exactly this, but this console entry point never threaded it
-    through — every unmocked test-level call scaffolded a REAL office under the
+    through, every unmocked test-level call scaffolded a REAL office under the
     developer's real home directory while the DB side rolled back in a test transaction,
-    leaving a directory on disk with no matching Seat (climintworker1/inferredworker1,
-    Thoth's msg 3928/6026 — an office with no Seat, the exact inverse of #139's mint-entry-point
-    catalog, manufactured by our own test suite on every real run)."""
+    leaving a directory on disk with no matching Seat, an office with no Seat, manufactured
+    by our own test suite on every real run."""
     from src.actions.core import Actions
     from src.orchestrator.mintseat import mint_seat as _mint_seat
 
@@ -6451,9 +6403,9 @@ async def cmd_mint_seat(
     if office:
         print(f"seat directory: {office['office']} (pin {office['osiris_pin']}, orders "
               f"{office['standing_orders']}, charter {office['charter_file']})")
-        # THE PROJECT CONFESSION, same voice as `osiris new`'s own (decision 24e0b761):
+        # THE PROJECT CONFESSION, same voice as `osiris new`'s own:
         # only fires when this call actually WROTE the pin (`project_declared is None`
-        # means the pin already existed and was left untouched — nothing new to confess).
+        # means the pin already existed and was left untouched, nothing new to confess).
         if office.get("osiris_pin_project_declared") is False:
             print("project: unset in this seat directory's pin. No --project given, "
                   "none invented. mount will fill this in on its own once the graph "
@@ -6472,25 +6424,24 @@ async def cmd_new(
     handle: str, path: str | None, *, project: str | None,
     model: str | None, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris new <handle> [path] [--project P] [--model M] [--actor <who>] — NO
-    SEPARATE --house FLAG (Thoth mail 12000, implements 70c001ec): a self-managed
+    """osiris new <handle> [path] [--project P] [--model M] [--actor <who>] - NO
+    SEPARATE --house FLAG: a self-managed
     seat has no manager to derive its own project from, so `--project` is the ONE
-    source for both the pin declaration and the Seat's own house/project property —
+    source for both the pin declaration and the Seat's own house/project property,
     never two flags that could disagree.
-    ONE command, no ceremony (dispatch 3685/3688, the operator's own "too much witchcraft to
-    spawn a project... I'll remember 'osiris new' boom"): found a SELF-MANAGED seat —
-    Ooblek's own real shape, read off its own dossier before this was built rather than
-    assumed — a directory + `.osiris` pin for its own code workspace (created if absent,
+    ONE command, no unnecessary setup steps: found a SELF-MANAGED seat, an existing
+    seat's own real shape, read off its own dossier before this was built rather than
+    assumed, a directory + `.osiris` pin for its own code workspace (created if absent,
     `path` defaults to `~/code/<handle>`), a Seat with NO `managed_by` edge ever, an
     office scaffold at the standard `~/.osiris/seats/<handle>/` location, and its tree
-    bound to the workspace (`bind_seat_tree` — distinct from the office, offices.py's own
-    "code stays in the repos they GOVERN"). The console-script entry point onto
+    bound to the workspace (`bind_seat_tree`, distinct from the office, offices.py's own
+    convention that code stays in the repos a seat governs). The console-script entry point onto
     mintseat.found_seat, which composes mint_seat's OWN primitives (`ensure_seat`,
     `_scaffold_office`) rather than reimplementing them.
 
-    Does not create a `governs` edge — the new seat charters itself, live, on its own
-    first turn (its own compiled CLAUDE.md says so), matching Ooblek's real bootstrap
-    order: self-claimed, then officed, then — once actually live — self-chartered.
+    Does not create a `governs` edge, the new seat charters itself, live, on its own
+    first turn (its own compiled CLAUDE.md says so), matching a self-managed seat's real
+    bootstrap order: self-claimed, then officed, then, once actually live, self-chartered.
 
     `osiris new` and `osiris launch` are the two commands meant to be memorized: found,
     then launch. Prints the exact `osiris launch <handle>` line so the second half never
@@ -6498,11 +6449,11 @@ async def cmd_new(
     from src.actions.core import Actions
     from src.orchestrator.mintseat import found_seat as _found_seat
 
-    # THE CONFESSION, BEFORE ANYTHING IS WRITTEN (thread bc11a2d3/msg 6262, the operator's
-    # real transcript: `mkdir cdking && cd cdking && osiris new Chad` silently created
-    # ~/code/chad instead — cdking is now an orphan). Never silently switches the default
-    # to cwd (deriving-by-convention is the exact trap the earlier anchor_cwd bug came
-    # from) — only names both paths and the exact remedy, so the operator decides.
+    # THE CONFESSION, BEFORE ANYTHING IS WRITTEN: a real incident showed `mkdir cdking &&
+    # cd cdking && osiris new Chad` silently creating ~/code/chad instead, leaving cdking
+    # an orphan directory. Never silently switches the default
+    # to cwd (deriving-by-convention is the exact trap an earlier anchor_cwd bug came
+    # from), only names both paths and the exact remedy, so the operator decides.
     if path is None:
         cwd = Path.cwd()
         default_workspace = Path.home() / "code" / handle.lower()
@@ -6541,10 +6492,10 @@ async def cmd_new(
         return 1
     print(f"{'founded' if out['seat_minted'] else 'converged on'} {out['handle']} "
           f"({out['seat_id']}): self-managed, no manager")
-    # THE PROJECT CONFESSION (the operator, live, 2026-09-02: "the thing cannot handle
-    # 'no project' — it falsely creates a jesus project and a chad project when really
-    # they are working somewhere else", decision 24e0b761): no --project no longer
-    # fabricates one from the handle — say so plainly, the same "confess, never assume"
+    # THE PROJECT CONFESSION: an earlier version fabricated a project name from the seat
+    # handle whenever no --project was given, creating phantom projects when the seat was
+    # really working somewhere else. no --project no longer
+    # fabricates one from the handle, say so plainly, the same "confess, never assume"
     # voice as the cwd-default note above, rather than leaving a silent `project: None`
     # for the next reader to puzzle over.
     if out["project"]:
@@ -6558,10 +6509,10 @@ async def cmd_new(
     if office:
         print(f"seat directory: {office['office']} (pin {office['osiris_pin']}, orders "
               f"{office['standing_orders']}, charter {office['charter_file']})")
-    # THE CASE NOTE (thread bc11a2d3/msg 6262): resolution is case-insensitive by design
-    # — this is not a bug — but a caller who typed 'Chad' and sees 'chad' in every path
-    # with nothing saying so reads it as unpredictable. Say plainly which is which,
-    # only when they actually differ.
+    # THE CASE NOTE: resolution is case-insensitive by design,
+    # this is not a bug, but a caller who typed a capitalized handle and sees it
+    # lowercased in every path with nothing saying so reads it as unpredictable. Say
+    # plainly which is which, only when they actually differ.
     if out["handle"] != out["handle"].lower():
         print(f"note: paths use the lowercase form ({out['handle'].lower()!r}). The "
               f"handle itself keeps your capitalization ({out['handle']!r}). Both name "
@@ -6578,41 +6529,40 @@ async def cmd_new(
 async def cmd_bootstrap(
     cwd: str, *, project: str | None, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris bootstrap <cwd> [--project P] [--actor <who>] — the console-script entry point
-    onto bootstrap.bootstrap_project, the SAME function the `bootstrap` MCP tool wraps —
+    """osiris bootstrap <cwd> [--project P] [--actor <who>] - the console-script entry point
+    onto bootstrap.bootstrap_project, the SAME function the `bootstrap` MCP tool wraps,
     same name, same first param name (`cwd`, matching the MCP tool's own signature
-    exactly rather than a synonym like `path`, per the CLI/MCP parity law, decision
-    0b29f1cbcc5a). #135 deliverable 3's last of three missing verbs (decision 3db8832c):
-    a no-ctx, explicit-string-arg function, same shape as mint-seat/new's own CLI entry points,
+    exactly rather than a synonym like `path`, per the CLI/MCP parity requirement).
+    A no-ctx, explicit-string-arg function, same shape as mint-seat/new's own CLI entry points,
     with no entry point of its own until now for no architectural reason.
 
     Migrates `cwd`'s markdown MEMORY (CLAUDE.md build log / DESIGN.md / memory essays)
-    into the graph as retrieval-sized Reference nodes and registers the SoftwareProject —
+    into the graph as retrieval-sized Reference nodes and registers the SoftwareProject,
     it does NOT touch the project's files (no hands); it prints a suggested boot-sector
     CLAUDE.md for a human or that project's own agent to review and write. `--actor`
     stamps every write this call makes (the registration and every ingested log entry),
     same default-to-console pattern as mint-seat/new (a raw terminal call already carries
-    operator authority by construction — see `_CONSOLE_ACTOR`'s own comment). `--project`
+    operator authority by construction, see `_CONSOLE_ACTOR`'s own comment). `--project`
     is CLI-only (declared in CLI_ONLY_PARAMS): bootstrap_project itself takes this
-    override, the MCP tool's own wrapper simply never exposes it — a gap on that side,
+    override, the MCP tool's own wrapper simply never exposes it, a gap on that side,
     not an inconsistency to paper over here.
 
-    THE LIVE-DB GUARD (9b9ba394, found live 2026-08-16 — this exact command wrote a
-    real, if small, specimen into the shared fleet graph during its own verification):
-    on this box `apply_dev_fallback()`'s "dev" DSN and every deployed service's own
+    THE LIVE-DB GUARD: found live once, when this exact command wrote a
+    real, if small, specimen into the shared fleet graph during its own verification.
+    On this box `apply_dev_fallback()`'s "dev" DSN and every deployed service's own
     DATABASE_URL are the SAME database (`dev_env.py`'s own docstring assumes a
-    separate `/etc/osiris/osiris.env` prod file that does not exist here — confirmed
-    absent) — there is no isolated instance to fall back to. Unlike `merge`/`mint-seat`/
+    separate `/etc/osiris/osiris.env` prod file that does not exist here, confirmed
+    absent), there is no isolated instance to fall back to. Unlike `merge`/`mint-seat`/
     `deploy`/etc. (deliberate operator acts a bare terminal call is SUPPOSED to run
     against the real graph), `bootstrap` is the one CLI entry point whose ordinary use includes
-    exploratory/scratch runs — exactly the shape that produced the specimen. So: if the
+    exploratory/scratch runs, exactly the shape that produced the specimen. So: if the
     caller did not set DATABASE_URL themselves (about to hit the fallback) AND has not
     set OSIRIS_ALLOW_LIVE=1, this refuses loudly instead of writing to production by
     accident. An explicit DATABASE_URL (including one a deployed unit's own environment
     already carries) always wins and is never blocked.
 
-    THE CHECK ITSELF NOW LIVES IN `dev_env.refuse_silent_live_db` (thread 86d562e0's own
-    CLASS fix, not just this one entry point) — reused verbatim here, never a second copy."""
+    THE CHECK ITSELF NOW LIVES IN `dev_env.refuse_silent_live_db`, a class-wide fix, not just
+    this one entry point, reused verbatim here, never a second copy."""
     from src.actions.core import Actions
     from src.orchestrator.bootstrap import bootstrap_project
 
@@ -6652,15 +6602,13 @@ async def cmd_bootstrap(
 
 
 # ============================================================================================
-# WAVE 3 (thread 5bf6447c, Thoth dispatch 7943): the 25 NO_CLI_EQUIVALENT excuses re-read
-# one by one against today's code. These sixteen had a real, standalone, third-party-capable
-# orchestrator function all along — the console entry point was simply never scoped (each earlier
-# entry's own generic "not on the jesus/chad path; not ruled out" reason, from a narrower
-# dispatch that never claimed these were impossible, only out of scope). Every one below
-# calls the SAME function its own MCP tool wraps — verified by reading each tool's own
-# forwarding body in src/mcp_server.py before writing its CLI twin, never guessed from the
-# orchestrator module alone (a hidden alias's own MCP-facing param names, not the internal
-# orchestrator function's, are the parity contract this file's forward detector checks).
+# The 25 NO_CLI_EQUIVALENT excuses re-read one by one against today's code. These sixteen
+# had a real, standalone, third-party-capable orchestrator function all along, the console
+# entry point was simply never scoped. Every one below calls the SAME function its own MCP
+# tool wraps, verified by reading each tool's own forwarding body in src/mcp_server.py before
+# writing its CLI twin, never guessed from the orchestrator module alone (a hidden alias's
+# own MCP-facing param names, not the internal orchestrator function's, are the parity
+# contract this file's forward detector checks).
 # ============================================================================================
 
 
@@ -6668,7 +6616,7 @@ async def cmd_attach_seat(
     worker: str, manager: str, evidence: str, *, actor: str,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris attach-seat <worker> <manager> <evidence> [--actor W] — the console-script
+    """osiris attach-seat <worker> <manager> <evidence> [--actor W] - the console-script
     entry point onto orchestrator.seats.attach_seat, the SAME function the attach_seat MCP tool
     wraps (forwards to seat_edge(action='attach')). Creates a managed_by edge."""
     from src.actions.core import Actions
@@ -6709,7 +6657,7 @@ async def cmd_attach_seat(
 async def cmd_detach_seat(
     seat: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris detach-seat <seat> <because> [--actor W] — the console-script entry point onto
+    """osiris detach-seat <seat> <because> [--actor W] - the console-script entry point onto
     orchestrator.seats.detach_seat, the SAME function the detach_seat MCP tool wraps
     (forwards to seat_edge(action='detach')). Invalidates an active managed_by edge."""
     from src.actions.core import Actions
@@ -6750,12 +6698,12 @@ async def cmd_promote(
     target: str, workers: list[str], because: str, *, actor: str,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris promote <target> <worker1> [worker2 ...] --because <str> [--actor W] — the
+    """osiris promote <target> <worker1> [worker2 ...] --because <str> [--actor W] - the
     console-script entry point onto orchestrator.seats.promote_seat, the SAME function the seat
     MCP tool's action='promote' branch wraps. Mints target as manager over each worker
     (peer bonds invalidated, house derived, offices reissued), one transaction, per-worker
     outcomes never a whole-call failure. `--actor` defaults to `_CONSOLE_ACTOR`
-    ('console'), one of promote_seat's own recognized operator sentinels — a bare
+    ('console'), one of promote_seat's own recognized operator sentinels, a bare
     terminal invocation IS the operator's own hand by construction, same authority every
     other third-party seat-write CLI entry point in this file already carries."""
     from src.actions.core import Actions
@@ -6796,7 +6744,7 @@ async def cmd_promote(
 async def cmd_vacate_seat(
     seat_id: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris vacate-seat <seat> <because> [--actor W] — the console-script entry point onto
+    """osiris vacate-seat <seat> <because> [--actor W] - the console-script entry point onto
     orchestrator.trigger.vacate_dead_seat, the SAME function the vacate_seat MCP tool
     wraps (forwards to seat(action='vacate')). Releases a dead holder without retiring
     the seat itself."""
@@ -6838,7 +6786,7 @@ async def cmd_vacate_seat(
 async def cmd_retire_seat(
     seat_id: str, reason: str = "", *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris retire-seat <seat> [--reason R] [--actor W] — the console-script entry point onto
+    """osiris retire-seat <seat> [--reason R] [--actor W] - the console-script entry point onto
     orchestrator.seats.retire_seat, the SAME function the retire_seat MCP tool wraps
     (forwards to retire_object(kind='seat')). Marks a Seat permanently CLOSED."""
     from src.actions.core import Actions
@@ -6879,7 +6827,7 @@ async def cmd_bind_seat_tree(
     seat_id: str, tree_cwd: str, because: str, *, actor: str,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris bind-seat-tree <seat> <tree_cwd> <because> [--actor W] — the console-script
+    """osiris bind-seat-tree <seat> <tree_cwd> <because> [--actor W] - the console-script
     entry point onto orchestrator.seats.bind_seat_tree, the SAME function the bind_seat_tree MCP
     tool wraps (forwards to seat(action='bind_tree')). Points a seat's CODE checkout,
     distinct from its anchor office."""
@@ -6922,7 +6870,7 @@ async def cmd_sweep_seat_disk(
     handle: str, dry_run: bool = True, because: str = "",
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris sweep-seat-disk <handle> [--apply] [--because R] — the console-script entry point
+    """osiris sweep-seat-disk <handle> [--apply] [--because R] - the console-script entry point
     onto orchestrator.offices.sweep_retired_office + sweep_seat_workspace, the SAME two
     functions the sweep_seat_disk MCP tool wraps (forwards to seat(action='sweep_disk')).
     Dry-run by default; --apply writes."""
@@ -6965,8 +6913,8 @@ async def cmd_sweep_seat_trees(
     *, apply: bool = False, actor: str, as_json: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris sweep-seat-trees [--apply] [--actor W] [--json] — WAVE 27 priority fix
-    (operator-flagged via Nebbercracker DM 11747, Thoth mail 11759): the console-script
+    """osiris sweep-seat-trees [--apply] [--actor W] [--json] - an operator-flagged
+    priority fix: the console-script
     entry point onto orchestrator.seats.sweep_seat_trees, fleet-wide, listing every seat whose
     tree_cwd is null or not a real git tree of its own governed project, repairing on
     --apply. Dry run by default."""
@@ -7004,7 +6952,7 @@ async def cmd_rename_seat(
     seat_id: str, new_handle: str, because: str, *, actor: str,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris rename-seat <seat> <new_handle> <because> [--actor W] — the console-script
+    """osiris rename-seat <seat> <new_handle> <because> [--actor W] - the console-script
     entry point onto orchestrator.seats.rename_seat, the SAME function the rename_seat MCP tool
     wraps (forwards to seat(action='rename'))."""
     from src.actions.core import Actions
@@ -7046,7 +6994,7 @@ async def cmd_set_seat_attended(
     seat_id: str, attended: str, because: str, *, actor: str,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris set-seat-attended <seat> <attended> <because> [--actor W] — the console-
+    """osiris set-seat-attended <seat> <attended> <because> [--actor W] - the console-
     script entry point onto orchestrator.seats.set_seat_attended, the SAME function the
     set_seat_attended MCP tool wraps (forwards to seat(action='set_attended'))."""
     from src.actions.core import Actions
@@ -7088,9 +7036,9 @@ async def cmd_reissue_office(
     seat_id: str, because: str, *, adopt: bool = False, actor: str,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris reissue-office <seat> <because> [--adopt] [--actor W] — DEPRECATED alias
-    for `reissue-seat-dir`, kept this release only (ONE TAXONOMY, ruling
-    52a59652/70c001ec: "office" retired as a place-word in favor of "seat directory").
+    """osiris reissue-office <seat> <because> [--adopt] [--actor W] - DEPRECATED alias
+    for `reissue-seat-dir`, kept this release only, keeping one taxonomy: "office" retired
+    as a place-word in favor of "seat directory".
     A thin wrapper, never a second implementation."""
     print("osiris reissue-office: deprecated, use reissue-seat-dir. Kept as an "
           "alias this release only.", file=sys.stderr)
@@ -7101,7 +7049,7 @@ async def cmd_reissue_seat_dir(
     seat_id: str, because: str, *, adopt: bool = False, actor: str,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris reissue-seat-dir <seat> <because> [--adopt] [--actor W] — the console-script
+    """osiris reissue-seat-dir <seat> <because> [--adopt] [--actor W] - the console-script
     entry point onto orchestrator.boot_compiler.reissue_office, the SAME function the
     reissue_office MCP tool wraps (forwards to seat(action='reissue_office'))."""
     from src.actions.core import Actions
@@ -7142,9 +7090,9 @@ async def cmd_reissue_seat_dir(
 async def cmd_establish_office(
     seat: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris establish-office <seat> [--actor W] — DEPRECATED alias for
-    `establish-seat-dir`, kept this release only (ONE TAXONOMY, ruling
-    52a59652/70c001ec). A thin wrapper, never a second implementation."""
+    """osiris establish-office <seat> [--actor W] - DEPRECATED alias for
+    `establish-seat-dir`, kept this release only, keeping one taxonomy.
+    A thin wrapper, never a second implementation."""
     print("osiris establish-office: deprecated, use establish-seat-dir. Kept as "
           "an alias this release only.", file=sys.stderr)
     return await cmd_establish_seat_dir(seat, actor=actor, pool=pool)
@@ -7153,10 +7101,10 @@ async def cmd_establish_office(
 async def cmd_establish_seat_dir(
     seat: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris establish-seat-dir <seat> [--actor W] — the console-script entry point onto
+    """osiris establish-seat-dir <seat> [--actor W] - the console-script entry point onto
     orchestrator.offices.establish_office, the SAME function the establish_office MCP
     tool wraps (forwards to seat(action='establish_office')). The full seat-directory
-    ceremony, one receipt."""
+    setup, one receipt."""
     from src.actions.core import Actions
     from src.orchestrator.offices import establish_office as _establish_office
 
@@ -7194,11 +7142,11 @@ async def cmd_establish_seat_dir(
 async def cmd_resync_seat_project(
     seat_id: str, reason: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris resync-seat-project <seat> <reason> [--actor W] — RETIRES resync-seat-house
-    outright, no alias (Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY"): the
+    """osiris resync-seat-project <seat> <reason> [--actor W] - RETIRES resync-seat-house
+    outright, no alias, keeping one taxonomy: the
     console-script entry point onto orchestrator.seats.resync_seat_project, which collapses
     the old third-party `resync_seat_house_third_party` AND the old self-scoped
-    `correct_house` into one entry point — a seat's project is never a second, declared
+    `correct_house` into one entry point, a seat's project is never a second, declared
     value, so there is no `<new_house>` argument left to take; this always
     RE-DERIVES from the seat's own charter instead."""
     from src.actions.core import Actions
@@ -7240,11 +7188,11 @@ async def cmd_reconcile_seat_identity(
     seat_id: str, because: str, *, agent_id: str | None = None, actor: str,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris reconcile-seat-identity <seat> <because> [--agent-id A] [--actor W] — the
+    """osiris reconcile-seat-identity <seat> <because> [--agent-id A] [--actor W] - the
     console-script entry point onto orchestrator.identity_heal.reconcile_seat_identity_third_
     party, the SAME function reconcile_seat_identity_third_party (and, third-party-wise,
     reconcile_seat_identity) MCP-forwards to (seat(action='reconcile_identity')). Always
-    third-party here — a raw terminal has no mounted identity to reconcile self-wise."""
+    third-party here, a raw terminal has no mounted identity to reconcile self-wise."""
     from src.actions.core import Actions
     from src.orchestrator.identity_heal import reconcile_seat_identity_third_party
 
@@ -7284,7 +7232,7 @@ async def cmd_reconcile_seat_identity(
 async def cmd_create_project(
     name: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris create-project <name> <because> [--actor W] — the console-script entry point onto
+    """osiris create-project <name> <because> [--actor W] - the console-script entry point onto
     orchestrator.project_identity.create_project, the SAME function the create_project
     MCP tool wraps (forwards to project(action='create'))."""
     from src.actions.core import Actions
@@ -7326,19 +7274,19 @@ async def cmd_rename_project(
     merge_into: bool = False, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris rename-project <project> <new_name> <because> [--apply] [--merge-into]
-    [--actor W] — the console-script entry point onto orchestrator.project_identity.
+    [--actor W]. The console-script entry point onto orchestrator.project_identity.
     rename_project, the SAME underlying write the rename_project MCP tool's
     project(action='rename') calls. Dry-run by default; --apply writes.
 
-    RECEIPT LAW (Thoth mail 9122 item 1, wave 16) — NOT the same overall guarantee as
-    the MCP entry point, and this docstring used to falsely claim it was: the MCP entry point also
+    RECEIPT LAW: this is NOT the same overall guarantee as the MCP entry point, and this
+    docstring used to falsely claim it was. The MCP entry point also
     (a) gathers governing-seat evidence and warns when it disagrees with `new_name`
     (`rename_evidence`/`evidence_disagrees`/`warning`, mcp_server.py's `_project_impl`
     rename branch) and (b) heals every already-mounted agent's IN-PROCESS mount cache
     so a live session's `get_status()` stops reporting the pre-rename name. (b) is
-    structurally inapplicable here — a CLI invocation is its own short-lived process
+    structurally inapplicable here: a CLI invocation is its own short-lived process
     with no `_agents` cache to heal; only the long-lived MCP server process has one.
-    (a) is portable and IS run here now (see below) — the earlier gap was landing a
+    (a) is portable and IS run here now (see below). The earlier gap was landing a
     rename while governing-seat evidence still disagreed with the new name, with no
     warning at all, silently."""
     from src.actions.core import Actions
@@ -7364,7 +7312,7 @@ async def cmd_rename_project(
                   "instance.", file=sys.stderr)
             return 1
     try:
-        # SAME evidence-gathering the MCP entry point runs, before the write (best-effort —
+        # SAME evidence-gathering the MCP entry point runs, before the write (best-effort:
         # an ambiguous ref is the real refusal inside _rename_project itself below).
         evidence_by_seat: dict[str, Any] = {}
         try:
@@ -7417,7 +7365,7 @@ async def cmd_rename_project(
 async def cmd_set_project_tag(
     project: str, tag: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris set-project-tag <project> <tag> <because> [--actor W] — the console-script
+    """osiris set-project-tag <project> <tag> <because> [--actor W]. The console-script
     entry point onto orchestrator.projects.set_project_window_tag, the SAME function the
     project(action='set_tag') MCP verb wraps. Declares the persisted `[TAG]` override
     trigger.py's `_house_tag`/`_window_name` read BEFORE ever deriving one from the
@@ -7458,7 +7406,7 @@ async def cmd_set_project_tag(
 async def cmd_retire_project(
     project: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris retire-project <project> <because> [--actor W] — the console-script entry point
+    """osiris retire-project <project> <because> [--actor W]. The console-script entry point
     onto orchestrator.projects.retire_project, the SAME function the retire_project MCP
     tool wraps (forwards to retire_object(kind='project'))."""
     from src.actions.core import Actions
@@ -7499,9 +7447,9 @@ async def cmd_retire_project(
 async def cmd_retire_object(
     ref: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris retire-object <ref> <because> [--actor W] — the console-script entry point
+    """osiris retire-object <ref> <because> [--actor W]. The console-script entry point
     onto orchestrator.retirement.retire_bare_object, the SAME function the
-    retire_object(kind='object') MCP tool wraps (thread 92dde6cc). Retires an
+    retire_object(kind='object') MCP tool wraps. Retires an
     arbitrary ACTIVE object of no other kind (not a Seat/SoftwareProject/Agent)."""
     from src.actions.core import Actions
     from src.orchestrator.retirement import retire_bare_object as _retire_bare_object
@@ -7542,7 +7490,7 @@ async def cmd_fork_project(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris fork-project <project> <fork_into> <because> [--direction fork|unfork]
-    [--actor W] — the console-script entry point onto orchestrator.project_identity.
+    [--actor W]. The console-script entry point onto orchestrator.project_identity.
     fork_project, the SAME function the fork_project MCP tool wraps (forwards to
     project(action='fork'/'unfork') by direction)."""
     from src.actions.core import Actions
@@ -7584,16 +7532,16 @@ async def cmd_fork_project(
         print(f"  {k}: {v}")
     return 0
 
-# dispatch 3678, "make the cli a front entry point instead of a dump": bare `osiris` used to be
-# an argparse error (`the following arguments are required: command`) followed, on -h/
-# --help, by a flat alphabetical dump of thirteen verbs with no sense of what a newcomer
-# actually needs first. This is that front entry point — GROUPED by what a person is trying to
-# DO (#97's own acceptance test: a stranger with no context gets from `osiris` to a
-# running worker without reading source or asking anyone), with the newcomer path shown
-# as literal copy-pasteable lines rather than prose describing it. Every individual
-# subcommand's own `help=` text is suppressed from argparse's default listing (it would
-# otherwise print AGAIN, alphabetically, right below this) — `osiris <verb> --help`
-# still shows that verb's own full description and a worked example, untouched.
+# Bare `osiris` used to be an argparse error (`the following arguments are required:
+# command`) followed, on -h/--help, by a flat alphabetical dump of thirteen verbs with
+# no sense of what a newcomer actually needs first. This is that front entry point,
+# GROUPED by what a person is trying to do (the acceptance test: a newcomer with no
+# context gets from `osiris` to a running worker without reading source or asking
+# anyone), with the newcomer path shown as literal copy-pasteable lines rather than
+# prose describing it. Every individual subcommand's own `help=` text is suppressed
+# from argparse's default listing (it would otherwise print AGAIN, alphabetically,
+# right below this): `osiris <verb> --help` still shows that verb's own full
+# description and a worked example, untouched.
 _TOP_LEVEL_HELP = """\
 THE TWO COMMANDS TO REMEMBER, nothing else, to get a working, independent agent running:
     osiris new <name>
@@ -7646,7 +7594,7 @@ human view. Run `osiris <command> --help` for that command's own flags and a wor
 
 class _RawSubparser(argparse.ArgumentParser):
     """Every subcommand's own --help gets RawDescriptionHelpFormatter too (not just the
-    top level) — several epilogs below are literal copy-pasteable command lines, and the
+    top level). Several epilogs below are literal copy-pasteable command lines, and the
     default formatter re-wraps/re-flows them, destroying exactly the thing they're for."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -7655,10 +7603,10 @@ class _RawSubparser(argparse.ArgumentParser):
 
 
 def _add_text_flag(parser: argparse.ArgumentParser) -> None:
-    """`--text` (#92, the zero-token read hook, Thoth mail 11780 item B): print the raw
-    server-rendered string verbatim, no box, no title, no color — exactly what a slash
-    face already prints in a code block. Shared across every command the hook serves so its
-    static `osiris <verb> --text` invocation is uniform."""
+    """`--text`, the zero-token read path: print the raw server-rendered string verbatim,
+    no box, no title, no color, exactly what a slash-command handler already prints in a
+    code block. Shared across every command the hook serves so its static
+    `osiris <verb> --text` invocation is uniform."""
     parser.add_argument("--text", action="store_true",
                         help="raw rendered text, no box, title, or color: for scripting "
                              "or automation, never a human at an interactive terminal")
@@ -7668,8 +7616,8 @@ def _d(text: str) -> str:
     """Wrap a subcommand's own `description=` prose to a terminal-friendly width.
     RawDescriptionHelpFormatter (needed below so worked-example epilogs keep their literal
     line breaks) disables argparse's own wrapping for EVERYTHING on that parser, description
-    included — without this, a description written as ordinary flowing prose renders as one
-    unbroken line, exactly the "flat dump" this whole rebuild exists to fix."""
+    included. Without this, a description written as ordinary flowing prose renders as one
+    unbroken line, exactly the flat, alphabetical dump this rebuild exists to fix."""
     return textwrap.fill(text, width=78)
 
 
