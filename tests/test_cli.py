@@ -884,14 +884,17 @@ async def test_cmd_team_seat_human_mode_paints_render_team_text_not_generic_rend
 async def test_cmd_launch_returns_the_existing_window_instead_of_twinning(
     actions: Actions,
 ) -> None:
-    await ensure_seat(actions, house="osiris", handle="already-live",
-                      anchor_cwd="/home/x/.osiris/seats/already-live", source="test")
+    seat = await ensure_seat(actions, house="osiris", handle="already-live",
+                             anchor_cwd="/home/x/.osiris/seats/already-live", source="test")
 
     calls: list[dict[str, Any]] = []
 
     async def _fake(req: dict[str, Any]) -> dict[str, Any]:
         calls.append(req)
-        return {"sessions": [{"name": "[OS] already-live", "alive": True}]}
+        # seat_id is what launch_seat's own PTY-lane idempotency check keys on
+        # (never the window name), matching a real manager daemon roster row.
+        return {"sessions": [{"name": "[OS] already-live", "alive": True,
+                              "seat_id": seat["seat_id"]}]}
 
     out = await cmd_launch("already-live", model=None, pool=actions.pool, manager=_fake,
                            debug=True)
@@ -1048,6 +1051,51 @@ async def test_cmd_launch_harness_lane_delegates_to_launch_seat_not_a_reimplemen
     assert kw["caller"] == "operator"
     assert kw["target"] == "delegates-to-launch-seat"
     assert kw["substrate"] == "harness"
+
+
+async def test_cmd_launch_pty_lane_delegates_to_launch_seat_not_a_reimplementation(
+    actions: Actions, tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """The PTY lane's own half of the same delegation proof ("UNIFY LAUNCH", part 2): a
+    spy on launch_seat itself, so a future regression back to a second implementation
+    fails here, not by drift discovered later."""
+    office = tmp_path / "delegates-to-launch-seat-pty"
+    office.mkdir()
+    await ensure_seat(actions, house="osiris", handle="delegates-to-launch-seat-pty",
+                      anchor_cwd=str(office), source="test")
+
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_launch_seat(actions_arg: Actions, **kw: Any) -> dict[str, Any]:
+        calls.append(kw)
+        return {"status": "launched", "window": "[OS] fake", "body_exists": True,
+                "can_receive": True, "spawned_model": kw.get("model")}
+
+    monkeypatch.setattr("src.orchestrator.trigger.launch_seat", _fake_launch_seat)
+
+    manager_ops: list[str] = []
+
+    async def _manager_stub(req: dict[str, Any]) -> dict[str, Any]:
+        # launch_seat is faked above, so pty_spawn must never reach here; only the
+        # CLI-side post-spawn confirmation poll's own pty_list calls are expected.
+        assert req["op"] != "pty_spawn", "should never be called, launch_seat is a fake here"
+        manager_ops.append(req["op"])
+        return {"sessions": []}
+
+    out = await cmd_launch("delegates-to-launch-seat-pty", model=None, pool=actions.pool,
+                           manager=_manager_stub, debug=True)
+    assert out == 0
+    assert len(calls) == 1
+    kw = calls[0]
+    # THE ONE FLAG ONLY THIS DOOR MAY SET (launch_seat's own docstring): a local-execution
+    # trust boundary no MCP-invoked caller can reach, proven here by name, not assumed.
+    assert kw["operator_authorized"] is True
+    assert kw["caller"] == "operator"
+    assert kw["target"] == "delegates-to-launch-seat-pty"
+    assert kw["substrate"] == "pty"
+    # the two injectable primitives launch_seat's own PTY lane wants, both present
+    assert kw["manager"] is _manager_stub
+    assert callable(kw["windows"])
 
 
 # --- cmd_launch harness-native default lane (task #72), same "never risk a real spawn" law,

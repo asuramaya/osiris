@@ -161,13 +161,16 @@ default; the harness-native mode's own process is not attachable this way (it ha
 PTY osiris ever opened), so reach for `--debug` specifically when you need an
 interactive terminal on the fresh process.
 
-Neither mode is `trigger.py`'s `launch_seat()`: that function's own docstring is
-explicit that the operator should never call it directly, because it's a seat-to-seat
-function gated by a `managed_by` graph edge. A human driving this CLI already acts as
-that out-of-band authority, the same trust boundary `src.manager.attach` already
-stands in for, so both modes mirror `launch_seat`'s own primitives directly (same
-`claude --bg`/`claude agents --json` calls, same boot-prompt wording, same `pty_spawn`
-operation) rather than calling it.
+Both modes call `trigger.py`'s `launch_seat()` directly, with `operator_authorized=True`:
+that function's own docstring is explicit that no MCP-invoked caller can ever set this
+flag, since it's a seat-to-seat function normally gated by a `managed_by` graph edge, but
+a human driving this CLI already acts as an out-of-band authority, the same trust
+boundary `src.manager.attach` already stands in for. One implementation, two entry
+points, never two separately drifting copies of the spawn logic ("UNIFY LAUNCH": the
+harness-native mode first, then the PTY mode). The seat-lookup guard (unknown handle,
+ambiguous handle, no `anchor_cwd`) and the bounded post-spawn confirmation poll both stay
+CLI-side on purpose in either mode, see `_cmd_launch_harness`'s and `_cmd_launch_pty`'s
+own docstrings for why.
 
 Both modes share the same model precedence (`--model` flag, then the target seat's own
 stamped `intended_model`, then an economy default for a low-stakes wake) and the same
