@@ -1,16 +1,15 @@
-"""THE READING LAYER, part B: FOCUS = PATH LENS (ruling c5953bb1, Thoth DM 10596, thread
-71c4ca0d), AMENDED by THE LEGIBILITY PASS TIP 1's own amendment (operator via Thoth mail
-10726): a single CLICK is now the whole gesture -- select, inspector, hide, fit, one act.
+"""THE READING LAYER, part B: FOCUS = PATH LENS, later amended so a single CLICK is now
+the whole gesture: select, inspector, hide, fit, one act.
 The old double-click/Enter/select-vs-focus split is retired outright (see
 test_legibility_pass_tip1.py for the amendment's own new tests: single-click, the
 downstream toggle, ego relayout, the 100ms budget). This file keeps the still-valid parts:
 the walk itself (over a curated provenance/evidence edge-type allowlist, PATH_EDGE_TYPES,
 never structural containment) and the acceptance-test proof below.
 
-Thoth's own stated acceptance bar for this part: "a test on a synthetic 5-hop chain where
+The stated acceptance bar for this part: "a test on a synthetic 5-hop chain where
 focus at the tail lights exactly the chain and nothing else." buildPathAdjacency/walkPath
 are pure, DOM-free, module-level functions in space.js specifically so this can be a REAL
-executable proof of the algorithm rather than another string-presence guard -- run via a
+executable proof of the algorithm rather than another string-presence guard, run via a
 Node subprocess importing the actual ES module, skipped (not failed) if Node isn't
 available in this environment, since the project's own stack (CLAUDE.md) declares no Node
 dependency. Everything else here stays the existing static-source-guard convention.
@@ -76,12 +75,12 @@ def test_a_shallower_depth_does_not_reach_the_whole_chain() -> None:
 # --- everything else: static-source-guard proofs, the existing convention -----------------
 
 def test_a_single_click_is_the_whole_focus_gesture() -> None:
-    # TIP 1 AMENDMENT (mail 10726): select-vs-focus is retired -- selectObject is gone, a
+    # TIP 1 AMENDMENT: select-vs-focus is retired, selectObject is gone, a
     # plain click focuses directly, and there is no separate double-click trigger left.
     assert "async function selectObject" not in _SPACE_JS
     assert "async function focusObject(id, opts)" in _SPACE_JS
-    # window widened for TIP 3 (Thoth mail 10930): at the far/mid LOD tiers a click drills
-    # into a glyph instead (no individual object to focus at that zoom) -- the near-tier
+    # window widened for TIP 3: at the far/mid LOD tiers a click drills
+    # into a glyph instead (no individual object to focus at that zoom), the near-tier
     # focusObject(hit.id) branch now sits after that.
     click_body = _SPACE_JS.split(
         'renderer.domElement.addEventListener("click", (ev) => {', 1)[1][:500]
@@ -90,20 +89,20 @@ def test_a_single_click_is_the_whole_focus_gesture() -> None:
 
 
 def test_select_never_hides_the_graph_only_focus_does() -> None:
-    # THE LEGIBILITY PASS, TIP 1(d) (ruling e1cb9e3b) replaced the old dim-to-near-invisible
-    # with an outright per-instance HIDE (aVisible) -- "no dim" was Thoth's own instruction.
+    # THE LEGIBILITY PASS, TIP 1(d) replaced the old dim-to-near-invisible
+    # with an outright per-instance HIDE (aVisible): "no dim" was the stated instruction.
     body = _SPACE_JS.split("function applyDim()", 1)[1].split("\n  }\n", 1)[0]
     assert "const focused = !!pathFocusId;" in body
     assert "const focusHidden = focused && nd.id !== pathFocusId " \
         "&& !pathReachable.has(nd.id);" in body
-    # CONSOLE CHROME CLEANUP piece 2 (decision 31717ca7): projectHidden (the repo
-    # selector's own hidden-set check) joined the same condition — select/focus
+    # CONSOLE CHROME CLEANUP piece 2: projectHidden (the repo
+    # selector's own hidden-set check) joined the same condition, select/focus
     # semantics here are unchanged, only a third filter dimension was added alongside.
     assert "visibleAttr.setX(i, (typeHidden || projectHidden || focusHidden) ? 0 : 1);" in body
 
 
 def test_enter_no_longer_promotes_a_selection_a_click_already_focused() -> None:
-    # TIP 1 AMENDMENT (mail 10726): "no double-click or Enter" -- the old Enter-focuses-
+    # TIP 1 AMENDMENT: "no double-click or Enter", the old Enter-focuses-
     # selectedId listener is retired outright, not left as harmless redundancy.
     assert 'if (ev.key !== "Enter") return;' not in _SPACE_JS
 
@@ -114,7 +113,7 @@ def test_inspector_carries_a_focus_button() -> None:
 
 
 def test_focus_walk_uses_the_curated_provenance_types_never_structural() -> None:
-    # TIP 1 AMENDMENT (mail 10726) added grounded_by/decided_in/answers to the walk.
+    # TIP 1 AMENDMENT added grounded_by/decided_in/answers to the walk.
     for t in ("possible_upstream", "cites", "derived_from", "spawned_by",
               "succeeded_from", "supersedes", "resolves",
               "grounded_by", "decided_in", "answers"):
@@ -128,8 +127,8 @@ def test_focus_hides_unreachable_outright_not_a_softer_dim() -> None:
 
 
 def test_focus_is_never_empty_a_lone_reachable_node_widens_one_structural_hop() -> None:
-    # Thoth's own live measurement (mail 10708): a degree-8 Decision with no PATH_EDGE_TYPES
-    # links reached only itself and fit the camera to a point at 300x. WAVE 27, THE LENS
+    # A live measurement: a degree-8 Decision with no PATH_EDGE_TYPES
+    # links reached only itself and fit the camera to a point at 300x. THE LENS
     # PANEL: the literal "structural" check became isStructuralLike() so a genuine
     # "container"-class edge (now distinct from "structural") still widens this fallback.
     body = _SPACE_JS.split("async function focusObject(id, opts)", 1)[1][:2900]
@@ -145,10 +144,10 @@ def test_reachable_path_edges_draw_with_a_directional_gradient() -> None:
 
 
 def test_the_structural_edges_of_focus_carve_out_is_retired() -> None:
-    # RETIRED by THE LAST RENDERER (operator ruling d7d55257, Thoth mail 11066): "an edge
+    # RETIRED by THE LAST RENDERER: "an edge
     # draws only when both ends are visible, no structural-hop exception." updatePathEdges
     # used to draw every structural edge touching the focus regardless of whether the other
-    # end was ever positioned or visible -- for a container-scale focus that meant thousands
+    # end was ever positioned or visible, for a container-scale focus that meant thousands
     # of lines fanning to scattered positions, "a solid disc of edges." Only the real
     # PATH_EDGE_TYPES overlay (`onPath`, both ends reachable) remains.
     body = _SPACE_JS.split("function updatePathEdges()", 1)[1][:1400]
@@ -163,7 +162,7 @@ def test_camera_fits_to_the_reachable_set_not_a_fixed_view() -> None:
 
 
 def test_widen_is_retired_depth_is_unlimited_by_default() -> None:
-    # TIP 1 AMENDMENT (mail 10726): "upstream ... until roots" -- depth is Infinity by
+    # TIP 1 AMENDMENT: "upstream ... until roots", depth is Infinity by
     # default now, so a capped-depth Widen control no longer means anything. See
     # test_legibility_pass_tip1.py for its replacement, the downstream toggle.
     assert "const FOCUS_DEPTH_DEFAULT = Infinity;" in _SPACE_JS
@@ -187,7 +186,7 @@ def test_escape_clears_rather_than_stepping_back() -> None:
 
 
 def test_back_and_downstream_buttons_exist_in_both_pages() -> None:
-    # "downstream-btn" replaces the retired "widen-btn" (TIP 1 amendment, mail 10726).
+    # "downstream-btn" replaces the retired "widen-btn" (TIP 1 amendment).
     index_html = (_STATIC / "index.html").read_text()
     space_html = (_STATIC / "space.html").read_text()
     for html in (index_html, space_html):
@@ -196,7 +195,7 @@ def test_back_and_downstream_buttons_exist_in_both_pages() -> None:
 
 
 def test_table_row_clicks_always_focus_now() -> None:
-    # TIP 1 AMENDMENT (mail 10726): select-vs-focus is retired -- a table row click is the
+    # TIP 1 AMENDMENT: select-vs-focus is retired, a table row click is the
     # same one gesture a canvas click is, always a real focus (see
     # test_legibility_pass_tip1.py's own fuller amendment tests).
     console_js = (_STATIC / "console.js").read_text()

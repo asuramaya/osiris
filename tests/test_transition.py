@@ -1,7 +1,7 @@
-"""THE SELF-SERVICE TRANSITION VERB (Thoth dispatch 6901, the Jesus/Chad specimen) —
-proves the compose-not-orchestrate contract: invalidate_works_in + correct_own_pin_value
-+ set_charter, atomic-or-refused, never rebind_seat (THE ANCHOR INVARIANT, ruling
-23771416 — that call is exactly what broke Jesus's and Chad's own anchors).
+"""THE SELF-SERVICE TRANSITION VERB (the Jesus/Chad specimen): proves the
+compose-not-orchestrate contract: invalidate_works_in + correct_own_pin_value
++ set_charter, atomic-or-refused, never rebind_seat (THE ANCHOR INVARIANT:
+that call is exactly what broke Jesus's and Chad's own anchors).
 """
 from __future__ import annotations
 

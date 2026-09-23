@@ -1,16 +1,16 @@
-"""stophook_logic (task #180 piece 2 (b)) — the pure halves osiris_stophook.py's own
+"""stophook_logic (task #180 piece 2 (b)): the pure halves osiris_stophook.py's own
 `_deliverable`/`_offload_boxes` now delegate to, and the /stop route calls directly
 against the shared pool. tests/test_stophook.py already covers the FULL behavioral
 surface (project resolution, self-echo, the settle-state rollup, seat-office cwd
 correction) through those wrappers; this file only proves the extracted functions work
-against a bare Pool (not just a Connection) — the shape the /stop route actually uses.
+against a bare Pool (not just a Connection), the shape the /stop route actually uses.
 
 STAGE A/B/C (dispatch 5441 LEG 1 parity fix): `compute_stop_stage_a` and its helpers are
-PORTED VERBATIM from osiris_stophook.py's own `_stage_a_async` family — see that file's
+PORTED VERBATIM from osiris_stophook.py's own `_stage_a_async` family, see that file's
 THE PIT WATCH / STAGE C section headers for the full founding rationale, and
 tests/test_stophook.py for the exhaustive edge-case coverage of the identical logic before
 the port. This file proves the ported copy, now taking a bare `pool` (no second one-off
-connection, no DSN), reproduces the same behavior end to end — it does not re-derive every
+connection, no DSN), reproduces the same behavior end to end; it does not re-derive every
 edge case test_stophook.py already owns."""
 from __future__ import annotations
 
@@ -80,9 +80,9 @@ async def test_compute_stop_deliverable_counts_unread_mail_for_a_mounted_session
 async def test_compute_stop_deliverable_finds_mail_sent_to_a_g_n_lineage_base(
     actions: Actions,
 ) -> None:
-    """The live specimen (thread 25b57dca, msg 7707): a compaction successor's own id
+    """The live specimen: a compaction successor's own id
     carries a `-g<N>` suffix (past generation 39, `_to_roman`'s numeric fallback), not a
-    roman numeral — the old rpartition+roman-alphabet check here treated the whole id as
+    roman numeral, the old rpartition+roman-alphabet check here treated the whole id as
     its own brand-new root, so mail addressed to the TRUE base never counted as deliverable.
     """
     a = "agent:stophooklogicgen-g115"
@@ -90,7 +90,7 @@ async def test_compute_stop_deliverable_finds_mail_sent_to_a_g_n_lineage_base(
     await actions.assert_property(obj, "project", "logicprojgen", a, datetime.now(UTC), 0.9,
                                   evidence_class=EvidenceClass.SELF_DECLARED.value)
     sid = "logicgse-0000-4000-8000-000000000000"  # find_session_row's lane 1 matches on
-    # job_dir ending exactly '/jobs/' + sid[:8] — no trailing chars past that boundary
+    # job_dir ending exactly '/jobs/' + sid[:8], no trailing chars past that boundary
     await save_mount(actions.pool, job_dir="/j/jobs/logicgse", agent_id=a,
                      project="logicprojgen", cwd="/lp/office-gen", model="claude-fable-5",
                      session_key=None)
@@ -105,7 +105,7 @@ async def test_compute_stop_deliverable_finds_mail_sent_to_a_g_n_lineage_base(
     assert out["bands"] == {"ask": 1, "fyi": 0}
 
 
-# ═══ no-regrow hygiene item 2 (practice 393be453) — stale_after surfaces on the owner's
+# ═══ no-regrow hygiene item 2: stale_after surfaces on the owner's
 # own Stop, named, not counted ═══
 
 
@@ -129,7 +129,7 @@ async def test_compute_stale_obligations_surfaces_a_past_window_duty_owned_by_my
     await _mounted_seat(actions, agent="agent:staleobl1", seat="seat:staleobl1",
                         handle="Staleworker1", sid="staleob1-0000-4000-8000-000000000000",
                         job_short="staleob1")
-    # a window already in the past — the same shape a real 15-day-old obligation carries
+    # a window already in the past, the same shape a real 15-day-old obligation carries
     await open_thread(actions, "a duty already past its window", kind="obligation",
                       owner="Staleworker1", source="agent:staleobl1", stale_after_days=-1)
     out = await compute_stale_obligations(
@@ -185,7 +185,7 @@ async def test_compute_stop_deliverable_carries_stale_obligations_alongside_mail
     assert "riding along" in out["stale_obligations"][0]["summary"]
 
 
-# ═══════════ STAGE A/B/C, PORTED — dispatch 5441 LEG 1 parity fix ═══════════
+# ═══════════ STAGE A/B/C, PORTED: dispatch 5441 LEG 1 parity fix ═══════════
 
 async def test_resolve_worker_identity_via_a_real_mount_row(
     actions: Actions, tmp_path: Path,
@@ -240,9 +240,9 @@ async def test_resolve_worker_identity_none_outside_any_office(
 async def test_owned_obligations_counts_project_owned_rows_in_my_charter(
     actions: Actions,
 ) -> None:
-    """thread 3a9d9a5d89fa, Ra XL's measured report ("three owner categories existed,
-    the fix reasoned about two"): obligations owned by the bare project name, or
-    unowned with an in_repo link, in a project THIS agent's own seat GOVERNS — invisible
+    """thread 3a9d9a5d89fa: three owner categories existed where the fix reasoned about
+    two. obligations owned by the bare project name, or
+    unowned with an in_repo link, in a project THIS agent's own seat GOVERNS, invisible
     to `owned`'s own owner_refs match, counted SEPARATELY as `project`."""
     from src.orchestrator.stophook_logic import owned_obligations
 
@@ -395,7 +395,7 @@ async def test_compute_stop_stage_a_no_identity_is_a_silent_noop(
         actions.pool, payload={}, session_id="00000000-0000-4000-8000-000000000000",
         cwd=str(tmp_path / "code" / "osiris"))
     after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
-    assert after == before  # nobody to attribute this to — no confession, no assertion, no crash
+    assert after == before  # nobody to attribute this to, no confession, no assertion, no crash
 
 
 async def test_compute_stop_stage_a_sends_the_leased_confession_end_to_end(
@@ -403,7 +403,7 @@ async def test_compute_stop_stage_a_sends_the_leased_confession_end_to_end(
 ) -> None:
     """The full integration path: a seated worker with an open obligation owned by their
     seat, and a manager who spoke more recently than the worker did, earns exactly one
-    courtesy fyi DM to the manager — the SAME behavior test_stophook.py already proves for
+    courtesy fyi DM to the manager, the SAME behavior test_stophook.py already proves for
     the pre-port `_stage_a_async`, now proven for the ported `compute_stop_stage_a`."""
     from src.orchestrator.capture import open_thread
     from src.orchestrator.mailbox import send_message
@@ -443,7 +443,7 @@ async def test_compute_stop_stage_a_sends_the_leased_confession_end_to_end(
 async def test_compute_stop_stage_a_practice_check_disabled_by_default_sends_nothing(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Stage C (ruling DM 3059) stays disarmed by default even through the ported path —
+    """Stage C stays disarmed by default even through the ported path,
     a turn that would trip the practice-violation fingerprint sends nothing when
     `osiris_stage_c_practice_check_enabled` is unset."""
     from src.config.settings import get_settings

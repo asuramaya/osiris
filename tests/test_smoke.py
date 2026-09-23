@@ -1,9 +1,9 @@
-"""smoke — the deploy-time liveness check (ruling 2ee43411, task #63, threads bb763977 and
-1849d800). The core probes are fully testable (a real pool, a real ASGI-served chrome app);
-the CLI's own network glue (scripts/osiris_smoke.py's MCP round-trip, the operator brief) is
-live-environment-dependent by nature and untested here, same precedent as
-scripts/osiris_preflight.py leaving its own collectors untested while `evaluate()` — the pure
-judgment layer, `_fails_from`'s own sibling here — is thoroughly covered.
+"""smoke: the deploy-time liveness check (task #63). The core probes are fully testable
+(a real pool, a real ASGI-served chrome app); the CLI's own network glue
+(scripts/osiris_smoke.py's MCP round-trip, the operator brief) is live-environment-dependent
+by nature and untested here, same precedent as scripts/osiris_preflight.py leaving its own
+collectors untested while `evaluate()`, the pure judgment layer, `_fails_from`'s own sibling
+here, is thoroughly covered.
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ async def client(actions: Actions) -> httpx.AsyncClient:
 
 
 class _RaisingPool:
-    """A stand-in that fails exactly where smoke_pool touches a real pool — no live broken
+    """A stand-in that fails exactly where smoke_pool touches a real pool: no live broken
     Postgres connection needed to prove the error path reports honestly."""
 
     async def fetchval(self, *args: object, **kwargs: object) -> None:
@@ -49,9 +49,9 @@ class _RaisingPool:
 # --- smoke_chrome: every named route, against the real ASGI app, no compositions seeded ----
 
 async def test_smoke_chrome_walks_every_named_route(client: httpx.AsyncClient) -> None:
-    """Every route named in thread bb763977, on a BLANK DB — the smoke walk only cares that
-    the surface answered, not what it said. (/roadmap and /live-desk retired, ruling
-    d42c543b; /canon retired task #96 — all pure pass-throughs to compositions already
+    """Every named route, on a BLANK DB: the smoke walk only cares that
+    the surface answered, not what it said. (/roadmap and /live-desk retired;
+    /canon retired task #96, all pure pass-throughs to compositions already
     roomed in /ui.)"""
     out = await smoke_chrome(client)
     assert set(out) == set(CHROME_ROUTES)
@@ -65,7 +65,7 @@ async def test_smoke_chrome_names_a_real_failure(client: httpx.AsyncClient) -> N
 
 
 async def test_smoke_chrome_names_a_timeout_distinctly_from_a_refusal() -> None:
-    """Live finding (Thoth DM 2823): httpx's own ReadTimeout/ConnectTimeout carry an EMPTY
+    """Live finding: httpx's own ReadTimeout/ConnectTimeout carry an EMPTY
     str() when raised with no message, so the generic error branch used to render an
     unreachable route and a merely-slow one identically as `"error: "`. A refused connection
     keeps its own real message and was never actually ambiguous."""
@@ -121,7 +121,7 @@ async def test_smoke_is_not_ok_when_the_pool_fails(client: httpx.AsyncClient) ->
 async def test_the_mcp_tool_wrapper_delegates_to_smoke(actions: Actions) -> None:
     """Proves the ACTUAL MCP verb wires `_pool_get()` correctly (db="ok" with the swapped
     real test pool) and hits every named chrome route via a real httpx client pointed at
-    `settings.osiris_console_base_url` — deliberately NOT asserting chrome's own up/down
+    `settings.osiris_console_base_url`, deliberately NOT asserting chrome's own up/down
     verdict, since whether anything is actually listening on that port is real environment
     state outside this test's control (this box happens to run a live console); only that
     the wrapper composes and reports honestly, never crashes, regardless."""
@@ -156,8 +156,8 @@ def test_summarize_failures_names_a_chrome_route() -> None:
 
 
 def test_summarize_failures_names_an_unreachable_mcp_round_trip() -> None:
-    """A bare error STRING (call_mcp_smoke's own return on a failed round-trip) — the exact
-    shape thread 1849d800 asked for: osiris-mcp being down must be its OWN loud finding, not
+    """A bare error STRING (call_mcp_smoke's own return on a failed round-trip): the exact
+    shape asked for. osiris-mcp being down must be its OWN loud finding, not
     a blank in the report."""
     fails = summarize_failures(_green_chrome(), "error: connection refused")
     assert fails == ["osiris-mcp round-trip: error: connection refused"]
@@ -171,8 +171,8 @@ def test_summarize_failures_names_mcps_own_pool_failure() -> None:
 
 
 def test_summarize_failures_mcps_own_chrome_view_can_disagree() -> None:
-    """The two chrome walks are INDEPENDENT (this script's own httpx client vs. osiris-mcp's)
-    — a route reachable from one vantage but not the other is a real, distinct finding, not
+    """The two chrome walks are INDEPENDENT (this script's own httpx client vs. osiris-mcp's):
+    a route reachable from one vantage but not the other is a real, distinct finding, not
     a duplicate to be collapsed."""
     mcp_chrome = {**_green_chrome(), "/desk": "error: connection refused"}
     fails = summarize_failures(_green_chrome(), {"chrome": mcp_chrome, "db": "ok", "ok": False})
@@ -207,8 +207,8 @@ async def test_whisper_health_finds_a_recorded_hook_failure(actions: Actions) ->
 async def test_whisper_health_counts_repeated_failures_on_the_same_surface(
     actions: Actions,
 ) -> None:
-    """record_blind_spot's own idempotency-per-surface (task #34) is the rate-limiter — one
-    graph OBJECT regardless of failure volume — but the ASSERTION HISTORY on that object
+    """record_blind_spot's own idempotency-per-surface (task #34) is the rate-limiter: one
+    graph OBJECT regardless of failure volume, but the ASSERTION HISTORY on that object
     still keeps every telling, which is exactly what whisper_health counts."""
     for i in range(3):
         await record_hook_failure(actions, surface="hook/stophook",
@@ -236,7 +236,7 @@ async def test_whisper_health_excludes_failures_outside_the_window(actions: Acti
 
 async def test_whisper_health_only_counts_the_named_hook_surfaces(actions: Actions) -> None:
     """A BlindSpot from an unrelated surface (webkit-rendering, ios-touch, ...) must never
-    be mistaken for a hook failure — whisper_health is scoped to exactly the surfaces task
+    be mistaken for a hook failure: whisper_health is scoped to exactly the surfaces task
     #179's own hook sites file under."""
     await record_hook_failure(actions, surface="whisper/automount", cannot_see="real one")
     b = await actions.create_or_find_object("BlindSpot", "blindspot:unrelated-surface", "test")
@@ -276,7 +276,7 @@ def test_summarize_failures_says_nothing_when_whisper_is_healthy() -> None:
     assert summarize_failures(_green_chrome(), mcp_result) == []
 
 
-# --- registry_rowless_warning: WARNING, never a failure (Thoth DM 5257) --------------------
+# --- registry_rowless_warning: WARNING, never a failure -------------------------------------
 
 async def test_registry_rowless_warning_is_none_on_a_clean_census(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,

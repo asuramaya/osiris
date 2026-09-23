@@ -1,4 +1,4 @@
-"""WHAT DID THE GHOST FARM COST? — 818 wakes, and not one of them in the ledger.
+"""WHAT DID THE GHOST FARM COST? 818 wakes, and not one of them in the ledger.
 
 Spawning an entire Claude session is the most expensive thing Osiris can do, and it was the one
 thing nobody could see. The miner cost $40.49 and I can prove it to the cent. The farm that minted
@@ -52,7 +52,7 @@ async def test_a_wake_s_REAL_spend_is_read_off_its_own_transcript(
     assert row["output_tokens"] == 300 and row["cache_read_tokens"] == 15000
     # THE PRICE IS NOT GUESSED. The transcript gives TOKENS; a price table invented here would be a
     # guess wearing the authority of a measurement, and it would be stale within the month. The
-    # tokens are a FACT. An honest gap beats a confident invention — that is the law of this week,
+    # tokens are a FACT. An honest gap beats a confident invention: that is the law of this week,
     # and it applies to me too.
     assert row["cost_usd"] is None
 
@@ -61,7 +61,7 @@ async def test_an_ORDINARY_session_is_not_billed_as_a_wake(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The fingerprint is the FIRST TURN, never a mention. This project has DISCUSSED the wake
-    prompt at length — billing those conversations as wakes would be the instrument miscounting
+    prompt at length: billing those conversations as wakes would be the instrument miscounting
     itself, which is the loop-pathology class in its cheapest form."""
     _session(tmp_path, "real0001", "why does the wake prompt say 'You have unread Osiris mail'?")
     assert (await meter_wakes(actions.pool, tmp_path))["metered"] == 0
@@ -72,7 +72,7 @@ async def test_an_ORDINARY_session_is_not_billed_as_a_wake(
 async def test_a_wake_is_metered_ONCE_and_never_double_billed(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A meter that counts twice is worse than no meter — it manufactures a debt that was never
+    """A meter that counts twice is worse than no meter: it manufactures a debt that was never
     owed, which is precisely what the miner did to the operator's wall."""
     p = _session(tmp_path, "wake0002", "You have unread Osiris mail. Call mount(...)")
     assert (await meter_wakes(actions.pool, tmp_path))["metered"] == 1
@@ -100,9 +100,9 @@ def _receipt(root: Path, stem: str, *, cost: float | None = 0.2559) -> Path:
 async def test_a_RESUMED_wake_is_priced_off_its_receipt(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE FIELD RUN THAT FOUND THIS (pokex pile-drain, wake 819, 2026-07-14): a resume-mode
+    """THE FIELD RUN THAT FOUND THIS (a pile-drain, wake 819, 2026-07-14): a resume-mode
     wake appends to a transcript the once-ever watermark already walked, so the transcript pass
-    is structurally blind to it — $0.2559 of real spend sat in a perfect receipt while three
+    is structurally blind to it: $0.2559 of real spend sat in a perfect receipt while three
     meter ticks walked past. The wake's unit of account is the EVENT; the file was the wrong
     key. The envelope carries this run's OWN dollars and token deltas, so nothing double-counts
     the transcript's earlier life."""
@@ -118,7 +118,7 @@ async def test_a_RESUMED_wake_is_priced_off_its_receipt(
     assert row["model"] == "claude-haiku-4-5-20251001"
     assert row["output_tokens"] == 13343 and row["cache_read_tokens"] == 650619
     assert row["cost_usd"] is not None and abs(float(row["cost_usd"]) - 0.2559) < 1e-6
-    # once, ever — the receipt is watermarked
+    # once, ever: the receipt is watermarked
     assert (await meter_receipts(actions.pool, receipts=receipts))["receipts_metered"] == 0
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM watermarks WHERE key=$1", receipt_key("f3520001")) == 1
@@ -128,7 +128,7 @@ async def test_an_EMPTY_or_unpriced_receipt_is_left_for_the_next_tick(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """A 0-byte receipt is a session still running (or a spawn that died before its first
-    write — wake-7.json): billing it would invent a number, watermarking it would forget it
+    write, wake-7.json): billing it would invent a number, watermarking it would forget it
     forever. It is left alone, un-watermarked, for the tick after its session exits."""
     from src.ingest.wake_cost import meter_receipts, receipt_key
 
@@ -164,7 +164,7 @@ async def test_a_receipt_billed_by_the_TRANSCRIPT_pass_is_never_billed_twice(
         "SELECT count(*) FROM llm_usage WHERE purpose='wake'") == 1
 
 
-# ═══ THE OTHER DIMENSION — body_usage: resource-seconds beside the vendor's dollars ═══
+# ═══ THE OTHER DIMENSION, body_usage: resource-seconds beside the vendor's dollars ═══
 
 
 def _body_receipt_file(
@@ -191,7 +191,7 @@ async def test_a_body_receipt_is_swept_into_body_usage(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The RECEIPT v1 envelope parses into a body_usage row carrying BOTH dimensions the
-    ceiling now needs — resource-seconds and exit cause, beside the seat/project it ran for."""
+    ceiling now needs: resource-seconds and exit cause, beside the seat/project it ran for."""
     receipts = tmp_path / "body-receipts"
     _body_receipt_file(receipts, "body0001", provider="ra")
     rep = await meter_bodies(actions.pool, receipts=receipts)
@@ -211,7 +211,7 @@ async def test_a_body_receipt_is_swept_into_body_usage(
 async def test_a_body_receipt_is_event_dated_by_its_OWN_mtime(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A LEDGER MUST BE DATED BY THE EVENT, NEVER BY THE BOOKKEEPING — the same law the wake
+    """A LEDGER MUST BE DATED BY THE EVENT, NEVER BY THE BOOKKEEPING: the same law the wake
     receipts prove above. A receipt swept long after the body dissolved must file under the
     day the BODY RAN, never the day the sweep happened to notice it."""
     receipts = tmp_path / "body-receipts"
@@ -228,8 +228,8 @@ async def test_a_body_receipt_is_event_dated_by_its_OWN_mtime(
 async def test_a_body_receipt_is_metered_ONCE_and_never_double_billed(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Idempotent on `handle`: a body is dissolved once, so sweeping its receipt twice — or
-    two ticks racing — must cost nothing extra."""
+    """Idempotent on `handle`: a body is dissolved once, so sweeping its receipt twice, or
+    two ticks racing, must cost nothing extra."""
     receipts = tmp_path / "body-receipts"
     _body_receipt_file(receipts, "body0003")
     assert (await meter_bodies(actions.pool, receipts=receipts))["metered"] == 1
@@ -242,7 +242,7 @@ async def test_malformed_and_zero_byte_body_receipts_are_skipped_never_crash(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The sweep must survive a body still dissolving (0-byte file), unparseable JSON, a
-    future version this parser doesn't speak, and a receipt missing a required field — skip
+    future version this parser doesn't speak, and a receipt missing a required field: skip
     and count each, exactly as `_envelope` does for wake receipts. Never crash the sweep."""
     receipts = tmp_path / "body-receipts"
     receipts.mkdir(parents=True)
@@ -253,7 +253,7 @@ async def test_malformed_and_zero_byte_body_receipts_are_skipped_never_crash(
 
     rep = await meter_bodies(actions.pool, receipts=receipts)
     assert rep == {"metered": 0, "skipped": 4}
-    # scoped to THESE handles, not a bare table count — body_usage isn't in conftest's
+    # scoped to THESE handles, not a bare table count: body_usage isn't in conftest's
     # per-test TRUNCATE list (it's telemetry, like llm_usage's sibling), so a raw count here
     # would depend on whatever earlier tests in this file already swept successfully.
     assert await actions.pool.fetchval(
@@ -263,7 +263,7 @@ async def test_malformed_and_zero_byte_body_receipts_are_skipped_never_crash(
 async def test_the_digest_surfaces_resource_seconds_beside_dollars(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The membrane's spend surface gains the meter's OTHER dimension — core-seconds and
+    """The membrane's spend surface gains the meter's OTHER dimension: core-seconds and
     RAM-gib-seconds grouped by exit cause, in the SAME report shape as `costs`, right beside
     it. Visibility only: no enforcement policy is invented here, the ceiling's dollar gate
     (orchestrator/ceiling.py) is untouched."""
@@ -289,7 +289,7 @@ async def test_the_digest_surfaces_resource_seconds_beside_dollars(
 async def test_a_provider_minted_receipt_round_trips_into_body_usage(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE SEAM TEST — binds the receipt's WRITER (bodies._build_receipt, Phase 0.1) to its
+    """THE SEAM TEST: binds the receipt's WRITER (bodies._build_receipt, Phase 0.1) to its
     READER (_body_receipt, Phase 0.2), built by two different hands against one spec: a receipt
     minted by a real BodyProvider dissolve() must sweep into body_usage unchanged. If either
     side ever drifts from RECEIPT v1, this test says so before the field does."""

@@ -1,5 +1,5 @@
-"""The process census — OS truth beside the graph's beliefs (heinrich's ghost-seat filing,
-thread 1fe6811c). Pure: every OS read is a fake here, never a real pgrep or /proc.
+"""The process census: OS truth beside the graph's beliefs (a ghost-seat filing).
+Pure: every OS read is a fake here, never a real pgrep or /proc.
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def test_maps_bodies_to_projects_by_the_shared_cwd_fold(tmp_path: Path) -> None:
 
 
 def test_an_osiris_file_label_overrides_the_folder_basename(tmp_path: Path) -> None:
-    """resolve_identity's own precedence: `.osiris`'s `project =` beats the cwd basename — a
+    """resolve_identity's own precedence: `.osiris`'s `project =` beats the cwd basename, a
     census label must line up with a mount's, not invent its own second mapping."""
     d = tmp_path / "renamed-folder"
     d.mkdir()
@@ -55,9 +55,9 @@ def test_the_bare_office_root_is_dropped_never_a_phantom_project(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A body sitting at the bare seat-office CONTAINER (~/.osiris/seats itself, never a
-    project) must never be tallied under the literal string "seats" (Thoth's live specimen,
-    msg 1888: fleet() reported "seats — 0 live · 3 sessions · 2 os bodies"). This census has
-    no agent_id to resolve the real project through the seat — it drops the pid instead of
+    project) must never be tallied under the literal string "seats" (a live specimen where
+    fleet() reported "seats: 0 live, 3 sessions, 2 os bodies"). This census has
+    no agent_id to resolve the real project through the seat, so it drops the pid instead of
     mis-tallying it, same honesty resolve_identity already keeps for the exact same cwd."""
     import src.orchestrator.census as census_mod
 
@@ -77,7 +77,7 @@ def test_the_bare_office_root_is_dropped_never_a_phantom_project(
 
 def test_an_exe_that_is_not_the_claude_binary_is_refused(tmp_path: Path) -> None:
     """The second witness: `pgrep -x claude` matches on a truncated 15-char `comm` field alone,
-    which is not proof — an unrelated process (an mcp child, a coincidence) sharing that name
+    which is not proof, an unrelated process (an mcp child, a coincidence) sharing that name
     must not be counted as a body just because its comm string collided."""
     d = tmp_path / "osiris"
     d.mkdir()
@@ -90,7 +90,7 @@ def test_an_exe_that_is_not_the_claude_binary_is_refused(tmp_path: Path) -> None
 
 
 def test_a_vanished_process_is_skipped_not_counted(tmp_path: Path) -> None:
-    """pgrep's snapshot and the /proc reads are not atomic — a pid that exited in between reads
+    """pgrep's snapshot and the /proc reads are not atomic: a pid that exited in between reads
     back None from cwd or exe. Skipped, never crashed on, never miscounted as a ghost."""
     d = tmp_path / "osiris"
     d.mkdir()
@@ -124,7 +124,7 @@ def test_the_real_os_facing_default_never_crashes() -> None:
 
 def test_blindness_is_none_never_an_empty_box(tmp_path: Path) -> None:
     """BLIND IS NOT EMPTY: pgrep failing (None, or raising) must stay distinguishable from
-    an honest zero — the door sweep deletes on the strength of 'nobody is home', which only
+    an honest zero: the door sweep deletes on the strength of 'nobody is home', which only
     an honest census may say. `live_bodies` (a pure cross-check) degrades to {} instead."""
     from src.orchestrator.census import live_bodies_by_cwd
 
@@ -140,8 +140,8 @@ def test_blindness_is_none_never_an_empty_box(tmp_path: Path) -> None:
 
 
 def test_live_bodies_by_cwd_is_directory_grained(tmp_path: Path) -> None:
-    """The sweep's witness: same project label, two directories — an office and its governed
-    repo — stay distinct doors; the exe check still refuses the impostor."""
+    """The sweep's witness: same project label, two directories, an office and its governed
+    repo, stay distinct doors; the exe check still refuses the impostor."""
     from src.orchestrator.census import live_bodies_by_cwd
 
     a = tmp_path / "office"
@@ -156,11 +156,10 @@ def test_live_bodies_by_cwd_is_directory_grained(tmp_path: Path) -> None:
     assert out == {str(a.resolve()): [1, 2], str(b.resolve()): [3]}
 
 
-# ═══ THE LIVENESS CONVERGENCE FIX, PIECE B2 (Nebbercracker's monsterhouse report,
-# DM 11817/11821): a `claude bg-spare` pre-warmed body is a real, exe-verified claude
-# process sitting at a real cwd — cmdline is the only signal that tells it apart from
-# an actual occupant. Live specimen: pid 3750764, 14h old, cwd = jenny's own seat
-# directory, no turns ever — misread as the occupant by both census functions.
+# ═══ THE LIVENESS CONVERGENCE FIX, PIECE B2: a `claude bg-spare` pre-warmed body is a
+# real, exe-verified claude process sitting at a real cwd, cmdline is the only signal
+# that tells it apart from an actual occupant. Live specimen: pid 3750764, 14h old, cwd
+# a seat's own directory, no turns ever, misread as the occupant by both census functions.
 
 def test_is_bg_spare_matches_the_hook_s_own_probe() -> None:
     from src.orchestrator.census import _is_bg_spare
@@ -218,7 +217,7 @@ def test_live_bodies_by_cwd_cmdline_default_is_empty_bytes_never_a_false_spare(
     tmp_path: Path,
 ) -> None:
     """The real `_proc_cmdline` default reads empty bytes for a fake/vanished pid (caught
-    OSError) — never mistaken for a spare match, same vanished-process race every sibling
+    OSError), never mistaken for a spare match, same vanished-process race every sibling
     probe here absorbs."""
     d = tmp_path / "osiris"
     d.mkdir()

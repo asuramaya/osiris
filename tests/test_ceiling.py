@@ -1,16 +1,16 @@
-"""THE DAILY CEILING — what Osiris may SPEND before it stops.
+"""THE DAILY CEILING: what Osiris may SPEND before it stops.
 
-    "nobody will touch this if it burns."                            — the operator, 2026-07-13
+Nobody will touch this if it burns.
 
 Every catastrophe in this system's life was a spend catastrophe: a miner that walked every
 transcript forever, a trigger that minted 463 real Claude sessions on abandoned projects, a worker
 that wedged itself with ten `claude -p` children. In every case NOBODY WAS COUNTING.
 
 The adversary already had a YIELD floor ("is this producer any good?"). Nothing anywhere answered
-the only question the operator actually asked: CAN HE AFFORD IT?
+the only question that actually matters: CAN THIS BE AFFORDED?
 
-The two tests that matter most here are test_the_gate_CAN_OPEN (Thoth XXVIII shipped one that
-could not — "a gate that can never open is a kill switch wearing a gate's clothes") and
+The two tests that matter most here are test_the_gate_CAN_OPEN (an earlier gate shipped one that
+could not: "a gate that can never open is a kill switch wearing a gate's clothes") and
 test_an_UNPRICED_call_is_not_a_FREE_call (an invisible spend is worse than a large one, and
 scoring it $0 is precisely how the ghost farm ran for a week).
 """
@@ -49,10 +49,10 @@ async def test_the_ceiling_STOPS_a_runaway(actions: Actions) -> None:
 
 
 async def test_the_gate_CAN_OPEN(actions: Actions) -> None:
-    """THE MISTAKE I REFUSE TO REPEAT. Thoth XXVIII shipped a licence gate that was a PERMANENT
+    """THE MISTAKE THIS TEST REFUSES TO REPEAT. An earlier licence gate was a PERMANENT
     LOCKOUT: it judged a new producer on the OLD one's yield, over rows the new one could never
     have written, so the number it demanded could not be raised BY ANY ACTION THE PRODUCER COULD
-    TAKE. He deployed it, ran it, and it refused. "A GATE THAT CAN NEVER OPEN IS A KILL SWITCH
+    TAKE. It was deployed, it ran, and it refused. "A GATE THAT CAN NEVER OPEN IS A KILL SWITCH
     WEARING A GATE'S CLOTHES."
 
     This ceiling reads a ROLLING WINDOW over spend that actually happened. It therefore DRAINS on
@@ -60,9 +60,9 @@ async def test_the_gate_CAN_OPEN(actions: Actions) -> None:
     does not sentence you to a dead system today.
     """
     for _ in range(12):
-        await _spend(actions, 1.00, ago_h=30)      # a blowout — but it was YESTERDAY
+        await _spend(actions, 1.00, ago_h=30)      # a blowout, but it was YESTERDAY
     ok, why = await may_spend(actions.pool, cap=10.0)
-    assert ok, "the window did not roll — this gate is a lockout"
+    assert ok, "the window did not roll: this gate is a lockout"
     assert "$0.00" in why
 
 
@@ -82,20 +82,20 @@ async def test_an_UNPRICED_call_is_not_a_FREE_call(actions: Actions) -> None:
     assert c.spent == 1.00, "an unpriced call must not be summed as zero"
     assert c.blind == 2
     ok, why = await may_spend(actions.pool, cap=10.0)
-    # thread 24c3cc74: the doctrine and the enforcement used to disagree — this asserted only
+    # the doctrine and the enforcement used to disagree here: this asserted only
     # the STRING, never that blindness alone actually refuses (spent=$1 under a $10 cap never
     # exercised a refusal before this fix).
-    assert not ok, "a producer that cannot price itself may not spend — regardless of $ spent"
+    assert not ok, "a producer that cannot price itself may not spend, regardless of $ spent"
     assert "NO PRICE" in why and "INVISIBLE" in why
     assert "cannot price itself may not spend" in why
 
 
 async def test_BLIND_ALONE_refuses_even_at_ZERO_dollars_spent(actions: Actions) -> None:
-    """The gap thread 24c3cc74 named precisely: `may_spend`'s boolean was `unlimited or spent
-    < cap` — `blind` never appeared in it, so a ledger with real dollars nowhere near the cap
+    """The gap named precisely: `may_spend`'s boolean was `unlimited or spent
+    < cap`. `blind` never appeared in it, so a ledger with real dollars nowhere near the cap
     always passed, no matter how many calls were invisible to the ceiling. This is the
     keyed-API failure mode verbatim: providers.py's AnthropicClient path records cost_usd=None,
-    so on a real deployment spent stays $0 while every call is blind — the ceiling must not
+    so on a real deployment spent stays $0 while every call is blind: the ceiling must not
     wave that through."""
     await _spend(actions, None)
     c = await ceiling(actions.pool, cap=10.0)
@@ -103,14 +103,14 @@ async def test_BLIND_ALONE_refuses_even_at_ZERO_dollars_spent(actions: Actions) 
     ok, why = await may_spend(actions.pool, cap=10.0)
     assert not ok, "$0.00 spent must not mean 'safe to spend' when the spend is unseen"
     assert "REFUSED" in why and "blind" in why.lower()
-    assert "CEILING REACHED" not in why, "the dollar cap was never touched — say so honestly"
+    assert "CEILING REACHED" not in why, "the dollar cap was never touched, say so honestly"
 
 
 def test_spend_is_metered_only_on_the_KEYED_api_backend() -> None:
-    """THE CEILING IS LIVE ONLY WHEN A DOLLAR IS ACTUALLY CHARGED (Thoth LIII 2026-07-21).
+    """THE CEILING IS LIVE ONLY WHEN A DOLLAR IS ACTUALLY CHARGED.
 
     On the local Claude CLI (a subscription) the envelope's total_cost_usd is a notional number
-    the vendor prints, not a debit — so metering it is a category error. Metered is true only on
+    the vendor prints, not a debit: so metering it is a category error. Metered is true only on
     the keyed API path, which is exactly the decision llm_provider() already makes from config;
     spend_is_metered asks it rather than re-guessing."""
     api = SimpleNamespace(osiris_extract_provider="anthropic",
@@ -124,11 +124,11 @@ def test_spend_is_metered_only_on_the_KEYED_api_backend() -> None:
 
 async def test_a_SUBSCRIPTION_makes_the_gate_INERT(actions: Actions) -> None:
     """THE '$12/$10' FALSE STOP, REMOVED. On a subscription the CLI cost is notional, not a
-    charge, so a ledger far over any cap must STILL pass — the gate was halting real work on
+    charge, so a ledger far over any cap must STILL pass: the gate was halting real work on
     imaginary money. may_spend(metered=False) never refuses and says why; and the SAME ledger
     with metered=True still stops, so the gate itself is intact, only correctly scoped."""
     for _ in range(50):
-        await _spend(actions, 10.00)                 # $500 of NOTIONAL cost — never charged
+        await _spend(actions, 10.00)                 # $500 of NOTIONAL cost, never charged
     ok, why = await may_spend(actions.pool, cap=10.0, metered=False)
     assert ok, "the ceiling false-stopped on money that was never charged"
     assert "subscription" in why and "not billed" in why
@@ -145,7 +145,7 @@ async def test_a_cap_of_zero_is_an_HONEST_kill_switch(actions: Actions) -> None:
 
 
 async def test_a_NEGATIVE_cap_is_the_operators_deliberate_no_net(actions: Actions) -> None:
-    """The operator may choose to run uncapped. He may not do it BY ACCIDENT — an unset config
+    """The operator may choose to run uncapped. This may not happen BY ACCIDENT: an unset config
     lands on DEFAULT_DAILY_USD, never on infinity."""
     for _ in range(50):
         await _spend(actions, 10.00)
@@ -159,7 +159,7 @@ async def test_the_ledger_is_dated_by_the_EVENT_not_the_BOOKKEEPING(actions: Act
     """A BACKFILL MUST NOT LOOK LIKE A SPREE.
 
     The wake meter read 257 historical wakes off disk in ONE PASS, and record_usage defaulted to
-    now() — filing a week of spending under a single day. Nobody noticed, because nobody was
+    now(), filing a week of spending under a single day. Nobody noticed, because nobody was
     counting. The moment a daily ceiling reads this table that becomes fatal: it would refuse to
     spend a cent on a day that had actually cost nothing, starving a producer over an accountant's
     clerical error.

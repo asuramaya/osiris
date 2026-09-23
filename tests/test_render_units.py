@@ -1,8 +1,7 @@
-"""render_units — generalizes render_backup_timers.py's own pattern (Wave 21, thread
-f04cce36 piece 3) past the 5 backup-lane timers (WAVE 22, ruling 7be61879, thread
-40d6eef3). `render()` is pure (no DB, no network); `_configured_values()` is the one
-async hop that reads every registered setting — proven separately, against a real test
-DB, by monkeypatching `get_settings`.
+"""render_units generalizes render_backup_timers.py's own pattern past the 5
+backup-lane timers. `render()` is pure (no DB, no network); `_configured_values()`
+is the one async hop that reads every registered setting: proven separately,
+against a real test DB, by monkeypatching `get_settings`.
 """
 from __future__ import annotations
 
@@ -66,7 +65,7 @@ def test_render_ignores_an_override_for_a_unit_with_no_shipped_file(tmp_path: Pa
     deploy = tmp_path / "deploy"
     deploy.mkdir()
     out = tmp_path / "out"
-    # no osiris-base-backup.timer exists in deploy/ at all — no crash, nothing written
+    # no osiris-base-backup.timer exists in deploy/ at all, no crash, nothing written
     n = render(deploy, out, {"backup.timer_schedule.osiris-base-backup.timer": "Sun 02:00:00"})
     assert n == 0
     assert not (out / "osiris-base-backup.timer").exists()
@@ -82,7 +81,7 @@ def test_render_substitutes_the_pg_autotune_schedule_too(tmp_path: Path) -> None
     assert "OnCalendar=Sun *-*-* 02:00:00" in (out / "osiris-pg-autotune.timer").read_text()
 
 
-# --- the daemon lane (WAVE 22): MemoryMax=, --watch, --host/--port ------------------
+# --- the daemon lane: MemoryMax=, --watch, --host/--port ----------------------------
 
 def test_render_substitutes_memory_max_in_place(tmp_path: Path) -> None:
     deploy = tmp_path / "deploy"
@@ -198,8 +197,7 @@ def test_render_console_defaults_are_byte_identical(tmp_path: Path) -> None:
 
 
 def test_render_substitutes_console_graceful_shutdown_independently(tmp_path: Path) -> None:
-    """THE CONSOLE GRACEFUL SHUTDOWN (thread 0be2f790's own deploy-reliability
-    follow-up, Thoth DM 10653)."""
+    """THE CONSOLE GRACEFUL SHUTDOWN: a deploy-reliability follow-up."""
     deploy = tmp_path / "deploy"
     user_dir = deploy / "user"
     user_dir.mkdir(parents=True)
@@ -234,7 +232,7 @@ def test_render_console_graceful_shutdown_default_is_byte_identical(tmp_path: Pa
 
 def test_shipped_osiris_console_unit_declares_a_graceful_shutdown_timeout() -> None:
     """Reads the REAL shipped file (not a tmp fixture), same discipline
-    test_shipped_osiris_mcp_unit_declares_a_transcripts_root already holds — a future
+    test_shipped_osiris_mcp_unit_declares_a_transcripts_root already holds: a future
     edit that drops the flag without meaning to fails here, loudly."""
     repo_root = Path(__file__).resolve().parent.parent
     text = (repo_root / "deploy" / "user" / "osiris-console.service").read_text()
@@ -250,7 +248,7 @@ def test_render_skips_the_daemon_lane_when_no_user_dir_exists(tmp_path: Path) ->
     assert not (out / "user").exists()
 
 
-# --- the reboot-survival guard (Thoth's ruling, mail 10247/10261) -------------------
+# --- the reboot-survival guard -------------------------------------------------------
 
 def test_looks_like_a_real_unit_requires_description_and_execstart() -> None:
     from scripts.render_units import _looks_like_a_real_unit
@@ -266,7 +264,7 @@ def test_render_falls_back_to_the_shipped_file_when_a_substitution_breaks_the_un
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A substitution function that corrupts ExecStart= (a bad regex match, an
-    unexpected value shape — the exact failure mode the guard exists for) must never
+    unexpected value shape: the exact failure mode the guard exists for) must never
     reach the installed file; the shipped original is used instead, logged to stderr."""
     import scripts.render_units as ru
 
@@ -283,11 +281,11 @@ def test_render_falls_back_to_the_shipped_file_when_a_substitution_breaks_the_un
                         [("daemon.osiris_console.memory_max", _corrupt)])
     out = tmp_path / "out"
     n = render(deploy, out, {"daemon.osiris_console.memory_max": "1G"})
-    assert n == 0  # the fallback is byte-identical to the shipped file — not a real render
+    assert n == 0  # the fallback is byte-identical to the shipped file, not a real render
     assert (out / "user" / "osiris-console.service").read_text() == original
 
 
-# --- the transcripts root (thread e332177f, ingest.transcripts_root) ----------------
+# --- the transcripts root (ingest.transcripts_root) ----------------------------------
 
 def test_render_substitutes_transcripts_root_in_place(tmp_path: Path) -> None:
     deploy = tmp_path / "deploy"
@@ -314,7 +312,7 @@ def test_render_transcripts_root_default_is_byte_identical(tmp_path: Path) -> No
         "Environment=OSIRIS_TRANSCRIPTS=%h/.claude/projects\n"
         "ExecStart=/bin/true\n\n[Install]\nWantedBy=default.target\n")
     out = tmp_path / "out"
-    n = render(deploy, out, {})  # no override — spec default is None
+    n = render(deploy, out, {})  # no override, spec default is None
     assert n == 0
     assert (out / "user" / "osiris-mcp.service").read_text() == (
         user_dir / "osiris-mcp.service").read_text()
@@ -336,9 +334,9 @@ def test_render_transcripts_root_inserts_a_new_line_when_none_shipped(tmp_path: 
 
 
 def test_shipped_osiris_mcp_unit_declares_a_transcripts_root() -> None:
-    """thread e332177f: the actual gap this whole lane traces back to — osiris-mcp's own
+    """The actual gap this whole lane traces back to: osiris-mcp's own
     unit never set OSIRIS_TRANSCRIPTS at all, so `settings.osiris_transcripts` defaulted
-    to "" inside the MCP process. Reads the REAL shipped file (not a tmp fixture) —
+    to "" inside the MCP process. Reads the REAL shipped file (not a tmp fixture):
     a future edit that drops the line without meaning to fails here, loudly."""
     repo_root = Path(__file__).resolve().parent.parent
     text = (repo_root / "deploy" / "user" / "osiris-mcp.service").read_text()

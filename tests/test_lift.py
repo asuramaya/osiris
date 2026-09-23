@@ -1,4 +1,4 @@
-"""lift(ref, handle) — extract a named, quiet rogue into a clean osiris office (thread 67f11cbd)."""
+"""lift(ref, handle): extract a named, quiet rogue into a clean osiris office."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -16,13 +16,13 @@ async def _rogue(
     actions: Actions, agent_id: str, cwd: str, *, project: str = "rogueproject",
     handle: str | None = None, live: bool = False,
 ) -> None:
-    """A mounted lineage in some ad hoc cwd — the pre-lift shape. Quiet by default (the
+    """A mounted lineage in some ad hoc cwd, the pre-lift shape. Quiet by default (the
     ceremony refuses a live one); `live=True` re-warms it for the refusal tests.
 
     Carries a real `works_in` edge alongside the raw `project` assertion (a real mount/
-    register_agent flow always pairs the two) — project_of (agents.py) resolves through
+    register_agent flow always pairs the two): project_of (agents.py) resolves through
     lineage_works_in, never a raw stamp with nothing behind it, so a fixture missing this
-    edge is a fixture lying about how mints actually work (thread 19d6bdcb7fa9/c5a91ea1)."""
+    edge is a fixture lying about how mints actually work."""
     now = datetime.now(UTC)
     a = await actions.create_or_find_object("Agent", agent_id, agent_id)
     await actions.assert_property(a, "project", project, agent_id, now, 0.9,
@@ -68,7 +68,7 @@ async def test_lift_the_whole_ceremony(actions: Actions, tmp_path: Path) -> None
 
 
 async def test_lift_is_idempotent(actions: Actions, tmp_path: Path) -> None:
-    """Re-running converges on the same office — claim_name re-affirms the same name,
+    """Re-running converges on the same office: claim_name re-affirms the same name,
     establish_office leaves the standing orders in place, exactly like establish_office
     alone. lift() adds nothing that breaks that."""
     cwd = str(tmp_path / "clusterfuck")
@@ -107,11 +107,11 @@ async def test_lift_refuses_an_ambiguous_cwd(actions: Actions, tmp_path: Path) -
 
 
 async def test_lift_refuses_a_live_target(actions: Actions, tmp_path: Path) -> None:
-    """A GENUINELY live target (door census item 4/ninth-specimen fix, Thoth msg 5772/5741,
-    thread 2c3c2b9a): both doors()'s own liveness check (lift's pre-claim gate) and
-    establish_office's own separate one now cross-check registry_census, so this test
-    injects a fake confirming occupancy — a bare fresh mount row alone is no longer
-    sufficient to prove liveness, by design (the atlas-shape fix)."""
+    """A GENUINELY live target (door census item 4/ninth-specimen fix): both doors()'s own
+    liveness check (lift's pre-claim gate) and establish_office's own separate one now
+    cross-check registry_census, so this test injects a fake confirming occupancy, a bare
+    fresh mount row alone is no longer sufficient to prove liveness, by design (the
+    atlas-shape fix)."""
     cwd = str(tmp_path / "livecwd")
     Path(cwd).mkdir()
     await _rogue(actions, "agent:livrogue1", cwd, live=True)
@@ -139,7 +139,7 @@ async def test_lift_no_longer_refuses_on_a_fresh_but_bodiless_target(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """THE ATLAS SHAPE ITSELF: a fresh/refreshing mount row with NO harness-confirmed body
-    behind it must not block a lift — the exact false refusal this fix closes."""
+    behind it must not block a lift, the exact false refusal this fix closes."""
     cwd = str(tmp_path / "unhauntedcwd")
     Path(cwd).mkdir()
     await _rogue(actions, "agent:unhaunt1", cwd, live=True)
@@ -155,11 +155,11 @@ async def test_lift_no_longer_refuses_on_a_fresh_but_bodiless_target(
 
 
 async def test_lift_propagates_claim_name_refusals(actions: Actions, tmp_path: Path) -> None:
-    """A name already LIVE-held by someone else refuses at claim_name, and lift stops there
-    — never partially establishes an office under the wrong name."""
+    """A name already LIVE-held by someone else refuses at claim_name, and lift stops there,
+    never partially establishes an office under the wrong name."""
     await _rogue(actions, "agent:holder001", "/w/holder", live=True)
-    # ONE LIVENESS AUTHORITY, FOURTH DOOR (Thoth msg 5719, 2026-08-26): claim_name's own
-    # refusal now cross-checks is_occupied_by_a_live_body — retarget the mount row to an
+    # ONE LIVENESS AUTHORITY, FOURTH DOOR: claim_name's own refusal now cross-checks
+    # is_occupied_by_a_live_body, retarget the mount row to an
     # exactly-8-char basename ("holder01") so a fake harness census can confirm it
     # (registry_census keys agent_mounts.job_dir's basename against sessionId[:8]).
     await actions.pool.execute(
@@ -188,9 +188,9 @@ async def test_lift_propagates_claim_name_refusals(actions: Actions, tmp_path: P
 # test_mintseat.py's ritual is the precedent: fake a mounted connection by injecting an
 # AgentIdentity into srv._agents keyed by srv._conn_key(ctx), point srv._pool at the test
 # DB, call the tool FUNCTION directly (never the MCP transport). lift() exposes no
-# office_root param (a live caller never gets to redirect where an office lands) — the
+# office_root param (a live caller never gets to redirect where an office lands); the
 # happy-path test sets OSIRIS_OFFICE_ROOT instead (offices._default_office_root()'s own
-# env seam, wave 9, msg 6089), exactly mint_seat's own technique for the same problem.
+# env seam), exactly mint_seat's own technique for the same problem.
 
 class _Ctx:
     class request_context:  # noqa: N801
@@ -214,7 +214,7 @@ async def test_mcp_lift_refuses_an_unmounted_caller(actions: Actions) -> None:
 async def test_mcp_lift_the_happy_path_through_the_tool_layer(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The tool layer end to end: a mounted caller lifts a different, quiet rogue — the
+    """The tool layer end to end: a mounted caller lifts a different, quiet rogue, the
     wrapper resolves `actor` from the connection's own identity (never a param) and hands
     off to the real lift(), which really writes the office (redirected to a scratch dir,
     since the tool exposes no office_root override)."""

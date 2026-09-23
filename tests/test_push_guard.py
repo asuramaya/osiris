@@ -1,19 +1,19 @@
-"""push_guard — the pre-push secret/PII guard (2026-08-15 incident, ruling 2fc98818).
-FAIL-OPEN ON INFRASTRUCTURE, NEVER ON A REAL MATCH (577988ed): the only thing that blocks a
+"""push_guard, the pre-push secret/PII guard (2026-08-15 incident).
+FAIL-OPEN ON INFRASTRUCTURE, NEVER ON A REAL MATCH: the only thing that blocks a
 push is a positive pattern match; every internal failure degrades to ALLOW, loudly.
 
-SELF-SCAN INCIDENT (2026-08-16, Thoth msg 4718): the first version of this file used
-LITERAL secret-shaped strings as fixture content — a full-length AWS-key-shaped string and
+SELF-SCAN INCIDENT (2026-08-16): the first version of this file used
+LITERAL secret-shaped strings as fixture content: a full-length AWS-key-shaped string and
 a full private-key header, written out contiguously. Once committed, that content became a
-permanent part of this repo's own history — push_guard, scanning ITS OWN test file's diff on
+permanent part of this repo's own history. push_guard, scanning ITS OWN test file's diff on
 every future push whose range includes that commit, matched its own DEFAULT_PATTERNS against
 its own fixtures and refused, forever, since a merged commit's own historical diff can never
 be un-scanned short of rewriting history. NEVER AGAIN, including in prose describing the
 incident itself (the first fix attempt repeated the exact mistake in this very docstring):
 every fixture below that needs to match DEFAULT_PATTERNS is built at RUNTIME (string
 concatenation, see `_synthetic_aws_key`/`_synthetic_private_key_header`) so no CONTIGUOUS
-matching substring ever exists as literal text anywhere in this file's own committed source
-— not in a fixture, not in a comment, not in this docstring — the detector is still
+matching substring ever exists as literal text anywhere in this file's own committed source,
+not in a fixture, not in a comment, not in this docstring. The detector is still
 exercised for real, on real regex matches, just never against a string this file's own diff
 could be caught holding.
 """
@@ -42,13 +42,13 @@ from scripts.push_guard import (
 
 def _synthetic_aws_key() -> str:
     """Runtime-built so this file's own source never contains the 20-char contiguous
-    string `\\bAKIA[0-9A-Z]{16}\\b` actually matches — see the module docstring."""
+    string `\\bAKIA[0-9A-Z]{16}\\b` actually matches, see the module docstring."""
     return "AKIA" + "Q" * 16
 
 
 def _synthetic_private_key_header() -> str:
     """Runtime-built so this file's own source never contains a contiguous
-    `-----BEGIN ... PRIVATE KEY-----` sequence — see the module docstring."""
+    `-----BEGIN ... PRIVATE KEY-----` sequence, see the module docstring."""
     return "-----BEGIN " + "RSA" + " PRIVATE KEY-----"
 
 
@@ -82,7 +82,7 @@ def small_repo(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def linked_worktree(small_repo: Path, tmp_path: Path) -> Path:
-    """A REAL `git worktree add` checkout off `small_repo` — the exact shape a seat's own
+    """A REAL `git worktree add` checkout off `small_repo`, the exact shape a seat's own
     `.claude/worktrees/<name>` is (EnterWorktree's own convention), not a path-string
     stand-in. Needs at least one commit to check out, so this seeds one."""
     _commit(small_repo, "seed")
@@ -167,7 +167,7 @@ def test_scan_range_is_clean_on_ordinary_content(small_repo: Path) -> None:
 def test_default_patterns_actually_catch_the_shapes_they_claim_to(
     small_repo: Path,
 ) -> None:
-    """DEFAULT_PATTERNS' own regexes, exercised for real against the actual dict — see
+    """DEFAULT_PATTERNS' own regexes, exercised for real against the actual dict, see
     the module docstring for why the content is built at runtime rather than written as
     a literal."""
     sha = _write_and_commit(
@@ -205,7 +205,7 @@ def test_custom_patterns_is_empty_off_a_none_common_dir() -> None:
 # --- format_refusal ---------------------------------------------------------------------------
 
 def test_format_refusal_names_the_escape_hatch() -> None:
-    msg = format_refusal(["aws-access-key-id: commit abc123 — matched 'AKIA…MNOP'"])
+    msg = format_refusal(["aws-access-key-id: commit abc123, matched 'AKIA…MNOP'"])
     assert "OSIRIS_PUSH_GUARD_SKIP=1" in msg
     assert "aws-access-key-id" in msg
 
@@ -242,7 +242,7 @@ def test_run_allows_on_an_unresolvable_range_rather_than_blocking(small_repo: Pa
     assert run(small_repo, stdin) == 0
 
 
-# --- is_worktree_checkout / the ref-hygiene refusal (Thoth msg 5278, 2026-08-18) --------------
+# --- is_worktree_checkout / the ref-hygiene refusal (2026-08-18) --------------
 
 def test_is_worktree_checkout_is_false_for_the_main_checkout(small_repo: Path) -> None:
     assert is_worktree_checkout(small_repo) is False
@@ -259,9 +259,9 @@ def test_is_worktree_checkout_is_none_off_a_non_git_directory(tmp_path: Path) ->
 
 
 def test_run_refuses_a_clean_push_from_a_linked_worktree(linked_worktree: Path) -> None:
-    """THE ACTUAL GAP (Thoth msg 5278): content-clean is not enough — a seat worktree must
-    never push AT ALL, whatever the range carries. This is the specimen shape of XXIII's
-    own incident (sekhmet-advisory-lock-fix / sekhmet-resume-guard-zero-hop): no secret in
+    """THE ACTUAL GAP: content-clean is not enough, a seat worktree must
+    never push AT ALL, whatever the range carries. This is the specimen shape of a prior
+    incident where two worktree branches carried no secret in
     either branch, and the old hook had nothing else to say no with."""
     a = _commit(linked_worktree, "clean commit, no secret anywhere")
     stdin = f"refs/heads/main {a} refs/heads/main {_NULL_SHA}\n"
@@ -292,7 +292,7 @@ def test_run_from_the_main_checkout_is_unaffected_by_the_worktree_check(
     small_repo: Path,
 ) -> None:
     """The negative control: a plain, non-worktree checkout (the operator's own) still
-    scans by content exactly as before — the new check never fires there."""
+    scans by content exactly as before, the new check never fires there."""
     a = _commit(small_repo, "clean commit")
     stdin = f"refs/heads/main {a} refs/heads/main {_NULL_SHA}\n"
     assert run(small_repo, stdin) == 0
@@ -338,7 +338,7 @@ def test_hook_status_reports_stale_when_installed_differs(small_repo: Path) -> N
 
 
 def test_hook_status_is_accurate_on_the_real_osiris_checkout() -> None:
-    """The real, live installed state — not a synthetic repo — proving the actual house
+    """The real, live installed state, not a synthetic repo, proving the actual house
     convention (tracked .githooks/pre-push + install_push_guard_hook.sh) round-trips."""
     from scripts.push_guard import REPO_ROOT
 

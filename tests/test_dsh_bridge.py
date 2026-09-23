@@ -3,7 +3,7 @@ grammar `session-<uuid>` teaches identity, and the whisper's explicit-anchor doo
 
 Why this file exists (2026-08-23): the adapter shipped assuming a flat
 `<slug>/session.jsonl.zstd` layout while the harness actually writes
-`<slug>/session-<uuid>/session.jsonl.zstd` — so it had NEVER discovered a single
+`<slug>/session-<uuid>/session.jsonl.zstd`, so it had NEVER discovered a single
 real session (the soul store carried zero harness='dsh' rows), and a real DSH
 session's mount() refused as UNRESOLVABLE because every identity door parsed the
 anchor as a Claude jobs path. These tests pin the real layout so it cannot
@@ -58,7 +58,7 @@ def dsh_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A ~/.dsh/sessions tree with two sessions in one workspace, decompress patched.
 
     The zstd BINARY compresses for real in production; tests patch the module's
-    _decompress so no binary dependency rides the suite — the LAYOUT (the thing
+    _decompress so no binary dependency rides the suite. The LAYOUT (the thing
     that broke) is what these tests pin, not the codec.
     """
     sessions = tmp_path / ".dsh" / "sessions"
@@ -201,7 +201,7 @@ async def test_session_end_releases_the_explicit_dsh_anchor(
                     cwd="/home/u/code/osiris", actor="analyst:operator",
                     job_dir=job_dir)
     # the resume-race grace yields an end that races its own greeting; a real close
-    # happens later — age the greeting out by clearing the in-memory ledger
+    # happens later, age the greeting out by clearing the in-memory ledger
     mounts_mod._GREETS.clear()
     out = await session_end(actions, session_id=f"session-{UUID_A}", job_dir=job_dir)
     assert out.get("released", 0) >= 1
@@ -223,7 +223,7 @@ class _RouteRequest:
 async def test_automount_route_renders_the_whisper_for_the_bridge(
         actions: Actions, dsh_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """THE RENDER DOOR (the DSH bridge's own): a harness plugin cannot run the python
-    hook script, so it POSTs render=true and reads `whisper_text` — ONE renderer
+    hook script, so it POSTs render=true and reads `whisper_text`: ONE renderer
     (scripts.osiris_hook.render_whisper), never a TS twin to drift. The honesty
     gate keys on env_job: the bridge passes the job_dir it is ABOUT to bind with."""
     from src import mcp_server
@@ -246,13 +246,13 @@ async def test_automount_route_renders_the_whisper_for_the_bridge(
     assert "ALREADY MOUNTED" in text
     assert f"agent:{UUID_A[:8]}" in text
     # the durable-anchor mount-again mechanics paragraph moved to orient()'s own output
-    # (context-bloat diet, decision e1fbde18, Thoth msg 6884) — no longer pushed here
+    # (context-bloat diet), no longer pushed here
 
 
 async def test_automount_route_without_render_leaves_the_whisper_out(
         actions: Actions, dsh_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Claude's own whisper hook still prints its own text (env_job from the client
-    env, not a request field) — the door only opens when a caller asks."""
+    env, not a request field): the door only opens when a caller asks."""
     from src import mcp_server
 
     monkeypatch.setattr(mcp_server, "_pool", actions.pool)

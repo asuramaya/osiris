@@ -1,4 +1,4 @@
-"""The composer's REST surface (P4/P5) — the human channel the shell drives, mirroring
+"""The composer's REST surface (P4/P5): the human channel the shell drives, mirroring
 the MCP authoring tools. Proves the generic renderer's contract: a composition runs over
 REST and returns a Result whose `kind` (objects / values / rows / data) is what the JS
 `renderResult` dispatches on. The console pages are now render modes of this one surface.
@@ -43,7 +43,7 @@ async def test_save_list_run_objects(client: httpx.AsyncClient, actions: Actions
     names = {c["name"]: c for c in (await client.get("/compositions")).json()}
     assert names["all-orgs"]["kind"] == "lens"
     # running it returns an OBJECTS result, each item carrying label/type/canonical AND its
-    # compact properties — the Table view (W1) reads `props` for its columns (sector here)
+    # compact properties: the Table view reads `props` for its columns (sector here)
     res = (await client.post("/compositions/all-orgs/run", json={})).json()
     assert res["kind"] == "objects" and res["count"] == 3
     assert all({"label", "type", "canonical", "props"} <= set(it) for it in res["items"])
@@ -71,7 +71,7 @@ async def test_run_function_without_subject_returns_error(client: httpx.AsyncCli
 
 
 async def test_watch_appears_as_a_composition(client: httpx.AsyncClient) -> None:
-    """A watch saved via /subscriptions is the SAME primitive — it shows up in
+    """A watch saved via /subscriptions is the SAME primitive: it shows up in
     /compositions as kind='watch', so the composer rail lists lenses and watches together."""
     await client.post("/subscriptions", json={"name": "sec watch", "criteria": {
         "object_type": "Organization", "where": []}})
@@ -84,12 +84,12 @@ async def test_watch_appears_as_a_composition(client: httpx.AsyncClient) -> None
 async def test_watermark_endpoint_returns_the_seven_markers_and_moves_on_a_write(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
-    """ruling cf9286b2's whole poll target — osiris.js fetches this, never a composition,
+    """The whole poll target: osiris.js fetches this, never a composition,
     to decide whether to re-run one. task #109 added rooms/compositions/cases (the CATALOG
     half osiris.js's separate catalogTick watches). Full behavioral coverage of
-    graph_watermark lives in test_watermark.py — including why `audit_log` alone is left
+    graph_watermark lives in test_watermark.py, including why `audit_log` alone is left
     out of the "empty" assertion below (task #97's catalog seed can leave it non-None
-    depending on test collection order; the other six carry no such exception) — this just
+    depending on test collection order; the other six carry no such exception). This just
     proves the REST route (the thing the browser actually calls) wires through correctly."""
     before = (await client.get("/watermark")).json()
     assert before["fleet_messages"] is None and before["agent_mounts"] is None
@@ -103,7 +103,7 @@ async def test_watermark_endpoint_returns_the_seven_markers_and_moves_on_a_write
 async def test_compositions_list_surfaces_refresh_secs_over_rest(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
-    """The sidebar's own source of truth for whether/how often to poll a lens — read once
+    """The sidebar's own source of truth for whether/how often to poll a lens, read once
     when GET /compositions loads, per composition, not re-fetched on every run."""
     from src.orchestrator.compositions import save_composition
 
@@ -115,8 +115,8 @@ async def test_compositions_list_surfaces_refresh_secs_over_rest(
 async def test_related_pivot_returns_a_result_set(
     client: httpx.AsyncClient, actions: Actions
 ) -> None:
-    """W3: a relationship group opens as a SET. /related?type=&direction= returns the
-    typed neighbours as enriched object items (table-ready) — the pivot behind 'open as set'."""
+    """A relationship group opens as a SET. /related?type=&direction= returns the
+    typed neighbours as enriched object items (table-ready), the pivot behind 'open as set'."""
     dev = await actions.create_or_find_object("Person", "dev:x@y.z", "git")
     await actions.assert_property(dev, "name", "Dev X", "git", NOW, 0.85)
     for sha in ["c1", "c2", "c3"]:
@@ -136,7 +136,7 @@ async def test_related_pivot_returns_a_result_set(
 async def test_run_spec_is_ephemeral_and_echoes_spec(
     client: httpx.AsyncClient, actions: Actions
 ) -> None:
-    """W4: the inline composer runs an EPHEMERAL working spec (no save) and echoes it back
+    """The inline composer runs an EPHEMERAL working spec (no save) and echoes it back
     so the lineage breadcrumb + chips can re-render. Adding a where filters in place."""
     await _orgs(actions)  # 2 ai + 1 bio
     base = {"op": "select", "object_type": "Organization"}
@@ -147,7 +147,7 @@ async def test_run_spec_is_ephemeral_and_echoes_spec(
                 "where": [{"property": "sector", "op": "eq", "value": "ai"}]}
     res2 = (await client.post("/compositions/run-spec", json={"spec": filtered})).json()
     assert res2["count"] == 2  # only the ai orgs
-    # nothing was saved (ephemeral) — the working spec never hit the compositions table
+    # nothing was saved (ephemeral): the working spec never hit the compositions table
     assert "(working" in res2["composition"] or res2["composition"] == "(spec)"
     assert not any(c["spec"] == filtered for c in (await client.get("/compositions")).json())
 
@@ -155,10 +155,9 @@ async def test_run_spec_is_ephemeral_and_echoes_spec(
 async def test_rooms_never_scope_compositions_cases_or_the_graph(
     client: httpx.AsyncClient, actions: Actions
 ) -> None:
-    """W2's own room-scoping was retired outright (WAVE 28, Thoth dispatch 12310/12807,
-    ruling 70c001ec/decision a47a0c7f): "end to end" turned out to mean the still-live
+    """Room-scoping was retired outright: "end to end" turned out to mean the still-live
     `?room=` READ filter on /compositions and /cases too, not just the mint/list doors
-    retired earlier this wave. GET/POST /rooms are gone; rooms are minted here through
+    retired earlier. GET/POST /rooms are gone; rooms are minted here through
     orchestrator.compositions.create_room/list_rooms directly, the same underlying
     functions the retired REST routes used to call, per the same ruling's own "the rooms
     table stays as read-only history" law -- room_id columns and values are UNTOUCHED, a
@@ -196,11 +195,10 @@ async def test_rooms_never_scope_compositions_cases_or_the_graph(
 
 
 async def test_claude_authors_a_room_from_a_sentence(actions: Actions) -> None:
-    """W5: orchestrator.compositions.create_room + save_composition(room_id=) still mint
-    a stance from a sentence ('set up a compliance desk') and scope a composition to it —
-    the MCP composition() dispatcher's own `room` save-time parameter is gone (WAVE 28,
-    Thoth dispatch 12310), this is the underlying door it used to call, still live per
-    ruling 70c001ec/decision a47a0c7f. resolve_room takes name or id."""
+    """orchestrator.compositions.create_room + save_composition(room_id=) still mint
+    a stance from a sentence ('set up a compliance desk') and scope a composition to it,
+    the MCP composition() dispatcher's own `room` save-time parameter is gone, this is
+    the underlying door it used to call, still live. resolve_room takes name or id."""
     from src.orchestrator.compositions import (
         create_room,
         list_compositions,
@@ -221,7 +219,7 @@ async def test_claude_authors_a_room_from_a_sentence(actions: Actions) -> None:
 
 
 async def test_console_pages_are_render_mode_stubs() -> None:
-    """object.html and watch.html are CUT — thin redirect stubs into the composer."""
+    """object.html and watch.html are CUT: thin redirect stubs into the composer."""
     ui = Path(__file__).resolve().parent.parent / "src" / "ui" / "static"
     for page, marker in [("object.html", "?id="), ("watch.html", "?run=")]:
         text = (ui / page).read_text()

@@ -1,6 +1,6 @@
-"""LANE 0 (thread aac54abb, operator ruling a0339e16): the single primitive every
-orphan-healing lane calls. Binary, no dial — mints iff the caller's own lookup returned
-exactly one candidate, else writes nothing and records why."""
+"""LANE 0: the single primitive every orphan-healing lane calls. Binary, no dial:
+mints iff the caller's own lookup returned exactly one candidate, else writes nothing
+and records why."""
 from __future__ import annotations
 
 import uuid
@@ -27,7 +27,7 @@ async def test_derive_or_abstain_mints_on_exactly_one_candidate(actions: Actions
         "SELECT evidence_class, confidence, properties FROM links "
         "WHERE from_id=$1 AND to_id=$2 AND type='implements'", orphan, target)
     assert row["evidence_class"] == "direct_observation"
-    assert round(row["confidence"], 2) == 0.6  # real column precision — DIRECT_OBSERVATION
+    assert round(row["confidence"], 2) == 0.6  # real column precision, DIRECT_OBSERVATION
     assert row["properties"]["origin"] == "derived"
 
 
@@ -61,7 +61,7 @@ async def test_derive_or_abstain_writes_nothing_on_zero_candidates(actions: Acti
 async def test_derive_or_abstain_writes_nothing_on_ambiguous_candidates(
     actions: Actions,
 ) -> None:
-    """The exact mistake Thoth made twice before asking for this: a join that
+    """The exact mistake made twice before this primitive existed: a join that
     confirmed a story without checking whether it returned one row or many."""
     orphan = await _mint_bare(actions, "GateWidget")
     t1 = await _mint_bare(actions, "GateWidget")
@@ -87,15 +87,15 @@ async def test_derive_or_abstain_uses_the_callers_own_reason_when_given(
     t2 = await _mint_bare(actions, "GateWidget")
     out = await capture.derive_or_abstain(
         actions, orphan, "implements", [t1, t2], "test",
-        why_if_ambiguous="session df4c827f holds 232 linked agents, not 1")
-    assert out["reason"] == "session df4c827f holds 232 linked agents, not 1"
+        why_if_ambiguous="this lookup holds 232 linked agents, not 1")
+    assert out["reason"] == "this lookup holds 232 linked agents, not 1"
 
 
 async def test_derive_or_abstain_namespaces_the_abstention_by_link_type(
     actions: Actions,
 ) -> None:
     """A second lane abstaining on the SAME object under a DIFFERENT link_type must
-    never clobber the first lane's own record — assert_property's last-write-wins
+    never clobber the first lane's own record: assert_property's last-write-wins
     would otherwise silently lose it."""
     orphan = await _mint_bare(actions, "GateWidget")
     t1 = await _mint_bare(actions, "GateWidget")
@@ -112,7 +112,7 @@ async def test_derive_or_abstain_namespaces_the_abstention_by_link_type(
     assert rediscovers_reason is not None and rediscovers_reason["candidate_count"] == 0
 
 
-# --- abstained_derivations: the read surface (thread f1f14cb3 item 2, msg 5937) -----
+# --- abstained_derivations: the read surface ------------------------------------------
 
 async def test_abstained_derivations_resolves_from_id_and_every_candidate(
     actions: Actions,
@@ -154,8 +154,8 @@ async def test_abstained_derivations_count_is_never_capped_by_limit(actions: Act
     assert out["sample"] == []
 
 
-# --- the retry door (thread e67fc338, Thoth's ruling): zero-candidate is retryable, ---
-# --- ambiguous never is — structurally, not by a filter someone could widen -----------
+# --- the retry door: zero-candidate is retryable, ambiguous never is, structurally, ---
+# --- not by a filter someone could widen -----------------------------------------------
 
 async def test_retryable_abstentions_includes_zero_candidate_excludes_ambiguous(
     actions: Actions,
@@ -177,7 +177,7 @@ async def test_retryable_abstentions_never_returns_an_ambiguous_row_even_unscope
     actions: Actions,
 ) -> None:
     """The structural guarantee: even pooling every link_type together (link_type=None),
-    a 2+-candidate abstention can never appear — the SQL's own WHERE clause excludes it,
+    a 2+-candidate abstention can never appear: the SQL's own WHERE clause excludes it,
     not application code that a later edit could accidentally widen."""
     t1 = await _mint_bare(actions, "GateWidget")
     t2 = await _mint_bare(actions, "GateWidget")
@@ -191,7 +191,7 @@ async def test_derive_or_abstain_resolves_a_stale_abstention_on_a_successful_ret
     actions: Actions,
 ) -> None:
     """A zero-candidate abstention that later resolves must stop appearing as still-
-    abstained (or still-retryable) — otherwise the abstention record itself becomes the
+    abstained (or still-retryable); otherwise the abstention record itself becomes the
     stale, never-revisited fact this whole lane exists to fix."""
     orphan = await _mint_bare(actions, "GateWidget")
     target = await _mint_bare(actions, "GateWidget")
@@ -224,7 +224,7 @@ async def test_derive_or_abstain_resolves_a_stale_abstention_on_a_successful_ret
 async def test_derive_or_abstain_first_pass_success_writes_no_resolved_marker(
     actions: Actions,
 ) -> None:
-    """The common case — a fresh cardinality-1 mint with no prior abstention on record —
+    """The common case, a fresh cardinality-1 mint with no prior abstention on record,
     must not write a spurious 'resolved' property implying one existed."""
     orphan = await _mint_bare(actions, "GateWidget")
     target = await _mint_bare(actions, "GateWidget")
@@ -238,12 +238,12 @@ async def test_derive_or_abstain_first_pass_success_writes_no_resolved_marker(
 async def test_derive_or_abstain_resolves_a_stale_abstention_from_a_different_source(
     actions: Actions,
 ) -> None:
-    """Wave 5's own finding: a retry runs under whatever actor re-derived it, almost
-    never the original abstention's own writer — assert_property's own supersession is
-    same-source-only, so a naive re-assert under the RETRYING actor would leave the
-    ORIGINAL actor's abstention "current" beside the new resolved marker instead of
-    retiring it. This is the cross-source case the sibling same-source test above
-    cannot catch (it uses "test" for both calls)."""
+    """A retry runs under whatever actor re-derived it, almost never the original
+    abstention's own writer: assert_property's own supersession is same-source-only,
+    so a naive re-assert under the RETRYING actor would leave the ORIGINAL actor's
+    abstention "current" beside the new resolved marker instead of retiring it. This
+    is the cross-source case the sibling same-source test above cannot catch (it uses
+    "test" for both calls)."""
     orphan = await _mint_bare(actions, "GateWidget")
     target = await _mint_bare(actions, "GateWidget")
     first = await capture.derive_or_abstain(
@@ -260,7 +260,7 @@ async def test_derive_or_abstain_resolves_a_stale_abstention_from_a_different_so
         "AND name='derivation_abstained_implements' "
         "AND NOT EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes=assertions.id)",
         orphan)
-    # exactly one LIVE row must remain, and it must be the resolved one — not two
+    # exactly one LIVE row must remain, and it must be the resolved one, not two
     # "current" rows (one per source) coexisting, the exact bug this test guards.
     assert len(rows) == 1
     assert rows[0]["value"]["resolved"] is True

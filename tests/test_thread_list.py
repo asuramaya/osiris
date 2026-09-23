@@ -1,4 +1,4 @@
-"""get_thread_list's "open" filter — dispatch #195 defect 2.
+"""get_thread_list's "open" filter: dispatch #195 defect 2.
 
 Measured live before this fix: 75.5% false-open (2,553 of 3,380 "active" Thread objects
 were actually resolved/retracted, not open). `o.status='active'` is the OBJECT's own
@@ -70,7 +70,7 @@ async def test_get_thread_list_mixed_population_reports_only_the_open_ones(
 async def test_get_thread_list_limit_zero_count_only_also_excludes_resolved(
     actions: Actions,
 ) -> None:
-    """The `limit=0` count-only path shares the same WHERE clause — must not regress
+    """The `limit=0` count-only path shares the same WHERE clause: must not regress
     separately from the body-returning path."""
     from src import mcp_server as srv
 
@@ -111,11 +111,11 @@ async def test_get_thread_list_kind_and_owner_filters_still_compose(
 async def test_get_thread_list_never_duplicates_a_thread_with_a_retracted_in_repo_link(
     actions: Actions,
 ) -> None:
-    """THE RAMSTEIN DOUBLE-THREAD SPECIMEN (thread 1ba9d9be), reproduced directly: a
+    """THE DOUBLE-THREAD SPECIMEN, reproduced directly: a
     thread whose `in_repo` edge was retracted and re-created (an ordinary fold/re-file,
-    not a bug in itself) used to appear TWICE — the JOIN onto `links` had no
+    not a bug in itself) used to appear TWICE: the JOIN onto `links` had no
     `valid_until` filter, so it matched the retracted historical row AND the live one.
-    NOT the multi-current-status-row leak (ruling 1335332e) — that class is a different
+    NOT the multi-current-status-row leak, that class is a different
     table (`assertions`) entirely; confirmed independently already closed."""
     from datetime import UTC, datetime
 
@@ -141,11 +141,11 @@ async def test_get_thread_list_never_duplicates_a_thread_with_a_retracted_in_rep
 
 
 async def test_get_thread_list_honest_total_excludes_a_disagreement(actions: Actions) -> None:
-    """THE HONEST COUNT (thread 0ae050d8, Thoth DM 6243): `total` counts by the `status`
-    PROPERTY alone — a thread closed by a decision (resolves=) and then reopened by a
+    """THE HONEST COUNT: `total` counts by the `status`
+    PROPERTY alone, a thread closed by a decision (resolves=) and then reopened by a
     DIFFERENT source's later 'open' write still reads property_status='open' and inflates
     `total`, even though a real closure edge already covers it (the `disagree` bucket).
-    `honest_total` — closure_buckets' `open_both` count — must exclude it; `total` (its
+    `honest_total`, closure_buckets' `open_both` count, must exclude it; `total` (its
     existing, unchanged contract) still includes it."""
     from src import mcp_server as srv
 
@@ -169,7 +169,7 @@ async def test_get_thread_list_honest_total_excludes_a_disagreement(actions: Act
     assert "1 more carry a closure edge" in out["honest_total_note"]
 
 
-# --- list_unfiled_threads: the H-bucket instrument gap (decision a49d2730/38755abe) —
+# --- list_unfiled_threads: the H-bucket instrument gap:
 # threads with NO in_repo edge at all, invisible to get_thread_list(project=...) no
 # matter which project is asked. -------------------------------------------------------
 
@@ -265,7 +265,7 @@ async def test_list_unfiled_threads_limit_zero_is_count_only(actions: Actions) -
     assert out["total"] >= 1
 
 
-# --- the age-bin instrument (thread 6a1dfc52, Thoth dispatch 7098 item 2): creation age
+# --- the age-bin instrument (dispatch 7098 item 2): creation age
 # exposed and filterable in bulk, so binning a pile by age is a count, not a per-object
 # pull at fleet scale. -----------------------------------------------------------------
 
@@ -380,11 +380,11 @@ async def test_get_object_list_thread_branch_exposes_created_at_and_age_filter(
     assert "created_at" in row and "T" in row["created_at"]
 
 
-# --- THE RENAME READ ALIAS (dispatch 2589353a, the rename cascade verb) -------------------
+# --- THE RENAME READ ALIAS (the rename cascade verb) -------------------------------------
 #
 # "The old name stays a permanent READ alias (search/get_object_list/graph_search answer
 # under either)." Before this fix, every one of these resolved `project=` by a literal
-# `canonical = 'repo:' || project` string match — going permanently blind to items filed
+# `canonical = 'repo:' || project` string match, going permanently blind to items filed
 # under a project's OLD label the moment `rename_project` changed only its `name` property
 # (canonical never moves). `_resolve_repo`'s own name-or-canonical fallback already existed;
 # these call sites just never used it.
