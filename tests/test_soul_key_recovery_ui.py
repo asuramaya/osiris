@@ -165,4 +165,9 @@ def test_enroll_button_only_offered_when_zero_recovery_paths_are_enrolled() -> N
 
 def test_cli_pointer_still_stands_alongside_the_new_browser_button() -> None:
     # piece 2 is an ADDITIONAL path, never a replacement for Khnum's CLI-only door.
+    # THE FIRST-RUN STEPPER (operator ruling: no paragraphs in the console) moved this
+    # pointer off its own inline sentence onto a tooltip on the browser button itself --
+    # same fact, no longer prose.
     assert "osiris soul-key enroll-recovery" in _CONSOLE_JS
+    body = _CONSOLE_JS.split('onclick="enrollRecoveryBrowser()"', 1)[1][:200]
+    assert "title=" in body

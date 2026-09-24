@@ -1582,6 +1582,21 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
         return await soul_key_restore_drill(p, repo_url=body.repo_url)
 
+    # THE ENCRYPT-EXISTING ROUTE (the readiness stepper's "existing data encrypted"
+    # step's own action): scripts/osiris_encrypt_soul_lines.py --apply, over HTTP,
+    # real writes. The whole migration runs inside this one call (batched
+    # internally, see soul_key_encrypt_existing's own docstring); the returned
+    # counts are the progress readout, same report the CLI script prints.
+    @app.post("/soul-key/encrypt-existing")
+    async def soul_key_encrypt_existing_route(
+        p: asyncpg.Pool = Depends(get_pool),
+    ) -> dict[str, Any]:
+        """Encrypt every soul-store row still stored in plain text under the
+        current encryption key. Refuses if no key is set up yet."""
+        from src.orchestrator.soul_key import soul_key_encrypt_existing
+
+        return await soul_key_encrypt_existing(p)
+
     # THE BROWSER RECOVERY MATERIAL ENDPOINTS: NEW routes only, no edits to the
     # soul-key routes above; see
     # src/orchestrator/soul_key_recovery_material.py's own module docstring for the
@@ -1693,6 +1708,39 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         from src.orchestrator.deploy_status import get_deploy_status
 
         return await get_deploy_status()
+
+    # THE FIRST-RUN STEPPER'S OWN ROUTE (readiness.py's module docstring): a thin
+    # assembly over facts every other route here already exposes separately
+    # (soul-key status, restic-key status, backup settings' own offload targets with
+    # their live presence already attached, the offload runner's receipts, the
+    # restore-drill's own receipts), plus one live systemctl check this route alone
+    # needs (whether osiris-mcp/osiris-worker have actually restarted since the key
+    # was minted -- `soul_key.py` stays pool-and-filesystem only, on purpose, so this
+    # lives here instead). readiness.compute_readiness_steps does the actual
+    # ordering/flag logic, unit-tested with synthetic inputs, no DB, no systemctl.
+    @app.get("/readiness")
+    async def readiness_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        """Return the first-run stepper's ordered step list: what's done, what's
+        missing, what needs attention, and which step to act on next."""
+        from src.orchestrator.backup_settings import get_backup_settings
+        from src.orchestrator.offload_runner import offload_receipts
+        from src.orchestrator.readiness import compute_readiness_steps
+        from src.orchestrator.restic_credential import restic_key_status
+        from src.orchestrator.soul_key import restore_drill_receipts, soul_key_status
+
+        soul_key = await soul_key_status(p)
+        restic_key = restic_key_status()
+        settings = await get_backup_settings(p)
+        receipts = offload_receipts()
+        offload_targets = [dict(t, **receipts.get(t.get("name"), {}))
+                          for t in settings.get("offload_targets", [])]
+        services_restarted = await _services_restarted_since_key(
+            soul_key.get("created_age_seconds") if soul_key.get("present") else None)
+        steps = compute_readiness_steps(
+            soul_key=soul_key, restic_key=restic_key, offload_targets=offload_targets,
+            restore_drill_receipts=restore_drill_receipts(),
+            services_restarted=services_restarted)
+        return {"steps": steps}
 
     # THE OPERATOR DESK, AS JSON (for the Settings pane's own Operator Desk section):
     # the EXISTING /desk route (above) only ever served server-rendered HTML (the old
@@ -2192,6 +2240,44 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 # from the canonical and `git show` it in the tracked repo (the same repo gitlog ingested).
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 _REPO_DIR = os.environ.get("OSIRIS_REPO_DIR", ".")
+
+
+async def _services_restarted_since_key(key_created_age_seconds: float | None) -> bool | None:
+    """The readiness stepper's own "services restarted with the key" check: did
+    osiris-mcp AND osiris-worker each last (re)start AFTER the key was minted, off
+    `systemctl --user show -p ActiveEnterTimestamp` -- same best-effort, UNAVAILABLE-
+    not-fabricated law compositions._backup_timer_live_state already holds (a dev
+    worktree or a systemd-less box returns None, never a false yes/no). None also
+    covers "no key yet" (nothing to have restarted for) and "systemctl says n/a"
+    (the unit was never started under this boot, which prior code elsewhere never
+    had to parse since it only ever asked for LastTriggerUSec/NextElapseUSecRealtime,
+    not a real start timestamp)."""
+    if key_created_age_seconds is None:
+        return None
+    from src.cli import _SOUL_KEY_RESTART_UNITS
+
+    key_created_at = datetime.now(UTC).timestamp() - key_created_age_seconds
+    for unit in _SOUL_KEY_RESTART_UNITS:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "systemctl", "--user", "show", unit, "-p", "ActiveEnterTimestamp",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        except (OSError, TimeoutError):
+            return None
+        line = out.decode().strip()
+        value = line.removeprefix("ActiveEnterTimestamp=") if "=" in line else ""
+        if not value or value == "n/a":
+            return None
+        try:
+            started_at = datetime.strptime(value, "%a %Y-%m-%d %H:%M:%S %Z").replace(
+                tzinfo=UTC).timestamp()
+        except ValueError:
+            return None
+        if started_at <= key_created_at:
+            return False
+    return True
 
 
 async def _git_show(sha: str) -> str | None:

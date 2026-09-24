@@ -1235,9 +1235,18 @@ def _redirect_credstore_dir_for_soul_key_tests(
     would collide across these tests (and with this developer's own real credential)
     under xdist parallelism without this redirect. Scoped to just this file's own
     soul-key section (`autouse=True` at module scope would be too broad for a file
-    this large) via `request.node`'s own test name."""
-    if request.node.name.startswith(("test_soul_key_", "test_restic_key_")):
+    this large) via `request.node`'s own test name.
+
+    Same reasoning covers `OSIRIS_RESTORE_DRILL_RECEIPTS_FILE`: soul_key_restore_
+    drill now writes a receipt as a side effect (caught live, a real
+    ~/.local/state/osiris/restore_drill_receipts.json got left on the machine
+    actually running tests/test_soul_key.py before that file's own autouse fixture
+    closed the gap there; this file's own restore-drill route tests need the same
+    redirect)."""
+    if request.node.name.startswith(("test_soul_key_", "test_restic_key_", "test_readiness_")):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdgcfg"))
+        monkeypatch.setenv(
+            "OSIRIS_RESTORE_DRILL_RECEIPTS_FILE", str(tmp_path / "restore_drill_receipts.json"))
 
 
 async def test_soul_key_status_route_absent(
@@ -1352,6 +1361,70 @@ async def test_soul_key_restore_drill_route_refuses_with_no_repo_configured(
     body = r.json()
     assert "error" in body
     assert "no offbox repository configured" in body["error"]
+
+
+async def test_soul_key_encrypt_existing_route_refuses_with_no_key(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(tmp_path / "no-such-file"))
+    r = await client.post("/soul-key/encrypt-existing")
+    assert r.status_code == 200
+    body = r.json()
+    assert "error" in body
+    assert "no encryption key" in body["error"]
+
+
+async def test_soul_key_encrypt_existing_route_runs_for_real(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cryptography.fernet import Fernet
+
+    key_file = tmp_path / "soul.key"
+    key_file.write_bytes(Fernet.generate_key())
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    r = await client.post("/soul-key/encrypt-existing")
+    assert r.status_code == 200
+    body = r.json()
+    assert "error" not in body
+    assert body["dry_run"] is False
+
+
+async def test_readiness_route_reports_every_step_when_nothing_is_set_up(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(tmp_path / "no-such-key"))
+    monkeypatch.setenv("OSIRIS_RESTIC_PASSWORD_FILE", str(tmp_path / "no-such-restic"))
+    monkeypatch.setenv("OSIRIS_RESTORE_DRILL_RECEIPTS_FILE", str(tmp_path / "drill.json"))
+    monkeypatch.setenv("OSIRIS_OFFLOAD_RECEIPTS_FILE", str(tmp_path / "offload.json"))
+    r = await client.get("/readiness")
+    assert r.status_code == 200
+    steps = r.json()["steps"]
+    from src.orchestrator.readiness import STEP_ORDER
+
+    assert [s["key"] for s in steps] == list(STEP_ORDER)
+    assert steps[0]["key"] == "key_set_up"
+    assert steps[0]["status"] == "missing"
+    assert steps[0]["current"] is True
+    assert all(s["current"] is False for s in steps[1:])
+
+
+async def test_readiness_route_key_present_advances_past_the_first_step(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cryptography.fernet import Fernet
+
+    key_file = tmp_path / "soul.key"
+    key_file.write_bytes(Fernet.generate_key())
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    monkeypatch.setenv("OSIRIS_RESTIC_PASSWORD_FILE", str(tmp_path / "no-such-restic"))
+    monkeypatch.setenv("OSIRIS_RESTORE_DRILL_RECEIPTS_FILE", str(tmp_path / "drill.json"))
+    monkeypatch.setenv("OSIRIS_OFFLOAD_RECEIPTS_FILE", str(tmp_path / "offload.json"))
+    r = await client.get("/readiness")
+    assert r.status_code == 200
+    steps = {s["key"]: s for s in r.json()["steps"]}
+    assert steps["key_set_up"]["status"] == "done"
+    # no live systemctl in a test environment: unavailable, never a fabricated yes/no
+    assert steps["services_restarted"]["status"] == "needs_attention"
 
 
 async def test_backfill_route_dry_run_reports_the_plan(

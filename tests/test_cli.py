@@ -29,6 +29,7 @@ from src.cli import (
     _run_install_script,
     _synthetic_automount_probe,
     _wait_for_health,
+    _wait_for_mcp_socket,
     _wait_for_smoke,
     _worker_heartbeat_probe,
     alembic_gap_note,
@@ -2346,6 +2347,60 @@ async def test_wait_for_health_backoff_is_capped() -> None:
     assert max(slept) == 8.0
 
 
+# --- _wait_for_mcp_socket: a FIXED-interval bound, not the exponential shape above ------------
+
+async def test_wait_for_mcp_socket_up_on_first_try_never_sleeps() -> None:
+    calls = []
+
+    async def _probe() -> bool:
+        calls.append(1)
+        return True
+
+    async def _no_sleep(_delay: float) -> None:
+        raise AssertionError("must never sleep when the first probe is already listening")
+
+    ready, waited = await _wait_for_mcp_socket(_probe, sleep=_no_sleep)
+    assert ready is True
+    assert waited == 0.0
+    assert len(calls) == 1
+
+
+async def test_wait_for_mcp_socket_recovers_after_the_measured_soul_key_delay() -> None:
+    """The exact shape a live deploy hit: refused a few times while MCP's own credential
+    import and soul-key resolution finish, then accepts, reported as a real elapsed wait."""
+    attempts = [False, False, False, True]
+    slept: list[float] = []
+
+    async def _probe() -> bool:
+        return attempts.pop(0)
+
+    async def _fake_sleep(delay: float) -> None:
+        slept.append(delay)
+
+    ready, waited = await _wait_for_mcp_socket(_probe, sleep=_fake_sleep)
+    assert ready is True
+    assert slept == [0.5, 0.5, 0.5]  # fixed interval, never doubling
+    assert waited == 1.5
+
+
+async def test_wait_for_mcp_socket_gives_up_at_the_ceiling_and_reports_honestly() -> None:
+    """An MCP server that never comes up is still reported truthfully; the bound protects
+    against a slow-but-real boot, never hides a genuinely dead process."""
+    async def _never_ready() -> bool:
+        return False
+
+    slept: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        slept.append(delay)
+
+    ready, waited = await _wait_for_mcp_socket(
+        _never_ready, ceiling_secs=2.0, sleep=_fake_sleep)
+    assert ready is False
+    assert waited >= 2.0
+    assert slept == [0.5, 0.5, 0.5, 0.5]
+
+
 # --- diff_tool_lists: pure --------------------------------------------------------------------
 
 def test_diff_tool_lists_no_change_is_empty() -> None:
@@ -2379,11 +2434,12 @@ def test_diff_tool_lists_composes_all_three_kinds_in_thoths_own_example_shape() 
 
 
 # --- cmd_deploy: fake git_status/restart, a real pool for the seeder/migration comparison ------
-# wait_for_health/wait_for_smoke default to REAL bounded pollers (120s/30s ceilings, real
-# network round-trips against the live console/MCP), every test whose restart succeeds and
-# falls through to that stage injects these fast fakes instead. cmd_deploy's own control flow
-# (order of calls, what it prints, what it returns) is what's under test here; the wait
-# LOGIC itself already has its own dedicated, correctly-mocked unit tests below.
+# wait_for_health/wait_for_smoke/wait_for_mcp_socket default to REAL bounded pollers
+# (120s/30s/60s ceilings, real network round-trips against the live console/MCP), every test
+# whose restart succeeds and falls through to that stage injects these fast fakes instead.
+# cmd_deploy's own control flow (order of calls, what it prints, what it returns) is what's
+# under test here; the wait LOGIC itself already has its own dedicated, correctly-mocked unit
+# tests below.
 
 async def _fake_wait_for_health() -> tuple[bool, float]:
     return True, 0.0
@@ -2395,6 +2451,10 @@ async def _fake_wait_for_smoke() -> tuple[list[str], float]:
 
 async def _fake_check_whisper_ok() -> tuple[bool, str]:
     return True, "whisper probe: /automount round-tripped clean"
+
+
+async def _fake_wait_for_mcp_socket() -> tuple[bool, float]:
+    return True, 0.0
 
 
 # --- task #179: the deploy refuses to record on a bad whisper probe, same law as the -------
@@ -2421,10 +2481,47 @@ async def test_cmd_deploy_refuses_to_record_when_the_whisper_probe_fails(
                                pool=actions.pool, record_deploy=_unreachable,
                                wait_for_health=_fake_wait_for_health,
                                wait_for_smoke=_fake_wait_for_smoke,
+                               wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                                check_whisper_probe=_bad_probe)
     assert out == 1
     assert "REFUSED" in buf.getvalue()
     assert "not recording this deploy" in buf.getvalue()
+
+
+async def test_cmd_deploy_refuses_before_the_whisper_probe_when_the_mcp_socket_never_answers(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The soul-key-latency race: the whisper probe's own single, un-retried POST is
+    never even reached if the MCP socket wait exhausts its ceiling first -- the refusal
+    must name the wait, not the whisper probe's generic round-trip failure, and it must
+    never call the whisper probe at all."""
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    async def _never_ready() -> tuple[bool, float]:
+        return False, 60.0
+
+    async def _must_not_be_called() -> tuple[bool, str]:
+        raise AssertionError("must never be called, the MCP socket wait exhausted first")
+
+    async def _unreachable(pool: Any, repo_root: Path) -> str | None:
+        raise AssertionError("must never be called, the MCP socket wait refused first")
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                               pool=actions.pool, record_deploy=_unreachable,
+                               wait_for_health=_fake_wait_for_health,
+                               wait_for_smoke=_fake_wait_for_smoke,
+                               wait_for_mcp_socket=_never_ready,
+                               check_whisper_probe=_must_not_be_called)
+    assert out == 1
+    assert "refused" in buf.getvalue()
+    assert "MCP server's listen socket never accepted a connection" in buf.getvalue()
+    assert "waiting 60s (ceiling)" in buf.getvalue()
 
 
 async def test_cmd_deploy_records_normally_when_the_whisper_probe_succeeds(
@@ -2443,6 +2540,7 @@ async def test_cmd_deploy_records_normally_when_the_whisper_probe_succeeds(
                            pool=actions.pool, record_deploy=_record_deploy,
                            wait_for_health=_fake_wait_for_health,
                            wait_for_smoke=_fake_wait_for_smoke,
+                           wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                            check_whisper_probe=_fake_check_whisper_ok)
     assert calls == [tmp_path]
     assert out == 0
@@ -2477,7 +2575,9 @@ async def test_cmd_deploy_notes_but_never_blocks_on_an_anchor_invariant_violatio
         out = await cmd_deploy(
             repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
             pool=actions.pool, wait_for_health=_fake_wait_for_health,
-            wait_for_smoke=_fake_wait_for_smoke, check_whisper_probe=_fake_check_whisper_ok)
+            wait_for_smoke=_fake_wait_for_smoke,
+            wait_for_mcp_socket=_fake_wait_for_mcp_socket,
+            check_whisper_probe=_fake_check_whisper_ok)
     assert out == 0  # informational only, never refuses
     assert "NOTE: anchor invariant" in buf.getvalue()
     assert "seat:deployanchor1" in buf.getvalue()
@@ -2498,7 +2598,9 @@ async def test_cmd_deploy_prints_no_anchor_note_when_the_fleet_is_clean(
         out = await cmd_deploy(
             repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
             pool=actions.pool, wait_for_health=_fake_wait_for_health,
-            wait_for_smoke=_fake_wait_for_smoke, check_whisper_probe=_fake_check_whisper_ok)
+            wait_for_smoke=_fake_wait_for_smoke,
+            wait_for_mcp_socket=_fake_wait_for_mcp_socket,
+            check_whisper_probe=_fake_check_whisper_ok)
     assert out == 0
     assert "NOTE: anchor invariant" not in buf.getvalue()
 
@@ -2528,6 +2630,7 @@ async def test_cmd_deploy_skips_the_full_suite_gate_by_default(
     out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                            pool=actions.pool, wait_for_health=_fake_wait_for_health,
                            wait_for_smoke=_fake_wait_for_smoke,
+                           wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                            check_whisper_probe=_fake_check_whisper_ok,
                            full_suite_gate=_boom_full_suite_gate,
                            deploy_settings=Settings(
@@ -2563,6 +2666,7 @@ async def test_cmd_deploy_records_normally_when_the_full_suite_gate_holds(
                                pool=actions.pool, record_deploy=_record_deploy,
                                wait_for_health=_fake_wait_for_health,
                                wait_for_smoke=_fake_wait_for_smoke,
+                               wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                                check_whisper_probe=_fake_check_whisper_ok,
                                full_suite_gate=_ok_full_suite_gate,
                                deploy_settings=Settings(
@@ -2599,6 +2703,7 @@ async def test_cmd_deploy_refuses_to_record_when_the_full_suite_gate_finds_a_rea
                                pool=actions.pool, record_deploy=_unreachable,
                                wait_for_health=_fake_wait_for_health,
                                wait_for_smoke=_fake_wait_for_smoke,
+                               wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                                check_whisper_probe=_fake_check_whisper_ok,
                                full_suite_gate=_bad_full_suite_gate,
                                chaos_gate=_unreachable_chaos,
@@ -2633,6 +2738,7 @@ async def test_cmd_deploy_skips_the_chaos_gate_by_default(
     out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                            pool=actions.pool, wait_for_health=_fake_wait_for_health,
                            wait_for_smoke=_fake_wait_for_smoke,
+                           wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                            check_whisper_probe=_fake_check_whisper_ok,
                            chaos_gate=_boom_chaos_gate,
                            deploy_settings=Settings(
@@ -2667,6 +2773,7 @@ async def test_cmd_deploy_records_normally_when_the_chaos_gate_holds(
                                pool=actions.pool, record_deploy=_record_deploy,
                                wait_for_health=_fake_wait_for_health,
                                wait_for_smoke=_fake_wait_for_smoke,
+                               wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                                check_whisper_probe=_fake_check_whisper_ok,
                                chaos_gate=_ok_chaos_gate,
                                deploy_settings=Settings(
@@ -2706,6 +2813,7 @@ async def test_cmd_deploy_refuses_to_record_when_the_chaos_gate_finds_a_real_vio
                                pool=actions.pool, record_deploy=_unreachable,
                                wait_for_health=_fake_wait_for_health,
                                wait_for_smoke=_fake_wait_for_smoke,
+                               wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                                check_whisper_probe=_fake_check_whisper_ok,
                                chaos_gate=_bad_chaos_gate,
                                deploy_settings=Settings(
@@ -2749,6 +2857,7 @@ async def test_cmd_deploy_refuses_when_a_false_mint_live_specimen_exists(
                                pool=actions.pool, record_deploy=_unreachable,
                                wait_for_health=_fake_wait_for_health,
                                wait_for_smoke=_fake_wait_for_smoke,
+                               wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                                check_whisper_probe=_fake_check_whisper_ok)
     assert out == 1
     text = buf.getvalue()
@@ -2880,6 +2989,7 @@ async def test_cmd_deploy_confesses_the_withheld_record_when_head_is_known(
                            pool=actions.pool, record_deploy=_unreachable,
                            wait_for_health=_fake_wait_for_health,
                            wait_for_smoke=_fake_wait_for_smoke,
+                           wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                            check_whisper_probe=_fake_check_whisper_ok)
     assert out == 1
 
@@ -3181,6 +3291,7 @@ async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
                                wait_for_health=_fake_wait_for_health,
                                wait_for_smoke=_fake_wait_for_smoke,
                                unit_start_timestamps=_timestamps,
+                         wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                          check_whisper_probe=_fake_check_whisper_ok)
     assert calls == [["osiris-mcp", "osiris-pulse"]]
     assert "osiris-mcp: started Thu 2026-09-11 00:00:00 UTC" in buf.getvalue()
@@ -3210,6 +3321,7 @@ async def test_cmd_deploy_broadcasts_a_disconnect_warning_before_and_after_the_r
     out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                            pool=actions.pool, wait_for_health=_fake_wait_for_health,
                            wait_for_smoke=_fake_wait_for_smoke,
+                           wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                            check_whisper_probe=_fake_check_whisper_ok)
     assert out in (0, 1)
     rows = await actions.pool.fetch(
@@ -3237,6 +3349,7 @@ async def test_cmd_deploy_disconnect_warning_failure_never_blocks_the_deploy(
         out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                                pool=actions.pool, wait_for_health=_fake_wait_for_health,
                                wait_for_smoke=_fake_wait_for_smoke,
+                               wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                                check_whisper_probe=_fake_check_whisper_ok)
     assert out in (0, 1)
     assert "disconnect warning failed to send" in buf.getvalue()
@@ -3275,6 +3388,7 @@ async def test_cmd_deploy_records_the_deployed_head_on_a_successful_restart(
                          pool=actions.pool, record_deploy=_record_deploy,
                          wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke,
+                         wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                          check_whisper_probe=_fake_check_whisper_ok)
     assert calls == [(actions.pool, tmp_path)]
     assert "deploy ledger: recorded deadbeef" in buf.getvalue()
@@ -3313,6 +3427,7 @@ async def test_cmd_deploy_reports_head_unknown_off_a_non_git_root(
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke,
+                         wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                          check_whisper_probe=_fake_check_whisper_ok)
     assert "deploy ledger: HEAD unknown, not recorded" in buf.getvalue()
 
@@ -3475,6 +3590,7 @@ async def test_cmd_deploy_applies_pending_migrations_before_restarting(
                          pool=actions.pool, migration_state=_state, run_migrations=_run,
                          wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke,
+                         wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                          check_whisper_probe=_fake_check_whisper_ok)
     assert order == ["migrate", "restart"]
     assert "0037" in buf.getvalue() and "0038" in buf.getvalue() and "applied" in buf.getvalue()
@@ -3536,6 +3652,7 @@ async def test_cmd_deploy_casefold_automerge_executes_by_default(
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke,
+                         wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                          check_whisper_probe=_fake_check_whisper_ok)
     text = buf.getvalue()
     assert "casefold auto-merge: EXECUTED: 1 candidate(s)" in text
@@ -3571,6 +3688,7 @@ async def test_cmd_deploy_casefold_automerge_opts_out_under_the_env_flag(
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke,
+                         wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                          check_whisper_probe=_fake_check_whisper_ok)
     assert "casefold auto-merge: dry-run: 1 candidate(s)" in buf.getvalue()
 
@@ -3612,6 +3730,7 @@ async def test_cmd_deploy_remote_url_automerge_executes_by_default(
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke,
+                         wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                          check_whisper_probe=_fake_check_whisper_ok)
     text = buf.getvalue()
     assert "remote_url auto-merge: EXECUTED: 1 candidate(s)" in text
@@ -3639,6 +3758,7 @@ async def test_cmd_deploy_remote_url_automerge_opts_out_under_the_env_flag(
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke,
+                         wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                          check_whisper_probe=_fake_check_whisper_ok)
     assert "remote_url auto-merge: dry-run: 1 candidate(s)" in buf.getvalue()
 
@@ -3680,6 +3800,7 @@ async def test_cmd_deploy_name_alias_automerge_executes_by_default(
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke,
+                         wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                          check_whisper_probe=_fake_check_whisper_ok)
     text = buf.getvalue()
     assert "name-alias auto-merge: EXECUTED: 1 candidate(s)" in text
@@ -3707,6 +3828,7 @@ async def test_cmd_deploy_name_alias_automerge_opts_out_under_the_env_flag(
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke,
+                         wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                          check_whisper_probe=_fake_check_whisper_ok)
     assert "name-alias auto-merge: dry-run: 1 candidate(s)" in buf.getvalue()
 
@@ -4124,6 +4246,7 @@ async def test_cmd_deploy_calls_install_units_before_restarting(
                          pool=actions.pool, install_units=_install,
                          wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke,
+                         wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                          check_whisper_probe=_fake_check_whisper_ok)
     assert order == ["install", "restart"]
     assert "unit: installed (new) osiris-mcp.service" in buf.getvalue()
@@ -4219,6 +4342,7 @@ async def test_cmd_deploy_actually_runs_install_commands_sh(
                              restart=_restart,
                              pool=actions.pool, wait_for_health=_fake_wait_for_health,
                              wait_for_smoke=_fake_wait_for_smoke,
+                             wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                              check_whisper_probe=_fake_check_whisper_ok)
     finally:
         if old_env is None:
@@ -4270,6 +4394,7 @@ async def test_cmd_deploy_actually_runs_install_prune_timers_sh(
                              restart=_restart,
                              pool=actions.pool, wait_for_health=_fake_wait_for_health,
                              wait_for_smoke=_fake_wait_for_smoke,
+                             wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                              check_whisper_probe=_fake_check_whisper_ok)
     finally:
         if old_env is None:
@@ -4455,6 +4580,7 @@ async def test_cmd_deploy_pins_the_snapshot_only_on_a_green_smoke(
                                pool=actions.pool, record_deploy=_record_deploy,
                                wait_for_health=_fake_wait_for_health,
                                wait_for_smoke=_fake_wait_for_smoke,
+                               wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                                check_whisper_probe=_fake_check_whisper_ok,
                                update_deploy_snapshot=_snapshot)
     assert out == 0
@@ -4488,6 +4614,7 @@ async def test_cmd_deploy_skips_the_snapshot_when_smoke_fails(
                            pool=actions.pool, record_deploy=_record_deploy,
                            wait_for_health=_fake_wait_for_health,
                            wait_for_smoke=_failing_smoke,
+                           wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                            check_whisper_probe=_fake_check_whisper_ok,
                            update_deploy_snapshot=_snapshot)
     assert out == 1
@@ -4516,6 +4643,7 @@ async def test_cmd_deploy_skips_the_snapshot_when_head_is_unknown(
                            pool=actions.pool, record_deploy=_record_deploy,
                            wait_for_health=_fake_wait_for_health,
                            wait_for_smoke=_fake_wait_for_smoke,
+                           wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                            check_whisper_probe=_fake_check_whisper_ok,
                            update_deploy_snapshot=_snapshot)
     assert out == 0

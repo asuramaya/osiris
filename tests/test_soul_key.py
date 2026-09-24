@@ -12,6 +12,20 @@ from src.actions.core import Actions
 from src.orchestrator import soul_key
 
 
+@pytest.fixture(autouse=True)
+def _redirect_restore_drill_receipts(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """soul_key_restore_drill now writes a receipt as a side effect (the readiness
+    stepper's own "restore test passed" step needs to read one back). Caught live:
+    running this file's own test_soul_key_restore_drill_calls_run_drill_for_an_
+    explicit_url once left a real ~/.local/state/osiris/restore_drill_receipts.json
+    on the machine actually running the tests, contaminating any later live check
+    of the readiness route (a stale "repo-good" receipt reading as a real passed
+    drill). Every test in this file gets its own scratch file instead, autouse, no
+    per-test opt-in to remember."""
+    monkeypatch.setenv(
+        soul_key._RESTORE_DRILL_RECEIPTS_ENV, str(tmp_path / "restore_drill_receipts.json"))
+
+
 async def test_soul_key_status_absent(tmp_path, actions: Actions) -> None:
     out = await soul_key.soul_key_status(actions.pool, path=str(tmp_path / "no-such-file"))
     assert out["present"] is False
@@ -78,3 +92,59 @@ async def test_soul_key_restore_drill_calls_run_drill_for_an_explicit_url(
     assert "error" not in out
     assert out["all_ok"] is True
     assert calls == ["repo-good"]
+
+
+# --- THE RESTORE-DRILL RECEIPT (the readiness stepper's own "restore test passed"
+# step): run_drill itself writes nothing, a bare pass/fail returned to the caller and
+# never seen again before this -----------------------------------------------------
+
+
+async def test_restore_drill_writes_a_passing_receipt(
+    actions: Actions, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(soul_key._RESTORE_DRILL_RECEIPTS_ENV, str(tmp_path / "r.json"))
+    import scripts.osiris_offbox_restore_drill as drill_module
+    monkeypatch.setattr(drill_module, "run_drill", lambda repo_url, **kw: None)
+
+    await soul_key.soul_key_restore_drill(actions.pool, repo_url="repo-a")
+
+    receipts = soul_key.restore_drill_receipts()
+    assert "repo-a" in receipts
+    assert receipts["repo-a"]["last_passed_at"] is not None
+    assert receipts["repo-a"]["last_error"] is None
+
+
+async def test_restore_drill_writes_a_failing_receipt_never_clobbers_a_prior_pass(
+    actions: Actions, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(soul_key._RESTORE_DRILL_RECEIPTS_ENV, str(tmp_path / "r.json"))
+    import scripts.osiris_offbox_restore_drill as drill_module
+    monkeypatch.setattr(drill_module, "run_drill", lambda repo_url, **kw: None)
+    await soul_key.soul_key_restore_drill(actions.pool, repo_url="repo-b")
+    first_pass = soul_key.restore_drill_receipts()["repo-b"]["last_passed_at"]
+
+    monkeypatch.setattr(drill_module, "run_drill", lambda repo_url, **kw: "unreachable")
+    await soul_key.soul_key_restore_drill(actions.pool, repo_url="repo-b")
+
+    receipt = soul_key.restore_drill_receipts()["repo-b"]
+    assert receipt["last_error"] == "unreachable"
+    assert receipt["last_passed_at"] == first_pass  # the earlier real pass survives
+
+
+async def test_soul_key_encrypt_existing_refuses_with_no_key(
+    tmp_path, actions: Actions,
+) -> None:
+    out = await soul_key.soul_key_encrypt_existing(
+        actions.pool, path=str(tmp_path / "no-such-file"))
+    assert "error" in out
+    assert "no encryption key" in out["error"]
+
+
+async def test_soul_key_encrypt_existing_runs_for_real_not_a_dry_run(
+    tmp_path, actions: Actions,
+) -> None:
+    key_file = tmp_path / "soul.key"
+    key_file.write_bytes(Fernet.generate_key())
+    out = await soul_key.soul_key_encrypt_existing(actions.pool, path=str(key_file))
+    assert "error" not in out
+    assert out["dry_run"] is False

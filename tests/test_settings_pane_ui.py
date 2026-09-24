@@ -158,26 +158,69 @@ def test_reject_merge_candidate_uses_the_existing_resolve_route() -> None:
     assert "decision: 'rejected'" in body
 
 
-# --- section 5: THE BOX ----------------------------------------------------------------
+# --- section 5: THE FIRST-RUN STEPPER ---------------------------------------------------
+# The aggregation itself (whether a restic target's reachability is ever probed live, the
+# ordering/flag logic) moved server-side into src.orchestrator.readiness -- see
+# tests/test_readiness.py, e.g. test_restic_target_with_no_live_presence_is_still_done.
+# This file only proves the console's own display/action wiring.
 
-def test_box_reads_all_four_status_doors() -> None:
-    body = _CONSOLE_JS.split("async function renderSettingsSectionBox() {", 1)[1][:1000]
-    assert "fetch('/soul-key/status')" in body
-    assert "fetch('/restic-key/status')" in body
-    assert "fetch('/backup-settings')" in body
+def test_stepper_reads_the_readiness_and_deploy_status_routes() -> None:
+    body = _CONSOLE_JS.split("async function renderSettingsSectionBox() {", 1)[1][:600]
+    assert "fetch('/readiness')" in body
     assert "fetch('/deploy-status')" in body
-    assert "renderBoxHtml(soulKey, resticKey, backupSettings, deployStatus)" in body
+    assert "renderReadinessStepperHtml(readiness, deployStatus)" in body
 
 
-def test_box_never_probes_restic_reachability_live() -> None:
+def test_stepper_shows_deploy_snapshot_in_sync_state() -> None:
     body = _CONSOLE_JS.split(
-        "function renderBoxHtml(soulKey, resticKey, backupSettings, deployStatus) {", 1)[1][:1700]
-    assert "kind === 'restic'" in body
-    assert "Connection is not checked automatically" in body
-
-
-def test_box_shows_deploy_snapshot_in_sync_state() -> None:
-    body = _CONSOLE_JS.split(
-        "function renderBoxHtml(soulKey, resticKey, backupSettings, deployStatus) {", 1)[1][:1700]
+        "function renderReadinessStepperHtml(readiness, deployStatus) {", 1)[1][:900]
     assert "deployStatus.in_sync" in body
     assert "deployStatus.running_sha.slice(0, 8)" in body
+
+
+def test_stepper_highlights_exactly_the_current_step() -> None:
+    body = _CONSOLE_JS.split("function readinessStepRow(s) {", 1)[1][:1200]
+    assert "readiness-current" in body
+    assert "s.current" in body
+
+
+def test_stepper_every_action_kind_maps_to_a_jump_or_a_perform() -> None:
+    body = _CONSOLE_JS.split("var READINESS_STEP_ACTIONS = {", 1)[1].split("};", 1)[0]
+    for kind in ("init_key", "restart_services", "enroll_recovery", "encrypt_existing",
+                 "init_restic", "configure_offload", "run_offload", "restore_drill"):
+        assert kind + ":" in body, f"{kind} missing from READINESS_STEP_ACTIONS"
+    assert body.count("kind: 'jump'") + body.count("kind: 'perform'") == 8
+
+
+def test_stepper_one_shot_actions_post_to_the_real_routes() -> None:
+    for fn, route in (
+        ("readinessEncryptExisting", "/soul-key/encrypt-existing"),
+        ("readinessRunOffload", "/offload-runner/tick"),
+        ("readinessRestoreDrill", "/soul-key/restore-drill"),
+    ):
+        body = _CONSOLE_JS.split("async function " + fn + "(btn) {", 1)[1][:400]
+        assert "fetch('" + route + "'" in body
+
+
+# THE STALE-STEPPER CHROME-WALK FINDING: the Key/Backup & Offload panels' own action
+# functions each re-render only their OWN section on success, so the stepper -- right
+# there on the same pane, reporting the exact same underlying facts -- stayed visibly
+# stale after clicking, say, "Set up the encryption key" until a manual reload.
+# Confirmed live before the fix, in a real browser: initResticKey() succeeded, its own
+# section updated, and the stepper's "Backup password set" row kept reading "Not set
+# up yet." refreshReadinessIfShown() (a no-op when the stepper isn't the current view)
+# now closes every one of these paths.
+
+def test_refresh_readiness_if_shown_is_a_noop_outside_the_settings_pane() -> None:
+    body = _CONSOLE_JS.split("function refreshReadinessIfShown() {", 1)[1][:200]
+    assert "$('settings-sec-box')" in body
+    assert "renderSettingsSectionBox()" in body
+
+
+def test_every_key_and_offload_action_refreshes_the_stepper_on_success() -> None:
+    for fn in ("initKey", "rotateKey", "finishKeyRotate", "restoreDrillKey",
+               "enrollRecoveryBrowser", "recoverKeyBrowser", "initResticKey",
+               "saveOffloadTargets", "runOffloadTick"):
+        body = _CONSOLE_JS.split("async function " + fn + "(", 1)[1].split(
+            "\nasync function ", 1)[0]
+        assert "refreshReadinessIfShown();" in body, f"{fn} never refreshes the stepper"

@@ -3583,6 +3583,7 @@ RecordDeploy = Callable[[asyncpg.Pool, Path], Awaitable[str | None]]
 WaitForHealth = Callable[[], Awaitable[tuple[bool, float]]]
 WaitForSmoke = Callable[[], Awaitable[tuple[list[str], float]]]
 CheckWhisperProbe = Callable[[], Awaitable[tuple[bool, str]]]
+WaitForMcpSocket = Callable[[], Awaitable[tuple[bool, float]]]
 ChaosGate = Callable[[asyncpg.Pool], Awaitable[dict[str, Any]]]
 FullSuiteGate = Callable[[Path], Awaitable[dict[str, Any]]]
 CheckFalseMintLive = Callable[[asyncpg.Pool], Awaitable[list[dict[str, Any]]]]
@@ -3624,6 +3625,42 @@ async def _real_wait_for_pg_dump(
         delay = min(delay * 2, 60.0)
         active = await probe(pool)
     return not active, elapsed
+
+
+async def _real_mcp_socket_probe() -> bool:
+    """The MCP server's own instance of `_port_open_probe` (the same zero-arg bool probe
+    `cmd_smoke_reboot` already reuses for exactly this reason, rather than a second poll
+    loop), resolved from live settings at call time, never import time, since
+    `osiris_mcp_host`/`osiris_mcp_port` can differ between processes and tests."""
+    from src.config.settings import get_settings
+
+    settings = get_settings()
+    return await _port_open_probe(settings.osiris_mcp_host, settings.osiris_mcp_port)()
+
+
+async def _wait_for_mcp_socket(
+    probe: Callable[[], Awaitable[bool]] = _real_mcp_socket_probe, *,
+    ceiling_secs: float = 60.0, interval_secs: float = 0.5,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> tuple[bool, float]:
+    """A BOUNDED, FIXED-INTERVAL poll (never indefinite) for the MCP server's raw listen
+    socket, run BEFORE the whisper probe: since the soul key was minted, MCP server startup
+    grew from about 1s to 4-6s (credential import and key resolution at boot), and the
+    whisper probe's own single, un-retried POST fired into that window and read as a genuine
+    failure (a live specimen: `/health`, the CONSOLE's own endpoint, a different process,
+    came back up immediately while MCP's own socket was still refused). 0.5s/60s is
+    deliberately flatter than `_wait_for_health`/`_wait_for_smoke`'s own exponential backoff:
+    a listen socket either exists or it doesn't, with no slow-ramp app-layer work left to wait
+    out once it does, so a fast fixed poll finds it sooner without over-waiting a genuinely
+    dead process for a full exponential ceiling. Returns (ready, elapsed); ready=False past
+    the ceiling is a real finding worth refusing the deploy over, not a timing false alarm."""
+    elapsed = 0.0
+    ready = await probe()
+    while not ready and elapsed < ceiling_secs:
+        await sleep(interval_secs)
+        elapsed += interval_secs
+        ready = await probe()
+    return ready, elapsed
 
 
 async def _synthetic_automount_probe(client: Any) -> tuple[bool, str]:
@@ -3825,6 +3862,7 @@ async def cmd_deploy(
     install_units: InstallUserUnits = _real_install_user_units,
     unit_start_timestamps: UnitStartTimestamps = _real_unit_start_timestamps,
     check_whisper_probe: CheckWhisperProbe = _real_check_whisper_probe,
+    wait_for_mcp_socket: WaitForMcpSocket = _wait_for_mcp_socket,
     chaos_gate: ChaosGate = _real_chaos_gate,
     check_false_mint_live: CheckFalseMintLive = _real_check_false_mint_live,
     full_suite_gate: FullSuiteGate = _real_full_suite_gate,
@@ -4042,6 +4080,23 @@ async def cmd_deploy(
             print(f"health: not up after waiting {health_waited:.0f}s (ceiling). The "
                   "console did not come up; this is a real startup failure, not a "
                   "smoke-timing false alarm")
+
+        # THE MCP SOCKET WAIT: `/health` above answers for the CONSOLE, a different process,
+        # so "health: up immediately" is no evidence MCP itself is listening. Since the soul
+        # key was minted, MCP's own startup (credential import + key resolution) grew from
+        # about 1s to 4-6s, and the whisper probe just below has no retry of its own -- a live
+        # specimen fired straight into that window and refused every deploy. Wait for the raw
+        # socket first; a hard refuse here names the wait instead of falling through to the
+        # whisper probe's own less specific "round-trip failed" message.
+        mcp_ready, mcp_waited = await wait_for_mcp_socket()
+        if mcp_ready:
+            print(f"mcp socket: up after {mcp_waited:.1f}s" if mcp_waited
+                  else "mcp socket: up immediately")
+        else:
+            print(f"osiris deploy: refused. The MCP server's listen socket never accepted a "
+                  f"connection after waiting {mcp_waited:.0f}s (ceiling). This is a real "
+                  "startup failure, not a timing race.")
+            return 1
 
         whisper_ok, whisper_note = await check_whisper_probe()
         print(whisper_note)

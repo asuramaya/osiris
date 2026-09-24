@@ -1007,31 +1007,32 @@ async function renderKeyPanel() {
   await renderKeyInto('result');
 }
 function renderKeyPanelHtml(s) {
+  // THE FIRST-RUN STEPPER OWNS THE FLAGS NOW: a missing recovery method and a
+  // nonzero legacy-row count used to render here as their own red warning
+  // paragraphs; both now live as steps on the Readiness stepper above, one line
+  // each. This table stays, the two paragraphs don't.
   var enrollBtn = (s.present && (s.recovery_paths_enrolled || []).length === 0)
-    ? ' <button class="iconbtn" onclick="enrollRecoveryBrowser()">Add a recovery method with a security key</button>'
+    ? '<button class="iconbtn" onclick="enrollRecoveryBrowser()" ' +
+      'title="Or run osiris soul-key enroll-recovery in a terminal.">' +
+      'Add a recovery method with a security key</button> '
     : '';
-  var warn = s.recovery_warning
-    ? '<div style="color:#e5534b;margin:8px 0">⚠ ' + esc(s.recovery_warning) +
-      '. Run <code>osiris soul-key enroll-recovery</code> in a terminal' +
-      (enrollBtn ? ', or' + enrollBtn : '.') +
-      '</div>' : '';
-  var legacy = (s.legacy_plaintext_rows != null && s.legacy_plaintext_rows > 0)
-    ? '<div style="color:#e5534b;margin:8px 0">⚠ ' + s.legacy_plaintext_rows +
-      ' item(s) still use the previous key. Replacement is not finished until this reaches zero.</div>' : '';
   var rotating = s.rotation_in_flight
     ? '<div style="margin:8px 0"><span>Key replacement in progress.</span> ' +
       '<button class="iconbtn" onclick="finishKeyRotate()">Finish replacement</button></div>' : '';
   var actions = !s.present
-    ? '<div style="margin-bottom:8px">' +
-      '<label>Storage method: <select id="key-init-backend"><option value="">Default for this machine</option>' +
+    ? '<div style="margin-bottom:8px"><label>Storage method: <select id="key-init-backend">' +
+      '<option value="">Default for this machine</option>' +
       '<option value="host-cred">System credential store</option>' +
-      '<option value="host+tpm2">System credential store with hardware chip</option>' +
+      '<option value="host+tpm2" title="Strongest option. Needs the tss Linux group ' +
+      '(sudo usermod -aG tss $USER, then log out and back in).">' +
+      'System credential store with hardware chip</option>' +
       '<option value="file">Plain file, no hardware protection</option></select></label></div>' +
       '<div style="margin-bottom:8px"><label><input type="checkbox" id="key-init-restart" checked /> ' +
       'Restart the services now</label></div>' +
       '<button class="iconbtn" onclick="initKey()">Set up the encryption key</button> ' +
       '<button class="iconbtn" onclick="recoverKeyBrowser()">Recover using a security key</button>'
     : (s.rotation_in_flight ? '' :
+       enrollBtn +
        '<div style="margin-bottom:8px"><label><input type="checkbox" id="key-rotate-confirm" ' +
        'onchange="$(\'key-rotate-btn\').disabled = !this.checked" /> ' +
        'I understand existing data will move to a new key</label></div>' +
@@ -1048,7 +1049,7 @@ function renderKeyPanelHtml(s) {
     '<tr><td>Created</td><td>' + esc(keyAgeProse(s.created_age_seconds)) + '</td></tr>' +
     '<tr><td>Recovery methods</td><td>' +
     esc((s.recovery_paths_enrolled || []).join(', ') || 'none') + '</td></tr>' +
-    '</tbody></table>' + warn + legacy + rotating +
+    '</tbody></table>' + rotating +
     '<div style="margin-top:12px">' + actions + '</div>' +
     '<pre id="key-out" class="o-faint" style="white-space:pre-wrap;margin-top:12px"></pre></div>';
 }
@@ -1066,6 +1067,7 @@ async function initKey() {
   setStatus('Encryption key set up (' + res.backend + ').' +
     (res.restart_hint ? ' ' + res.restart_hint : ''));
   renderKeyInto(KEY_CONTAINER_ID);
+  refreshReadinessIfShown();
 }
 async function rotateKey() {
   var out = $('key-out'); if (out) out.textContent = 'Replacing…';
@@ -1077,6 +1079,7 @@ async function rotateKey() {
   if (res.error) { setStatus('Replace failed: ' + res.error); return; }
   setStatus('Replacement begun. See the results above. Finish once the item count above reads zero.');
   renderKeyInto(KEY_CONTAINER_ID);
+  refreshReadinessIfShown();
 }
 async function finishKeyRotate() {
   var out = $('key-out'); if (out) out.textContent = 'Finishing…';
@@ -1091,6 +1094,7 @@ async function finishKeyRotate() {
   }
   setStatus('Replacement finished (' + res.backend + ').');
   renderKeyInto(KEY_CONTAINER_ID);
+  refreshReadinessIfShown();
 }
 async function restoreDrillKey() {
   var out = $('key-out'); if (out) out.textContent = 'Testing every offsite copy…';
@@ -1101,6 +1105,7 @@ async function restoreDrillKey() {
   if (out) out.textContent = JSON.stringify(res, null, 2);
   if (res.error) { setStatus('Test failed: ' + res.error); return; }
   setStatus(res.all_ok ? 'Test restore: every copy is readable.' : 'Test restore: at least one copy failed. See the results above.');
+  refreshReadinessIfShown();
 }
 
 // ── Browser recovery crypto ────────────────────────────────────────────────────────────
@@ -1244,6 +1249,7 @@ async function enrollRecoveryBrowser() {
     if (res.error) { setStatus('Setup failed: ' + res.error); return; }
     setStatus('Recovery method added.');
     renderKeyInto(KEY_CONTAINER_ID);
+    refreshReadinessIfShown();
   } catch (e) {
     if (out) out.textContent = String((e && e.message) || e);
     setStatus('Setup failed: ' + ((e && e.message) || e));
@@ -1298,6 +1304,7 @@ async function recoverKeyBrowser() {
     if (res.error) { setStatus('Recovery failed: ' + res.error); return; }
     setStatus('Encryption key recovered (' + res.backend + ').');
     renderKeyInto(KEY_CONTAINER_ID);
+    refreshReadinessIfShown();
   } catch (e) {
     if (out) out.textContent = String((e && e.message) || e);
     setStatus('Recovery failed: ' + ((e && e.message) || e));
@@ -1434,6 +1441,7 @@ async function saveOffloadTargets() {
   if (out) out.textContent = res.warnings ? 'Saved. Some settings need attention: ' + JSON.stringify(res.warnings) : 'Saved.';
   setStatus('Offload targets saved.');
   renderOffloadInto(OFFLOAD_CONTAINER_ID);
+  refreshReadinessIfShown();
 }
 
 // ── THE SETTINGS PANE ──────────────────────────────────────────────────────────────
@@ -1504,7 +1512,9 @@ function renderResticCredentialHtml(s) {
   var setupForm = s.present ? ''
     : '<label>Storage method: <select id="restic-init-backend"><option value="">Default for this machine</option>' +
       '<option value="host-cred">System credential store</option>' +
-      '<option value="host+tpm2">System credential store with hardware chip</option>' +
+      '<option value="host+tpm2" title="Strongest option. Needs the tss Linux group ' +
+      '(sudo usermod -aG tss $USER, then log out and back in).">' +
+      'System credential store with hardware chip</option>' +
       '<option value="file">Plain file, no hardware protection</option></select></label> ' +
       '<button class="iconbtn" onclick="initResticKey()">Set up</button>';
   var detail = s.present ? 'set up (' + esc(s.backend) + ')'
@@ -1522,6 +1532,7 @@ async function initResticKey() {
   if (res.error) { setStatus('Setup failed: ' + res.error); return; }
   setStatus('Remote backup password set up (' + res.backend + ').');
   renderResticCredentialWidget();
+  refreshReadinessIfShown();
 }
 // There used to be no on-demand offload tick.
 async function runOffloadTick() {
@@ -1542,6 +1553,7 @@ async function runOffloadTick() {
     setStatus('Offload finished. ' + ok + ' of ' + (res.targets || []).length + ' target(s) copied.');
   }
   renderBackupStatusSection(); // fresh results
+  refreshReadinessIfShown();
 }
 async function renderBackupStatusSection() {
   var out = $('settings-backup-status');
@@ -1718,59 +1730,122 @@ async function rejectMergeCandidate(btn) {
   renderSettingsSectionDesk();
 }
 
-// --- section 5: READINESS, a checklist of what is set up and connected, read live
-// off four existing status routes plus the two newer ones (remote backup password,
-// running-version status) --------------------------------------------------------------
+// --- section 5: READINESS, THE FIRST-RUN STEPPER (operator ruling: no paragraphs
+// in the console, a guided step-by-step with flags when something is missing).
+// GET /readiness does the aggregation (src.orchestrator.readiness.compute_readiness_
+// steps); this is display only, one line per step, the current step highlighted,
+// one action per step that either jumps to where the real control already lives
+// (the Key or Backup & Offload section above, both still on this same pane) or
+// performs the one-shot action directly (encrypt existing data, run an offload,
+// test a restore) with its own result line underneath. ---------------------------
+var READINESS_STEP_ACTIONS = {
+  init_key: { kind: 'jump', target: 'settings-sec-key' },
+  restart_services: { kind: 'jump', target: 'settings-sec-key' },
+  enroll_recovery: { kind: 'jump', target: 'settings-sec-key' },
+  encrypt_existing: { kind: 'perform', run: 'readinessEncryptExisting', label: 'Encrypt now' },
+  init_restic: { kind: 'jump', target: 'settings-sec-offload' },
+  configure_offload: { kind: 'jump', target: 'settings-sec-offload' },
+  run_offload: { kind: 'perform', run: 'readinessRunOffload', label: 'Run offload now' },
+  restore_drill: { kind: 'perform', run: 'readinessRestoreDrill', label: 'Test restore' },
+};
 async function renderSettingsSectionBox() {
   var container = $('settings-sec-box');
   if (!container) return;
   container.innerHTML = 'Loading…';
-  var soulKey, resticKey, backupSettings, deployStatus;
-  try {
-    var r1 = await fetch('/soul-key/status');
-    soulKey = r1.status === 404 ? { present: false, backend: 'not available in this deployment' } : await r1.json();
-  } catch (e) { soulKey = { error: 'Could not check.' }; }
-  try { resticKey = await fetch('/restic-key/status').then(function(r){ return r.json(); }); }
-  catch (e) { resticKey = { error: 'Could not check.' }; }
-  try { backupSettings = await fetch('/backup-settings').then(function(r){ return r.json(); }); }
-  catch (e) { backupSettings = { error: 'Could not check.' }; }
+  var readiness, deployStatus;
+  try { readiness = await fetch('/readiness').then(function(r){ return r.json(); }); }
+  catch (e) { readiness = { error: 'Could not check.' }; }
   try { deployStatus = await fetch('/deploy-status').then(function(r){ return r.json(); }); }
   catch (e) { deployStatus = { error: 'Could not check.' }; }
-  container.innerHTML = renderBoxHtml(soulKey, resticKey, backupSettings, deployStatus);
+  container.innerHTML = renderReadinessStepperHtml(readiness, deployStatus);
 }
-function boxRow(label, ok, detail) {
-  var dot = ok === true ? '<span style="color:#2ea043">●</span>'
-    : (ok === false ? '<span class="o-faint">○</span>' : '<span style="color:#e5534b">?</span>');
-  return '<tr><td>' + dot + ' ' + esc(label) + '</td><td class="o-faint">' + (detail || '') + '</td></tr>';
+function readinessStepDot(status) {
+  if (status === 'done') return '<span style="color:#2ea043">●</span>';
+  if (status === 'needs_attention') return '<span style="color:#e5534b">!</span>';
+  return '<span class="o-faint">○</span>';
 }
-function renderBoxHtml(soulKey, resticKey, backupSettings, deployStatus) {
-  var rows = '';
-  rows += boxRow('Encryption key set up', !!(soulKey && soulKey.present),
-    soulKey && soulKey.backend ? esc(soulKey.backend) : (soulKey && soulKey.error ? esc(soulKey.error) : ''));
-  rows += boxRow('Remote backup password set up', !!(resticKey && resticKey.present),
-    resticKey && resticKey.backend ? esc(resticKey.backend) : (resticKey && resticKey.error ? esc(resticKey.error) : ''));
-  var targets = (backupSettings && backupSettings.offload_targets) || [];
-  targets.filter(function(t) { return t.kind === 'local'; }).forEach(function(t) {
-    rows += boxRow('Local target "' + t.name + '" connected', t.presence ? !!t.presence.present : null,
-      t.presence
-        ? (t.presence.present
-           ? (t.presence.free_bytes != null ? Math.round(t.presence.free_bytes / 1024 ** 3) + ' GB free' : '')
-           : 'Not connected right now. Expected for a target that is only sometimes plugged in.')
-        : 'No expected folder is set.');
-  });
-  targets.filter(function(t) { return t.kind === 'restic'; }).forEach(function(t) {
-    rows += boxRow('Remote target "' + t.name + '" connected', null,
-      'Connection is not checked automatically. See Backup &amp; Offload above for its last successful offload.');
-  });
-  if (!targets.length) rows += boxRow('Offload targets configured', false, 'None configured yet.');
+function readinessStepRow(s) {
+  // s.action.kind is either 'jump' (a blocked step, server-side: do an earlier step
+  // first -- every such case in this stepper's own order blocks on the key, so it
+  // always jumps to the Key section) or one of the named actions the table above
+  // maps to its own jump target or one-shot perform function.
+  var act = (s.action && s.action.kind === 'jump')
+    ? { kind: 'jump', target: 'settings-sec-key' }
+    : (s.action ? READINESS_STEP_ACTIONS[s.action.kind] : null);
+  var btn = '';
+  if (act && act.kind === 'jump') {
+    btn = '<button class="iconbtn" onclick="readinessJump(' + JSON.stringify(act.target) + ')">Go to it</button>';
+  } else if (act && act.kind === 'perform') {
+    btn = '<button class="iconbtn" onclick="' + act.run + '(this)">' + esc(act.label) + '</button>';
+  }
+  return '<tr class="' + (s.current ? 'readiness-current' : '') + '">' +
+    '<td style="white-space:nowrap">' + readinessStepDot(s.status) + ' ' + esc(s.label) + '</td>' +
+    '<td class="o-faint">' + (s.reason ? esc(s.reason) : '') + '</td>' +
+    '<td>' + btn + '<div class="readiness-out o-faint" style="white-space:pre-wrap"></div></td>' +
+    '</tr>';
+}
+function renderReadinessStepperHtml(readiness, deployStatus) {
+  if (readiness && readiness.error) {
+    return '<div class="o-empty" style="padding:16px">' + esc(readiness.error) + '</div>';
+  }
+  var steps = (readiness && readiness.steps) || [];
+  var rows = steps.map(readinessStepRow).join('');
   var inSync = deployStatus && deployStatus.in_sync;
-  rows += boxRow('Running the latest version',
-    deployStatus && deployStatus.running_sha ? !!inSync : null,
-    deployStatus && deployStatus.running_sha
-      ? ('current: ' + deployStatus.running_sha.slice(0, 8) + ', latest available: ' +
-         (deployStatus.deploy_snapshot_sha ? deployStatus.deploy_snapshot_sha.slice(0, 8) : 'not yet published'))
-      : (deployStatus && deployStatus.error ? esc(deployStatus.error) : ''));
-  return '<table class="ee-table"><tbody>' + rows + '</tbody></table>';
+  var version = deployStatus && deployStatus.running_sha
+    ? ('Running ' + deployStatus.running_sha.slice(0, 8) +
+       (inSync ? ', up to date' : ', update available (' +
+        (deployStatus.deploy_snapshot_sha || '').slice(0, 8) + ')'))
+    : '';
+  return '<table class="ee-table"><tbody>' + rows + '</tbody></table>' +
+    (version ? '<div class="o-faint" style="margin-top:6px">' + esc(version) + '</div>' : '');
+}
+// Chrome-walk finding: the Key panel's own init/rotate/enroll/recover buttons, and the
+// Backup & Offload panel's own restic-init/save-targets/run-offload buttons, all live
+// on the SAME pane as the stepper and can each change a step's own state -- but only
+// called their OWN section's re-render on success, leaving the stepper visibly stale
+// right next to the action that just changed what it was reporting. Every one of those
+// success paths now also calls this, a no-op when the stepper isn't the current view
+// (renderKeyPanel()/renderOffloadPanel() opened standalone, no settings-sec-box in the
+// DOM at all).
+function refreshReadinessIfShown() {
+  if ($('settings-sec-box')) renderSettingsSectionBox();
+}
+function readinessJump(targetId) {
+  var el = $(targetId);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  el.style.transition = 'background-color 0.3s';
+  el.style.backgroundColor = 'var(--accent-bg, #1f2937)';
+  setTimeout(function() { el.style.backgroundColor = ''; }, 900);
+}
+function readinessRowOut(btn) {
+  return btn.parentElement.querySelector('.readiness-out');
+}
+async function readinessEncryptExisting(btn) {
+  var out = readinessRowOut(btn); if (out) out.textContent = 'Encrypting…';
+  var res = await fetch('/soul-key/encrypt-existing', { method: 'POST' }).then(function(r){ return r.json(); });
+  if (res.error) { if (out) out.textContent = res.error; return; }
+  if (out) out.textContent = res.hot_migrated + ' encrypted, ' + res.hot_already_encrypted + ' already were.';
+  renderSettingsSectionBox();
+}
+async function readinessRunOffload(btn) {
+  var out = readinessRowOut(btn); if (out) out.textContent = 'Running…';
+  var res = await fetch('/offload-runner/tick', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+  }).then(function(r){ return r.json(); });
+  if (res.error) { if (out) out.textContent = res.error; return; }
+  var ok = (res.targets || []).filter(function(t) { return t.ok; }).length;
+  if (out) out.textContent = ok + ' of ' + (res.targets || []).length + ' target(s) offloaded.';
+  renderSettingsSectionBox();
+}
+async function readinessRestoreDrill(btn) {
+  var out = readinessRowOut(btn); if (out) out.textContent = 'Testing…';
+  var res = await fetch('/soul-key/restore-drill', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+  }).then(function(r){ return r.json(); });
+  if (res.error) { if (out) out.textContent = res.error; return; }
+  if (out) out.textContent = res.all_ok ? 'Every copy is readable.' : 'At least one copy failed.';
+  renderSettingsSectionBox();
 }
 
 // ── Projects ────────────────────────────────────────────────────────────────
