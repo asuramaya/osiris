@@ -85,7 +85,7 @@ def _tripped_only_by_advisory_lock_noise(report: dict[str, Any]) -> bool:
     samples land back-to-back rather than usefully time-separated). Every OTHER sub-check
     `chaos_replay` runs is fully injected/deterministic in this specific test (fake kill/
     restart/storm/automount, all instant, all success). The advisory-lock check against
-    the REAL shared `pg_locks` is the one genuinely environment-dependent piece left, so
+    the REAL `pg_locks` is the one genuinely environment-dependent piece left, so
     it is also the only finding that can EVER legitimately appear here as load noise
     rather than a real regression. True only when `findings` is EXACTLY one item and that
     item is the advisory-lock finding beyond tolerance, never for a kill/restart/recovery/
@@ -265,8 +265,8 @@ async def isolated_chaos_daemons(
 
 async def test_chaos_replay_all_green(actions: Actions) -> None:
     """This used to fail as a bare `assert False is True` whenever the ONE
-    genuinely load-sensitive sub-check (`_stable_advisory_lock_count` against the real,
-    server-wide `pg_locks`) tripped under real `-n4` contention from other worker suites,
+    genuinely load-sensitive sub-check (`_stable_advisory_lock_count` against the real
+    `pg_locks`) tripped under real `-n4` contention from other worker suites,
     a finding this test's own environment cannot control, not a regression in the code
     under test. Skips, naming the guard, instead of failing opaque; any OTHER finding
     (kill/restart/recovery/flapping/stranger-mint, every one of them fully injected and
@@ -481,16 +481,50 @@ async def test_chaos_replay_reports_a_stranger_minted_over_a_listed_body(
     assert any("new identity was minted" in f for f in report["findings"])
 
 
+async def test_advisory_lock_count_ignores_locks_held_in_another_database(
+    actions: Actions, pg_dsn: str,
+) -> None:
+    """Advisory locks live inside one database, so a lock another database on the same
+    server holds is not this pool's to count. A burst of them used to land in the baseline
+    sample and hide a real leak from `chaos_replay`."""
+    import uuid
+
+    import asyncpg
+
+    other = f"chaos_other_{uuid.uuid4().hex[:8]}"
+    server = pg_dsn.rsplit("/", 1)[0]
+    admin = await asyncpg.connect(f"{server}/postgres")
+    holder = None
+    try:
+        await admin.execute(f'CREATE DATABASE "{other}"')
+        holder = await asyncpg.connect(f"{server}/{other}")
+        before = await _advisory_lock_count(actions.pool)
+        for key in range(40):
+            await holder.execute("SELECT pg_advisory_lock($1)", 8100 + key)
+        assert await _advisory_lock_count(actions.pool) == before
+        mine = await actions.pool.acquire()
+        try:
+            await mine.execute("SELECT pg_advisory_lock($1)", 8200)
+            assert await _advisory_lock_count(actions.pool) == before + 1
+            await mine.execute("SELECT pg_advisory_unlock_all()")
+        finally:
+            await actions.pool.release(mine)
+    finally:
+        if holder is not None:
+            await holder.close()
+        await admin.execute(f'DROP DATABASE IF EXISTS "{other}" WITH (FORCE)')
+        await admin.close()
+
+
 async def test_chaos_replay_reports_an_advisory_lock_leak(actions: Actions) -> None:
-    """`_advisory_lock_count` reads `pg_locks` SERVER-WIDE, by its own documented design
-    (it accounts for concurrent-fleet noise via a baseline diff, never scopes by key), but
-    under THIS SUITE's own xdist parallelism, every worker shares ONE physical Postgres
-    server (separate databases, same instance; see conftest.py's own `pg_dsn` docstring),
-    so `pg_locks` is genuinely visible cross-worker. A single leaked lock can occasionally
-    be masked by an unrelated worker's own transient advisory-lock traffic (e.g.
-    test_seats.py's wedge-cancellation specimens) landing in the same narrow measurement
-    window, so leaking TEN distinct keys instead of one keeps the signal solidly above that
-    noise floor without weakening `chaos_replay`'s own real, unscoped comparison."""
+    """`_advisory_lock_count` reads `pg_locks` for the pool's OWN database only: advisory
+    locks live inside one database, and every parallel test worker has its own database on
+    the one shared server, so another worker's lock traffic is not counted. It used to read
+    the whole server, and a burst of locks in another worker's database, landing in the
+    baseline sample, inflated it enough to hide a leak (reproduced at 4 to 5 of 40 runs
+    under synthetic cross-database noise, 0 of 120 after scoping). Ten distinct keys leak
+    here rather than one so the signal stays well above the residual same-database noise
+    `ADVISORY_LOCK_NOISE_TOLERANCE` absorbs."""
     leaked_conn: list[Any] = []
     keys = list(range(999999001, 999999011))
 
@@ -547,13 +581,11 @@ async def test_chaos_replay_all_green_against_isolated_real_daemons(
     correctly doesn't count it as a finding.
 
     THE OTHER HALF OF THIS SEGMENT'S FLAKE (root-caused live, reproduced twice under a
-    real `-n4` full-suite run): `_advisory_lock_count` reads `pg_locks` SERVER-WIDE
-    (`test_chaos_replay_reports_an_advisory_lock_leak`'s own docstring names this: every
-    xdist worker shares ONE physical Postgres instance), so an unrelated worker's own
-    transient lock landing in the narrow post-recovery sampling instant could false-
-    positive as a leak; `ADVISORY_LOCK_NOISE_TOLERANCE` (chaos.py) now absorbs that
-    measured noise without masking the leak-reproduction test's own deliberate 10-key
-    signal.
+    real `-n4` full-suite run): `_advisory_lock_count` used to read `pg_locks` for the
+    whole server, so another worker's lock burst could land in a sample and read as a
+    leak; it now counts only the pool's own database (see its docstring), and
+    `ADVISORY_LOCK_NOISE_TOLERANCE` (chaos.py) absorbs the small same-database residue
+    without masking the leak-reproduction test's own deliberate 10-key signal.
 
     A THIRD TIMING DEPENDENCY (this still failed a full gate under load and passed alone
     even with both fixes above): this call tightened `recovery_ceiling_secs` to 30.0,
@@ -571,7 +603,7 @@ async def test_chaos_replay_all_green_against_isolated_real_daemons(
     # This call, unlike `test_chaos_replay_all_green` above, takes NO `sleep=` override, so
     # `_stable_advisory_lock_count`'s own gap_secs elapses for real between samples; under
     # real `-n4` full-suite load, that's still the one genuinely environment-dependent
-    # sub-check (server-wide `pg_locks`, same root cause as above), so this sibling earns
+    # sub-check (the real `pg_locks`, same root cause as above), so this sibling earns
     # the identical narrow skip rather than a bare hard-fail. Every OTHER invariant here
     # (real kill/restart/storm/automount, all deterministic once they resolve) still fails
     # for real on any other finding.

@@ -78,13 +78,12 @@ AutomountProbe = Callable[[], Awaitable[tuple[bool, str]]]
 DEFAULT_CHAOS_UNITS = ("osiris-mcp", "osiris-worker")
 
 ADVISORY_LOCK_NOISE_TOLERANCE = 2
-"""Measured, not guessed: under this suite's own `-n4` xdist parallelism every worker
-shares ONE physical Postgres instance
-(`test_chaos_replay_reports_an_advisory_lock_leak`'s own docstring already names this:
-`pg_locks` is server-wide, never scoped per worker database). A killed-and-restarted
-daemon pair's own teardown/startup housekeeping, or simply an unrelated worker's ordinary
-transient lock, can land inside a single sampling instant and read as
-`post_locks > baseline_locks` even though nothing leaked.
+"""Measured, not guessed: a killed-and-restarted daemon pair's own teardown/startup
+housekeeping, or an unrelated connection's ordinary transient lock in the SAME database,
+can land inside a single sampling instant and read as `post_locks > baseline_locks`
+even though nothing leaked. (Locks held in OTHER databases on the same server, which is
+what every parallel test worker's own database is, are no longer counted at all: see
+`_advisory_lock_count`.)
 
 THIS TOLERANCE ALONE WAS NOT THE FIX: it reproduced live a second time under real
 contention (2 of 6 runs) even with this margin in place, because widening a count-based
@@ -160,8 +159,17 @@ async def _advisory_lock_count(pool: asyncpg.Pool) -> int:
     compares this against its own BASELINE (taken before the kill, same live-fleet
     conditions) rather than asserting an absolute zero, which is the honest way to filter
     that noise without hard-coding this house's own lock key strings into a
-    general-purpose census."""
-    return int(await pool.fetchval("SELECT count(*) FROM pg_locks WHERE locktype='advisory'"))
+    general-purpose census.
+
+    SCOPED TO THE POOL'S OWN DATABASE, which is a property of advisory locks and not a
+    key filter: a Postgres advisory lock lives inside one database (`pg_locks.database`),
+    so a lock another database on the same server holds can never block, or be leaked by,
+    anything this pool touches. Counting the whole server let one test worker's burst of
+    locks in its own database inflate this one's baseline, masking a real leak (a measured
+    4 to 5 of 40 missed under synthetic cross-database noise, never under an idle server)."""
+    return int(await pool.fetchval(
+        "SELECT count(*) FROM pg_locks WHERE locktype='advisory' "
+        "AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"))
 
 
 async def _stable_advisory_lock_count(
