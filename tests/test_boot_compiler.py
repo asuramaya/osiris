@@ -6,6 +6,7 @@ section byte-for-byte, and a mangled marker refuses loudly rather than guessing.
 """
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from src.orchestrator.boot_compiler import (
     derive_role,
     locate_managed_section,
     migrate_identity_to_charter,
+    reissue_call,
     reissue_office,
     scaffold_boot_file,
     sweep_stacked_office_headers,
@@ -840,7 +842,8 @@ def test_boot_rollout_gap_notes_names_the_seat_the_house_and_the_fix() -> None:
         {"seat_id": "seat:bbb", "handle": "Bort", "house": "", "reason": "no_office"},
     ])
     assert len(notes) == 2
-    assert "Anders (anders)" in notes[0] and "reissue_office(adopt=True)" in notes[0]
+    assert "Anders (anders)" in notes[0]
+    assert reissue_call("seat:aaa", adopt=True) in notes[0]
     assert "Bort (no house)" in notes[1] and "not an adopt target" in notes[1]
 
 
@@ -856,11 +859,51 @@ def test_boot_rollout_gap_notes_no_agents_md_gets_its_own_wording() -> None:
     assert "Cato (catohouse)" in notes[0]
     assert "no AGENTS.md" in notes[0]
     assert "has no compiled section" not in notes[0]
-    assert "reissue_office`" in notes[0] and "adopt=True" not in notes[0]
+    assert reissue_call("seat:ccc") in notes[0] and "adopt=True" not in notes[0]
 
 
 def test_boot_rollout_gap_notes_silent_on_an_empty_list() -> None:
     assert boot_rollout_gap_notes([]) == []
+
+
+_SEAT_CALL_RE = re.compile(r"seat\(action='(\w+)'((?:, \w+=(?:'[^']*'|\w+))*)\)")
+
+
+def _assert_names_a_real_seat_call(text: str, *, adopt: bool) -> None:
+    """The advice names an action the `seat` verb really dispatches, passes only parameters
+    that action accepts, supplies every one it requires, and carries `adopt` only when the
+    advice is for a first compile. Read from the verb's own parameter table, so a rename
+    there fails here instead of leaving a seat told to call something that is refused."""
+    from src.mcp_server import _SEAT_ACTION_PARAMS
+
+    calls = _SEAT_CALL_RE.findall(text)
+    assert len(calls) == 1, text
+    action, arg_text = calls[0]
+    assert action in _SEAT_ACTION_PARAMS, f"{action!r} is not a real seat action"
+    given = re.findall(r"(\w+)=", arg_text)
+    accepted, required = _SEAT_ACTION_PARAMS[action]
+    assert set(given) <= set(accepted)
+    assert set(required) <= set(given)
+    assert ("adopt" in given) is adopt
+
+
+def test_every_reissue_advice_names_a_real_seat_action() -> None:
+    plain = reissue_call("seat:abc")
+    first_compile = reissue_call("seat:abc", adopt=True)
+    _assert_names_a_real_seat_call(plain, adopt=False)
+    _assert_names_a_real_seat_call(first_compile, adopt=True)
+    assert "target='seat:abc'" in plain
+
+    notes = boot_rollout_gap_notes([
+        {"seat_id": "seat:aaa", "handle": "Anders", "house": "anders",
+         "reason": "never_compiled"},
+        {"seat_id": "seat:ccc", "handle": "Cato", "house": "catohouse",
+         "reason": "no_agents_md"},
+    ])
+    never_compiled, no_agents_md = notes
+    _assert_names_a_real_seat_call(never_compiled, adopt=True)
+    _assert_names_a_real_seat_call(no_agents_md, adopt=False)
+    assert "reissue_office" not in "".join(notes)
 
 
 # ═══ THE DRIFT CHECK ══════════════════════════
@@ -926,7 +969,9 @@ async def test_boot_drift_nudge_sweep_opens_an_obligation_naming_the_fix(
     assert row is not None
     props = await _props(actions.pool, row["object_id"])
     assert props["kind"] == "obligation"
-    assert "reissue_office(adopt=True)" in props["summary"]
+    assert reissue_call(seat["seat_id"]) in props["summary"]
+    assert "adopt" not in props["summary"]  # a drifted seat already has markers: adopt is refused
+    _assert_names_a_real_seat_call(props["summary"], adopt=False)
     assert props["arc"] == "Fleet-Hygiene"
 
 

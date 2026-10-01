@@ -783,21 +783,34 @@ async def boot_rollout_gaps(pool: asyncpg.Pool) -> list[dict[str, str]]:
     return gaps
 
 
+def reissue_call(seat_id: str, *, adopt: bool = False) -> str:
+    """The call a seat is told to make to recompile its own managed section: the
+    `seat` verb's `reissue_seat_dir` action, the only live spelling (`reissue_office`
+    survives as a hidden deprecated alias). `adopt=True` is advice for exactly one
+    shape, an office with no markers yet (a first compile); an office that already
+    carries markers is refused by it, so a stale or AGENTS.md-less seat gets the plain
+    call. One builder for every place that advises a reissue, so the wording cannot
+    drift from the verb's real action and parameter names (tests/test_boot_compiler.py
+    checks the string against the verb's own parameter table)."""
+    adopt_arg = ", adopt=True" if adopt else ""
+    return f"seat(action='reissue_seat_dir', target='{seat_id}', because='<reason>'{adopt_arg})"
+
+
 def boot_rollout_gap_notes(gaps: list[dict[str, str]]) -> list[str]:
     """One printable, actionable line per gap, `cmd_boot_status` prints these and a
     caller-facing exit code follows from whether this list is empty, same contract as
     `composition_gap_notes`. Each line names the seat and says what fixes it, because a
     gap that only says "N offices missing a section" is the exact miscount this check
     exists to replace."""
-    fixes = {
-        "never_compiled": "run `reissue_office(adopt=True)`",
-        "malformed": "markers are damaged: needs a hand fix before any reissue",
-        "no_claude_md": "no CLAUDE.md on disk: needs establish_office/mint_seat first",
-        "no_office": "no handle or anchor_cwd on record: not an adopt target",
-        "no_agents_md": "run `reissue_office`",
-    }
     lines = []
     for g in sorted(gaps, key=lambda g: (g["reason"], g["handle"] or g["seat_id"])):
+        fixes = {
+            "never_compiled": f"run `{reissue_call(g['seat_id'], adopt=True)}`",
+            "malformed": "markers are damaged: needs a hand fix before any reissue",
+            "no_claude_md": "no CLAUDE.md on disk: needs establish_office/mint_seat first",
+            "no_office": "no handle or anchor_cwd on record: not an adopt target",
+            "no_agents_md": f"run `{reissue_call(g['seat_id'])}`",
+        }
         if g["reason"] == "no_agents_md":
             # DISTINCT WORDING (not "has no compiled section"; CLAUDE.md's own section
             # is fine here, only its vendor-neutral mirror is missing, a narrower claim
@@ -852,8 +865,10 @@ async def boot_drift_gaps(pool: asyncpg.Pool) -> list[dict[str, str]]:
 
 async def apply_boot_drift_nudge_sweep(actions: Actions, *, actor: str) -> dict[str, Any]:
     """Nudges each drifted seat's own holder with an `open_thread(kind='obligation')`,
-    naming reissue_office(adopt=True) as the fix, same as boot_rollout_gap_notes' own
-    never_compiled line above. Deliberately a nudge, never an auto-reissue: reissue_office
+    naming the plain `reissue_call` (no adopt) as the fix: a drifted seat already carries
+    a compiled managed section, and adopt=True is refused for an office that has markers
+    unless a leading duplicate header sits before them. Deliberately a nudge, never an
+    auto-reissue: reissue_office
     is a deliberate act with its own `because` testimony and its own refusal law for a
     damaged marker span. A cron silently recompiling every stale office on a schedule
     would fire that refusal unattended, and would remint every reissue's own `because`
@@ -872,7 +887,7 @@ async def apply_boot_drift_nudge_sweep(actions: Actions, *, actor: str) -> dict[
         summary = (
             f"{g['handle']}'s boot orders are stale: compiled against template "
             f"v{g['stamped_version']}, current is v{g['current_version']}. "
-            "reissue_office(adopt=True) would refresh the managed section.")
+            f"{reissue_call(g['seat_id'])} would refresh the managed section.")
         try:
             # OWNER IS THE SEAT'S OWN CANONICAL, NEVER ITS BARE HANDLE (capture.py's own
             # open_thread comment: "an owner is a seat id or 'operator', never a bare

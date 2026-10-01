@@ -990,7 +990,7 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     AND THE BOOT DRIFT NUDGE (thread f37aaf1b, v1.1 follow-up piece 1, `apply_boot_
     drift_nudge_sweep` in boot_compiler.py): every active seat whose compiled CLAUDE.md
     carries an older `boot_compiled_version` than the template's current hash gets an
-    `open_thread(kind='obligation')` naming `reissue_office(adopt=True)` as the fix —
+    `open_thread(kind='obligation')` naming the plain `reissue_seat_dir` call as the fix —
     nothing read that drift proactively before this; a stale seat only ever got
     recompiled on an explicit reissue call. Idempotent on open_thread's own summary-hash
     dedup, so this never re-nudges the same (stamped, current) gap twice.

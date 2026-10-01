@@ -4976,7 +4976,8 @@ async def test_cmd_boot_status_names_a_gap_and_exits_nonzero(
         out = await cmd_boot_status(pool=actions.pool)
     assert out == 1
     assert "CliGapSeat" in buf.getvalue()
-    assert "reissue_office(adopt=True)" in buf.getvalue()
+    assert "action='reissue_seat_dir'" in buf.getvalue()
+    assert "adopt=True" in buf.getvalue()  # a never-compiled office is the first-compile case
 
 
 async def test_cmd_boot_status_fleet_never_touches_the_rollout_gap_check(
