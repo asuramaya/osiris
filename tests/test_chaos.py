@@ -23,12 +23,10 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-import pytest
 import pytest_asyncio
 from src.actions.core import Actions
 from src.orchestrator import mounts
 from src.orchestrator.chaos import (
-    ADVISORY_LOCK_NOISE_TOLERANCE,
     DEFAULT_CHAOS_UNITS,
     _advisory_lock_count,
     _baseline_seat_map,
@@ -74,33 +72,6 @@ async def _no_storm(pool: Any) -> int:
 async def _noop_sleep(secs: float) -> None:
     return None
 
-
-def _tripped_only_by_advisory_lock_noise(report: dict[str, Any]) -> bool:
-    """`test_chaos_replay_all_green`'s own guard.
-    `_stable_advisory_lock_count`'s min-across-samples resampling narrows but does not
-    eliminate cross-worker advisory-lock noise under real `-n4` contention (this module's
-    own `ADVISORY_LOCK_NOISE_TOLERANCE` docstring already documents a 2/6 reproduction
-    even WITH the min-sampling fix in place, and this test injects `sleep=_noop_sleep`, so
-    `_stable_advisory_lock_count`'s own `gap_secs` never actually elapses here: its three
-    samples land back-to-back rather than usefully time-separated). Every OTHER sub-check
-    `chaos_replay` runs is fully injected/deterministic in this specific test (fake kill/
-    restart/storm/automount, all instant, all success). The advisory-lock check against
-    the REAL `pg_locks` is the one genuinely environment-dependent piece left, so
-    it is also the only finding that can EVER legitimately appear here as load noise
-    rather than a real regression. True only when `findings` is EXACTLY one item and that
-    item is the advisory-lock finding beyond tolerance, never for a kill/restart/recovery/
-    flapping/stranger-mint finding, which stay real failures regardless of load."""
-    findings = report.get("findings") or []
-    if len(findings) != 1:
-        return False
-    return (
-        report.get("post_advisory_locks", 0)
-        > report.get("baseline_advisory_locks", 0) + ADVISORY_LOCK_NOISE_TOLERANCE
-        and "advisory lock(s) held after recovery" in findings[0]
-    )
-
-
-# --- _advisory_lock_count -----------------------------------------------------------------
 
 async def test_advisory_lock_count_is_a_plain_read(actions: Actions) -> None:
     n = await _advisory_lock_count(actions.pool)
@@ -264,67 +235,17 @@ async def isolated_chaos_daemons(
 # --- chaos_replay (full orchestration, every side effect injected) -------------------------
 
 async def test_chaos_replay_all_green(actions: Actions) -> None:
-    """This used to fail as a bare `assert False is True` whenever the ONE
-    genuinely load-sensitive sub-check (`_stable_advisory_lock_count` against the real
-    `pg_locks`) tripped under real `-n4` contention from other worker suites,
-    a finding this test's own environment cannot control, not a regression in the code
-    under test. Skips, naming the guard, instead of failing opaque; any OTHER finding
-    (kill/restart/recovery/flapping/stranger-mint, every one of them fully injected and
-    deterministic here) still fails for real, exactly as before."""
+    """Every sub-check is injected and deterministic here except the advisory-lock count,
+    which reads the real `pg_locks` for this worker's own database. Another worker's lock
+    traffic lives in a different database and is not counted (see `_advisory_lock_count`),
+    so any finding at all is a real one and fails the test; there is no load-noise skip."""
     report = await chaos_replay(
         actions.pool, kill=_ok_kill, restart=_ok_restart, fire_storm=_no_storm,
         automount_probe=_always_ok_automount,
         agents_json=_agents_json_sequence([[]]), sleep=_noop_sleep)
-    if not report["ok"] and _tripped_only_by_advisory_lock_noise(report):
-        pytest.skip(
-            "advisory-lock wall-clock guard (_stable_advisory_lock_count) tripped under "
-            f"real Postgres contention, not a regression: {report['findings'][0]}")
     assert report["ok"] is True
     assert report["findings"] == []
     assert report["automount_probes_failed"] == 0
-
-
-def test_advisory_lock_noise_guard_recognizes_the_tripped_shape() -> None:
-    """SIMULATES THE GUARD TRIPPING: a synthetic report shaped exactly like
-    `chaos_replay`'s real output when ONLY the advisory-lock check fired beyond tolerance.
-    `test_chaos_replay_all_green` must skip on this, not fail bare."""
-    report = {
-        "ok": False,
-        "findings": [
-            f"{ADVISORY_LOCK_NOISE_TOLERANCE + 5} advisory lock(s) held after recovery, "
-            f"vs 0 baseline before the kill (tolerance {ADVISORY_LOCK_NOISE_TOLERANCE}) — "
-            "a real leak (this check accounts for ordinary concurrent-fleet noise by "
-            "comparing to its own baseline plus a small margin, not to zero or to an "
-            "exact baseline match)"],
-        "baseline_advisory_locks": 0,
-        "post_advisory_locks": ADVISORY_LOCK_NOISE_TOLERANCE + 5,
-    }
-    assert _tripped_only_by_advisory_lock_noise(report) is True
-
-
-def test_advisory_lock_noise_guard_never_swallows_a_real_finding() -> None:
-    """A kill failure alongside the SAME inflated lock count must still hard-fail: the
-    guard only ever excuses the load-noise shape by itself, never as cover for a real
-    regression that happens to ride along with it."""
-    report = {
-        "ok": False,
-        "findings": [
-            "kill failed (exit 1): unit not found",
-            f"{ADVISORY_LOCK_NOISE_TOLERANCE + 5} advisory lock(s) held after recovery, "
-            f"vs 0 baseline before the kill (tolerance {ADVISORY_LOCK_NOISE_TOLERANCE})"],
-        "baseline_advisory_locks": 0,
-        "post_advisory_locks": ADVISORY_LOCK_NOISE_TOLERANCE + 5,
-    }
-    assert _tripped_only_by_advisory_lock_noise(report) is False
-
-
-def test_advisory_lock_noise_guard_ignores_within_tolerance_counts() -> None:
-    """A count that never actually crossed the tolerance line is not "noise that tripped
-    the guard" -- it is not a finding at all, so `findings` here is deliberately empty;
-    the helper must not accidentally treat an in-tolerance report as a match."""
-    report = {"ok": True, "findings": [], "baseline_advisory_locks": 0,
-             "post_advisory_locks": ADVISORY_LOCK_NOISE_TOLERANCE}
-    assert _tripped_only_by_advisory_lock_noise(report) is False
 
 
 async def test_chaos_replay_reports_a_kill_failure(actions: Actions) -> None:
@@ -601,41 +522,16 @@ async def test_chaos_replay_all_green_against_isolated_real_daemons(
     skip: a genuine non-recovery still fails this test, just with the same headroom
     every OTHER caller of chaos_replay already gets."""
     # This call, unlike `test_chaos_replay_all_green` above, takes NO `sleep=` override, so
-    # `_stable_advisory_lock_count`'s own gap_secs elapses for real between samples; under
-    # real `-n4` full-suite load, that's still the one genuinely environment-dependent
-    # sub-check (the real `pg_locks`, same root cause as above), so this sibling earns
-    # the identical narrow skip rather than a bare hard-fail. Every OTHER invariant here
-    # (real kill/restart/storm/automount, all deterministic once they resolve) still fails
-    # for real on any other finding.
+    # `_stable_advisory_lock_count`'s own gap_secs elapses for real between samples. Every
+    # finding fails for real: the lock count is scoped to this worker's own database, so
+    # there is no cross-worker noise left to excuse.
     report = await chaos_replay(
         actions.pool, units=DEFAULT_CHAOS_UNITS,
         kill=isolated_chaos_daemons.kill, restart=isolated_chaos_daemons.restart,
         fire_storm=_real_fire_storm, automount_probe=isolated_chaos_daemons._whisper_probe,
         agents_json=_agents_json_sequence([[]]))
-    if not report["ok"] and _tripped_only_by_advisory_lock_noise(report):
-        pytest.skip(
-            "advisory-lock wall-clock guard (_stable_advisory_lock_count) tripped under "
-            f"real Postgres contention, not a regression: {report['findings'][0]}")
     assert report["storm_fired"] == 25
     assert report["ok"] is True, report["findings"]
     assert report["findings"] == []
 
 
-def test_advisory_lock_noise_guard_recognizes_the_tripped_shape_alongside_a_storm_report(
-) -> None:
-    """The guard `test_chaos_replay_all_green_against_isolated_real_daemons` now
-    shares is the SAME `_tripped_only_by_advisory_lock_noise` helper the fully-mocked sibling
-    already has three simulated-trip tests for above; this one confirms the shared helper
-    still recognizes the tripped shape when the report also carries `storm_fired` (present
-    only on the real-daemon call's own report, never on the mocked sibling's), so the guard
-    genuinely extends to this call site rather than only happening to work by accident."""
-    report = {
-        "ok": False,
-        "storm_fired": 25,
-        "findings": [
-            f"{ADVISORY_LOCK_NOISE_TOLERANCE + 5} advisory lock(s) held after recovery, "
-            f"vs 0 baseline before the kill (tolerance {ADVISORY_LOCK_NOISE_TOLERANCE})"],
-        "baseline_advisory_locks": 0,
-        "post_advisory_locks": ADVISORY_LOCK_NOISE_TOLERANCE + 5,
-    }
-    assert _tripped_only_by_advisory_lock_noise(report) is True
