@@ -339,13 +339,11 @@ def tier2_mints(report: dict[str, Any]) -> list[dict[str, Any]]:
     Thread_side_orphans stay 1:1, no repetition exists there to collapse (each row is
     already one distinct Thread by construction).
 
-    Rerun note: because a disagreement summary now depends on the FULL current set of
-    citing tasks for that Thread, a citing set that changes between runs (a new task
-    starts citing it, one stops, or any citation's status flips) changes the summary text
-    and therefore mints a NEW Thread on the next run rather than updating the old one,
-    the same "idempotent on exact text" limitation every open_thread caller already has,
-    just newly reachable here because the text is now a function of more than one row.
-    Not solved here; flagged rather than silently accepted."""
+    Rerun note: a disagreement summary depends on the FULL current set of citing tasks for
+    that Thread, so it changes whenever a task starts or stops citing it or a citation's
+    status flips. Each mint therefore carries a `key`, the stable prefix naming the
+    disputed Thread, and `mint_tier2_threads` finds the thread standing for it by that key
+    and corrects its text in place, never minting a sibling."""
     mints: list[dict[str, Any]] = []
     by_thread: dict[str, list[dict[str, Any]]] = {}
     order: list[str] = []
@@ -369,35 +367,38 @@ def tier2_mints(report: dict[str, Any]) -> list[dict[str, Any]]:
             f"{len(citations)} citing task(s): {citing_desc}. task_sync never resolves "
             f"this automatically (Tier 3); needs a human/agent look."
         )
-        mints.append({"kind": "obligation", "summary": summary, "rows": citations})
+        mints.append({"kind": "obligation", "summary": summary, "rows": citations,
+                      "key": f"TASK/THREAD DISAGREEMENT: Thread {tid[:8]} carries "})
     for o in report["thread_side_orphans"]:
         summary = (
             f"THREAD SIDE ORPHAN: Thread {o['thread_id'][:8]} carries kind=task but no "
             f"harness task cites it (task_sync dry run). Stale, or the harness lost track "
             f"of it; task_sync never auto-closes an orphan, needs a human/agent look."
         )
-        mints.append({"kind": "obligation", "summary": summary, "rows": [o]})
+        mints.append({"kind": "obligation", "summary": summary, "rows": [o],
+                      "key": f"THREAD SIDE ORPHAN: Thread {o['thread_id'][:8]} carries "})
     return mints
 
 
 async def mint_tier2_threads(
     actions: Actions, mints: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Execute TIER 2: one open_thread(kind='obligation', arc='Fleet-Hygiene') per mint
-    from `tier2_mints`. DO NOT CALL against production data without the summaries having
-    been reviewed first, see this module's own write-half note above. A rerun with an
-    UNCHANGED citing set is safe: open_thread is idempotent on the exact summary string,
-    so it collapses onto the same Thread instead of duplicating, see `tier2_mints`'s own
-    rerun note for the one case (a citing set that changes between runs) where that
-    idempotency doesn't hold. Returns one {"summary", "thread_id"} result per mint."""
-    from src.orchestrator.capture import open_thread
+    """Execute TIER 2: one obligation thread (arc='Fleet-Hygiene') per mint from
+    `tier2_mints`. DO NOT CALL against production data without the summaries having been
+    reviewed first, see this module's own write-half note above. A rerun is safe whether or
+    not the citing set changed: each mint is found by its stable `key` and its text is
+    corrected in place, so the same disputed Thread never accumulates siblings. Returns
+    one {"summary", "thread_id", "action"} result per mint, `action` being "opened",
+    "corrected" or "unchanged"."""
+    from src.orchestrator.capture import open_or_update_thread
 
     out: list[dict[str, Any]] = []
     for m in mints:
-        tid = await open_thread(
-            actions, m["summary"], kind=m["kind"], arc="Fleet-Hygiene", source=_SOURCE,
-        )
-        out.append({"summary": m["summary"], "thread_id": str(tid)})
+        res = await open_or_update_thread(
+            actions, m["summary"], key=m["key"], kind=m["kind"], arc="Fleet-Hygiene",
+            source=_SOURCE)
+        out.append({"summary": m["summary"], "thread_id": str(res["id"]),
+                    "action": res["action"]})
     return out
 
 
