@@ -708,6 +708,37 @@ async def sweep_stale_doors(actions: Actions, *, actor: str) -> int:
     return released
 
 
+async def _ghost_row_protected(pool: asyncpg.Pool, row: Any) -> bool:
+    """Evidence of life the process census cannot see, so the ghost rule must not act on
+    its absence alone. A row is protected when its agent's lineage holds a seat right now
+    (a seat holder's row is how the fleet finds the seat; its address outlives any one
+    census blind spot, and the slower pile rule still retires it once it truly goes
+    stale), or when a transcript for its session or lineage was written inside the door
+    window (a working session writes its transcript even when its process sits under a cwd
+    or project label the census does not match). Measured live: a seat holder working in a
+    directory outside the census's cwd and project matches lost its row to this rule and
+    then read as never mounted to every sender."""
+    from src.config.settings import get_settings
+    from src.orchestrator.agents import _generation
+
+    agent_id = str(row["agent_id"] or "")
+    base = _generation(agent_id)[0] if agent_id else ""
+    if base and await _active_seat_for_lineage_base(pool, base) is not None:
+        return True
+    root = get_settings().osiris_transcripts
+    if not root:
+        return False
+    sids = [Path(str(row["job_dir"])).name[:8]]
+    prefix = _session_derived_prefix(base) if base else None
+    if prefix:
+        sids.append(prefix)
+    freshest = _freshest_transcript_mtime(Path(root), sids)
+    if freshest is None and agent_id:
+        freshest = await _lineage_transcript_mtime(pool, agent_id, base or None)
+    return (freshest is not None
+            and (datetime.now(UTC) - freshest).total_seconds() < _DOOR_WINDOW_SECS)
+
+
 async def sweep_ghost_doors(
     actions: Actions, *, body_cwds: set[str], body_projects: set[str], actor: str,
 ) -> int:
@@ -760,6 +791,8 @@ async def sweep_ghost_doors(
             continue
         project = r["project"] or (Path(cwd).name if cwd else "")
         if cwd in body_cwds or (project and project in body_projects):
+            continue
+        if await _ghost_row_protected(actions.pool, r):
             continue
         async with actions.pool.acquire() as conn, conn.transaction():
             row = await conn.fetchrow(

@@ -2315,11 +2315,13 @@ async def test_rescue_seat_holder_mount_re_adopts_after_a_ghost_sweep(
     await p.execute(
         "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
         "WHERE job_dir='/x/jobs/rescuewit1'")
-    # THE WIPE: exactly the mechanism that actually fired live, a ghost sweep with no
-    # live /proc body at this cwd/project, releasing the row (audited, reversible).
-    released = await mounts.sweep_ghost_doors(
-        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
-    assert released == 1
+    # THE WIPE: the same audited, reversible release the ghost sweep performed live,
+    # driven through the retired-project drop now that the ghost rule spares a seat holder.
+    dropped = await mounts.drop_dead_project_mount(
+        actions, job_dir="/x/jobs/rescuewit1", actor="cron:test",
+        project=await p.fetchval(
+            "SELECT project FROM agent_mounts WHERE job_dir=$1", "/x/jobs/rescuewit1"))
+    assert dropped["dropped"] == 1
     assert await mounts.find_mount(p, job_dir="/x/jobs/rescuewit1") is None
 
     rescued = await mounts.rescue_seat_holder_mount(p, job_dir="/x/jobs/rescuewit1")
@@ -2355,8 +2357,10 @@ async def test_rescue_seat_holder_mount_adopts_the_current_generation(
     await p.execute(
         "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
         "WHERE job_dir='/x/jobs/rescuewit2'")
-    await mounts.sweep_ghost_doors(
-        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
+    await mounts.drop_dead_project_mount(
+        actions, job_dir="/x/jobs/rescuewit2", actor="cron:test",
+        project=await p.fetchval(
+            "SELECT project FROM agent_mounts WHERE job_dir=$1", "/x/jobs/rescuewit2"))
 
     rescued = await mounts.rescue_seat_holder_mount(p, job_dir="/x/jobs/rescuewit2")
     assert rescued is not None
@@ -2378,8 +2382,10 @@ async def test_rescue_seat_holder_mount_never_fires_for_a_genuine_stranger(
     await p.execute(
         "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
         "WHERE job_dir='/x/jobs/rescuewit3'")
-    await mounts.sweep_ghost_doors(
-        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
+    await mounts.drop_dead_project_mount(
+        actions, job_dir="/x/jobs/rescuewit3", actor="cron:test",
+        project=await p.fetchval(
+            "SELECT project FROM agent_mounts WHERE job_dir=$1", "/x/jobs/rescuewit3"))
 
     assert await mounts.rescue_seat_holder_mount(p, job_dir="/x/jobs/rescuewit3") is None
 
@@ -2415,8 +2421,10 @@ async def test_rescue_seat_holder_mount_walks_past_its_own_retire_witness(
     await p.execute(
         "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
         "WHERE job_dir='/x/jobs/rescuewit4'")
-    await mounts.sweep_ghost_doors(
-        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
+    await mounts.drop_dead_project_mount(
+        actions, job_dir="/x/jobs/rescuewit4", actor="cron:test",
+        project=await p.fetchval(
+            "SELECT project FROM agent_mounts WHERE job_dir=$1", "/x/jobs/rescuewit4"))
     # a stranger then re-registers the SAME job_dir (the self-reinforcing shape), and
     # is itself retired by law 3a's own compensating write, the NEWEST entry now.
     await mounts.save_mount(p, job_dir="/x/jobs/rescuewit4", agent_id=stranger,
@@ -2451,8 +2459,10 @@ async def test_demote_seatless_mount_if_outranked_retires_the_stranger_and_re_ad
     await p.execute(
         "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
         "WHERE job_dir='/x/jobs/rescuewit5'")
-    await mounts.sweep_ghost_doors(
-        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
+    await mounts.drop_dead_project_mount(
+        actions, job_dir="/x/jobs/rescuewit5", actor="cron:test",
+        project=await p.fetchval(
+            "SELECT project FROM agent_mounts WHERE job_dir=$1", "/x/jobs/rescuewit5"))
     # THE SELF-REINFORCING WRITE: the stranger now owns a LIVE row for this job_dir.
     await mounts.save_mount(p, job_dir="/x/jobs/rescuewit5", agent_id=stranger,
                             project=None, cwd=str(live), model=None, session_key=None)
@@ -3478,3 +3488,43 @@ async def test_mcp_pulse_refreshes_only_the_mounted_callers_own_row(
         "SELECT last_seen FROM agent_mounts WHERE job_dir='/j/pulsemcp2'")
     assert mounts.is_live(mine)
     assert other == stale  # a different agent's row, untouched
+
+
+async def test_sweep_ghost_doors_spares_a_seat_holder_and_a_working_transcript(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The census cannot see every living session (a holder working under a cwd or project
+    label it does not match reads as bodyless), so the ghost rule must not act on that
+    silence for an agent that holds a seat or whose transcript was written inside the door
+    window; a bodyless row with neither is still the killed tab's leak."""
+    from src.config import settings as settings_mod
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    class _FakeSettings:
+        osiris_transcripts = str(tmp_path / "projects")
+
+    p = actions.pool
+    transcripts = tmp_path / "projects" / "-some-cwd"
+    transcripts.mkdir(parents=True)
+    monkeypatch.setattr(settings_mod, "get_settings", lambda: _FakeSettings())
+    mounts._transcript_index_cache.clear()
+
+    seat = await ensure_seat(actions, house="osiris", handle="Sweepholder", source="test")
+    await actions.create_or_find_object("Agent", "agent:holderone", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:holderone",
+                      source="test")
+    await actions.create_or_find_object("Agent", "agent:writerone", "test")
+    await actions.create_or_find_object("Agent", "agent:ghostone", "test")
+    (transcripts / "writeron-0000-4000-8000-000000000000.jsonl").write_text("{}\n")
+
+    for jd, agent in (("/x/jobs/holderon", "agent:holderone"),
+                      ("/x/jobs/writeron", "agent:writerone"),
+                      ("/x/jobs/ghostone", "agent:ghostone")):
+        await mounts.save_mount(p, job_dir=jd, agent_id=agent, project="elsewhere",
+                                cwd="/r/elsewhere", model=None, session_key=None)
+    await p.execute("UPDATE agent_mounts SET last_seen = now() - interval '5 minutes'")
+    released = await mounts.sweep_ghost_doors(
+        actions, body_cwds=set(), body_projects=set(), actor="test")
+    assert released == 1
+    left = {r["job_dir"] for r in await p.fetch("SELECT job_dir FROM agent_mounts")}
+    assert left == {"/x/jobs/holderon", "/x/jobs/writeron"}
