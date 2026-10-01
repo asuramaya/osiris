@@ -1400,7 +1400,7 @@ async def _ident_readonly(ctx: Context | None, anchor: str | None = None) -> Age
     """`_ident_for` for a pure read: the cached identity, else the identity an existing
     mount row for this anchor already names, resolved WITHOUT registering, minting or
     saving anything. A peek (a glance from a hook or a terminal) must never be the act that
-    seats an office-standing session or re-registers an agent; with no row to read, the
+    seats a session standing at a seat directory or re-registers an agent; with no row to read, the
     caller is simply unresolved and the read falls back to project scope, which its output
     says."""
     key = _conn_key(ctx)
