@@ -989,11 +989,12 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
 
     AND THE BOOT DRIFT NUDGE (thread f37aaf1b, v1.1 follow-up piece 1, `apply_boot_
     drift_nudge_sweep` in boot_compiler.py): every active seat whose compiled CLAUDE.md
-    carries an older `boot_compiled_version` than the template's current hash gets an
-    `open_thread(kind='obligation')` naming the plain `reissue_seat_dir` call as the fix —
-    nothing read that drift proactively before this; a stale seat only ever got
-    recompiled on an explicit reissue call. Idempotent on open_thread's own summary-hash
-    dedup, so this never re-nudges the same (stamped, current) gap twice.
+    carries an older `boot_compiled_version` than the template's current hash gets one open
+    obligation naming the plain `reissue_seat_dir` call as the fix. Identity is the seat
+    plus the condition, not the wording (a thread's canonical hashes its summary, so
+    keying on text orphaned a generation per reword): a moved nudge is corrected in
+    place, duplicates are resolved as superseded, and a seat that is no longer drifted
+    has its nudge closed. A repeat tick over an unchanged board writes nothing.
 
     PER-SUB-SWEEP TIME BUDGET AND INSTRUMENTATION (thread 9150aec2, follow-up piece,
     Thoth mail 10204): the w218 liveness regression FIXED the specific defect (an
@@ -1079,15 +1080,16 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
 
     drift = await _timed("boot_drift_nudge", apply_boot_drift_nudge_sweep(
         actions, actor="cron:classification_laws_heartbeat"))
-    drift_nudged = len(drift.get("nudged", []))
-    if drift_nudged or drift.get("errors"):
+    drift_changed = sum(len(drift.get(k, []))
+                        for k in ("nudged", "updated", "superseded", "closed"))
+    if drift_changed or drift.get("errors"):
         _log.info("boot drift nudge sweep: %s", drift)
 
     _log.info("classification laws heartbeat sub-sweep timings (s): %s",
               {k: round(v, 2) for k, v in timings.items()})
 
     return (acted + retired + ghosts_retired + dropped + bound + healed_offices
-           + provenance_minted + drift_nudged)
+           + provenance_minted + drift_changed)
 
 
 async def landing_audit_heartbeat(ctx: dict[str, Any]) -> int:

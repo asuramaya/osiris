@@ -16,6 +16,7 @@ from src.orchestrator.boot_compiler import (
     _armed_practices,
     _has_any_markers,
     _mirror_agents_md,
+    _open_drift_nudges,
     _practice_block,
     apply_boot_drift_nudge_sweep,
     boot_drift_gaps,
@@ -23,6 +24,7 @@ from src.orchestrator.boot_compiler import (
     boot_rollout_gaps,
     compile_managed_body,
     derive_role,
+    drift_nudge_summary,
     establish_call,
     locate_managed_section,
     migrate_identity_to_charter,
@@ -1024,7 +1026,8 @@ async def test_boot_drift_nudge_sweep_silent_when_nothing_is_stale(
     actions: Actions,
 ) -> None:
     out = await apply_boot_drift_nudge_sweep(actions, actor="agent:test")
-    assert out == {"gaps": 0, "nudged": [], "errors": []}
+    assert out == {"gaps": 0, "nudged": [], "updated": [], "superseded": [], "closed": [],
+                   "errors": []}
 
 
 # ═══ THE CHARTER RENDERS TRUE AFTER A REISSUE ══════════════════
@@ -1268,3 +1271,161 @@ async def test_reissue_office_wires_the_migration_automatically(
     again = await reissue_office(actions, seat_id=seat_id, because="second reissue",
                                  actor="agent:test")
     assert again["identity_migration"]["migrated"] is False
+
+
+# ═══ ONE OPEN NUDGE PER SEAT AND CONDITION ═══════════════════════════════════════
+
+
+async def _stamp(actions: Actions, seat_id: str, version: str) -> None:
+    obj = await actions.create_or_find_object("Seat", seat_id, "test")
+    await actions.assert_property(obj, "boot_compiled_version", version, "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+
+async def _drifted(actions: Actions, tmp_path: Path, handle: str,
+                   stamped: str = "stale-hash-000000") -> dict[str, str]:
+    seat = await ensure_seat(actions, house="drifthouse", handle=handle,
+                             anchor_cwd=str(tmp_path / handle.lower()), source="test")
+    await _stamp(actions, seat["seat_id"], stamped)
+    gaps = await boot_drift_gaps(actions.pool)
+    (gap,) = [g for g in gaps if g["seat_id"] == seat["seat_id"]]
+    return gap
+
+
+async def _seed(actions: Actions, seat_id: str, summary: str) -> None:
+    from src.orchestrator.capture import open_thread
+
+    await open_thread(actions, summary, kind="obligation", owner=seat_id,
+                      arc="Fleet-Hygiene", source="cron:test")
+
+
+def _em_dash_wording(gap: dict[str, str]) -> str:
+    return (f"{gap['handle']}'s boot orders are stale \u2014 compiled against template "
+            f"v{gap['stamped_version']}, current is v{gap['current_version']}. "
+            "reissue_office(adopt=True) would refresh the managed section.")
+
+
+def _colon_wording(gap: dict[str, str]) -> str:
+    return (f"{gap['handle']}'s boot orders are stale: compiled against template "
+            f"v{gap['stamped_version']}, current is v{gap['current_version']}. "
+            "reissue_office(adopt=True) would refresh the managed section.")
+
+
+async def _thread_count(actions: Actions) -> int:
+    return int(await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Thread'"))
+
+
+async def test_every_wording_generation_collapses_to_one_open_nudge(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The measured defect: one drifted seat held an open nudge per wording generation,
+    because a thread's canonical hashes its summary. The sweep keeps the thread already
+    carrying the current wording and resolves the rest as superseded."""
+    gap = await _drifted(actions, tmp_path, "Gens")
+    seat_id = gap["seat_id"]
+    await _seed(actions, seat_id, _em_dash_wording(gap))
+    await _seed(actions, seat_id, _colon_wording(gap))
+    await _seed(actions, seat_id, drift_nudge_summary(gap))
+    assert len((await _open_drift_nudges(actions.pool))[seat_id]) == 3
+
+    out = await apply_boot_drift_nudge_sweep(actions, actor="agent:test")
+    assert out["errors"] == []
+    assert out["nudged"] == [] and out["updated"] == []
+    assert len(out["superseded"]) == 2
+
+    (only,) = (await _open_drift_nudges(actions.pool))[seat_id]
+    assert only["effective"] == drift_nudge_summary(gap)
+
+
+async def test_an_old_wording_is_corrected_in_place_not_duplicated(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    gap = await _drifted(actions, tmp_path, "Reword")
+    seat_id = gap["seat_id"]
+    await _seed(actions, seat_id, _em_dash_wording(gap))
+    await _seed(actions, seat_id, _colon_wording(gap))
+    before = await _thread_count(actions)
+
+    out = await apply_boot_drift_nudge_sweep(actions, actor="agent:test")
+    assert out["updated"] == [seat_id] and out["nudged"] == []
+    assert len(out["superseded"]) == 1
+    assert await _thread_count(actions) == before  # corrected, never a new sibling
+
+    (only,) = (await _open_drift_nudges(actions.pool))[seat_id]
+    assert only["effective"] == drift_nudge_summary(gap)
+    assert "adopt" not in only["effective"]
+
+
+async def test_a_repeat_tick_over_an_unchanged_board_writes_nothing(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    gap = await _drifted(actions, tmp_path, "Steady")
+    await _seed(actions, gap["seat_id"], _em_dash_wording(gap))
+    await apply_boot_drift_nudge_sweep(actions, actor="agent:test")
+    before = await _thread_count(actions)
+
+    again = await apply_boot_drift_nudge_sweep(actions, actor="agent:test")
+    assert (again["nudged"], again["updated"], again["superseded"], again["closed"]) == (
+        [], [], [], [])
+    assert await _thread_count(actions) == before
+
+
+async def test_a_new_template_version_updates_the_same_thread(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    gap = await _drifted(actions, tmp_path, "Bumped", stamped="stamp-aaaa")
+    seat_id = gap["seat_id"]
+    first = await apply_boot_drift_nudge_sweep(actions, actor="agent:test")
+    assert first["nudged"] == [seat_id]
+    before = await _thread_count(actions)
+
+    await _stamp(actions, seat_id, "stamp-bbbb")
+    second = await apply_boot_drift_nudge_sweep(actions, actor="agent:test")
+    assert second["updated"] == [seat_id] and second["nudged"] == []
+    assert await _thread_count(actions) == before
+    (only,) = (await _open_drift_nudges(actions.pool))[seat_id]
+    assert "vstamp-bbbb" in only["effective"]
+
+
+async def test_a_seat_no_longer_drifted_has_its_nudges_closed(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A seat that reissued: stamped now equals current, so every open nudge it carries,
+    of any wording, resolves. A seat still drifted keeps its own."""
+    done = await _drifted(actions, tmp_path, "Reissued")
+    still = await _drifted(actions, tmp_path, "Stillstale")
+    await _seed(actions, done["seat_id"], _em_dash_wording(done))
+    await _seed(actions, done["seat_id"], _colon_wording(done))
+    await _seed(actions, still["seat_id"], _colon_wording(still))
+    await _stamp(actions, done["seat_id"], template_version())  # the reissue
+
+    out = await apply_boot_drift_nudge_sweep(actions, actor="agent:test")
+    assert len(out["closed"]) == 2
+    open_now = await _open_drift_nudges(actions.pool)
+    assert done["seat_id"] not in open_now
+    assert len(open_now[still["seat_id"]]) == 1
+
+
+async def test_the_sweep_never_touches_a_thread_that_is_not_its_own(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Ownership boundary: only threads minted in the nudge's own shape are read or
+    written. The same owner's other obligations, even one quoting the phrase, stay open."""
+    from src.orchestrator.capture import open_thread
+
+    done = await _drifted(actions, tmp_path, "Bystander")
+    await _stamp(actions, done["seat_id"], template_version())
+    unrelated = await open_thread(
+        actions, "finish the migration review", kind="obligation",
+        owner=done["seat_id"], source="agent:test")
+    quoting = await open_thread(
+        actions, "note to self: the boot orders are stale in my own view, discuss",
+        kind="obligation", owner=done["seat_id"], source="agent:test")
+
+    out = await apply_boot_drift_nudge_sweep(actions, actor="agent:test")
+    assert out["closed"] == []
+    for tid in (unrelated, quoting):
+        status = await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+            "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", tid)
+        assert status == "open"

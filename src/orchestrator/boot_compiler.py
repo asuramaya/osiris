@@ -871,45 +871,134 @@ async def boot_drift_gaps(pool: asyncpg.Pool) -> list[dict[str, str]]:
     return gaps
 
 
+# One open drift nudge per (seat, condition). A thread's canonical is a hash of its
+# summary text, so keying the nudge on its wording orphaned a generation of threads
+# every time the wording or the template version moved. The identity is now the seat
+# plus the condition (this shape, below), never the text: a moved nudge is corrected in
+# place, a duplicate is resolved as superseded, and a seat that is no longer drifted has
+# its nudge closed. Matching on the summary SHAPE is also this sweep's ownership
+# boundary: it reads and writes only threads it minted, never anyone else's obligation
+# that happens to share an owner. Covers every wording generation ever shipped (the
+# em dash form and the colon form), so the first tick cleans up the backlog too.
+_DRIFT_NUDGE_RE = re.compile(
+    r"'s boot orders are stale(?::| \u2014) compiled against template v")
+
+
+def drift_nudge_summary(gap: dict[str, str]) -> str:
+    """The nudge's current wording for one drifted seat."""
+    return (
+        f"{gap['handle']}'s boot orders are stale: compiled against template "
+        f"v{gap['stamped_version']}, current is v{gap['current_version']}. "
+        f"{reissue_call(gap['seat_id'])} would refresh the managed section.")
+
+
+def _current_prop(name: str) -> str:
+    return (f"(SELECT a.value #>> '{{}}' FROM current_assertions a WHERE a.object_id=o.id "
+            f"AND a.name='{name}' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)")
+
+
+async def _open_drift_nudges(pool: asyncpg.Pool) -> dict[str, list[dict[str, Any]]]:
+    """Every open drift-nudge thread, grouped by owning seat, oldest first. `summary` is
+    the thread's identity text (what it was minted with); `effective` is what a reader
+    sees (a correction wins)."""
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, o.created_at, "
+        f"{_current_prop('summary')} AS summary, "
+        f"{_current_prop('corrected_summary')} AS corrected, "
+        f"{_current_prop('owner')} AS owner, "
+        f"{_current_prop('status')} AS status "
+        "FROM objects o WHERE o.type='Thread' AND o.id IN ("
+        "  SELECT a.object_id FROM current_assertions a WHERE a.name='summary' "
+        "  AND a.value #>> '{}' LIKE '%boot orders are stale%') "
+        "ORDER BY o.created_at")
+    by_seat: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        if r["status"] != "open" or not r["owner"] or not r["summary"]:
+            continue
+        if not _DRIFT_NUDGE_RE.search(r["summary"]):
+            continue
+        by_seat.setdefault(r["owner"], []).append({
+            "id": r["id"], "canonical": r["canonical"],
+            "effective": r["corrected"] or r["summary"]})
+    return by_seat
+
+
 async def apply_boot_drift_nudge_sweep(actions: Actions, *, actor: str) -> dict[str, Any]:
-    """Nudges each drifted seat's own holder with an `open_thread(kind='obligation')`,
-    naming the plain `reissue_call` (no adopt) as the fix: a drifted seat already carries
-    a compiled managed section, and adopt=True is refused for an office that has markers
-    unless a leading duplicate header sits before them. Deliberately a nudge, never an
-    auto-reissue: reissue_office
-    is a deliberate act with its own `because` testimony and its own refusal law for a
-    damaged marker span. A cron silently recompiling every stale office on a schedule
-    would fire that refusal unattended, and would remint every reissue's own `because`
-    under a synthetic cron reason no future reader could trust the way a real seat's
-    own hand-typed `because` reads. `open_thread` is idempotent on its own summary hash
-    (docstring, capture.py), so a call with the same (stamped, current) pair every 900s
-    mints nothing new after the first, the natural dedup, no separate 'already nudged'
-    marker to invent or go stale itself; a fresh template bump or a seat's own reissue
-    changes the pair, which is exactly when a fresh nudge is correct."""
-    from src.orchestrator.capture import open_thread
+    """Keeps exactly one open obligation per drifted seat, naming the plain
+    `reissue_call` (no adopt) as the fix: a drifted seat already carries a compiled
+    managed section, and adopt=True is refused for an office that has markers unless a
+    leading duplicate header sits before them. Per tick:
+
+      - a drifted seat with no open nudge gets one (`nudged`);
+      - a drifted seat whose open nudge carries an older wording or template version has
+        that same thread corrected in place (`updated`), never a sibling;
+      - any further open nudge for that seat is resolved as superseded (`superseded`);
+      - a seat that is no longer drifted has its open nudge(s) resolved (`closed`).
+
+    A repeat tick over an unchanged board writes nothing. Deliberately a nudge, never an
+    auto-reissue: a reissue is a deliberate act with its own `because` testimony and its
+    own refusal law for a damaged marker span. A cron silently recompiling every stale
+    office on a schedule would fire that refusal unattended, and would remint every
+    reissue's own `because` under a synthetic cron reason no future reader could trust
+    the way a real seat's own hand-typed `because` reads."""
+    from src.orchestrator.capture import correct_thread_summary, open_thread, resolve_thread
 
     gaps = await boot_drift_gaps(actions.pool)
+    existing = await _open_drift_nudges(actions.pool)
+    drifted = {g["seat_id"] for g in gaps}
     nudged: list[str] = []
+    updated: list[str] = []
+    superseded: list[str] = []
+    closed: list[str] = []
     errors: list[dict[str, str]] = []
+
     for g in gaps:
-        summary = (
-            f"{g['handle']}'s boot orders are stale: compiled against template "
-            f"v{g['stamped_version']}, current is v{g['current_version']}. "
-            f"{reissue_call(g['seat_id'])} would refresh the managed section.")
+        seat_id = g["seat_id"]
+        summary = drift_nudge_summary(g)
+        mine = existing.get(seat_id, [])
         try:
-            # OWNER IS THE SEAT'S OWN CANONICAL, NEVER ITS BARE HANDLE (capture.py's own
-            # open_thread comment: "an owner is a seat id or 'operator', never a bare
-            # handle"). The stored value must already satisfy the requirement itself, not just
-            # look plausible; a bare handle would only get canonicalized later by
-            # migration_0060's own normalization pass, so stamping the canonical
-            # directly here is correct on the first write, not a style choice.
-            await open_thread(
-                actions, summary, kind="obligation", owner=g["seat_id"],
-                arc="Fleet-Hygiene", source=actor)
-            nudged.append(g["seat_id"])
+            if not mine:
+                # OWNER IS THE SEAT'S OWN CANONICAL, NEVER ITS BARE HANDLE (capture.py's
+                # own open_thread comment: "an owner is a seat id or 'operator', never a
+                # bare handle"). Stamped directly here so the first write already
+                # satisfies the ownership law.
+                await open_thread(
+                    actions, summary, kind="obligation", owner=seat_id,
+                    arc="Fleet-Hygiene", source=actor)
+                nudged.append(seat_id)
+                continue
+            keep = next((t for t in mine if t["effective"] == summary), mine[0])
+            if keep["effective"] != summary:
+                await correct_thread_summary(
+                    actions, str(keep["id"]), summary,
+                    because="the boot template or this nudge's wording moved on",
+                    source=actor)
+                updated.append(seat_id)
+            for t in mine:
+                if t is keep:
+                    continue
+                await resolve_thread(
+                    actions, str(t["id"]), source=actor, artifact=keep["canonical"],
+                    because="superseded: one boot-drift nudge per seat, kept on the "
+                            "older thread")
+                superseded.append(str(t["id"]))
         except Exception as exc:  # a mail/graph hiccup must not sink a sibling seat's nudge
-            errors.append({"seat_id": g["seat_id"], "error": f"{type(exc).__name__}: {exc}"})
-    return {"gaps": len(gaps), "nudged": nudged, "errors": errors}
+            errors.append({"seat_id": seat_id, "error": f"{type(exc).__name__}: {exc}"})
+
+    for seat_id, threads in existing.items():
+        if seat_id in drifted:
+            continue
+        for t in threads:
+            try:
+                await resolve_thread(
+                    actions, str(t["id"]), source=actor,
+                    because="the office was recompiled against the current boot template, "
+                            "so it is no longer drifted")
+                closed.append(str(t["id"]))
+            except Exception as exc:
+                errors.append({"seat_id": seat_id, "error": f"{type(exc).__name__}: {exc}"})
+    return {"gaps": len(gaps), "nudged": nudged, "updated": updated,
+            "superseded": superseded, "closed": closed, "errors": errors}
 
 
 async def sweep_stacked_office_headers(
