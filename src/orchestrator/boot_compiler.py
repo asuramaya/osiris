@@ -594,7 +594,7 @@ async def reissue_office(
     orders_path = office / "CLAUDE.md"
     if not orders_path.exists():
         return {"error": f"{handle} ({seat_id}) has no CLAUDE.md on disk at "
-                         f"{orders_path}: establish_office/mint_seat scaffolds the "
+                         f"{orders_path}: {establish_call(seat_id)} scaffolds the "
                          "first one; reissue only recompiles an existing managed "
                          "section"}
 
@@ -796,6 +796,14 @@ def reissue_call(seat_id: str, *, adopt: bool = False) -> str:
     return f"seat(action='reissue_seat_dir', target='{seat_id}', because='<reason>'{adopt_arg})"
 
 
+def establish_call(seat_id: str) -> str:
+    """The call that writes a seat's missing directory orders (a seat with a handle and
+    an anchor but no CLAUDE.md on disk): `establish_seat_dir`, which takes only the
+    target. The deprecated `establish_office` spelling is retired, and minting is for a
+    seat that does not exist yet, which this one already does."""
+    return f"seat(action='establish_seat_dir', target='{seat_id}')"
+
+
 def boot_rollout_gap_notes(gaps: list[dict[str, str]]) -> list[str]:
     """One printable, actionable line per gap, `cmd_boot_status` prints these and a
     caller-facing exit code follows from whether this list is empty, same contract as
@@ -807,7 +815,7 @@ def boot_rollout_gap_notes(gaps: list[dict[str, str]]) -> list[str]:
         fixes = {
             "never_compiled": f"run `{reissue_call(g['seat_id'], adopt=True)}`",
             "malformed": "markers are damaged: needs a hand fix before any reissue",
-            "no_claude_md": "no CLAUDE.md on disk: needs establish_office/mint_seat first",
+            "no_claude_md": f"no CLAUDE.md on disk: run `{establish_call(g['seat_id'])}` first",
             "no_office": "no handle or anchor_cwd on record: not an adopt target",
             "no_agents_md": f"run `{reissue_call(g['seat_id'])}`",
         }

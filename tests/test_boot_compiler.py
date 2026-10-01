@@ -23,6 +23,7 @@ from src.orchestrator.boot_compiler import (
     boot_rollout_gaps,
     compile_managed_body,
     derive_role,
+    establish_call,
     locate_managed_section,
     migrate_identity_to_charter,
     reissue_call,
@@ -904,6 +905,27 @@ def test_every_reissue_advice_names_a_real_seat_action() -> None:
     _assert_names_a_real_seat_call(never_compiled, adopt=True)
     _assert_names_a_real_seat_call(no_agents_md, adopt=False)
     assert "reissue_office" not in "".join(notes)
+
+    _assert_names_a_real_seat_call(establish_call("seat:abc"), adopt=False)
+    (no_claude_md,) = boot_rollout_gap_notes([
+        {"seat_id": "seat:ddd", "handle": "Dido", "house": "dido", "reason": "no_claude_md"},
+    ])
+    _assert_names_a_real_seat_call(no_claude_md, adopt=False)
+    assert "target='seat:ddd'" in no_claude_md
+    assert "establish_office" not in no_claude_md and "mint_seat" not in no_claude_md
+
+
+async def test_reissue_refusal_for_a_missing_claude_md_names_a_real_call(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    seat = await ensure_seat(actions, house="bare", handle="Bare",
+                             anchor_cwd=str(tmp_path / "bare"), source="test")
+    (tmp_path / "bare").mkdir()
+    out = await reissue_office(actions, seat_id=seat["seat_id"], because="test",
+                               actor="agent:test")
+    assert "error" in out
+    _assert_names_a_real_seat_call(out["error"], adopt=False)
+    assert "establish_office" not in out["error"]
 
 
 # ═══ THE DRIFT CHECK ══════════════════════════
