@@ -125,6 +125,38 @@ async def test_agent_liveness_ever_mounted_survives_the_mount_row_itself_vanishi
     assert out["live"] is False and out["ever_mounted"] is True
 
 
+async def test_agent_liveness_reads_a_session_derived_holder_whose_row_was_swept(
+    actions: Actions, tmp_path, monkeypatch,
+) -> None:
+    """A session-derived identity (the agent id is the first eight characters of its own
+    session id) is deliberately never written to the anchor ledger, so when a sweep
+    releases its mount row the liveness read found no row, no ledger entry, and no
+    transcript to stat, and a message to that live seat's holder was told the addressee had
+    never mounted. Its own id is the transcript lookup key: a transcript the session wrote
+    proves both that it mounted before and, when fresh, that it is live now."""
+    from src.config import settings as settings_mod
+
+    class _FakeSettings:
+        osiris_transcripts = str(tmp_path)
+
+    monkeypatch.setattr(settings_mod, "get_settings", lambda: _FakeSettings())
+    sid8 = "c0ffee" + "11"
+    mounts._transcript_index_cache.clear()
+    await actions.create_or_find_object("Agent", f"agent:{sid8}", "test")
+    cold = await mounts.agent_liveness(actions.pool, f"agent:{sid8}")
+    assert cold["live"] is False and cold["ever_mounted"] is False   # no transcript yet
+    proj = tmp_path / "-some-project"
+    proj.mkdir()
+    (proj / f"{sid8}-0000-4000-8000-000000000000.jsonl").write_text("{}\n")
+    mounts._transcript_index_cache.clear()
+    out = await mounts.agent_liveness(actions.pool, f"agent:{sid8}")
+    assert out["live"] is True and out["ever_mounted"] is True
+    # a named lineage keeps its own contract: its eight characters are not a session id
+    named = await mounts.agent_liveness(actions.pool, f"agent:seat-{sid8}")
+    assert named["ever_mounted"] is False
+    mounts._transcript_index_cache.clear()
+
+
 async def test_agent_liveness_ignores_a_stale_miner_stamped_last_active(
     actions: Actions,
 ) -> None:
@@ -1664,6 +1696,67 @@ async def test_retire_will_not_let_the_pile_LEAVE_QUIETLY(actions: Actions, tmp_
     assert out["retired"] == "agent:leaver", "the farewell must ALWAYS be allowed to complete"
     assert out["undisposed"] == 1
     assert "not to a human" in out["you_are_leaving_a_pile"]
+
+
+async def test_mount_replaces_a_nonexistent_job_dir_with_the_sessions_real_anchor(
+    actions: Actions, tmp_path,
+) -> None:
+    """A path copied from a stale brief is no anchor. Bound as given it minted a second
+    identity holding no seat while the session's own startup mount held the real one. When
+    the hook-stamped session anchor is a real directory, mount binds on that and says so."""
+    from src import mcp_server as srv
+
+    real = tmp_path / "jobs" / "realanchor"
+    real.mkdir(parents=True)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path),
+                              job_dir=str(tmp_path / "jobs" / "briefpath"),
+                              session_anchor=str(real))
+    finally:
+        srv._pool = saved_pool
+    warn = out["anchor_warning"]
+    assert warn["job_dir_replaced"] == str(tmp_path / "jobs" / "briefpath")
+    assert warn["using"] == str(real)
+    assert await mounts.find_mount(
+        actions.pool, job_dir=str(tmp_path / "jobs" / "briefpath")) is None
+    bound = await mounts.find_mount(actions.pool, job_dir=str(real))
+    assert bound is not None and bound.agent_id == out["agent"]
+
+
+async def test_mount_warns_loudly_when_no_real_anchor_exists_anywhere(
+    actions: Actions, tmp_path,
+) -> None:
+    """With nothing real to fall back on the mount still lands (some harnesses anchor to
+    paths nothing creates) but the result carries a loud warning, never a clean mount."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path),
+                              job_dir=str(tmp_path / "jobs" / "ghostjob1"))
+    finally:
+        srv._pool = saved_pool
+    assert out["anchor_warning"]["job_dir_missing"] == str(tmp_path / "jobs" / "ghostjob1")
+    assert "not an existing directory" in out["anchor_warning"]["note"]
+
+
+async def test_mount_with_an_existing_job_dir_carries_no_anchor_warning(
+    actions: Actions, tmp_path,
+) -> None:
+    from src import mcp_server as srv
+
+    real = tmp_path / "jobs" / "realjob001"
+    real.mkdir(parents=True)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path), job_dir=str(real))
+    finally:
+        srv._pool = saved_pool
+    assert "anchor_warning" not in out
 
 
 async def test_mount_refuses_an_identity_conflict_loudly(actions: Actions,

@@ -45,9 +45,8 @@ OPERATOR_ADDR = "operator"
 # analysis it minted was still computing. A lease held by a reader whose mount is live
 # stretches to the hold-grace hour: the holder is demonstrably present, at-least-once
 # needs no duplicate yet. A holder gone stale (died, idled out) redelivers at the plain
-# lease exactly as before. Must match the stop hook's STOP_GRACE_SECS
-# (scripts/osiris_stophook.py): if the two windows disagree, the hook nags about mail
-# the inbox refuses to show.
+# lease exactly as before. The Stop gate counts through `deliverable_bands`, the same
+# predicate, so the hook and the inbox can never disagree about this window.
 _HOLD_GRACE_SECS = 3600
 
 # Deliverable to a given reader: addressed to it (a DM to_agent=me, or a broadcast to
@@ -878,6 +877,36 @@ async def unread_counts(
         _generation(reader_agent)[0])
     assert row is not None  # count(*) always returns exactly one row
     return {"total": row["total"], "ask": row["ask"]}
+
+
+async def deliverable_bands(
+    pool: asyncpg.Pool | asyncpg.Connection, reader_project: str, *, reader_agent: str,
+    lease_secs: int = 900,
+) -> dict[str, Any]:
+    """{"n", "ask", "fyi", "senders"} for one reader, off the SAME `_DELIVERABLE_TO_READER`
+    predicate every other mailbox door runs (inbox, get_mail, mount/orient counts, the
+    statusline). The Stop hook used to carry its own hand-copied variant of that predicate,
+    which silently left out mail addressed to a seat the reader holds: a seat-addressed
+    message showed up in inbox() yet never made the Stop gate say anything. One predicate
+    means every door counts the same mail for the same caller."""
+    from src.orchestrator.agents import _generation
+
+    q = ("SELECT count(*) AS n, array_agg(DISTINCT m.from_agent) AS senders, "
+         "count(*) FILTER (WHERE m.grade = 'ask') AS asks, "
+         "count(*) FILTER (WHERE m.grade = 'fyi') AS fyis "
+         "FROM fleet_messages m "
+         "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$agent "
+         "WHERE " + _DELIVERABLE_TO_READER)
+    q = (q.replace("$agent", "$1").replace("$project", "$2").replace("$lease", "$3")
+         .replace("$grace", "$4").replace("$lineage", "$5"))
+    row = await pool.fetchrow(
+        q, reader_agent, _norm(reader_project), lease_secs, _HOLD_GRACE_SECS,
+        _generation(reader_agent)[0])
+    if row is None:
+        return {"n": 0, "ask": 0, "fyi": 0, "senders": []}
+    return {"n": int(row["n"] or 0), "ask": int(row["asks"] or 0),
+            "fyi": int(row["fyis"] or 0),
+            "senders": [s for s in (row["senders"] or []) if s]}
 
 
 async def unread_split(

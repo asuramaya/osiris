@@ -1025,6 +1025,23 @@ def _sane_job_dir(value: str | None) -> str | None:
     return value
 
 
+def _is_dir(path: str) -> bool:
+    return Path(path).is_dir()
+
+
+def _real_anchor_for(own_anchor: str | None, transcript_path: str | None) -> str | None:
+    """The session's own real anchor directory, when the harness has stamped one that
+    exists: the hook-injected session anchor first, then the one the stamped transcript
+    path names. None when neither is a directory on disk."""
+    if own_anchor and _is_dir(own_anchor):
+        return own_anchor
+    if transcript_path:
+        derived = handshake._derive_job_dir(Path(transcript_path).stem)
+        if derived and _is_dir(derived):
+            return derived
+    return None
+
+
 def _infer_harness(cwd: str | None, job_dir: str | None) -> str:
     """Which process adapter's capabilities apply to this session: read off the anchor's
     own shape, never asked for or assumed. A job_dir under `~/.claude/jobs/` is Claude
@@ -1377,6 +1394,30 @@ async def _ident_for(ctx: Context | None, anchor: str | None = None) -> AgentIde
         _agents_touched[key] = time.monotonic()
         return cached
     return await _reattach(await _pool_get(), key, _job_hint(ctx) or (anchor or None))
+
+
+async def _ident_readonly(ctx: Context | None, anchor: str | None = None) -> AgentIdentity | None:
+    """`_ident_for` for a pure read: the cached identity, else the identity an existing
+    mount row for this anchor already names, resolved WITHOUT registering, minting or
+    saving anything. A peek (a glance from a hook or a terminal) must never be the act that
+    seats a session standing at a seat directory or re-registers an agent; with no row to read, the
+    caller is simply unresolved and the read falls back to project scope, which its output
+    says."""
+    key = _conn_key(ctx)
+    if key is not None and (cached := _agents.get(key)) is not None:
+        _agents_touched[key] = time.monotonic()
+        return cached
+    job = _job_hint(ctx) or (anchor or None)
+    if job is None:
+        return None
+    rec = await mounts.find_mount(await _pool_get(), job_dir=job)
+    if rec is None or not rec.agent_id:
+        return None
+    ident = resolve_identity(cwd=rec.cwd, job_dir=rec.job_dir)
+    ident.agent_id = rec.agent_id
+    if rec.project:
+        ident.project = rec.project
+    return ident
 
 
 async def _source_for(ctx: Context | None, anchor: str | None = None) -> str:
@@ -2634,6 +2675,36 @@ async def mount(
     # owner-liveness checks, would otherwise have minted a duplicate over a live session).
     passed = _sane_job_dir(job_dir)
     own_anchor = _sane_job_dir(session_anchor)  # hook-injected: the caller's own session
+    # A passed anchor that names no directory on disk is a path copied from a stale brief,
+    # never a session's real anchor: bound as given, it mints a fresh identity that holds
+    # no seat while the session's own startup mount already holds the real one, so the
+    # caller runs as its own invisible co-agent with the seat's mail unread. The harness
+    # speaks for the session twice, in the hook-injected anchor and in the transcript
+    # path it stamps; when either names a directory that exists, that real anchor wins
+    # and the result says so. With nothing real to fall back on the mount still lands
+    # (some harnesses and tests anchor to paths nothing creates) but warns loudly.
+    anchor_note: dict[str, str] | None = None
+    if passed and not _is_dir(passed):
+        real_anchor = _real_anchor_for(own_anchor, transcript_path)
+        if real_anchor is not None:
+            anchor_note = {
+                "job_dir_replaced": passed,
+                "using": real_anchor,
+                "note": ("the job_dir you passed is not an existing directory, so it "
+                         "cannot be this session's anchor. Mounted on the session's own "
+                         "real anchor instead. Use $CLAUDE_JOB_DIR, never a path copied "
+                         "from a brief."),
+            }
+            passed = real_anchor
+        else:
+            anchor_note = {
+                "job_dir_missing": passed,
+                "note": ("WARNING: the job_dir you passed is not an existing directory, "
+                         "so this mount may bind a second identity that holds no seat "
+                         "while your session's real one holds it, with the seat's mail "
+                         "unread. Check the path (`ls -d \"$CLAUDE_JOB_DIR\"`) and "
+                         "re-mount with the real anchor."),
+            }
     # The conflict refusal: after a machine died, a session-launch retry vended a stale
     # anchor from a dead sibling's session, and the mount that followed seated one agent in
     # another's history, with writes interleaving into a sibling's lineage. A passed anchor
@@ -3054,6 +3125,7 @@ async def mount(
                     "you). Call inbox()" if asks else
                     f"{unread} unread. Call inbox()") if unread else "none",
            **({"cwd_corrected": cwd_note} if cwd_note else {}),
+           **({"anchor_warning": anchor_note} if anchor_note else {}),
            **({"project_pin_error": pin_warn} if pin_warn else {}),
            **({"project_pin": pin_heal} if pin_heal else {}),
            **({"write_attribution_disagreement": wa_warn} if wa_warn else {}),
@@ -6302,7 +6374,10 @@ async def inbox(project: str | None = None, peek: bool = False,
     itemized, since settling by id needs the ids this collapsed glance deliberately
     drops; re-call without `render` for the full structured bands first), then
     `your_queue` itemized one line per thread (`textrender.render_desk_text`)."""
-    ident = await _ident_for(ctx, session_anchor)
+    if peek and not ack and as_seat is None:
+        ident = await _ident_readonly(ctx, session_anchor)
+    else:
+        ident = await _ident_for(ctx, session_anchor)
     pool = await _pool_get()
     # Mail is otherwise unsurfaceable: as_seat switches to a completely
     # separate, read-only mode. A coordinator reading another seat's received DMs
@@ -6450,14 +6525,24 @@ async def inbox(project: str | None = None, peek: bool = False,
         ack_keys["settled"] = ack_out["settled"]
         if ack_out["skipped"]:
             ack_keys["skipped"] = ack_out["skipped"]
+    shown = proj.removeprefix("repo:").strip()
+    # NAME THE SCOPE: an unresolved caller reads only the project's broadcasts, never its own
+    # direct mail, and an empty or short list there says nothing about the mailbox the caller
+    # actually owns. Saying so in the output is what keeps that reading from passing for a
+    # clean inbox.
+    scope = (f"your mailbox: your DMs, held-seat DMs, {shown} broadcasts"
+             if ident is not None else
+             f"project broadcasts to {shown} only (no identity resolved, DMs not shown)")
     if render == "text":
         from src.orchestrator.textrender import render_mail_text
         text = render_mail_text(msgs)
         if ack_keys.get("settled"):
             text += f"\nsettled: {ack_keys['settled']}"
+        if ident is None:
+            text += f"\nscope: {scope}"
         text += f"\n{note}"
         return {"text": text}
-    return {"project": proj.removeprefix("repo:").strip(), "messages": msgs,
+    return {"project": shown, "messages": msgs, "scope": scope,
             **({"in_flight": flight} if flight else {}),
             **ack_keys, "note": note}
 
