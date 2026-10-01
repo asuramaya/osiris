@@ -475,6 +475,52 @@ async def test_reattach_self_restore_flags_an_unattributed_revisit_to_a_known_pr
     srv._agents.pop("sid:restored2", None)
 
 
+async def test_unattributed_revisit_names_the_lowest_sorting_other_agent_and_updates_in_place(
+    actions: Actions,
+) -> None:
+    """The obligation names one other agent already working in the project. Without an
+    ORDER BY the choice was whatever the planner returned first, so the text could vary and
+    mint a sibling; now it is the lowest-sorting canonical, and if a lower one appears later
+    the same obligation is corrected in place."""
+    from src.orchestrator.agents import _flag_unattributed_revisit
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:revisitdemo", "test")
+    for canon in ("agent:zzz-visitor", "agent:mmm-visitor"):  # inserted in reverse sort order
+        other = await actions.create_or_find_object("Agent", canon, "test")
+        await actions.create_link(other, proj, "works_in", "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+
+    async def _flags() -> list[str]:
+        rows = await actions.pool.fetch(
+            "SELECT COALESCE("
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "  AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC "
+            "  LIMIT 1),"
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)"
+            ") AS text FROM objects o WHERE o.type='Thread' "
+            "AND EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
+            "  AND s.name='summary' AND s.value #>> '{}' LIKE 'UNATTRIBUTED REVISIT%' "
+            "  AND s.value #>> '{}' LIKE '%agent:fresh%') "
+            "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "  AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "  = 'open'")
+        return [r["text"] for r in rows]
+
+    await _flag_unattributed_revisit(
+        actions, base="agent:fresh", project="revisitdemo", src="test", now=datetime.now(UTC))
+    (first,) = await _flags()
+    assert "agent:mmm-visitor" in first and "agent:zzz-visitor" not in first
+
+    lower = await actions.create_or_find_object("Agent", "agent:aaa-visitor", "test")
+    await actions.create_link(lower, proj, "works_in", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    await _flag_unattributed_revisit(
+        actions, base="agent:fresh", project="revisitdemo", src="test", now=datetime.now(UTC))
+    (second,) = await _flags()  # still exactly one open obligation
+    assert "agent:aaa-visitor" in second
+
+
 async def test_reattach_stays_none_when_no_transcript_exists_to_restore_from(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

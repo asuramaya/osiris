@@ -383,6 +383,55 @@ async def test_propose_hard_stops_to_zero_on_a_7_day_rejection_only_window(
     assert n == 1
 
 
+async def test_a_still_throttled_pair_holds_one_notice_with_the_current_count(
+    actions: Actions,
+) -> None:
+    """The notice's text carries a count and a date, and a thread's canonical hashes its
+    text, so a pair that stayed throttled used to mint a new notice whenever either moved.
+    The notice is found by its (miner, owner) prefix and corrected in place instead."""
+    two_days_ago = datetime.now(UTC) - timedelta(days=2)
+    for _ in range(2):
+        await _seed_resolved(actions, "drifting-miner", "operator", "rejected", two_days_ago)
+
+    async def _refused_attempt() -> None:
+        orphan = await _mint_bare(actions, "GateWidget")
+        await capture.derive_or_abstain(actions, orphan, "implements", [], "test")
+        out = await propose(actions, from_id=orphan, link_type="implements",
+                            candidate=_LINK_CANDIDATE, confidence=0.9, owner="operator",
+                            miner="drifting-miner", actor="drifting-miner")
+        assert "throttled" in out["error"]
+
+    prefix = "Miner drifting-miner throttled to zero proposals for operator:"
+
+    async def _open_notices() -> list[str]:
+        rows = await actions.pool.fetch(
+            "SELECT COALESCE("
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "  AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC "
+            "  LIMIT 1),"
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)"
+            ") AS text FROM objects o WHERE o.type='Thread' "
+            "AND EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
+            "  AND s.name='summary' AND starts_with(s.value #>> '{}', $1)) "
+            "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "  AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "  = 'open'", prefix)
+        return [r["text"] for r in rows]
+
+    await _refused_attempt()
+    (first,) = await _open_notices()
+    assert "2 rejection(s)" in first
+
+    await _seed_resolved(actions, "drifting-miner", "operator", "rejected", two_days_ago)
+    await _refused_attempt()
+    (second,) = await _open_notices()
+    assert "3 rejection(s)" in second
+
+    await _refused_attempt()  # nothing moved: still one, still the same text
+    assert await _open_notices() == [second]
+
+
 async def test_guarded_miner_tick_writes_a_receipt_before_the_exception_propagates(
     actions: Actions,
 ) -> None:

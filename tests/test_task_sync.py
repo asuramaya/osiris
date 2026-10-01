@@ -351,19 +351,14 @@ async def test_mint_tier2_threads_is_idempotent_on_rerun(actions: Actions) -> No
     assert first[0]["thread_id"] == second[0]["thread_id"]  # collapses, never duplicates
 
 
-async def test_mint_tier2_threads_duplicates_when_the_citing_set_changes_between_runs(
+async def test_mint_tier2_threads_updates_in_place_when_the_citing_set_changes(
     actions: Actions,
 ) -> None:
-    """This risk needed to be established with evidence, not assumed: mint_tier2_threads
-    is idempotent on BYTE-IDENTICAL summary text only (see
-    test_mint_tier2_threads_is_idempotent_on_rerun, and open_thread's own
-    create_or_find_object -> ON CONFLICT (type, canonical) DO NOTHING, a real DB unique
-    constraint). But a disagreement summary encodes the FULL current citing-task set
-    (tier2_mints's own rerun note). A second run where a new task starts citing the same
-    disputed Thread changes the summary text and therefore mints a SECOND, DISTINCT Thread
-    rather than updating the first: a real duplicate, not a hypothetical one. This is why
-    firing this at every turn-end is not yet safe: the citing set legitimately changes
-    turn to turn as the agent works."""
+    """A disagreement summary encodes the FULL current citing-task set, so a second run
+    where a new task starts citing the same disputed Thread changes the text. Identity is
+    the disputed Thread (each mint's stable `key`), not the wording: the same review
+    thread is corrected in place, never a second one minted. That is what makes this safe
+    to run repeatedly while the citing set changes turn to turn."""
     disputed = await open_thread(actions, "disputed, citing set will grow", source="agent:me")
     report_v1 = {
         "disagreement": [{"task_id": "11", "store": "storeA", "thread_id": str(disputed),
@@ -381,8 +376,16 @@ async def test_mint_tier2_threads_duplicates_when_the_citing_set_changes_between
         ],
         "thread_side_orphans": [],
     }
+    before = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Thread'")
     second = await mint_tier2_threads(actions, tier2_mints(report_v2))
-    assert first[0]["thread_id"] != second[0]["thread_id"]  # duplicated, not collapsed
+    assert first[0]["action"] == "opened"
+    assert second[0]["action"] == "corrected"
+    assert first[0]["thread_id"] == second[0]["thread_id"]  # corrected in place
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Thread'") == before  # no sibling minted
+
+    third = await mint_tier2_threads(actions, tier2_mints(report_v2))
+    assert third[0]["action"] == "unchanged"
 
 
 # ── archive_eligible_targets (pure computation only) ───────────────────────────────────

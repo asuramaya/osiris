@@ -1744,10 +1744,12 @@ async def _flag_unattributed_revisit(
     confesses that this may be one of four unresolved-revisit shapes (weeks-cold project,
     harness churn, no .osiris pin, foreign harness) landing as an unrecognized arrival
     instead of a recognized return, exactly the population "zero inference-minted Agents
-    after the fold" is meant to measure. `open_thread`'s own summary-hash dedup absorbs a repeat
-    mount finding the same gap again, so this fires once per (agent, project) pair, not
-    once per mount."""
-    from src.orchestrator.capture import open_thread
+    after the fold" is meant to measure. The obligation is found by its stable
+    (agent, project) prefix, so a repeat mount finding the same gap again fires once per
+    pair, not once per mount, and the other agent it names (the lowest-sorting one, by an
+    explicit ORDER BY, so the choice is deterministic) updates the same thread in place
+    if it ever changes."""
+    from src.orchestrator.capture import open_or_update_thread
 
     other = await actions.pool.fetchval(
         "SELECT o2.canonical FROM links l JOIN objects o ON o.id=l.to_id "
@@ -1755,11 +1757,11 @@ async def _flag_unattributed_revisit(
         "JOIN objects o2 ON o2.id=l.from_id AND o2.type='Agent' AND o2.status='active' "
         "WHERE l.type='works_in' AND o2.canonical <> $2 AND o2.canonical NOT LIKE $2 || '-%' "
         "AND (l.valid_until IS NULL OR l.valid_until > now()) "
-        "LIMIT 1",
+        "ORDER BY o2.canonical LIMIT 1",
         f"repo:{project}", base)
     if not other:
         return
-    await open_thread(
+    await open_or_update_thread(
         actions,
         f"UNATTRIBUTED REVISIT: a fresh identity ({base}) just minted at {project!r} via "
         "a transcript self-restore with no known lineage. The project already carries "
@@ -1768,6 +1770,7 @@ async def _flag_unattributed_revisit(
         "harness churn, no .osiris pin, foreign harness) landing as an unrecognized "
         "arrival instead of a recognized return. Never auto-resolved: a human's own "
         "judgment decides which.",
+        key=f"UNATTRIBUTED REVISIT: a fresh identity ({base}) just minted at {project!r} via ",
         kind="obligation", owner="operator", repo=project, source="revisit-determinism")
 
 

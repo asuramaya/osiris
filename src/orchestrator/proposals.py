@@ -45,9 +45,10 @@ the full trust of a proven record nor the total silence of zero). A 7-day window
 rejections but zero acceptances hard-stops the budget to zero regardless of the 30-day
 rate, a pair actively producing nothing but rejections right now doesn't get to coast
 on an old good record, and fires a notice (a Thread, kind='fyi', owner=the Proposal
-owner) naming the rejection count that triggered it. `open_thread`'s own
-idempotency-on-summary-hash is the dedup: the notice's summary embeds the day, so it
-fires at most once per (miner, owner, day) without a second piece of state to track it.
+owner) naming the rejection count that triggered it. One notice stands per
+(miner, owner) pair: `open_or_update_thread` finds it by its stable prefix and corrects
+its count and date in place, so a pair that stays throttled for weeks holds one open
+thread, not one per day.
 
 Telemetry: made/accepted/rejected/expired-in-effect per (miner, owner) lives in
 digest.py's own `_proposal_telemetry` (the per-project/per-seat summary convention
@@ -70,7 +71,7 @@ import asyncpg
 
 from src.actions.core import Actions
 from src.config.settings import get_settings
-from src.orchestrator.capture import open_thread
+from src.orchestrator.capture import open_or_update_thread
 from src.orchestrator.owner_normalization import resolve_owner_seat
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
@@ -233,11 +234,12 @@ async def propose(
     if throttle["throttled"]:
         today = now.date().isoformat()
         window_days = get_settings().osiris_miner_zero_acceptance_window_days
-        await open_thread(
+        await open_or_update_thread(
             actions,
             f"Miner {miner} throttled to zero proposals for {resolved_owner}: "
             f"{throttle['rejected_7d']} rejection(s) in the trailing "
             f"{window_days} days with zero acceptances (as of {today})",
+            key=f"Miner {miner} throttled to zero proposals for {resolved_owner}:",
             kind="fyi", owner=resolved_owner, source=miner)
         return {"error": f"{miner} is throttled to zero proposals for {resolved_owner} "
                          f"({throttle['rejected_7d']} rejection(s) in the trailing "

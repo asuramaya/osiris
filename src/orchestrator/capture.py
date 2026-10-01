@@ -3650,6 +3650,66 @@ async def open_thread(
     return t
 
 
+def _current_thread_prop(name: str) -> str:
+    return (f"(SELECT a.value #>> '{{}}' FROM current_assertions a WHERE a.object_id=o.id "
+            f"AND a.name='{name}' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)")
+
+
+async def open_or_update_thread(
+    actions: Actions, summary: str, *, key: str, owner: str | None = None,
+    because: str = "the notice's own text moved on", **open_kwargs: Any,
+) -> dict[str, Any]:
+    """Open a thread, or bring the one already standing for the same condition up to date,
+    for a caller whose summary text carries values that change between calls (a count, a
+    date, a set of citing tasks).
+
+    `open_thread` is idempotent on the exact summary text: right for a fixed sentence,
+    wrong for a changing one, because a thread's canonical hashes its text, so every change
+    minted a sibling and orphaned the last. Here the identity is `key`, a stable prefix the
+    caller owns (and `owner`, when given), never the wording. Among the OPEN threads whose
+    summary or corrected summary starts with `key`:
+
+      - none: opens one with `open_thread(summary, owner=owner, **open_kwargs)`;
+      - one or more: keeps the one already carrying `summary`, else the oldest; corrects
+        it in place when its text differs (`corrected_summary`, so `summary` stays the
+        thread's identity); resolves any others as superseded, pointing at the kept one.
+
+    Writes nothing when the kept thread already says exactly `summary`. Pick `key` so that
+    no unrelated thread can start with it (a caller-specific prefix naming the subject).
+    Returns {"id", "action": "opened"|"corrected"|"unchanged", "superseded": [ids]}."""
+    rows = await actions.pool.fetch(
+        "SELECT o.id, o.canonical, o.created_at, "
+        f"{_current_thread_prop('summary')} AS summary, "
+        f"{_current_thread_prop('corrected_summary')} AS corrected "
+        "FROM objects o WHERE o.type='Thread' AND o.id IN ("
+        "  SELECT a.object_id FROM current_assertions a "
+        "  WHERE a.name IN ('summary', 'corrected_summary') "
+        "  AND starts_with(a.value #>> '{}', $1)) "
+        f"AND {_current_thread_prop('status')} = 'open' "
+        f"AND ($2::text IS NULL OR {_current_thread_prop('owner')} = $2) "
+        "ORDER BY o.created_at", key, owner.strip() if owner else None)
+    source = str(open_kwargs.get("source", _SOURCE))
+    if not rows:
+        tid = await open_thread(actions, summary, owner=owner, **open_kwargs)
+        return {"id": tid, "action": "opened", "superseded": []}
+
+    keep = next((r for r in rows if (r["corrected"] or r["summary"]) == summary), rows[0])
+    action = "unchanged"
+    if (keep["corrected"] or keep["summary"]) != summary:
+        await correct_thread_summary(actions, str(keep["id"]), summary, because=because,
+                                     source=source)
+        action = "corrected"
+    superseded: list[str] = []
+    for r in rows:
+        if r["id"] == keep["id"]:
+            continue
+        await resolve_thread(
+            actions, str(r["id"]), source=source, artifact=keep["canonical"],
+            because="superseded: one open thread per condition, kept on the older one")
+        superseded.append(str(r["id"]))
+    return {"id": keep["id"], "action": action, "superseded": superseded}
+
+
 async def open_held_work(
     pool: asyncpg.Pool, *, repo: str | None = None,
 ) -> list[dict[str, Any]]:
