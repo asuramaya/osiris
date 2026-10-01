@@ -172,7 +172,7 @@ async def test_automount_rescues_a_ghost_swept_seat_holder_instead_of_minting_a_
     job_dir's own derived basename: the exact shape a prior real mismatch between the
     job_dir's derived basename and the seat-holder's agent id had, and which the
     seat-first-before-mint law (checked only against the FRESHLY-derived identity) cannot
-    catch on its own. A fake agent_mounts wipe (the real, audited sweep_ghost_doors, not a
+    catch on its own. A fake agent_mounts wipe (the real, audited drop, not a
     hand-rolled DELETE) releases the row; automount must re-adopt the seat's current
     holder, never mint a new identity under the job_dir's own derived name."""
     seat = await ensure_seat(actions, house="osiris", handle="Rescueholder",
@@ -191,9 +191,11 @@ async def test_automount_rescues_a_ghost_swept_seat_holder_instead_of_minting_a_
     await actions.pool.execute(
         "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
         "WHERE job_dir=$1", job_dir)
-    released = await mounts_mod.sweep_ghost_doors(
-        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
-    assert released == 1
+    # the ghost rule no longer drops a seat holder's row, so the wipe is the same audited
+    # release a retired-project cleanup performs
+    dropped = await mounts_mod.drop_dead_project_mount(
+        actions, job_dir=job_dir, project="osiris", actor="cron:test")
+    assert dropped["dropped"] == 1
     assert await mounts_mod.find_mount(actions.pool, job_dir=job_dir) is None
 
     out = await automount(actions, session_id=SID, cwd="/w/irrelevant-launch-cwd",
@@ -229,8 +231,8 @@ async def test_automount_demotes_a_self_reinforcing_stranger_and_re_adopts_the_h
     await actions.pool.execute(
         "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
         "WHERE job_dir=$1", job_dir)
-    await mounts_mod.sweep_ghost_doors(
-        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
+    await mounts_mod.drop_dead_project_mount(
+        actions, job_dir=job_dir, project="osiris", actor="cron:test")
     # THE SELF-REINFORCING WRITE: a stranger (a wrong mint from an earlier restart)
     # already owns a LIVE row for this exact job_dir: find_mount alone would keep
     # finding it forever.
