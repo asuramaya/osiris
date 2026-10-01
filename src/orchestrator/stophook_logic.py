@@ -20,12 +20,6 @@ from typing import Any
 
 import asyncpg
 
-# The HOOK's patience window (osiris_stophook.py's own STOP_GRACE_SECS), duplicated here
-# rather than imported, because the hook script inserts the repo root onto sys.path itself
-# (arbitrary cwd) and this module must not gain a reverse import back onto a scripts/ file.
-STOP_GRACE_SECS = 3600
-
-
 # No-regrow hygiene: every subquery COALESCEs to the SAME "current winning value" pattern
 # the-wall/obligation_hygiene.py already use; kept local (not a shared constant) since
 # this is the only caller in this module.
@@ -228,8 +222,12 @@ async def compute_stop_deliverable(
     `stale_obligations` (no-regrow hygiene) rides along in the SAME phase/round-trip: a
     session at Stop already pays for this query's own identity resolution via
     `_resolve_worker_identity`, so adding it here costs one more SELECT, not a second
-    phase the hook has to remember to call."""
-    from src.orchestrator.agents import soul_base
+    phase the hook has to remember to call.
+
+    The mail count is `mailbox.deliverable_bands`, the same predicate inbox() and the
+    count doors run, so this gate never disagrees with what the caller's own inbox shows."""
+    from src.config.settings import get_settings
+    from src.orchestrator.mailbox import deliverable_bands
     from src.orchestrator.mounts import find_session_row
     from src.orchestrator.seats import resolve_project
 
@@ -238,27 +236,12 @@ async def compute_stop_deliverable(
         return {"n": 0, "senders": [], "window": None, "bands": {}, "project": None,
                "stale_obligations": []}
     project = await resolve_project(conn, str(row["agent_id"]), cwd)
-    me = str(row["agent_id"])
-    base = soul_base(me)
-    n_row = await conn.fetchrow(
-        "SELECT count(*) AS n, array_agg(DISTINCT m.from_agent) AS senders, "
-        " count(*) FILTER (WHERE m.grade='ask') AS asks, "
-        " count(*) FILTER (WHERE m.grade='fyi') AS fyis "
-        "FROM fleet_messages m "
-        "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$1 "
-        "WHERE ((m.to_agent=$1) "
-        "   OR (m.to_agent = $4 OR m.to_agent LIKE $4 || '-%') "
-        "   OR (m.to_project=$2 AND m.to_agent IS NULL AND m.from_agent <> $1)) "
-        "AND m.read_at IS NULL "
-        "AND NOT EXISTS (SELECT 1 FROM message_recipients r3 WHERE r3.message_id=m.id "
-        "  AND (r3.agent_id=$1 OR r3.agent_id=$4 OR r3.agent_id LIKE $4 || '-%') "
-        "  AND r3.read_at IS NOT NULL) "
-        "AND (r.delivered_at IS NULL OR r.delivered_at < now() - make_interval(secs => $3))",
-        row["agent_id"], project, STOP_GRACE_SECS, base)
-    n = int(n_row["n"]) if n_row else 0
-    senders = [s for s in (n_row["senders"] or []) if s] if n_row else []
-    bands = ({"ask": int(n_row["asks"] or 0), "fyi": int(n_row["fyis"] or 0)}
-             if n_row else {})
+    found = await deliverable_bands(
+        conn, project or "", reader_agent=str(row["agent_id"]),
+        lease_secs=get_settings().osiris_mail_lease_secs)
+    n = found["n"]
+    senders = found["senders"]
+    bands = {"ask": found["ask"], "fyi": found["fyi"]}
     stale_obligations = await compute_stale_obligations(conn, session_id=session_id, cwd=cwd)
     return {
         "n": n, "senders": senders, "window": row["context_window_size"],

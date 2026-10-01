@@ -1609,6 +1609,66 @@ def test_cmd_read_mail_falls_through_with_no_project_baked_in(monkeypatch: Any) 
     assert calls == []
 
 
+def _capture_mail_read(monkeypatch: Any, hook: dict[str, Any]) -> tuple[list[str], list[str]]:
+    import subprocess as _subprocess
+
+    seen: list[str] = []
+    printed: list[str] = []
+
+    def _fake_run(args: list[str], **kw: Any) -> Any:
+        seen.extend(args)
+        return _subprocess.CompletedProcess(args, returncode=0, stdout="mail: empty\n",
+                                            stderr="")
+
+    monkeypatch.setattr(osiris_hook.subprocess, "run", _fake_run)
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: printed.append(s))
+    assert _cmd_read(hook) == 0
+    return seen, printed
+
+
+def test_cmd_read_mail_reads_the_sessions_own_mailbox_not_just_the_project(
+    monkeypatch: Any,
+) -> None:
+    """The hook names the caller's own session so the server answers with that session's
+    mailbox (direct mail, held seats, broadcasts); the project is only the fallback."""
+    monkeypatch.setenv("OSIRIS_HOOK_PROJECT", "osiris")
+    seen, printed = _capture_mail_read(monkeypatch, {
+        "prompt": "/mail", "session_id": "sessnid1-0000-4000-8000-000000000000"})
+    assert seen == [osiris_hook._OSIRIS_BIN, "inbox", "--session",
+                    "sessnid1-0000-4000-8000-000000000000", "--project", "osiris", "--text"]
+    assert len(printed) == 1
+
+
+def test_cmd_read_mail_serves_a_session_even_with_no_project_baked_in(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.delenv("OSIRIS_HOOK_PROJECT", raising=False)
+    seen, printed = _capture_mail_read(monkeypatch, {
+        "prompt": "/mail", "session_id": "sessnid1-0000-4000-8000-000000000000"})
+    assert seen == [osiris_hook._OSIRIS_BIN, "inbox", "--session",
+                    "sessnid1-0000-4000-8000-000000000000", "--text"]
+    assert len(printed) == 1
+
+
+def test_cmd_read_mail_with_only_a_project_still_serves_and_names_no_session(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setenv("OSIRIS_HOOK_PROJECT", "osiris")
+    seen, _printed = _capture_mail_read(monkeypatch, {"prompt": "/mail"})
+    assert seen == [osiris_hook._OSIRIS_BIN, "inbox", "--project", "osiris", "--text"]
+
+
+def test_cmd_read_answer_opens_with_a_line_saying_osiris_answered(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setenv("OSIRIS_HOOK_PROJECT", "osiris")
+    _seen, printed = _capture_mail_read(monkeypatch, {
+        "prompt": "/mail", "session_id": "sessnid1-0000-4000-8000-000000000000"})
+    reason = json.loads(printed[0])["reason"]
+    assert reason.splitlines()[0] == "answered by osiris: /mail (read-only, no model turn used)"
+    assert reason.splitlines()[1] == "mail: empty"
+
+
 def test_cmd_read_renders_a_matched_verb_as_a_block_decision(monkeypatch: Any) -> None:
     """THE FULL ROUND TRIP: a served verb with no act-word shells out to `osiris <verb>
     --text`, and a clean render becomes {"decision": "block", "reason": <rendered text>}
@@ -1629,7 +1689,9 @@ def test_cmd_read_renders_a_matched_verb_as_a_block_decision(monkeypatch: Any) -
     assert seen["args"] == [osiris_hook._OSIRIS_BIN, "status", "--text"]
     assert len(printed) == 1
     payload = json.loads(printed[0])
-    assert payload == {"decision": "block", "reason": "osiris: 3 open — oldest: Thoth"}
+    assert payload == {"decision": "block", "reason": (
+        "answered by osiris: /osiris (read-only, no model turn used)\n"
+        "osiris: 3 open — oldest: Thoth")}
 
 
 def test_cmd_read_search_joins_its_words_into_one_query_arg(monkeypatch: Any) -> None:

@@ -162,6 +162,7 @@ async def test_mount_receipt_omits_co_agents_and_held_work_by_default(
     await open_thread(actions, "held: batch the receipt-diet fixture read", repo=proj,
                       kind="obligation", branch="rd-branch",
                       files_touched=["src/orchestrator/receipt_diet.py"])
+    (tmp_path / "jobs" / "rdmount01").mkdir(parents=True)
     job_dir = str(tmp_path / "jobs" / "rdmount01")
 
     saved_pool = srv._pool

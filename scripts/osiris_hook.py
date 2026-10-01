@@ -1422,11 +1422,20 @@ def _cmd_anchor(hook: dict[str, Any]) -> int:
 
 _OSIRIS_BIN = os.environ.get("OSIRIS_CLI_BIN", "osiris")
 
+# The one served-read output shape Claude Code offers that skips the model is a
+# `decision: block`, and it labels that "operation blocked by hook" itself, which reads as
+# a failure. The reason text is the only part we control, so its first line says what
+# actually happened: osiris answered the read.
+_ANSWERED_BY_OSIRIS = "answered by osiris: /{verb} (read-only, no model turn used)"
+
 # verb -> (cli subcommand, needs_project). needs_project verbs read `OSIRIS_HOOK_PROJECT`
 # from the environment (baked into the wired hook command at onboarding time, `merge_
 # settings(..., reads=True, project=<name>)`, since a per-repo settings.json is tied to
 # one project by definition, so this is resolved once, not guessed per-invocation) and
 # fall through when it's unset, rather than ever guessing a project from cwd.
+# `mail` is the one session-scoped read: it names the caller's own session (the hook's
+# own `session_id`) so the server answers with that session's own mailbox, and treats the
+# baked project only as a fallback when the session's identity does not resolve.
 _READ_HOOK_VERBS: dict[str, tuple[str, bool]] = {
     # `/osiris` (commands/osiris.md), the board glance; never `/status`, which is a
     # Claude Code built-in (commands/RESERVED_NAMES.txt). The CLI subcommand stays `status`.
@@ -1444,7 +1453,7 @@ _READ_HOOK_VERBS: dict[str, tuple[str, bool]] = {
     # same as any other unrecognized arg, per the bare-only discipline in `_cmd_read`).
     "inspect": ("inspect", False),
     "digest": ("digest", False),
-    "mail": ("inbox", True),
+    "mail": ("inbox", False),
     "desk": ("desk", False),
     # `osiris practices` is served here on the same basis as `inspect` above: a
     # subprocess call to an unrecognized subcommand exits nonzero, which `_cmd_read`
@@ -1497,7 +1506,16 @@ def _cmd_read(hook: dict[str, Any]) -> int:
         return 0
     subcmd, needs_project = _READ_HOOK_VERBS[verb]
     cli_args = [_OSIRIS_BIN, subcmd]
-    if needs_project:
+    if verb == "mail":
+        session_id = str(hook.get("session_id") or "")
+        project = os.environ.get("OSIRIS_HOOK_PROJECT", "")
+        if len(session_id) >= 8:
+            cli_args += ["--session", session_id]
+        if project:
+            cli_args += ["--project", project]
+        if len(cli_args) == 2:
+            return 0  # no session to read for and no project baked in: nothing to scope to
+    elif needs_project:
         project = os.environ.get("OSIRIS_HOOK_PROJECT", "")
         if not project:
             return 0  # no project baked into this seat's own wired hook command
@@ -1533,7 +1551,8 @@ def _cmd_read(hook: dict[str, Any]) -> int:
     rendered = proc.stdout.strip()
     if not rendered:
         return 0
-    print(json.dumps({"decision": "block", "reason": rendered}))
+    header = _ANSWERED_BY_OSIRIS.format(verb=verb)
+    print(json.dumps({"decision": "block", "reason": f"{header}\n{rendered}"}))
     return 0
 
 

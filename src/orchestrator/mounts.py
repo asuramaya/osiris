@@ -1064,16 +1064,27 @@ def _freshest_transcript_mtime(root: Path, session_ids: list[str]) -> datetime |
     index = _transcript_index(root)
     freshest: datetime | None = None
     for sid in wanted:
-        p = index.get(sid)
-        if p is None:
-            continue
-        try:
-            mtime = datetime.fromtimestamp(p.stat().st_mtime, UTC)
-        except OSError:
-            continue
-        if freshest is None or mtime > freshest:
-            freshest = mtime
+        # An 8-character id is a session-id prefix (the whole of a session-derived
+        # agent's identity), never a full session id: every transcript it starts is a hit.
+        paths = ([p for stem, p in index.items() if stem.startswith(sid)]
+                 if len(sid) == 8 else [index[sid]] if sid in index else [])
+        for p in paths:
+            try:
+                mtime = datetime.fromtimestamp(p.stat().st_mtime, UTC)
+            except OSError:
+                continue
+            if freshest is None or mtime > freshest:
+                freshest = mtime
     return freshest
+
+
+def _session_derived_prefix(base: str) -> str | None:
+    """The eight-character session id an `agent:<8 hex>` identity is derived from, or None
+    for any other shape (a named lineage, a seat-born id)."""
+    tail = base.removeprefix("agent:")
+    if tail != base and len(tail) == 8 and all(c in "0123456789abcdef" for c in tail):
+        return tail
+    return None
 
 
 # A lineage's `anchor_sid` ledger only ever grows (record_session_anchor never retires a
@@ -1123,10 +1134,17 @@ async def _lineage_transcript_mtime(
             "WHERE o.type='Agent' AND a.name LIKE 'anchor_sid:%' AND o.canonical=$1 "
             "ORDER BY a.observed_at DESC LIMIT $2",
             agent_id, MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK)
-    if not rows:
+    sids = [r["sid"] for r in rows]
+    # A session-derived identity (the agent id IS the first eight characters of its
+    # session id) is deliberately never written to the anchor ledger, since the id already
+    # testifies to itself, so the ledger above is empty for exactly the agents whose mount
+    # row a sweep released. Their own id is the transcript lookup key.
+    derived = _session_derived_prefix(base or agent_id)
+    if derived:
+        sids.append(derived)
+    if not sids:
         return None
-    return await asyncio.to_thread(
-        _freshest_transcript_mtime, Path(root), [r["sid"] for r in rows])
+    return await asyncio.to_thread(_freshest_transcript_mtime, Path(root), sids)
 
 
 async def agent_liveness(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
@@ -1160,11 +1178,12 @@ async def agent_liveness(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     # real session bound to this identity at least once," the same class of signal the
     # tenure fix's graph-assertion leg trusts over the mount cache for the identical
     # reason.
-    ever_mounted = mount_seen is not None or bool(await pool.fetchval(
+    ever_mounted = (mount_seen is not None or transcript_mtime is not None
+                    or bool(await pool.fetchval(
         "SELECT 1 FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.type='Agent' AND (o.canonical=$1 OR o.canonical=$2 "
         "  OR o.canonical LIKE $2 || '-%') AND a.name LIKE 'anchor_sid:%' LIMIT 1",
-        agent_id, base))
+        agent_id, base)))
     return {"live": is_live(ts), "last_seen": ts.isoformat() if ts is not None else None,
             "ever_mounted": ever_mounted}
 

@@ -2474,6 +2474,7 @@ async def cmd_fleet(*, full: bool, as_json: bool = False) -> int:
 async def _call_and_emit_text(
     url: str, tool: str, params: dict[str, Any], *, as_json: bool, title: str,
     error_prefix: str, text_only: bool = False,
+    fallback_params: dict[str, Any] | None = None,
 ) -> int:
     """Shared body for the human-paint read commands (backlog/threads/roster/team).
     `--json` gets the full structured response, unchanged. Human mode asks the server for
@@ -2484,13 +2485,21 @@ async def _call_and_emit_text(
 
     `text_only` (the zero-token read hook): print the server's own `text` field VERBATIM,
     no box, no title, no color, the same string a slash command already prints inside a
-    code block. Takes priority over `as_json` (a hook never wants JSON)."""
+    code block. Takes priority over `as_json` (a hook never wants JSON).
+
+    `fallback_params`: a second try when the server answers the first with an `error`
+    (a caller identity that did not resolve), so a door can lead with the narrowest, most
+    personal scope and still degrade to a broader one instead of failing outright."""
     from src import cli_render as render
     from src.orchestrator.mcp_client import call_mcp_tool
 
     want_json = as_json and not text_only
     call_params = dict(params) if want_json else {**params, "render": "text"}
     result = await call_mcp_tool(url, tool, call_params)
+    if fallback_params is not None and isinstance(result, dict) and result.get("error"):
+        call_params = (dict(fallback_params) if want_json
+                       else {**fallback_params, "render": "text"})
+        result = await call_mcp_tool(url, tool, call_params)
     if isinstance(result, str):
         print(f"{error_prefix}: {result}. Is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
@@ -2608,14 +2617,43 @@ async def cmd_team(*, seat: str | None = None, as_json: bool = False, text: bool
 # --- inbox (`desk` is the operator's own organized queue; this is an ORDINARY project's
 # mailbox) --------------------------------------------------------------------------------
 
-async def cmd_inbox(*, project: str, as_json: bool = False, text: bool = False) -> int:
-    """osiris inbox --project <repo>: a peek at a project's own mailbox, terminal-native.
-    Always a peek (never leases): settling mail is an agent's own act mid-session, not
-    a human glancing from a terminal."""
+def _session_anchor(session: str | None) -> str | None:
+    """The durable job directory a harness session id maps to, the same derivation the
+    PreToolUse anchor stamp uses (`~/.claude/jobs/<first 8 of the session id>`). None for
+    an absent or too-short id, so a caller never passes the server a made-up anchor."""
+    sid = (session or "").strip()
+    if len(sid) < 8:
+        return None
+    return str(Path.home() / ".claude" / "jobs" / sid[:8])
+
+
+async def cmd_inbox(*, project: str | None, session: str | None = None,
+                    as_json: bool = False, text: bool = False) -> int:
+    """osiris inbox [--project <repo>] [--session <id>]: a peek at a mailbox,
+    terminal-native. Always a peek (never leases): settling mail is an agent's own act
+    mid-session, not a human glancing from a terminal.
+
+    With `--session` the read is the SESSION'S OWN mailbox (its direct mail, any seat it
+    holds, and its project's broadcasts), the same scope every in-session door reads. With
+    only `--project` it is the project's broadcasts alone, and the server's output says so.
+    Given both, the session's own mailbox leads and the project is the fallback when the
+    session's identity does not resolve."""
+    anchor = _session_anchor(session)
+    if anchor is None and not project:
+        print("osiris inbox: pass --project <repo>, or --session <id> to read a session's own "
+              "mailbox", file=sys.stderr)
+        return 2
     url = await _mcp_url()
+    if anchor is not None:
+        params: dict[str, Any] = {"peek": True, "session_anchor": anchor}
+        fallback = {"project": project, "peek": True} if project else None
+    else:
+        params = {"project": project, "peek": True}
+        fallback = None
     return await _call_and_emit_text(
-        url, "inbox", {"project": project, "peek": True}, as_json=as_json,
-        title=f"inbox · {project}", error_prefix="osiris inbox", text_only=text)
+        url, "inbox", params, as_json=as_json,
+        title=f"inbox · {project or 'this session'}", error_prefix="osiris inbox",
+        text_only=text, fallback_params=fallback)
 
 
 # --- desk / show: READING THE RECORD. A CLI-surface audit found it had shipped many
@@ -8194,7 +8232,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "called over the CLI. Always a read-only peek; marking mail as read is a "
         "separate, explicit act."),
         epilog="example: osiris inbox --project osiris")
-    p_inbox.add_argument("--project", required=True, help="the project mailbox to peek at")
+    p_inbox.add_argument("--project", default=None,
+                         help="the project mailbox to peek at (broadcasts only, unless "
+                              "--session names who is reading)")
+    p_inbox.add_argument("--session", default=None,
+                         help="a harness session id: read that session's own mailbox (its "
+                              "direct mail, held seats, and project broadcasts)")
     p_inbox.add_argument("--json", action="store_true", dest="as_json",
                          help="machine-readable: one compact JSON line, for a script or an agent")
     _add_text_flag(p_inbox)
@@ -9598,8 +9641,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_threads(project=args.project, as_json=args.as_json,
                                        text=args.text))
     if args.command == "inbox":
-        return asyncio.run(cmd_inbox(project=args.project, as_json=args.as_json,
-                                     text=args.text))
+        return asyncio.run(cmd_inbox(project=args.project, session=args.session,
+                                     as_json=args.as_json, text=args.text))
     if args.command == "team":
         return asyncio.run(cmd_team(seat=args.seat, as_json=args.as_json, text=args.text))
     if args.command == "desk":

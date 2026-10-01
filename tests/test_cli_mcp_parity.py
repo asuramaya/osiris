@@ -389,6 +389,10 @@ CLI_ONLY_PARAMS = {
         "above, #92, the zero-token read hook.",
     ("inbox", "text"): "same PRESENTATION-flag reasoning as inbox's own --json entry "
         "above, #92, the zero-token read hook.",
+    ("inbox", "session"): "the CLI takes a harness session id and derives the durable job "
+        "directory itself, then passes it as the MCP tool's own `session_anchor` (the same "
+        "derivation the PreToolUse hook stamps on every in-session call), so the hook-served "
+        "`/mail` reads the caller's own mailbox. The MCP tool never takes a raw session id.",
     ("team", "text"): "same PRESENTATION-flag reasoning as team's own --json entry "
         "above, #92, the zero-token read hook.",
     ("status", "text"): "same PRESENTATION-flag reasoning as status's own --json entry "
