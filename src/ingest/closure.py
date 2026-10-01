@@ -222,10 +222,17 @@ async def close_by_commits(
     threads = await _open_untouched_threads(actions.pool, repo)
     commits = await _commits(actions.pool, repo, since=since)
     if not threads or not commits:
+        if commits:
+            note = (f"{len(commits)} commit(s) landed, no open untouched thread for any of "
+                    "them to witness")
+        elif since:
+            note = (f"no commits landed since the last pass ({since.isoformat()}), "
+                    "nothing new to witness")
+        else:
+            note = "nothing to witness, no commits for this tree are in the graph"
         return {"repo": repo, "threads": len(threads), "commits": len(commits),
                 "since": since.isoformat() if since else None,
-                "resolved": 0, "candidates": 0,
-                "note": "nothing to witness, this tree's work is not in the graph"}
+                "resolved": 0, "candidates": 0, "note": note}
 
     prepared = [(c, f"{c['subject'] or ''} {c['rationale'] or ''}",
                  c["at"] or c["created_at"].isoformat()) for c in commits]

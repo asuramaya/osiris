@@ -202,7 +202,8 @@ async def test_watermark_narrows_a_second_run_to_only_new_commits(actions: Actio
     second = await close_by_commits(actions, repo="cl", dry_run=False, strong=2.0, weak=0.4)
     assert second["commits"] == 0
     assert second["since"] == EARLY.isoformat()
-    assert "nothing to witness" in second["note"]
+    assert "no commits landed since the last pass" in second["note"]
+    assert "not in the graph" not in second["note"]
 
     # a genuinely new commit lands, ingested after the watermark
     proj = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:cl'")
@@ -220,6 +221,44 @@ async def test_watermark_narrows_a_second_run_to_only_new_commits(actions: Actio
     assert third["commits"] == 1  # only commit:bbb -- commit:aaa is NOT re-fetched
     assert third["since"] == EARLY.isoformat()
     assert third["until"] == new_ingest.isoformat()
+
+
+async def _bare_project(actions: Actions, name: str) -> uuid.UUID:
+    proj = await actions.create_or_find_object("SoftwareProject", f"repo:{name}", "session")
+    await actions.assert_property(proj, "name", name, "session", BORN, 0.9)
+    return proj
+
+
+async def test_commits_with_no_open_thread_is_reported_as_healthy_not_blind(
+    actions: Actions,
+) -> None:
+    """An ingest that lands commits while no open thread exists is a healthy outcome. The
+    early-return note used to say the tree's work was not in the graph over commits=N, which
+    told a seat its successful ingest had failed."""
+    proj = await _bare_project(actions, "quiet")
+    for n in range(3):
+        c = await actions.create_or_find_object("Commit", f"commit:q{n}", "git")
+        await actions.assert_property(c, "subject", f"change {n}", "git", LATER, 0.9)
+        await actions.assert_property(c, "authored_date", LATER.isoformat(), "git", LATER, 0.9)
+        await actions.create_link(c, proj, "in_repo", "git", LATER, 0.9)
+
+    out = await close_by_commits(actions, repo="quiet", dry_run=True)
+    assert (out["commits"], out["threads"]) == (3, 0)
+    assert "3 commit(s) landed" in out["note"]
+    assert "no open untouched thread" in out["note"]
+    assert "not in the graph" not in out["note"]
+
+
+async def test_a_tree_with_no_commits_at_all_is_reported_as_not_in_the_graph(
+    actions: Actions,
+) -> None:
+    """The arm the old note was written for: nothing was ever ingested for this tree."""
+    await _bare_project(actions, "empty")
+
+    out = await close_by_commits(actions, repo="empty", dry_run=True)
+    assert out["commits"] == 0
+    assert out["since"] is None
+    assert "no commits for this tree are in the graph" in out["note"]
 
 
 async def test_dry_run_never_advances_the_watermark(actions: Actions) -> None:
