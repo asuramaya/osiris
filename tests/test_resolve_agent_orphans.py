@@ -1,11 +1,11 @@
-"""The provenance sweep's Agent lane (wave 15, mail 8840): resolve works_in for a
-zero-live-link Agent from its own recorded `session` property — never a guess,
+"""The provenance sweep's Agent lane: resolve works_in for a
+zero-live-link Agent from its own recorded `session` property, never a guess,
 cardinality-1-or-abstain via derive_or_abstain.
 
 Orphan fixtures build the Agent object directly (session + is_sidechain properties
 only), matching the REAL population's own shape: register_swarm's CURRENT code
 already stamps `project` and mints `works_in` itself when a project is resolvable, so
-calling it here would never reproduce an orphan at all — every live orphan was
+calling it here would never reproduce an orphan at all, every live orphan was
 written by an OLDER version of that miner pass, before it did either."""
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ _NOW = datetime.now(UTC)
 
 
 def _write_session_dir(root: Path, project_dashed: str, session_uuid: str, handle: str) -> Path:
-    """A bare on-disk session dir with one subagent — enough for _session_dirs/
+    """A bare on-disk session dir with one subagent, enough for _session_dirs/
     _project_of to find and decode, without going through register_swarm at all."""
     session = root / project_dashed / session_uuid
     subs = session / "subagents"
@@ -63,9 +63,9 @@ async def test_a_singleton_session_mints_works_in(actions: Actions, tmp_path: Pa
 async def test_a_session_prefix_reused_across_two_projects_abstains(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The 40 multi-project sidechains ruling 963aee42 names: an OLDER miner run
+    """The 40 multi-project sidechains the ruling names: an OLDER miner run
     stamped only an 8-hex `session` fragment, and that fragment now matches session
-    directories under two DIFFERENT projects — ambiguous, never guessed."""
+    directories under two DIFFERENT projects, ambiguous, never guessed."""
     shared_prefix = "bbbbbbbb"
     _write_session_dir(tmp_path, "-home-x-code-alpha",
                        f"{shared_prefix}-0000-4000-8000-000000000002", "ambi001")
@@ -121,8 +121,8 @@ async def test_apply_without_because_refuses(actions: Actions, tmp_path: Path) -
 async def test_an_abstention_also_writes_the_door_side_hatch(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thoth mail 9054 (Sekhmet's multi-phase pass 9047): resolve_agent_orphans used to
-    write only derivation_abstained_works_in — the adoption meter's hatch count
+    """resolve_agent_orphans used to
+    write only derivation_abstained_works_in, the adoption meter's hatch count
     (adoption_meter._hatch_counts) reads unlinked_because/unlinked_because_kind, an
     entirely separate property, so a sweep confession was invisible to it."""
     await _orphan_agent(actions, "agent:hatch001", "deadbeef")

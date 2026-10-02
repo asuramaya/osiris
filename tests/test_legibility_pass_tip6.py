@@ -1,14 +1,14 @@
-"""THE RENDERER, REOPENED FOR FOCUS AND PREVIEW (operator ruling, grounds 5b37d219, Thoth
-mail 11272). THE LAST RENDERER (ruling d7d55257) froze the renderer after w301; this
-ruling reopens it specifically for focus/preview, not a blanket reversal -- the base dim
-layer's own "no bundling, straight lines only" rule (mail 11066) stays exactly as it was.
+"""THE RENDERER, REOPENED FOR FOCUS AND PREVIEW. THE LAST RENDERER
+froze the renderer after its final pass; this ruling reopens it specifically for
+focus/preview, not a blanket reversal -- the base dim layer's own
+"no bundling, straight lines only" rule stays exactly as it was.
 
 Measured defect that triggered the ruling: focus walked PATH_EDGE_TYPES only, so focusing
-a real 402-degree agent (Sekhmet) reached 43 nodes over succeeded_from/succeeds_seat and
+a real 402-degree agent reached 43 nodes over succeeded_from/succeeds_seat and
 nothing else -- the operator saw a wall of same-named labels and never what the agent
 actually did.
 
-Live-verified via claude-in-chrome against the deployed graph (main fc9e1b47): focusing
+Live-verified via claude-in-chrome against the deployed graph (main): focusing
 that exact agent went from 43 (path-only) to 60 reachable (43 base + 17 direct one-hop
 members), with one "spawned_by (in) 381" group node (paged on click) and one container
 anchor pulled out ("analyst:operator"). Expanding the group added 50 more (110 total),
@@ -63,7 +63,7 @@ def test_focus_base_path_reachable_is_the_unchanged_provenance_walk() -> None:
 
 
 def test_group_expand_click_never_wipes_its_own_just_set_state() -> None:
-    # the SAME bug class caught in THE DRILL (mail 11241): a click handler sets
+    # the SAME bug class caught in THE DRILL: a click handler sets
     # egoGroupExpandedKey/egoGroupPageCount then re-renders through the SAME shared path a
     # fresh focus uses -- renderFocusEgoGroups itself must never reset that state (only
     # focusObject, on an actual container change, does).
@@ -173,7 +173,7 @@ def test_chain_spacing_is_tighter_than_the_ordinary_rank_column_width() -> None:
 # --- item 5: cross-cluster focus edges over a screen-px threshold bundle as curves --------
 
 def test_only_the_focus_overlay_bundles_the_base_dim_layer_stays_straight() -> None:
-    # THE LAST RENDERER's own "no bundling, straight lines only" rule (mail 11066) is
+    # THE LAST RENDERER's own "no bundling, straight lines only" rule is
     # UNCHANGED for buildEdgeLines (the base dim layer) -- this reopening is scoped to
     # updatePathEdges (the focus overlay) only, per the new ruling's own grounds.
     base_body = _SPACE_JS.split("function buildEdgeLines(nodes, edgeList)", 1)[1][:2500]
@@ -204,7 +204,7 @@ def test_bundle_threshold_is_measured_in_real_screen_pixels_not_world_units() ->
     assert "const screenLen = worldLen / wpp;" in body
 
 
-# --- w306 review BLOCKER (Thoth mail 11308): focus-set physics diverges to a non-finite --
+# --- review BLOCKER: focus-set physics diverges to a non-finite --
 # camera on a real high-degree Thread/Decision -------------------------------------------
 
 def test_repulsion_has_a_real_minimum_separation_not_a_1_unit_floor() -> None:
@@ -250,7 +250,7 @@ def test_group_seeding_spirals_instead_of_a_constant_radius_circle() -> None:
     assert "const r2 = ringR + i * 2;" in body
 
 
-# --- w306 review: chain labels still walled up, expansion left the table stale -----------
+# --- review: chain labels still walled up, expansion left the table stale -----------
 
 def test_chain_labels_declutter_past_generation_1_not_every_single_one() -> None:
     # live-verified: "lit labels always win their spot" flooded the view once a real
@@ -278,12 +278,12 @@ def test_group_expansion_notifies_the_table_not_just_the_initial_focus() -> None
     assert "if (onFocus) onFocus(id);" in body
 
 
-# --- w312 review (mail 11359): agent focus wrongly drilled, label pool ignored focus,
+# --- review: agent focus wrongly drilled, label pool ignored focus,
 # hover-card generation disagreed with the label's own, no-op group expansions ------------
 
 def test_only_membership_container_types_take_the_drill() -> None:
     # a busy Agent seat's own structural degree can exceed MAX_EGO_NODES the same way a
-    # real project's membership degree does now that spawned_by is structural (mail 11291)
+    # real project's membership degree does now that spawned_by is structural
     # -- the drill must never eat a non-membership focus regardless of degree.
     body = _SPACE_JS.split("function isContainerFocus(id)", 1)[1][:400]
     assert 'const CONTAINER_FOCUS_TYPES = new Set(["SoftwareProject", "Seat"]);' \
@@ -306,7 +306,7 @@ def test_label_pool_fills_lit_nodes_before_ranking_by_degree() -> None:
 
 def test_hover_card_generation_is_named_honestly_not_claimed_as_the_labels_own() -> None:
     # computeGeneration is a succeeded_from hop count, not the seat's own generation
-    # numeral the label string carries (Khnum's roman numeral) -- the two can genuinely
+    # numeral the label string carries (a roman numeral) -- the two can genuinely
     # disagree, so the card names what it actually measures instead of "gen".
     body = _SPACE_JS.split("function updateHoverCard(nd)", 1)[1][:500]
     assert '" · chain depth " + generation' in body

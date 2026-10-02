@@ -1,15 +1,14 @@
-"""THE ORPHAN LANE — a session that died with no rite left NOBODY holding the context.
+"""THE ORPHAN LANE, a session that died with no rite left NOBODY holding the context.
 
 A REGRESSION I SHIPPED KNOWINGLY. Killing the crawl (B6) made the PreCompact hook the only bell, so
 a session that crashes, is kill -9'd, has its laptop closed, or SIMPLY ENDS without reaching the
 context ceiling was never read at all. Before, the crawl would have caught it within ten minutes.
-That was not a decision — it was a consequence.
+That was not a decision, it was a consequence.
 
 AND IT IS THE CASE THAT PROVES THE WHOLE THESIS. A crashed session left nobody to ask what it
 forgot. The mind is GONE. Only an outside reader can recover it:
 
-    "if the live agent could settle on its own we would not need osiris or a miner, but the whole
-     point is that the adversary checks and we both forget."          — the operator, 2026-07-13
+    a live agent cannot settle everything on its own: the adversary checks and we both forget.
 
 What is tested hardest here is that this is NOT THE CRAWL COMING BACK.
 """
@@ -46,10 +45,10 @@ async def test_a_session_that_died_with_NO_RITE_is_found(
 
 async def test_a_LIVE_session_is_NEVER_swept(actions: Actions, tmp_path: Path) -> None:
     """THE MOST IMPORTANT GUARD HERE. Sweeping a live session would mine a conversation MID-THOUGHT
-    — minting the question and never seeing the answer, which is the crawl's entire disease and the
+   , minting the question and never seeing the answer, which is the crawl's entire disease and the
     reason 54 of my 264 hand-sorted rows were garbage.
 
-    And we JUST spent a day learning that quiet is not dead (456960e5): a mind heads-down for
+    And we JUST spent a day learning that quiet is not dead: a mind heads-down for
     twenty minutes is very much alive. So the quiet window is generous ON PURPOSE. We would rather
     be LATE than WRONG.
     """
@@ -59,7 +58,7 @@ async def test_a_LIVE_session_is_NEVER_swept(actions: Actions, tmp_path: Path) -
 
 
 async def test_a_transcript_is_read_ONCE_and_NEVER_AGAIN(actions: Actions, tmp_path: Path) -> None:
-    """NOT A CRAWL. The crawl re-read every transcript forever, on a clock — its cost was
+    """NOT A CRAWL. The crawl re-read every transcript forever, on a clock, its cost was
     (wall-clock × every transcript that ever existed). This reads each dead session ONCE. The
     backlog is finite, it shrinks by construction, and it converges to zero."""
     p = _transcript(tmp_path, "dead0002", quiet_secs=QUIET_SECS + 60)
@@ -72,7 +71,7 @@ async def test_a_transcript_is_read_ONCE_and_NEVER_AGAIN(actions: Actions, tmp_p
 async def test_an_EMPTY_yield_still_marks_the_session_READ(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """AN EMPTY YIELD IS A COMPLETE ANSWER. Most sessions abandon nothing — the adversary's prompt
+    """AN EMPTY YIELD IS A COMPLETE ANSWER. Most sessions abandon nothing, the adversary's prompt
     says so in as many words. Re-reading a session because it had nothing to say would be paying,
     forever, to be told nothing twice."""
     p = _transcript(tmp_path, "quiet001", quiet_secs=QUIET_SECS + 60)
@@ -86,7 +85,7 @@ async def test_the_adversary_s_OWN_scratch_sessions_are_not_orphans(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """Every `claude -p` the adversary makes writes a transcript of its own. Reaping those would be
-    the instrument reading itself — the loop-pathology class, and the exact shape of the bug where
+    the instrument reading itself, the loop-pathology class, and the exact shape of the bug where
     Osiris mined its own alarm clock."""
     d = tmp_path / "-tmp-osiris-extract"
     d.mkdir(parents=True)
@@ -111,8 +110,8 @@ async def test_the_batch_is_BOUNDED_and_the_oldest_go_first(
 
 
 def test_the_reaper_is_SCHEDULED_but_the_MINER_still_is_not() -> None:
-    """The distinction this whole redesign rests on. DETECTION is an OBSERVATION — a stat() and a
-    watermark lookup, free, deterministic, never wrong — so it may run on a clock. The SWEEP is an
+    """The distinction this whole redesign rests on. DETECTION is an OBSERVATION, a stat() and a
+    watermark lookup, free, deterministic, never wrong, so it may run on a clock. The SWEEP is an
     INFERENCE, so it costs money, holds a licence, and runs ONCE per dead session.
 
     A cron that detects is not a crawl. A cron that mines is.
@@ -127,7 +126,7 @@ async def test_the_scope_defers_the_reaper_and_never_buries(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The adversary's scope, the reaper's half (task #37): a scoped-out ended session is
-    not detected — the per-tick BATCH is never spent outside the armed projects — and
+    not detected, the per-tick BATCH is never spent outside the armed projects, and
     because nothing ever marked it swept, WIDENING the scope hands it straight back to
     this detector. Scope DEFERS reading; it never buries a session."""
     d = tmp_path / "-home-x-code-mono"

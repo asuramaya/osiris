@@ -1,4 +1,4 @@
-"""src/ontology/labels.py — task #97 workstream 3 (ruling 52daab71). Pure functions,
+"""src/ontology/labels.py, task #97 workstream 3. Pure functions,
 no DB: resolve_label's three tiers (rule/chain/canonical) and disambiguate_labels'
 collision handling."""
 from __future__ import annotations
@@ -6,7 +6,7 @@ from __future__ import annotations
 from src.ontology.labels import LABEL_CHAIN, disambiguate_labels, resolve_label
 
 
-def test_label_chain_is_thoths_own_ordering() -> None:
+def test_label_chain_ordering() -> None:
     assert LABEL_CHAIN == ("name", "title", "summary", "statement", "surface", "handle")
 
 
@@ -20,7 +20,7 @@ def test_rule_tier_wins_when_declared_field_is_present() -> None:
 
 
 def test_rule_tier_falls_through_to_chain_when_declared_field_is_null_on_this_row() -> None:
-    # Agent's label_field is "handle" — an unclaimed agent has no handle yet, so this
+    # Agent's label_field is "handle", an unclaimed agent has no handle yet, so this
     # row must fall to the chain's own "name" (the composite "claude in osiris" string).
     r = resolve_label("Agent", {"name": "claude in osiris"}, "agent:abc123")
     assert r.label == "claude in osiris"
@@ -44,7 +44,7 @@ def test_chain_tier_picks_first_populated_property_in_order() -> None:
 
 
 def test_practice_resolves_via_statement_not_canonical() -> None:
-    # the exact reported bug: a Practice has none of name/title/summary — only
+    # the exact reported bug: a Practice has none of name/title/summary, only
     # statement/failure_prevented/surface. Without "statement" in the chain this
     # falls straight to the raw hash.
     r = resolve_label("Practice", {"statement": "measure it yourself, don't trust an "
@@ -87,8 +87,8 @@ def test_disambiguate_labels_passes_through_non_colliding() -> None:
 
 
 def test_disambiguate_labels_strips_common_prefix_on_collision() -> None:
-    # the live bug, Thoth's own cited example: three project rows all truncating to
-    # "/home/asuramaya/code/REPOS/c…" at a 28-char display width — the full labels
+    # the live bug, the cited example: three project rows all truncating to
+    # "/home/asuramaya/code/REPOS/c…" at a 28-char display width, the full labels
     # differ, but not until well past where a naive truncation already cut them off.
     items = [
         ("a", "/home/asuramaya/code/REPOS/coinbase-onchain", "repo:a"),
@@ -103,7 +103,7 @@ def test_disambiguate_labels_strips_common_prefix_on_collision() -> None:
 
 def test_disambiguate_labels_falls_back_to_canonical_suffix_on_genuine_duplicate() -> None:
     # identical labels AND identical canonicals-minus-suffix would still tie after
-    # stripping — never render two distinct objects as visually identical
+    # stripping, never render two distinct objects as visually identical
     items = [("a", "duplicate", "obj:aaaaaaaa"), ("b", "duplicate", "obj:bbbbbbbb")]
     out = disambiguate_labels(items)
     assert out["a"] == "duplicate (aaaaaaaa)"
@@ -130,7 +130,7 @@ def test_disambiguate_labels_truncates_long_solo_label_at_a_word_boundary() -> N
 
 
 def test_disambiguate_labels_one_label_is_prefix_of_another() -> None:
-    # narrow width forces the two to collide ("coinbase-v2"[:8] == "coinbase"[:8]) —
+    # narrow width forces the two to collide ("coinbase-v2"[:8] == "coinbase"[:8]) ,
     # the shorter label IS the common prefix -> shown unchanged; the longer one shows
     # only what it adds beyond that shared prefix
     items = [("a", "coinbase", "repo:a"), ("b", "coinbase-v2", "repo:b")]

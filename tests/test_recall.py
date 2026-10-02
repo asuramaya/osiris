@@ -1,4 +1,4 @@
-"""recall(ref) — the full, untruncated record for a Thread or Decision (thread d6ed2f17)."""
+"""recall(ref), the full, untruncated record for a Thread or Decision."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -18,7 +18,7 @@ from src.parsers.evidence import confidence_for
 NOW = datetime(2026, 8, 1, tzinfo=UTC)
 
 _LONG_SUMMARY = (
-    "A" * 200 + " — this summary is well past the 160-char cap task #60 applies in "
+    "A" * 200 + ", this summary is well past the 160-char cap task #60 applies in "
     "terse mode, and recall() must hand it back whole, not truncated."
 )
 
@@ -69,7 +69,7 @@ async def test_recall_auto_detects_a_decision_when_no_thread_matches(
 
 
 async def test_recall_respects_an_explicit_kind_hint(actions: Actions) -> None:
-    """A kind hint skips the OTHER type's query entirely — asking for kind='decision' on a
+    """A kind hint skips the OTHER type's query entirely, asking for kind='decision' on a
     ref that only matches a Thread must refuse, never silently fall through to it."""
     tid = await open_thread(actions, "only a thread has this exact phrase", source="agent:me")
 
@@ -99,14 +99,14 @@ async def test_recall_returns_the_object_canonical_and_short_id(actions: Actions
     out = await recall(actions.pool, str(tid)[:8])
 
     assert out["id"] == str(tid)[:8]
-    # the miner's canonical scheme (capture._canon): thread:<sha1(summary)[:12]> —
+    # the miner's canonical scheme (capture._canon): thread:<sha1(summary)[:12]>:
     # content-derived, independent of the object's own uuid `id`
     expected = "thread:" + hashlib.sha1(b"canonical check").hexdigest()[:12]
     assert out["canonical"] == expected
 
 
-# ═══════════ notes / addenda (Thoth DM 3278, thread 1f4dcc03) ═══════════
-# annotate_thread/amend_decision write via `_append_property_name` — before this fix,
+# ═══════════ notes / addenda ═══════════
+# annotate_thread/amend_decision write via `_append_property_name`, before this fix,
 # neither `note:%` nor `addendum:%` rows surfaced anywhere a reader would think to look.
 
 async def test_recall_folds_thread_notes_oldest_first(actions: Actions) -> None:
@@ -154,9 +154,9 @@ async def test_recall_decision_addenda_is_an_empty_list_not_an_absent_key(
     assert out["addenda"] == []
 
 
-# ═══════════ bears_on's own read-back (898840dc, Thoth msg 4828) ═══════════
+# ═══════════ bears_on's own read-back ═══════════
 # mint_bears_on() mints an `answers` edge from a Decision INTO a Thread without closing
-# it — before this fix, nothing ever read that edge back onto the thread's own surface.
+# it, before this fix, nothing ever read that edge back onto the thread's own surface.
 
 async def test_recall_surfaces_decisions_that_bear_on_a_thread_oldest_first(
     actions: Actions,
@@ -174,7 +174,7 @@ async def test_recall_surfaces_decisions_that_bear_on_a_thread_oldest_first(
 
     assert [b["id"] for b in out["bears_on_from"]] == [str(d1)[:8], str(d2)[:8]]
     assert out["bears_on_from"][0]["summary"] == "first finding that bears on it"
-    # the row itself must stay open — bears_on is cite-only, never a close, by construction
+    # the row itself must stay open, bears_on is cite-only, never a close, by construction
     assert out["status"] == "open"
 
 
@@ -189,7 +189,7 @@ async def test_recall_bears_on_from_is_an_empty_list_not_an_absent_key(
 async def test_recall_bears_on_from_excludes_a_retracted_answers_edge(
     actions: Actions,
 ) -> None:
-    """A live edge only — an unmerge/retraction of the citing Decision must not go on
+    """A live edge only, an unmerge/retraction of the citing Decision must not go on
     claiming it still speaks to this row."""
     tid = await open_thread(actions, "a row whose citation gets retracted", source="agent:me")
     d1 = await record_decision(actions, "a finding later retracted", kind="ruling",
@@ -208,7 +208,7 @@ async def test_recall_addendum_observed_at_survives_real_json_serialization(
 ) -> None:
     """THE ACTUAL RISK: decision_addenda/thread_notes return a raw asyncpg datetime, and
     every other datetime bound for the MCP wire in this codebase is stringified at its own
-    call site (no blanket encoder — mcp_server.py has none). json.dumps must not raise."""
+    call site (no blanket encoder, mcp_server.py has none). json.dumps must not raise."""
     import json
 
     did = await record_decision(actions, "json safety check", kind="ruling", source="agent:me")
@@ -224,7 +224,7 @@ async def test_recall_addendum_observed_at_survives_real_json_serialization(
 # doors()'s own wrapper test is the precedent: recall(), like doors(), needs no mounted
 # identity (a pure read), so the tool function is called directly with only srv._pool swapped.
 
-# ═══════════ legacy_task_ref lookup (msg 4429's acceptance test: "#150" must resolve) ══
+# ═══════════ legacy_task_ref lookup (acceptance: "#150" must resolve) ══
 
 async def _stamp_legacy_ref(actions: Actions, oid, task_id: str, store: str) -> None:
     conf = confidence_for(EvidenceClass.SELF_DECLARED)
@@ -275,7 +275,7 @@ async def test_recall_refuses_a_legacy_task_id_present_in_two_stores(
 async def test_recall_falls_through_to_the_ordinary_ladder_when_no_legacy_ref_matches(
     actions: Actions,
 ) -> None:
-    # "#999" never migrated, but a Thread's own summary happens to quote it — unchanged,
+    # "#999" never migrated, but a Thread's own summary happens to quote it, unchanged,
     # pre-existing substring-match behavior must still work.
     await open_thread(actions, "still waiting on #999 to land", source="agent:me")
 

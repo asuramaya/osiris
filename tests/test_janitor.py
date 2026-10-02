@@ -1,10 +1,10 @@
-"""THE MINER CLEANS UP AFTER ITSELF — and the BOUNDARIES are the whole design.
+"""THE MINER CLEANS UP AFTER ITSELF, and the BOUNDARIES are the whole design.
 
 The operator, 2026-07-12: "the miner should not only shit out slop, it should also clean up and
 check and balance itself on the same pass so we don't end up with a noisy garbage graph."
 
 The fault was architectural: the miner was WRITE-ONLY. It emitted and never retracted, so every
-bug in it laid permanent sediment — 81% of the graph became machine inference, and 959 of 1059
+bug in it laid permanent sediment, 81% of the graph became machine inference, and 959 of 1059
 open threads were untouched guesses nobody had ever read. A memory that only accretes is a landfill.
 
 But a janitor is a dangerous thing to own, so what it MAY NOT touch is tested harder than what it
@@ -48,7 +48,7 @@ async def test_it_sweeps_what_it_mined_from_osiris_own_alarm_clock(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The trigger rings its own doorbell, the woken agent talks, and the miner files the echo as
-    something the fleet LEARNED. That was never knowledge — it was feedback."""
+    something the fleet LEARNED. That was never knowledge, it was feedback."""
     _transcript(tmp_path, "-x-demo", "wake111", "You have unread Osiris mail. Call mount(...)")
     t = await _mined(actions, "thread:from-wake", "a thought a wake session had",
                      "agent:wake111")
@@ -70,8 +70,8 @@ async def test_it_sweeps_what_it_plagiarised_from_a_diligent_author(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The ownership boundary said: backfill the SILENT, never second-guess the diligent. It never
-    once fired — it compared a session's transcript-derived id against the seat it actually writes
-    under — so the miner spent its life re-minting reworded copies of the very decisions its best
+    once fired, it compared a session's transcript-derived id against the seat it actually writes
+    under, so the miner spent its life re-minting reworded copies of the very decisions its best
     authors had already written by hand."""
     _transcript(tmp_path, "-x-demo", "abc12345", "fix the renderer please")
     await actions.pool.execute(
@@ -113,7 +113,7 @@ async def test_it_NEVER_touches_what_a_mind_touched(actions: Actions, tmp_path: 
 
 async def test_it_NEVER_touches_a_minds_own_declaration(actions: Actions, tmp_path: Path) -> None:
     """It may retract what the MINER wrote. A deliberate open_thread is a mind's word, and the
-    janitor has no standing over it — whatever its origin, whatever its age."""
+    janitor has no standing over it, whatever its origin, whatever its age."""
     _transcript(tmp_path, "-x-demo", "wake333", "You have unread Osiris mail. Call mount(...)")
     declared = await open_thread(actions, "a duty I declared myself", source="agent:wake333")
 
@@ -127,7 +127,7 @@ async def test_it_NEVER_touches_a_minds_own_declaration(actions: Actions, tmp_pa
 
 async def test_it_NEVER_sweeps_on_suspicion(actions: Actions, tmp_path: Path) -> None:
     """LEXICAL SIMILARITY MAY ASK, BUT MUST NEVER ASSERT (e27f7c3). A miner row from an ORDINARY
-    session — one that does not document itself, and that Osiris did not spawn — is exactly the
+    session, one that does not document itself, and that Osiris did not spawn, is exactly the
     backfill the miner exists to provide. Stale is not a crime. Unread is not a crime. A janitor
     that throws away what it merely suspects is worse than the mess it was cleaning."""
     _transcript(tmp_path, "-x-demo", "quiet77", "just a normal conversation")
@@ -159,7 +159,7 @@ async def test_a_retraction_is_a_compensating_event_never_a_delete(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """Invariant 3: heal with compensating events, NEVER DELETE. The row stays readable, auditable
-    and reversible forever — the lens stops hauling it; the record never forgets we swept it."""
+    and reversible forever, the lens stops hauling it; the record never forgets we swept it."""
     _transcript(tmp_path, "-x-demo", "wake555", "You have unread Osiris mail. Call mount(...)")
     t = await _mined(actions, "thread:gone", "swept, but not erased", "agent:wake555")
     await janitor_pass(actions, root=tmp_path, dry_run=False)
@@ -170,14 +170,14 @@ async def test_a_retraction_is_a_compensating_event_never_a_delete(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='summary' LIMIT 1", t)
     assert summary == "swept, but not erased"
-    # and the sweep is IDEMPOTENT — a second pass does not re-retract what it already swept
+    # and the sweep is IDEMPOTENT, a second pass does not re-retract what it already swept
     rep2 = await janitor_pass(actions, root=tmp_path, dry_run=False)
     assert rep2["candidates"] == 0
 
 
 def test_a_mention_of_the_wake_prompt_is_not_a_wake_spawn(tmp_path: Path) -> None:
     """The fingerprint is the FIRST TURN, never a mention. This very session has quoted the wake
-    prompt at length while diagnosing it — and its work is real."""
+    prompt at length while diagnosing it, and its work is real."""
     _transcript(tmp_path, "-x-demo", "spawn", "You have unread Osiris mail. Call mount(...)")
     _transcript(tmp_path, "-x-demo", "about",
                 "why does the wake prompt say 'You have unread Osiris mail'?")

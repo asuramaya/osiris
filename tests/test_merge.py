@@ -1,14 +1,14 @@
-"""MERGE / UNMERGE — the collapsed, symmetric pair (ruling 31c02dca) that replaces
+"""MERGE / UNMERGE, the collapsed, symmetric pair that replaces
 fold_agent + fold_seat + fold_project (the three dupe/into/evidence merges) and
 unfold_agent (their one, Agent-only reversal). These tests witness the DISPATCH layer
-only — self-typing routing by `dupe`'s own form, the one new cross-type refusal this
-collapse introduces, and the PARITY acceptance test the operator's own ruling names by
+only, self-typing routing by `dupe`'s own form, the one new cross-type refusal this
+collapse introduces, and the PARITY acceptance test the ruling names by
 name ("a test that enumerates every type merge() accepts and asserts unmerge() accepts
 the same set, so the asymmetry cannot silently return"). Each type's own refusal surface
 (thin evidence, dupe==into, unknown/already-folded labels, contradiction gates, the
 holder-liveness contradiction, the actor gate) is already fully covered where that type's
 own fold_X/unfold_X lives (test_folds.py, the fold_seat/unfold_seat section of
-test_seats.py, the fold_project/unfold_project section of test_projects.py) — not
+test_seats.py, the fold_project/unfold_project section of test_projects.py), not
 re-proven here.
 """
 from __future__ import annotations
@@ -94,7 +94,7 @@ async def test_merge_routes_a_bare_project_pair_to_fold_project(actions: Actions
 
 
 async def test_merge_refuses_a_cross_type_pairing(actions: Actions) -> None:
-    """The one refusal this collapse itself introduces — never reachable through any of
+    """The one refusal this collapse itself introduces, never reachable through any of
     the three original verbs, because none of them could ever be dialed with a foreign
     type's ref (fold_agent only ever queried type='Agent', and so on)."""
     await _mk_agent(actions, "agent:mg4dupe0")
@@ -141,16 +141,16 @@ async def test_unmerge_routes_a_project_dupe_to_unfold_project(actions: Actions)
     assert any(p["op"] == "unmerge_objects" for p in out["plan"])
 
 
-# ═══ THE PARITY ACCEPTANCE TEST (the operator's own ruling, 31c02dca, verbatim: "a test
+# ═══ THE PARITY ACCEPTANCE TEST (the ruling, verbatim: "a test
 # that enumerates every type merge() accepts and asserts unmerge() accepts the same set,
 # so the asymmetry cannot silently return") ═══
 
 
 async def test_merge_and_unmerge_accept_the_same_set_of_types(actions: Actions) -> None:
-    """Before this build, `unfold_agent` was the ONLY reversal — a fold of a Seat or a
+    """Before this build, `unfold_agent` was the ONLY reversal, a fold of a Seat or a
     SoftwareProject was permanent (task #127). This proves the parity directly: for every
     type merge() successfully folds, unmerge() on the SAME dupe also succeeds (returns a
-    real plan, never an 'unsupported type' refusal) — the asymmetry this ruling exists to
+    real plan, never an 'unsupported type' refusal), the asymmetry this ruling exists to
     close cannot silently return."""
     fixtures: dict[str, tuple[str, str, Any]] = {}
 
@@ -181,15 +181,15 @@ async def test_merge_and_unmerge_accept_the_same_set_of_types(actions: Actions) 
         unmerge_out = await unmerge(actions, dupe=dupe, because="parity check",
                                     actor="agent:judge")
         assert "error" not in unmerge_out, (
-            f"{type_name}: merge() accepted this type but unmerge() refused it — "
-            f"the exact asymmetry 31c02dca exists to close: {unmerge_out}")
+            f"{type_name}: merge() accepted this type but unmerge() refused it: "
+            f"the exact asymmetry this ruling exists to close: {unmerge_out}")
         assert any(p["op"] == "unmerge_objects" for p in unmerge_out["plan"])
         unmerge_doors.add(type_name)
 
     assert merged_types == unmerge_doors == {"Agent", "Seat", "SoftwareProject"}
 
 
-# ═══ the MCP tool layer — merge/unmerge must survive exposure through the tool wrapper ═══
+# ═══ the MCP tool layer, merge/unmerge must survive exposure through the tool wrapper ═══
 
 
 class _Ctx:
@@ -259,7 +259,7 @@ async def test_unmerge_tool_reaches_unfold_seat_through_the_wrapper(actions: Act
     assert out["was_merged_into"] == "seat:umt1into"
 
 
-# ═══ reconcile_merge (#127's repair door, dispatch layer only — each type's own
+# ═══ reconcile_merge (#127's repair door, dispatch layer only, each type's own
 # refusal surface is proven in test_folds.py/test_seats.py/test_projects.py) ═══
 
 
@@ -313,7 +313,7 @@ async def test_reconcile_merge_refuses_a_cross_type_pairing(actions: Actions) ->
 
 async def test_reconcile_merge_agent_branch_is_actor_gated(actions: Actions) -> None:
     """The one asymmetry this repair door deliberately keeps: the Agent branch is gated
-    like fold_agent/merge (962579a6), Seat/Project stay open — proven at the dispatch
+    like fold_agent/merge, Seat/Project stay open, proven at the dispatch
     layer since this is the door callers actually reach."""
     await _mk_agent(actions, "agent:rm5dupe0")
     await _mk_agent(actions, "agent:rm5into0")
