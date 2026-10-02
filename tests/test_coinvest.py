@@ -49,7 +49,7 @@ async def test_coinvestment_filters_admin_platform_by_name(actions: Actions) -> 
     dentist = await actions.create_or_find_object("Organization", "company:dentist", "edgar")
     await actions.assert_property(dentist, "name", "Dentologie", "edgar", NOW, 0.85)
 
-    # a fund-admin platform (Sydecar) signs SPVs for BOTH — must NOT count as a tie
+    # a fund-admin platform (Sydecar) signs SPVs for BOTH, must NOT count as a tie
     await _spv(actions, "org:p1", "sec-person:LLC Sydecar", target)
     await _spv(actions, "org:p2", "sec-person:LLC Sydecar", dentist)
 

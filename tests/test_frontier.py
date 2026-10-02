@@ -34,7 +34,7 @@ async def _seed(actions: Actions, cid: uuid.UUID, type_: str, canon: str) -> uui
 
 
 async def _child(actions: Actions, cid: uuid.UUID, type_: str, canon: str) -> uuid.UUID:
-    """A cascade-created object (hop_distance >= 1, i.e. not the seed) — the frontier
+    """A cascade-created object (hop_distance >= 1, i.e. not the seed), the frontier
     judges it by its inbound links."""
     oid = await actions.create_or_find_object(type_, canon, "helper", cid)
     await actions.pool.execute(
@@ -153,7 +153,7 @@ async def test_fire_triggers_crawls_anchor_skips_speculative_leaf(
 ) -> None:
     cid = uuid.UUID(case_id)
     # ON CONFLICT DO NOTHING (migration 0068's own unique constraint on helper_id):
-    # this is a test-setup convenience, not the real projection — a second call
+    # this is a test-setup convenience, not the real projection, a second call
     # inserting the same helper_id must never fail the test over an irrelevant detail.
     await actions.pool.execute(
         "INSERT INTO triggers (on_event, match, helper_id, enabled) "

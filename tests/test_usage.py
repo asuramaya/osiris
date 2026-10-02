@@ -1,4 +1,4 @@
-"""LLM usage telemetry — parse the provider envelopes, record + summarize per-call spend."""
+"""LLM usage telemetry: parse the provider envelopes, record + summarize per-call spend."""
 from __future__ import annotations
 
 from src.actions.core import Actions

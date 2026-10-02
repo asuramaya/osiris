@@ -1,4 +1,4 @@
-"""The sourced-dossier Markdown report — every claim carries its provenance."""
+"""The sourced-dossier Markdown report: every claim carries its provenance."""
 from __future__ import annotations
 
 from datetime import UTC, datetime

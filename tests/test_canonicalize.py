@@ -14,7 +14,7 @@ def test_email_canonicalization() -> None:
 
 
 def test_email_preserves_dots_and_subaddressing() -> None:
-    # dots and +subaddressing are significant — never stripped, any provider.
+    # dots and +subaddressing are significant; never stripped, any provider.
     # Regression: sanitization used to mangle these (gmail dot-stripping included).
     assert canonicalize("Email", "First.Last+osint@Corp.COM") == "first.last+osint@corp.com"
     assert canonicalize("Email", "priya.kowalski42@gmail.com") == "priya.kowalski42@gmail.com"

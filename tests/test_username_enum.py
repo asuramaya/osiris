@@ -1,4 +1,4 @@
-"""_probe's tri-state (60bc15db, specimen #6 of decision 01e0c69a): a network fault and a
+"""_probe's tri-state (a past specimen): a network fault and a
 confirmed-absent user must not collapse into the same bare None."""
 
 from __future__ import annotations
@@ -99,7 +99,7 @@ async def test_enumerate_username_never_folds_inconclusive_into_absent(
 async def test_enumerate_username_carries_an_empty_inconclusive_list_when_all_resolved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # NEVER omitted, even when empty -- an omitted key here is the exact 60bc15db shape
+    # NEVER omitted, even when empty -- an omitted key here is the exact old shape
     # this fix removes: "nothing inconclusive" and "never checked" must not look alike.
     async def fake_probe(client: Any, site: dict[str, Any], username: str) -> Any:
         return {"platform": site["platform"], "status": "absent", "url": None,

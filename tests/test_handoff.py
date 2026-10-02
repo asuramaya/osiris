@@ -34,7 +34,7 @@ async def _make_case(actions: Actions, budgets: dict) -> uuid.UUID:
         budgets,
     )
     # ON CONFLICT DO NOTHING (migration 0068's own unique constraint on helper_id):
-    # this is a test-setup convenience, not the real projection — a second call
+    # this is a test-setup convenience, not the real projection, a second call
     # inserting the same helper_id must never fail the test over an irrelevant detail.
     await actions.pool.execute(
         "INSERT INTO triggers (on_event, match, helper_id, enabled) "
@@ -167,7 +167,7 @@ async def test_challenge_mid_fetch_suspends(
     actions: Actions, redis_client: aioredis.Redis
 ) -> None:
     """An open-tier helper whose connector hits a wall suspends to a handoff
-    (we never solve/evade) — proven without a gated manifest."""
+    (we never solve/evade), proven without a gated manifest."""
     open_manifest = Manifest.model_validate(
         {
             "id": "telegram_channel_profile",  # reuse the parser; pretend open tier

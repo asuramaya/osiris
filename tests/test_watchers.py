@@ -1,4 +1,4 @@
-"""Phase 3 — the broker PoC: a real source watcher driving the full watch loop.
+"""Phase 3, the broker PoC: a real source watcher driving the full watch loop.
 
 Proves the loop on an easy, keyless source (new SEC Form D filings) with the network
 injected: schedule (tick) -> delta (only filings newer than the cursor) -> ingest
@@ -46,7 +46,7 @@ async def test_tick_ingests_filings_and_advances_cursor(actions: Actions) -> Non
 
 
 async def test_unchanged_feed_yields_no_news(actions: Actions) -> None:
-    """A re-poll of a feed with nothing newer than the cursor ingests nothing —
+    """A re-poll of a feed with nothing newer than the cursor ingests nothing:
     the watch is quiet when there is no news (no 3am false alert)."""
     feed = [_NEURALINK, _APPLE]
     watcher = make_form_d_watcher("form-d", fetch=_fetch_returning(feed))

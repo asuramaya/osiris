@@ -1,6 +1,6 @@
-"""The provenance sweep's own heartbeat sub-sweep (wave 15, mail 8840): every
-cardinality-1-mint-or-abstain orphan lane the wave built, re-applied unattended on
-classification_laws_heartbeat's own cadence -- "so a stranger's install self-heals."
+"""The provenance sweep's own heartbeat sub-sweep (own cadence): every
+cardinality-1-mint-or-abstain orphan lane, re-applied unattended on
+classification_laws_heartbeat's own cadence, so a stranger's install self-heals.
 """
 from __future__ import annotations
 

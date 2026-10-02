@@ -1,4 +1,4 @@
-"""Phase 7 — the hosting cut, as a verifiable topology.
+"""Phase 7: the hosting cut, as a verifiable topology.
 
 These aren't integration tests (the live multi-process bring-up is deploy/up.sh); they
 guard the deployment MANIFEST from rotting: the full compose must declare the rings as
@@ -59,7 +59,7 @@ def test_bringup_scripts_are_executable_and_present() -> None:
 
 
 def test_backup_and_restore_scripts_present() -> None:
-    """D4: the graph is the asset — a one-command backup + a tested restore ship with it."""
+    """D4: the graph is the asset: a one-command backup + a tested restore ship with it."""
     backup = _ROOT / "deploy" / "backup.sh"
     restore = _ROOT / "deploy" / "restore.sh"
     assert backup.exists() and restore.exists()

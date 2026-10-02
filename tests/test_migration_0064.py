@@ -231,7 +231,7 @@ async def test_plan_migration_0064_is_read_only(actions: Actions) -> None:
 async def test_apply_migration_0064_survives_concurrent_writes_during_the_run(
     actions: Actions,
 ) -> None:
-    """The exact false positive found live in production (wave 12): while the archiver
+    """The exact false positive found live in production: while the archiver
     is mid-run, the rest of the fleet keeps writing brand-new rows into assertions_hot
     via ordinary Actions.assert_property calls, completely unrelated to the migration.
     Real interleaving, not a simulation after the fact: apply_migration_0064 (batch_size

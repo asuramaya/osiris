@@ -1,4 +1,4 @@
-"""Wake GC — the victim classes are pure functions over a projects tree."""
+"""Wake GC: the victim classes are pure functions over a projects tree."""
 from __future__ import annotations
 
 import json
@@ -25,7 +25,7 @@ def _transcript(path: Path, *, spoke: bool, mtime: float = _OLD) -> Path:
 def test_extract_transcripts_are_victims_even_though_the_extractor_spoke(
         tmp_path: Path) -> None:
     """Every miner tick's `claude -p` call leaves a transcript nothing will ever read
-    (the miner refuses to mine its own instrument) — old ones are litter, ~145/day."""
+    (the miner refuses to mine its own instrument): old ones are litter, ~145/day."""
     litter = _transcript(tmp_path / "-home-x-osiris-extract" / "a.jsonl", spoke=True)
     fresh = _transcript(tmp_path / "-home-x-osiris-extract" / "b.jsonl",
                         spoke=True, mtime=time.time())
@@ -39,7 +39,7 @@ def test_extract_transcripts_are_victims_even_though_the_extractor_spoke(
 
 
 def test_subagent_transcripts_are_never_victims(tmp_path: Path) -> None:
-    """Sidechain trees live under <session>/subagents/ — they belong to their parent."""
+    """Sidechain trees live under <session>/subagents/ and belong belong to their parent."""
     _transcript(tmp_path / "-home-x-code-osiris" / "subagents" / "agent-1.jsonl",
                 spoke=False)
     zero_turn, extract = find_victims(tmp_path, time.time())

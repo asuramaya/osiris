@@ -1,4 +1,4 @@
-"""Memory profiling seam (thread e6fd3772 piece 2) — inert unless explicitly armed, so the
+"""Memory profiling seam: inert unless explicitly armed, so the
 two real production daemons never pay for it by accident.
 """
 from __future__ import annotations

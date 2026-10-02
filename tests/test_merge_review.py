@@ -1,4 +1,4 @@
-"""Merge review — resolve in place. The tray lists labelled candidate pairs (no raw
+"""Merge review: resolve in place. The tray lists labelled candidate pairs (no raw
 uuids), and an analyst confirms or rejects each through the Actions layer."""
 from __future__ import annotations
 

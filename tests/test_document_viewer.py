@@ -1,4 +1,4 @@
-"""The document-viewer primitive — a node's renderable CONTENT. A Reference/doc returns its
+"""The document-viewer primitive: a node's renderable CONTENT. A Reference/doc returns its
 markdown body; an object with no body returns kind=none; a missing object 404s. (The Commit
 git-show DIFF path needs a real repo, so it's proven live, not here.)
 """

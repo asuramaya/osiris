@@ -1,4 +1,4 @@
-"""THE INBOX's pure builders (task #71) — inbox.py's build_inbox() turns the SAME
+"""THE INBOX's pure builders: inbox.py's build_inbox() turns the SAME
 live-desk composition /live-desk already renders into a typed Block tree. These tests
 assert on the TREE, never on any HTML string (that's test_inbox_catalog.py's job)."""
 from __future__ import annotations
@@ -67,7 +67,7 @@ async def test_build_inbox_is_empty_on_a_clean_desk(actions: Actions) -> None:
 async def test_build_inbox_degrades_honestly_on_an_unseeded_composition(
     actions: Actions,
 ) -> None:
-    """A fresh/unseeded DB has no 'live-desk' composition saved — run_composition returns
+    """A fresh/unseeded DB has no 'live-desk' composition saved; run_composition returns
     {"error": ...}, not {"items": ...} (the same case /live-desk's own route already
     degrades gracefully on). Crashing here would be the exact KeyError this test pins
     against; the fix names the real reason rather than a misleading bare 'Inbox clear.'"""

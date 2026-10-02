@@ -1,6 +1,6 @@
 """The crawl×base edge for crypto: an OFAC-listed wallet and an on-chain trace of the
 same address fuse into ONE object (shared canonical), so screening a traced address
-surfaces a sanctioned counterparty + the named holder behind it — no merge required.
+surfaces a sanctioned counterparty + the named holder behind it; no merge required.
 """
 from __future__ import annotations
 
