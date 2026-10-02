@@ -1360,3 +1360,138 @@ def test_the_apps_cache_persists_to_the_configured_file() -> None:
     from src.orchestrator.graph_stream import snapshot_file_path
 
     assert snapshot_file_path().name == "graph_snapshot.bin"
+
+# --- THE IN-FLIGHT GAP: a row committed after the watermark was read is still delivered --------
+
+_HELD_INSERT = ("INSERT INTO outbox (event_type, object_id, payload) "
+                "VALUES ('object_created', $1, '{}'::jsonb)")
+
+
+async def test_a_writer_held_open_across_the_watermark_read_is_still_delivered(
+    actions: Actions,
+) -> None:
+    """The row is inserted (id taken) but not committed; a later row commits and the watermark
+    is read; then the held row commits. Its id is BELOW the tip the watermark would have been
+    with a bare max(id), so a cursor there skipped it for good."""
+    from src.orchestrator.graph_stream import safe_outbox_ceiling
+
+    held_obj = await actions.create_or_find_object("Thread", "thread:gs-held", "test")
+    later_obj = await actions.create_or_find_object("Thread", "thread:gs-later", "test")
+    _, start = await deltas_since(actions.pool, 0)
+
+    async with actions.pool.acquire() as writer:
+        tx = writer.transaction()
+        await tx.start()
+        await writer.execute(_HELD_INSERT, held_obj)  # id taken, not committed
+        await actions.pool.execute(_HELD_INSERT, later_obj)  # a higher id, committed
+        ceiling, tip = await safe_outbox_ceiling(actions.pool, start)
+        assert ceiling < tip  # the cursor may not pass the missing id
+        watermark = await outbox_watermark(actions.pool)
+        assert watermark < tip
+        await tx.commit()
+
+    deltas, _ = await deltas_since(actions.pool, watermark)
+    ids = {d["id"] for d in deltas}
+    assert str(held_obj) in ids
+    assert str(later_obj) in ids
+
+
+async def test_a_delta_stream_waits_at_the_missing_id_then_goes_on_when_it_commits(
+    actions: Actions,
+) -> None:
+    held_obj = await actions.create_or_find_object("Thread", "thread:gs-held2", "test")
+    later_obj = await actions.create_or_find_object("Thread", "thread:gs-later2", "test")
+    _, cursor = await deltas_since(actions.pool, 0)
+
+    async with actions.pool.acquire() as writer:
+        tx = writer.transaction()
+        await tx.start()
+        await writer.execute(_HELD_INSERT, held_obj)
+        await actions.pool.execute(_HELD_INSERT, later_obj)
+        waiting, cursor_mid = await deltas_since(actions.pool, cursor)
+        assert str(later_obj) not in {d["id"] for d in waiting}  # held back behind the gap
+        await tx.commit()
+
+    deltas, _ = await deltas_since(actions.pool, cursor_mid)
+    assert {str(held_obj), str(later_obj)} <= {d["id"] for d in deltas}
+
+
+async def test_no_transaction_in_flight_means_the_ceiling_is_the_tip(actions: Actions) -> None:
+    from src.orchestrator.graph_stream import safe_outbox_ceiling
+
+    await actions.create_or_find_object("Thread", "thread:gs-quiet", "test")
+    ceiling, tip = await safe_outbox_ceiling(actions.pool)
+    assert ceiling == tip
+
+
+async def test_a_stream_that_goes_past_a_gap_without_the_row_logs_the_missing_id(
+    actions: Actions, caplog: pytest.LogCaptureFixture,
+) -> None:
+    from src.orchestrator.graph_stream import GapWatch
+
+    held_obj = await actions.create_or_find_object("Thread", "thread:gs-held3", "test")
+    later_obj = await actions.create_or_find_object("Thread", "thread:gs-later3", "test")
+    _, cursor = await deltas_since(actions.pool, 0)
+    watch = GapWatch()
+
+    async with actions.pool.acquire() as writer:
+        tx = writer.transaction()
+        await tx.start()
+        await writer.execute(_HELD_INSERT, held_obj)
+        await actions.pool.execute(_HELD_INSERT, later_obj)
+        await deltas_since(actions.pool, cursor, gap_watch=watch)  # held at the gap
+        assert watch.held_at is not None
+        missing = watch.held_at
+        # the row above the gap ages past the bound while the transaction is still open
+        await actions.pool.execute(
+            "UPDATE outbox SET created_at = now() - interval '5 minutes' WHERE id > $1", missing)
+        with caplog.at_level("WARNING", logger="src.orchestrator.graph_stream"):
+            await deltas_since(actions.pool, cursor, gap_watch=watch)
+        await tx.rollback()
+
+    assert any(f"outbox id {missing}" in r.getMessage() for r in caplog.records)
+
+
+async def test_a_row_that_commits_during_the_hold_logs_nothing(
+    actions: Actions, caplog: pytest.LogCaptureFixture,
+) -> None:
+    from src.orchestrator.graph_stream import GapWatch
+
+    held_obj = await actions.create_or_find_object("Thread", "thread:gs-held4", "test")
+    later_obj = await actions.create_or_find_object("Thread", "thread:gs-later4", "test")
+    _, cursor = await deltas_since(actions.pool, 0)
+    watch = GapWatch()
+
+    async with actions.pool.acquire() as writer:
+        tx = writer.transaction()
+        await tx.start()
+        await writer.execute(_HELD_INSERT, held_obj)
+        await actions.pool.execute(_HELD_INSERT, later_obj)
+        await deltas_since(actions.pool, cursor, gap_watch=watch)
+        await tx.commit()
+
+    with caplog.at_level("WARNING", logger="src.orchestrator.graph_stream"):
+        await deltas_since(actions.pool, cursor, gap_watch=watch)
+    assert not [r for r in caplog.records if "went past outbox id" in r.getMessage()]
+
+
+def test_the_snapshot_file_is_private_to_the_owner_in_a_private_directory(
+    tmp_path: Path,
+) -> None:
+    from src.orchestrator.graph_stream import _write_snapshot_file
+
+    directory = tmp_path / "state" / "osiris"
+    directory.parent.mkdir()
+    directory.parent.chmod(0o755)
+    (directory.parent / "keep").write_text("x")
+    path = directory / "graph_snapshot.bin"
+    leftover = directory / "graph_snapshot.bin.tmp"
+    directory.mkdir(mode=0o755)
+    leftover.write_bytes(b"old")
+    leftover.chmod(0o644)  # an older run left looser bits behind
+
+    _write_snapshot_file(path, b"names and summaries")
+
+    assert oct(path.stat().st_mode & 0o777) == "0o600"
+    assert oct(directory.stat().st_mode & 0o777) == "0o700"
+    assert path.read_bytes() == b"names and summaries"

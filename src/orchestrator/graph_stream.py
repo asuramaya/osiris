@@ -535,6 +535,43 @@ async def _agent_identity_labels(
     return out
 
 
+# THE IN-FLIGHT GAP: outbox ids are handed out at insert time but become visible at COMMIT, so a
+# bare max(id) can be larger than a row still uncommitted in another transaction; a cursor set
+# there skips that row for good once it commits. `safe_outbox_ceiling` returns the highest id
+# below which nothing can still appear: the visible tip when no transaction is in flight, else
+# one before the first id missing from the recent window (a missing id is an uncommitted row or a
+# rolled-back one; the two cannot be told apart, so the cursor waits at it). The wait is bounded:
+# a gap only counts while the row just above it is younger than `STALL_SECONDS`, so a rolled-back
+# id stops holding anything back after that long, and a transaction that stays open longer than
+# that is the one case this does not cover. Ids below the oldest surviving row (retention) never
+# count. One statement, so the in-flight check and the rows it judges share a snapshot.
+GAP_WINDOW = 5000
+STALL_SECONDS = 30.0
+
+
+async def safe_outbox_ceiling(pool: asyncpg.Pool, after: int | None = None) -> tuple[int, int]:
+    """`(ceiling, tip)`: `tip` is the highest visible outbox id, `ceiling` the highest id
+    that is safe to advance a cursor to (equal to `tip` unless a lower id is still missing
+    while a transaction is in flight). Looks for gaps above `after`, or in the last
+    `GAP_WINDOW` ids when `after` is None."""
+    row = await pool.fetchrow(
+        "SELECT t.tip, t.busy, "
+        "  (SELECT min(g) FROM generate_series("
+        "     GREATEST(COALESCE($1::bigint, 0), t.tip - $2::bigint, t.oldest) + 1, t.tip) g "
+        "   WHERE NOT EXISTS (SELECT 1 FROM outbox o WHERE o.id = g) "
+        "     AND (SELECT o2.created_at FROM outbox o2 WHERE o2.id > g ORDER BY o2.id LIMIT 1) "
+        "         >= now() - make_interval(secs => $3::float8)) AS first_gap "
+        "FROM (SELECT COALESCE((SELECT max(id) FROM outbox), 0) AS tip, "
+        "             COALESCE((SELECT min(id) FROM outbox), 0) AS oldest, "
+        "             pg_snapshot_xmin(pg_current_snapshot()) "
+        "               <> pg_snapshot_xmax(pg_current_snapshot()) AS busy) t",
+        after, GAP_WINDOW, STALL_SECONDS)
+    tip = int(row["tip"])
+    if row["busy"] and row["first_gap"] is not None:
+        return int(row["first_gap"]) - 1, tip
+    return tip, tip
+
+
 async def fetch_snapshot(pool: asyncpg.Pool) -> bytes:
     """The live query: every already-placed object's position/type/project/weight/
     status, plus every live edge between two objects both in that set, encoded via
@@ -549,7 +586,7 @@ async def fetch_snapshot(pool: asyncpg.Pool) -> bytes:
     "already in the snapshot" and "cursor starts after it." The one-sided risk this
     ordering accepts is a rare harmless replay (the client re-applies a delta whose
     effect the snapshot already carried), never a silent drop."""
-    watermark = int(await pool.fetchval("SELECT COALESCE(max(id), 0) FROM outbox"))
+    watermark, _ = await safe_outbox_ceiling(pool)
     rows = await pool.fetch(
         "SELECT o.id, o.type, o.canonical, o.created_at, "
         "  (SELECT (a.value #>> '{}')::float8 FROM current_assertions a "
@@ -792,7 +829,7 @@ async def outbox_watermark(pool: asyncpg.Pool) -> int:
     to `/graph/stream/deltas` with no cursor of its own. Resolve to
     this, never 0, so a fresh connection with no prior snapshot starts listening from
     now instead of replaying the whole outbox."""
-    return int(await pool.fetchval("SELECT COALESCE(max(id), 0) FROM outbox"))
+    return (await safe_outbox_ceiling(pool))[0]
 
 
 async def resolve_deltas_start_cursor(
@@ -824,8 +861,33 @@ async def resolve_deltas_start_cursor(
 _DELTAS_PAGE_LIMIT = 500
 
 
+class GapWatch:
+    """Per delta stream: remembers the outbox id the stream was held at (see
+    `safe_outbox_ceiling`) and, once the stream goes past it, says whether that row ever
+    arrived. A row that never shows up after the hold ended is the one case the bounded wait
+    does not cover (a transaction open longer than `STALL_SECONDS`), or a rolled-back id; one
+    warning names the id so a skipped row can be found."""
+
+    def __init__(self) -> None:
+        self.held_at: int | None = None
+
+    async def observe(self, pool: asyncpg.Pool, ceiling: int, tip: int) -> None:
+        if ceiling < tip:
+            self.held_at = ceiling + 1
+            return
+        gap, self.held_at = self.held_at, None
+        if gap is not None and not await pool.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM outbox WHERE id = $1)", gap):
+            _log.warning(
+                "delta stream went past outbox id %s, which had not appeared when the hold on "
+                "it ended: that insert was rolled back, or its transaction stayed open past "
+                "%.0f s and the row, if it commits later, is not delivered to this stream",
+                gap, STALL_SECONDS)
+
+
 async def deltas_since(
     pool: asyncpg.Pool, cursor: int, *, limit: int = _DELTAS_PAGE_LIMIT,
+    gap_watch: GapWatch | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Poll the outbox table for graph-relevant events past `cursor` (an outbox id):
     the same poll-and-diff idiom /cases/{id}/stream, /console/stream and /pane/{id}/
@@ -847,11 +909,14 @@ async def deltas_since(
     joins the type list here for exactly this reason and needs no new branch below --
     every type other than 'object_merged' already resolves to op='moved' and gets the
     same graph_x/graph_y join, which is exactly what a freshly-positioned object needs."""
+    ceiling, tip = await safe_outbox_ceiling(pool, cursor)
+    if gap_watch is not None:
+        await gap_watch.observe(pool, ceiling, tip)
     rows = await pool.fetch(
         "WITH raw AS ("
         "  SELECT o.id AS outbox_id, o.object_id, o.event_type "
         "  FROM outbox o "
-        "  WHERE o.id > $1 AND o.event_type IN "
+        "  WHERE o.id > $1 AND o.id <= $3 AND o.event_type IN "
         "    ('object_created','property_added','object_merged','layout_moved') "
         "    AND o.object_id IS NOT NULL "
         "  ORDER BY o.id ASC "
@@ -865,7 +930,7 @@ async def deltas_since(
         "LEFT JOIN current_assertions gx ON gx.object_id=r.object_id AND gx.name='graph_x' "
         "LEFT JOIN current_assertions gy ON gy.object_id=r.object_id AND gy.name='graph_y' "
         "ORDER BY r.object_id, r.outbox_id DESC",
-        cursor, limit)
+        cursor, limit, ceiling)
     if not rows:
         return [], cursor
     new_cursor = max(int(r["page_max"]) for r in rows)
@@ -911,9 +976,14 @@ def snapshot_file_path() -> Path:
 
 
 def _write_snapshot_file(path: Path, data: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # the file holds every object's name and summary: private to the owner, in a private directory
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_bytes(data)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(data)
+    tmp.chmod(0o600)  # a leftover .tmp from an older run may carry looser bits
     tmp.replace(path)
 
 
