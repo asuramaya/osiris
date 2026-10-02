@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator import capture
 from src.orchestrator.capture import open_thread, record_decision, resolve_thread
@@ -26,6 +27,26 @@ from src.orchestrator.settle import (
 
 def _git(cwd: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True)
+
+
+# The product's git-status timeout is 2 s: right for a live seat, wrong for a test on a
+# machine at load average 30, where the honest "could not evaluate" (None) fired and the
+# assertions on the file list failed. Tests wait this long instead; the default is untouched.
+_PATIENT_S = 60.0
+
+
+@pytest.fixture(autouse=True)
+def _patient_git_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    """settle() reaches uncommitted_git_work through its module at call time, so every
+    settle-tool test in this file gets the patient timeout without a per-test change."""
+    import src.orchestrator.settle as settle_mod
+
+    real = settle_mod.uncommitted_git_work
+
+    async def _patient(repo_dir: str | None, *, timeout_s: float = _PATIENT_S) -> list[str] | None:
+        return await real(repo_dir, timeout_s=timeout_s)
+
+    monkeypatch.setattr(settle_mod, "uncommitted_git_work", _patient)
 
 
 def test_standing_orders_touched_absent_file_cannot_be_evaluated(tmp_path: Path) -> None:
@@ -254,13 +275,13 @@ async def test_uncommitted_git_work_a_clean_repo_reports_empty(tmp_path: Path) -
     (tmp_path / "committed.txt").write_text("hi\n")
     _git(tmp_path, "add", "committed.txt")
     _git(tmp_path, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-m", "seed")
-    assert await uncommitted_git_work(str(tmp_path)) == []
+    assert await uncommitted_git_work(str(tmp_path), timeout_s=_PATIENT_S) == []
 
 
 async def test_uncommitted_git_work_names_the_dirty_files(tmp_path: Path) -> None:
     _git(tmp_path, "init")
     (tmp_path / "untracked.txt").write_text("new\n")
-    out = await uncommitted_git_work(str(tmp_path))
+    out = await uncommitted_git_work(str(tmp_path), timeout_s=_PATIENT_S)
     assert out is not None and any("untracked.txt" in line for line in out)
 
 

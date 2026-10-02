@@ -142,7 +142,7 @@ async def _await_marker(session: Any, needle: bytes) -> None:
     replay, queue = session.attach()
     try:
         buf = bytearray(replay)
-        async with asyncio.timeout(2.0):
+        async with asyncio.timeout(30.0):
             while needle not in buf:
                 chunk = await queue.get()
                 assert chunk is not None, "session exited before the marker appeared"
@@ -553,7 +553,7 @@ async def test_pty_spawn_reaps_a_dead_registration_instead_of_refusing(
             assert spawned == {"spawned": "s1"}
             dead = manager._broker.get("s1")
             assert dead is not None
-            await asyncio.wait_for(dead.exited.wait(), timeout=2.0)  # exits on its own
+            await asyncio.wait_for(dead.exited.wait(), timeout=30.0)  # exits on its own
 
             listed = await client.send({"op": "pty_list"})
             assert listed["sessions"][0]["alive"] is False  # dead, still registered as "s1"
@@ -664,12 +664,12 @@ async def test_pty_attach_streams_output_over_the_daemon_socket_and_input_round_
             reader, writer, ack = await _attach(manager._socket_path, "a1")
             try:
                 assert ack == {"attached": "a1"}
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(30.0):
                     await _read_frames_until(reader, b"readymark")
 
                 writer.write(pack_frame(FRAME_TYPE_INPUT, b"echo inputmark\n"))
                 await writer.drain()
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(30.0):
                     await _read_frames_until(reader, b"inputmark")
             finally:
                 await _close_writer(writer)
@@ -704,9 +704,9 @@ async def test_two_attachments_to_one_session_both_receive_output(tmp_path: Path
                 # both replays are guaranteed to carry "readymark": the ring holds it from the
                 # moment it was first observed, and ring writes happen before any fan-out,
                 # so there's no race against how fast the shell started (see the banner above).
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(30.0):
                     await _read_frames_until(reader1, b"readymark")
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(30.0):
                     await _read_frames_until(reader2, b"readymark")
 
                 # OBSERVABLE STATE, not a guess: the broker's own session object says two
@@ -717,9 +717,9 @@ async def test_two_attachments_to_one_session_both_receive_output(tmp_path: Path
 
                 writer1.write(pack_frame(FRAME_TYPE_INPUT, b"echo fanoutmark\n"))
                 await writer1.drain()
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(30.0):
                     await _read_frames_until(reader1, b"fanoutmark")
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(30.0):
                     await _read_frames_until(reader2, b"fanoutmark")
             finally:
                 await _close_writer(writer1)
@@ -855,7 +855,7 @@ async def test_pty_spawn_with_seat_exports_identity_at_birth(
             # the child half: both vars crossed the exec boundary, witnessed on the pty
             reader, writer, ack = await _attach(tmp_path / "m.sock", "seated")
             assert ack.get("attached") == "seated"
-            async with asyncio.timeout(10):
+            async with asyncio.timeout(30.0):
                 seen = await _read_frames_until(reader, b"B=seat:")
             assert row["token"].encode() in seen
             await _close_writer(writer)

@@ -27,7 +27,7 @@ async def test_a_slow_subsweep_is_bounded_by_its_own_budget_not_the_whole_tick(
     monkeypatch.setattr(arq_worker, "_SUBSWEEP_TIMEOUT_SECS", 0.05)
 
     async def _slow_ghost_sweep(actions: Actions) -> dict[str, object]:
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(60.0)
         return {"retired": [], "refused": []}
 
     monkeypatch.setattr(
@@ -40,7 +40,7 @@ async def test_a_slow_subsweep_is_bounded_by_its_own_budget_not_the_whole_tick(
     result = await arq_worker.classification_laws_heartbeat(ctx)
     elapsed = time.monotonic() - t0
 
-    assert elapsed < 1.0, f"took {elapsed:.2f}s — the slow sweep's own sleep was not bounded"
+    assert elapsed < 30.0, f"took {elapsed:.2f}s — the slow sweep's own sleep was not bounded"
     assert isinstance(result, int)
     assert any(
         "ghost_house" in r.getMessage() and "budget" in r.getMessage()

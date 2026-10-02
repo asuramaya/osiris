@@ -67,17 +67,27 @@ async def test_acquire_wait_stats_measures_real_contention(pg_dsn: str) -> None:
     include that hold time, not read as near-zero."""
     pool = await create_pool(pg_dsn, min_size=1, max_size=1)
     try:
-        release_event = asyncio.Event()
+        held = asyncio.Event()
+        let_go = asyncio.Event()
+        waiting = asyncio.Event()
 
         async def _hold() -> None:
             async with pool.acquire():
-                release_event.set()
-                await asyncio.sleep(0.2)
+                held.set()
+                await let_go.wait()
+
+        async def _contend() -> None:
+            waiting.set()  # no await between this and acquire()'s own start of timing
+            async with pool.acquire():
+                pass  # this acquire() had to wait behind _hold()'s own release
 
         holder = asyncio.create_task(_hold())
-        await release_event.wait()  # the holder now owns the pool's one connection
-        async with pool.acquire():
-            pass  # this acquire() had to wait behind _hold()'s own release
+        await held.wait()  # the holder now owns the pool's one connection
+        contender = asyncio.create_task(_contend())
+        await waiting.wait()
+        await asyncio.sleep(0.2)  # the hold lasts at least 200ms after the waiter began
+        let_go.set()
+        await contender
         await holder
         stats = pool_acquire_wait_stats(pool)
         assert stats["count"] == 2

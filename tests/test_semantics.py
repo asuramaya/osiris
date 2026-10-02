@@ -9,6 +9,7 @@ lexical search with nothing false said.
 """
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -63,12 +64,18 @@ async def fake_embedder() -> AsyncIterator[FakeEmbedder]:
 async def test_model2vec_embedder_embed_bounds_a_hung_load(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(semantics, "_LOAD_TIMEOUT_S", 0.05)
     embedder = semantics.Model2VecEmbedder("fake/hangs")
-    monkeypatch.setattr(embedder, "_load", lambda: time.sleep(2))
+    # a load that never returns on its own; released in `finally` so the thread can exit
+    release = threading.Event()
+    monkeypatch.setattr(embedder, "_load", lambda: release.wait(60))
 
     t0 = time.monotonic()
-    with pytest.raises(TimeoutError):
-        await embedder.embed(["anything"])
-    assert time.monotonic() - t0 < 1.0  # bounded near 0.05s, not the simulated 2s hang
+    try:
+        with pytest.raises(TimeoutError):
+            await embedder.embed(["anything"])
+        # the 0.05s timeout cut a load that would otherwise run 60s; 20s is only a hang guard
+        assert time.monotonic() - t0 < 20.0
+    finally:
+        release.set()
     assert embedder._load_failed is True
 
 

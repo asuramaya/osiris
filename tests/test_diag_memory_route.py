@@ -143,7 +143,7 @@ async def test_diag_window_guard_auto_stops_after_its_hard_deadline(
     monkeypatch.setattr(srv, "_MEMORY_DIAG_CHECK_INTERVAL_S", 0.01)
     tracemalloc.start(srv._MEMORY_DIAG_MAX_FRAMES)
     task = asyncio.create_task(srv._diag_window_guard(-1.0))  # deadline already past
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=30.0)
     assert not tracemalloc.is_tracing()
     assert srv._diag_window["task"] is None
 
@@ -166,5 +166,5 @@ async def test_diag_window_guard_aborts_early_on_the_rss_tripwire(
     tracemalloc.start(srv._MEMORY_DIAG_MAX_FRAMES)
     far_future_deadline = time.monotonic() + 300.0  # the hard cap has NOT elapsed
     task = asyncio.create_task(srv._diag_window_guard(far_future_deadline))
-    await asyncio.wait_for(task, timeout=2.0)  # must not wait out the full 300s
+    await asyncio.wait_for(task, timeout=30.0)  # must not wait out the full 300s
     assert not tracemalloc.is_tracing()

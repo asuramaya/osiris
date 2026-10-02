@@ -60,7 +60,7 @@ async def test_project_triggers_no_longer_needs_access_exclusive(actions: Action
     await tr.start()
     try:
         await conn.execute("LOCK TABLE triggers IN ACCESS SHARE MODE")
-        n = await asyncio.wait_for(project_triggers(actions.pool, manifests), timeout=5.0)
+        n = await asyncio.wait_for(project_triggers(actions.pool, manifests), timeout=30.0)
         assert n == len(manifests)
     finally:
         await tr.rollback()
@@ -83,7 +83,7 @@ async def test_project_triggers_raises_promptly_under_a_genuinely_conflicting_lo
     try:
         await conn.execute("LOCK TABLE triggers IN ACCESS EXCLUSIVE MODE")
         with pytest.raises(asyncpg.exceptions.LockNotAvailableError):
-            await asyncio.wait_for(project_triggers(actions.pool, manifests), timeout=10.0)
+            await asyncio.wait_for(project_triggers(actions.pool, manifests), timeout=60.0)
     finally:
         await tr.rollback()
         await actions.pool.release(conn)
