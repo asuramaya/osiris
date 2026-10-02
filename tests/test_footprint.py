@@ -59,7 +59,7 @@ def test_url_to_account_recognizes_more_social_profiles() -> None:
 
 
 async def test_phone_enrichment_offline() -> None:
-    # libphonenumber metadata is fully offline/keyless — deterministic in tests
+    # libphonenumber metadata is fully offline/keyless: deterministic in tests
     io = _inp("Phone", "+14155552671")
     meta = await fetch_phone_meta(io)
     assert meta["valid"] is True

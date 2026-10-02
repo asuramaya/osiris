@@ -1,4 +1,4 @@
-"""The worker boot spike (thread 0c03a685): fifteen run_at_startup crons used to fire
+"""The worker boot spike: fifteen run_at_startup crons used to fire
 concurrently in the same ~3s window, racing for CPU/memory during the single costliest
 moment of the process's life. These tests prove the two new safety rails in isolation,
 without a real Postgres/Redis-backed CascadeContext: `watched()`'s boot-serialization
@@ -65,7 +65,7 @@ async def test_watched_runs_concurrently_past_the_boot_window() -> None:
 
 async def test_watched_with_no_boot_deadline_never_serializes() -> None:
     """A ctx that never went through startup() (no boot_serialize_until key at all)
-    must behave exactly like the past-deadline case — never blocked, never a KeyError."""
+    must behave exactly like the past-deadline case: never blocked, never a KeyError."""
     order: list[str] = []
 
     async def slow_job(ctx: dict[str, Any]) -> int:

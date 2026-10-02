@@ -48,7 +48,7 @@ async def test_cross_base_org_match_queues_candidate(actions: Actions) -> None:
 
 async def test_same_base_namesakes_not_matched(actions: Actions) -> None:
     # two orgs from the SAME base sharing a name are a within-base dup (the ingest's
-    # job), not a cross-base resolution — they must not be queued against each other.
+    # job), not a cross-base resolution: they must not be queued against each other.
     await _org(actions, "cik:1", "Tesla, Inc.", "edgar")
     await _org(actions, "cik:2", "Tesla Corp.", "edgar")
     assert await find_cross_base_candidates(actions.pool) == 0

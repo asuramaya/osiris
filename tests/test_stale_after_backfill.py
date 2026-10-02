@@ -1,4 +1,4 @@
-"""Migration 0058 (thread b0c5ddff, decision 0d863363 item 1): every existing OPEN
+"""Migration 0058 (stale_after backfill): every existing OPEN
 kind='obligation' Thread without a stale_after gains one, idempotently, mechanically --
 never a coordinator's hand pass. Exercises the exact SQL the migration ships (loaded from
 the migration file itself, never hand-copied) directly against the test pool, since

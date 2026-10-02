@@ -1,6 +1,6 @@
 """OrgBook BC ingest: BC corporate registry -> verified Organization nodes.
 
-Hermetic — the network is the `search_topics` seam; these drive the pure parser and the
+Hermetic: the network is the `search_topics` seam; these drive the pure parser and the
 materializer with a fixture topic (the real OrgBook response shape), never calling BC.
 """
 from __future__ import annotations

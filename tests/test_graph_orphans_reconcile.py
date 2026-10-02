@@ -1,4 +1,4 @@
-"""THE GRAPH VISUALIZER, WAVE B item 5 (operator dispatch, wave 15, thread 8839): orphans
+"""THE GRAPH VISUALIZER, item 5: orphans are
 distinct at every level with a count per supernode. Items 3/4 already built the field
 (compositions' own `_LIVE_LINK_COUNTS`-equivalent predicate, `orphans`, on every
 supernode/cluster) and its rendering; this is the acceptance proof itself --

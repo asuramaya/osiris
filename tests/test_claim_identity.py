@@ -1,7 +1,7 @@
-"""'This is me' — the developer unifies their own identity across repos.
+"""'This is me': the developer unifies their own identity across repos.
 
 The resolver catches dev Persons that share a name/handle, but a real name and a handle
-(priya ↔ asuramaya) share no deterministic key — that's a human assertion. The first
+(priya and asuramaya) share no deterministic key; that is a human assertion. The first
 claim designates a canonical `self`; a later claim merges that identity into it.
 """
 from __future__ import annotations

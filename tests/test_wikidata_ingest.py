@@ -40,7 +40,7 @@ async def test_enriches_stub_in_place_with_class(actions: Actions) -> None:
     assert counts["links"] == 2             # spouse + child
     assert counts["endpoints"] == 1         # Q3 stubbed (referenced, not in batch)
 
-    # the stub was enriched IN PLACE — same object id, no duplicate
+    # the stub was enriched IN PLACE: same object id, no duplicate
     same = await actions.create_or_find_object("Person", "Q1", "opensanctions")
     assert same == stub
     name = await actions.pool.fetchval(

@@ -1,4 +1,4 @@
-"""Atomic project ingest — one call brings a repo in WHOLE (history + files + decisions).
+"""Atomic project ingest: one call brings a repo in WHOLE (history + files + decisions).
 
 The dogfood finding this guards: gitlog / files / decisions were separate steps and a repo
 could land half-ingested (osiris had commits but 0 files). `ingest_project` composes all
@@ -39,7 +39,7 @@ async def test_ingest_project_brings_a_repo_in_whole(actions: Actions, tmp_path:
     assert res["decisions"]["decisions"] >= 1  # the "we chose" sentence
 
     p = actions.pool
-    # all three object kinds landed from ONE call — the atomic guarantee
+    # all three object kinds landed from ONE call: the atomic guarantee
     assert await p.fetchval("SELECT count(*) FROM objects WHERE type='Commit'") == 1
     assert await p.fetchval("SELECT count(*) FROM objects WHERE type='File'") >= 2
     assert await p.fetchval("SELECT count(*) FROM objects WHERE type='Decision'") >= 1

@@ -28,7 +28,7 @@ def test_extract_selectors_rejects_bare_words_and_short_runs() -> None:
 
 def test_extract_selectors_rejects_datelike_digit_runs() -> None:
     # the base->crawl yield run showed dates / year-ranges were the dominant phone
-    # noise (8 digits, often separated) — excised by requiring '+' or >=10 digits.
+    # noise (8 digits, often separated), excised by requiring '+' or >=10 digits.
     pairs = extract_selectors("© 2024 on 2026.06.24 and 2026-03-02 range 1989-1990")
     assert all(t != "Phone" for t, _ in pairs)
     # real phones still parse: an explicit country code, or a 10+ digit national number

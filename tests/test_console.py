@@ -1,4 +1,4 @@
-"""The shared console cursor — the substrate of real-time Claude↔front sync.
+"""The shared console cursor: the substrate of real-time Claude↔front sync.
 
 Both Claude (MCP) and the browser write here; `rev` + `updated_by` are what let each side
 follow the other without echoing its own move. These prove the write semantics the UI relies
@@ -38,7 +38,7 @@ async def test_set_console_rejects_unknown_field(actions: Actions) -> None:
 
 async def test_console_survives_a_wiped_singleton(actions: Actions) -> None:
     """The actions fixture TRUNCATE…CASCADE wipes the singleton (console_state references
-    objects); set_console upserts, so the cursor still works — get returns a coherent default
+    objects); set_console upserts, so the cursor still works, get returns a coherent default
     until the first write."""
     p = actions.pool
     base = await get_console(p)

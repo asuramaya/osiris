@@ -1,6 +1,6 @@
-"""THE OPERATOR CHARTER BACKFILL (thread 1d5b9773, "authority by charter"): mints a
+"""THE OPERATOR CHARTER BACKFILL: mints a
 `governs` link from `person:operator` to every active SoftwareProject it doesn't already
-govern — this is what makes "the single operator today is chartered over every project,
+govern. This is what makes "the single operator today is chartered over every project,
 so behaviour does not change" literally true.
 """
 from __future__ import annotations

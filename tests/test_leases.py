@@ -29,7 +29,7 @@ async def test_capture_get_roundtrip_and_encryption_at_rest(actions: Actions) ->
     assert lease.cookies[0]["value"] == "sekret"
     assert lease.ua == "UA/1.0"
     assert lease.bound_ip == "127.0.0.1"
-    # the blob at rest is ciphertext — plaintext cookie value never hits the DB
+    # the blob at rest is ciphertext: plaintext cookie value never hits the DB
     raw = await actions.pool.fetchval("SELECT cookie_blob FROM cookie_leases WHERE id=$1", lid)
     assert "sekret" not in str(raw)
 

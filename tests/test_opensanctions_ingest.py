@@ -19,9 +19,9 @@ _FTM = [
 
 async def test_ingest_ftm_loads_entities_and_relationships(actions: Actions) -> None:
     counts = await ingest_ftm(actions, _FTM)
-    assert counts["objects"] == 3  # P1, O1, P2 — relationship-entities are not nodes
+    assert counts["objects"] == 3  # P1, O1, P2; relationship-entities are not nodes
     assert counts["stubs"] == 1    # MISSING (the absent ownership asset) is stubbed
-    assert counts["links"] == 3    # directs, family, owns — the absent endpoint is bridged
+    assert counts["links"] == 3    # directs, family, owns; the absent endpoint is bridged
     # the absent endpoint became a typed stub (Organization, per the ownership role)
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE canonical='MISSING' AND type='Organization'"

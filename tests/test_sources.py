@@ -1,4 +1,4 @@
-"""The source/analysis registry — the playbook as data."""
+"""The source/analysis registry: the playbook as data."""
 from __future__ import annotations
 
 import re
@@ -33,7 +33,7 @@ def test_every_capability_names_a_tool() -> None:
 
 def test_repointed_analyses_name_a_real_composition() -> None:
     """The analyses evicted into compositions (discrepancy/coinvestment/subject_report/
-    network_screen) must invoke a composition that actually exists — guards the playbook
+    network_screen) must invoke a composition that actually exists, guarding the playbook
     against drifting from DEFAULT_COMPOSITIONS after the surface was cut."""
     repointed = [c for c in REGISTRY if c.tool.startswith("run_composition(")]
     assert {c.id for c in repointed} == {

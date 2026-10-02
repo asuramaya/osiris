@@ -1,4 +1,4 @@
-"""Evidence-class taxonomy — pure unit tests (no DB)."""
+"""Evidence-class taxonomy: pure unit tests (no DB)."""
 from __future__ import annotations
 
 from src.parsers.base import EvidenceClass, TargetRef
@@ -39,7 +39,7 @@ def test_speculative_vs_anchor_partition() -> None:
     assert not is_speculative(EvidenceClass.SELF_DECLARED)
     assert is_anchor_grade(EvidenceClass.SELF_DECLARED)
     assert is_anchor_grade(EvidenceClass.AUTHORITATIVE_API)
-    # direct observation is neither a guess nor an anchor — it's the middle tier
+    # direct observation is neither a guess nor an anchor, it's the middle tier
     assert not is_speculative(EvidenceClass.DIRECT_OBSERVATION)
     assert not is_anchor_grade(EvidenceClass.DIRECT_OBSERVATION)
 

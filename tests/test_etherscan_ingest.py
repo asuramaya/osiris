@@ -1,6 +1,6 @@
 """Etherscan ingest: address -> aggregated counterparties + contract identity.
 
-Hermetic — the network is the `fetch_address` seam; these drive the pure aggregator
+Hermetic: the network is the `fetch_address` seam; these drive the pure aggregator
 and the materializer with a fixture bundle, never calling Etherscan.
 """
 from __future__ import annotations

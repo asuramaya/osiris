@@ -1,4 +1,4 @@
-"""THE SETTINGS MENU's own MCP door pair (thread f4498ab304e4 piece 1) — the `settings`
+"""THE SETTINGS MENU's own MCP door pair (piece 1): the `settings`
 tool wrapper. The pure functions (list_settings/get_setting/write_setting) are proven
 directly in test_settings_service.py; this proves the TOOL routes action='list'/'get'/
 'write' correctly and resolves the caller's mounted identity as `actor`, the same
