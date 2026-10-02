@@ -1,4 +1,4 @@
-"""OWNER NORMALIZATION (thread 6d8f87a3, decision 0d863363 item 2) -- classify_thread_
+"""OWNER NORMALIZATION -- classify_thread_
 owner's three rewritable shapes (project name, dead agent, empty-with-repo), the
 already-durable shapes it must leave untouched, and the plan/apply split's own folding
 of unresolvable rows into one operator thread per project.
@@ -122,7 +122,7 @@ async def test_a_live_agent_owner_with_no_successor_is_left_alone(
 async def test_a_bare_seat_handle_owner_is_left_alone_even_when_a_same_spelled_project_exists(
     actions: Actions,
 ) -> None:
-    """Rung-0-before-project-name (obligation_hygiene.py's own precedent, msg 7425): an
+    """Rung-0-before-project-name (obligation_hygiene.py's own precedent): an
     owner string is a seat before it is a repo. This migration must never rewrite a bare
     seat-handle owner into that same seat's own canonical, or worse, chase a same-spelled
     project instead."""
@@ -147,7 +147,7 @@ async def test_a_project_name_with_no_charter_at_all_has_no_coordinator(
     assert "no seat's charter or pin names" in out["reason"]
 
 
-# ═══ peer-governed project owns to the operator (thread 614680c6) ══════════════════════
+# ═══ peer-governed project owns to the operator ══════════════════════
 
 async def test_peer_pair_with_no_manager_resolves_project_coordinator_to_operator(
     actions: Actions, tmp_path: Path,
@@ -155,7 +155,7 @@ async def test_peer_pair_with_no_manager_resolves_project_coordinator_to_operato
     """The 'rotten-apple' scenario: two seats jointly claim a project (one via charter,
     one via pin -- the exact `conflict` shape test_seats.py's own roster tests use) and
     are peer-bonded to each other, with NEITHER carrying any managed_by edge at all. The
-    operator ruling (thread 614680c6): this resolves to the literal 'operator', never
+    operator ruling: this resolves to the literal 'operator', never
     None and never a fold thread."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.owner_normalization import _coordinating_seat_for_project
@@ -187,12 +187,12 @@ async def test_peer_pair_with_no_manager_resolves_project_coordinator_to_operato
     assert resolved == "operator"
 
 
-# ═══ resolve_owner_seat: the shared resolver (migration 0061, census 583e2669) ══════════
+# ═══ resolve_owner_seat: the shared resolver (migration 0061) ══════════
 
 async def test_resolve_owner_seat_falls_a_malformed_agent_id_through_to_the_coordinator(
     actions: Actions,
 ) -> None:
-    """agent:deckard/agent:d00dbe16 (census 583e2669): a string shaped like an agent id
+    """agent:deckard/agent:d00dbe16: a string shaped like an agent id
     that never was one -- lineage_head/held_seat finds nothing, and this used to return
     None right there, the one prefix that never reached the project-coordinator rung a
     plain string already got. Fixed: it now falls through same as everything else."""
@@ -305,7 +305,7 @@ async def test_apply_does_not_mint_a_second_fold_thread_on_a_second_run(
     assert id1 == id2                                  # open_thread's own dedup-on-summary
 
 
-# ═══ skip_projects (operator ruling via Thoth DM 8650, 2026-09-09) ═══════════════════
+# ═══ skip_projects (operator ruling, 2026-09-09) ═══════════════════
 
 async def test_skip_projects_excludes_a_fold_entirely(actions: Actions) -> None:
     await _repo(actions, "onown-skip-fold")

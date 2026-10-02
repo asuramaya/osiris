@@ -1,4 +1,4 @@
-"""MIGRATION 0060 (thread 0af7b202): the three classification laws -- owner (a Seat
+"""MIGRATION 0060: the three classification laws -- owner (a Seat
 canonical or 'operator', nothing else, never a fold thread on failure), kind (a derived
 thread is never an obligation; a kindless thread's own summary evidence_class decides
 its kind), and expiry (a stale derived thread with no cites/noted_in activity closes).
@@ -87,7 +87,7 @@ async def test_owner_law_resolves_an_empty_owner_via_the_project_coordinator(
 async def test_owner_law_resolves_a_literal_project_name_owner_via_the_in_repo_link(
     actions: Actions,
 ) -> None:
-    """Migration 0061, census 583e2669: the `repo` this migration reads for a thread
+    """Migration 0061: the `repo` this migration reads for a thread
     comes ONLY from the real `in_repo` LINK (`link_repo`'s own convention) -- a `repo`
     PROPERTY assertion structurally never exists in this graph. A present-but-
     unresolvable owner (a bare project name, same as production's literal-'osiris'
@@ -233,15 +233,15 @@ async def test_plan_reports_every_bucket(actions: Actions) -> None:
     assert plan["threads_scanned"] >= 3
 
 
-# ═══ THE STALE-WINDOW SWEEP CRON (thread 28fa9e22): the fresh-install path re-applies
+# ═══ THE STALE-WINDOW SWEEP CRON: the fresh-install path re-applies
 # these same three laws on a schedule, with no coordinator's hand on it ═════════════════
 
 async def test_classification_laws_heartbeat_wires_through_to_apply_migration_0060(
     actions: Actions,
 ) -> None:
-    """The arq cron shim (thread 28fa9e22): a thin wrapper around apply_migration_0060,
+    """The arq cron shim: a thin wrapper around apply_migration_0060,
     same shape as this codebase's other undedicated-test heartbeat siblings (obligation_
-    hygiene_heartbeat, backfill_decided_in_heartbeat) — the real logic lives in (and is
+    hygiene_heartbeat, backfill_decided_in_heartbeat); the real logic lives in (and is
     fully tested by) the function it wraps. This proves the WIRING: ctx["cascade"].actions
     reaches the real actions, and a seeded expired derived thread closes on the FIRST
     sweep -- the dispatch's own explicit acceptance test."""
@@ -265,15 +265,15 @@ async def test_classification_laws_heartbeat_wires_through_to_apply_migration_00
     assert again == 0
 
 
-# ═══ OWNER RESOLUTION MEMOIZATION (thread cc82a8e7, classification_laws_heartbeat's own
-# heavy-sweep follow-up to 9150aec2): many open threads commonly share the SAME owner —
+# ═══ OWNER RESOLUTION MEMOIZATION (classification_laws_heartbeat's own
+# heavy-sweep follow-up): many open threads commonly share the SAME owner;
 # resolve_owner_seat must be called at most once per DISTINCT (owner, repo) pair within
 # one plan_migration_0060 call, never once per thread row ═════════════════════════════
 
 async def test_plan_migration_0060_memoizes_owner_resolution_per_distinct_owner(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Ten threads share ONE already-compliant seat owner — resolve_owner_seat still
+    """Ten threads share ONE already-compliant seat owner: resolve_owner_seat still
     confirms that seat is live (its own docstring: an already-compliant `seat:<...>`
     owner is still resolved, never skipped), but must pay that round trip ONCE for the
     tick, not ten times."""
@@ -298,4 +298,4 @@ async def test_plan_migration_0060_memoizes_owner_resolution_per_distinct_owner(
     plan = await plan_migration_0060(actions.pool)
 
     assert len(calls) == 1, f"expected exactly one resolve call, got {calls}"
-    assert plan["owner_resolved"] == []  # already compliant — nothing to write
+    assert plan["owner_resolved"] == []  # already compliant, nothing to write

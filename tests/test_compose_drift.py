@@ -1,17 +1,17 @@
-"""COMPOSE DRIFT (Thoth mail 9122 item 2, wave 16): deploy/up.sh, docker-compose.yml,
-deploy/docker-compose.full.yml must match the live osiris-pg — same image, the SAME
+"""COMPOSE DRIFT: deploy/up.sh, docker-compose.yml,
+deploy/docker-compose.full.yml must match the live osiris-pg, same image, the SAME
 named volume the real container actually runs on (osiris-pg-data, confirmed live via
-`docker inspect osiris-pg` — not a compose-project-prefixed anonymous one, which
+`docker inspect osiris-pg`, not a compose-project-prefixed anonymous one, which
 `docker volume ls` shows sitting as dead weight today, osiris_pgdata/osiris_redisdata,
 from exactly this mistake once already made), and WAL archiving (archive_mode/
-archive_command) — the structural fact nothing else rederives, so a recreate that drops
+archive_command), the structural fact nothing else rederives, so a recreate that drops
 it fails silently until a restore is actually attempted.
 
 TWO LAYERS: static checks (no docker needed, run every gate) confirm the three deploy
 artifacts declare the right structural facts and never re-hardcode the tuning flags
 scripts/osiris_pg_autotune.py now owns; a live check (skipped when docker or a real
 osiris-pg container isn't present) diffs those static declarations against
-`docker inspect`/postgresql.auto.conf on the ACTUAL running container — the real "does
+`docker inspect`/postgresql.auto.conf on the ACTUAL running container, the real "does
 the file match the world" proof, not just internal self-consistency.
 """
 from __future__ import annotations
@@ -80,14 +80,14 @@ def test_the_archive_script_is_bind_mounted_from_the_repo_not_baked_in(compose: 
 @pytest.mark.parametrize("compose", [COMPOSE_YML, COMPOSE_FULL_YML], ids=["yml", "full_yml"])
 def test_postgres_never_hardcodes_the_tuning_flags_autotune_owns(compose: dict) -> None:
     """scripts/osiris_pg_autotune.py derives shared_buffers/work_mem/effective_cache_
-    size/max_connections from THIS box's own RAM/CPU daily — a hardcoded value here
+    size/max_connections from THIS box's own RAM/CPU daily, a hardcoded value here
     would silently down-tune a recreated box back to whatever number was checked in
     years ago (measured live: shared_buffers is 7.7GB, the old checked-in value here
     was 4GB). Compose declares NONE of these; the image's stock defaults are the day-0
     floor and autotune corrects them within 24h."""
     cmd = _pg_command_text(compose)
     for flag in _STALE_TUNING_FLAGS:
-        assert flag not in cmd, f"{flag} is hardcoded — autotune should own this value"
+        assert flag not in cmd, f"{flag} is hardcoded, autotune should own this value"
 
 
 @pytest.mark.parametrize("compose", [COMPOSE_YML, COMPOSE_FULL_YML], ids=["yml", "full_yml"])
@@ -101,7 +101,7 @@ def test_postgres_image_is_16_in_both_compose_files() -> None:
     assert _pg_service(COMPOSE_FULL_YML)["image"] == "postgres:16"
 
 
-# --- static: deploy/up.sh (bash, not yaml — text checks) --------------------------
+# --- static: deploy/up.sh (bash, not yaml, text checks) --------------------------
 
 
 def test_up_sh_uses_the_real_named_volumes_not_rm() -> None:
@@ -125,7 +125,7 @@ def test_up_sh_bind_mounts_the_archive_script_read_only() -> None:
 
 def test_up_sh_never_hardcodes_the_tuning_flags_autotune_owns() -> None:
     for flag in _STALE_TUNING_FLAGS:
-        assert flag not in UP_SH_CODE, f"{flag} is hardcoded — autotune should own this value"
+        assert flag not in UP_SH_CODE, f"{flag} is hardcoded, autotune should own this value"
 
 
 # --- live: diff the static declarations against the actual running container ------
@@ -147,7 +147,7 @@ def _osiris_pg_is_running() -> bool:
 
 pytestmark_live = pytest.mark.skipif(
     not _osiris_pg_is_running(),
-    reason="no running osiris-pg container on this box — nothing to diff against")
+    reason="no running osiris-pg container on this box, nothing to diff against")
 
 
 @pytestmark_live
@@ -166,7 +166,7 @@ def test_live_container_volume_matches_the_compose_declared_name() -> None:
     live_volume = out.stdout.strip()
     assert live_volume == _REAL_PG_VOLUME, (
         f"live container mounts volume {live_volume!r}, compose declares "
-        f"{_REAL_PG_VOLUME!r} — a recreate from compose today would NOT reattach to "
+        f"{_REAL_PG_VOLUME!r}, a recreate from compose today would NOT reattach to "
         "the real data")
 
 

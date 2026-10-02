@@ -1,6 +1,5 @@
-"""succession — the full generation-chain walk (task #64, ruling ad19a779). NOT lineage.py
-(that module is the swarm/sub-agent spawn-tree reconstruction, a different concept entirely
-— caught by Read-before-Write before this module's own name clobbered it)."""
+"""succession: the full generation-chain walk. NOT lineage.py
+(that module is the swarm/sub-agent spawn-tree reconstruction, a different concept entirely)."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -48,8 +47,8 @@ async def test_walks_the_whole_chain_one_entry_per_hop(actions: Actions) -> None
 
 
 async def test_session_rides_along_per_hop(actions: Actions) -> None:
-    """7fa4b599's own named additive step (2026-08-04): the walker already read three
-    sibling properties off the identical current_assertions row — session is the fourth,
+    """An additive step: the walker already read three
+    sibling properties off the identical current_assertions row; session is the fourth,
     the transcript filename's own stem, asserted at mount() same as the other three. A
     generation that never mounted (no session asserted) reads None, not a crash or a
     guess."""
@@ -58,7 +57,7 @@ async def test_session_rides_along_per_hop(actions: Actions) -> None:
     await _agent(actions, "agent:sess-ii", generation="2", minted_because="compaction",
                 succeeded_from="agent:sess-i", session="22222222-aaaa-4bbb-8ccc-000000000002")
     await _agent(actions, "agent:sess-iii", generation="3", minted_because="compaction",
-                succeeded_from="agent:sess-ii")  # no session — never mounted
+                succeeded_from="agent:sess-ii")  # no session (never mounted)
 
     chain = await succession_chain(actions.pool, "agent:sess-iii")
     assert [c["session"] for c in chain] == [
@@ -97,7 +96,7 @@ async def test_unknown_ref_is_an_empty_chain_not_an_error(actions: Actions) -> N
 
 
 async def test_the_mcp_tool_wraps_the_core_walk(actions: Actions) -> None:
-    """srv._pool swap (mirrors test_describe.py's own pattern) — proves the ACTUAL MCP tool,
+    """srv._pool swap (mirrors test_describe.py's own pattern): proves the ACTUAL MCP tool,
     not just the core function."""
     from src import mcp_server as srv
 

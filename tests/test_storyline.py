@@ -1,6 +1,5 @@
-"""WAVE 26, PIECE 1: THE STORYLINE (Thoth mail 11534, operator's word "keep cooking,
-everyone gets a lane", ruling 1178e7d9's fourth principle -- lineages are time; held
-thread 3683a12a). Focusing an Agent lays its own succession chain (succeeded_from/
+"""PIECE 1: THE STORYLINE (lineages are time).
+Focusing an Agent lays its own succession chain (succeeded_from/
 succeeds_seat, both directions) out on a real horizontal TIME axis instead of the ordinary
 ranked-column ego tree: x from each body's own `createdAt` (graph_stream.py's new wire
 field, item 11), one row for the chain, a sub-agent (spawned_by a chain member but not
@@ -88,7 +87,7 @@ def test_sub_agents_branch_off_their_own_parent_at_their_own_spawn_time() -> Non
     assert "nd.y = dir * offsetPx * wpp;" in body
 
 
-# --- WAVE 27, THE SPAWN ROW (Thoth mail 11754): a burst-spawned parent's siblings never ---
+# --- THE SPAWN ROW: a burst-spawned parent's siblings never ---
 # --- collapse onto a shared (dir, tier) -- the tier is unbounded, not capped mod a constant.
 
 def test_spawn_row_tier_is_never_capped_and_never_collides() -> None:
@@ -197,7 +196,7 @@ def test_storyline_axis_label_css_exists_in_both_pages() -> None:
         assert ".storyline-axis-label {" in page
 
 
-# --- camera finiteness (the exact class of bug mail 11308 caught in the ego layout) --------
+# --- camera finiteness (the same class of bug as in the ego layout) --------
 
 def test_camera_fit_only_moves_on_a_finite_bbox() -> None:
     body = _SPACE_JS.split("async function renderStoryline(id, opts)", 1)[1][:5200]
@@ -221,7 +220,7 @@ def test_clear_storyline_state_disposes_lines_and_axis_and_resets_membership() -
 
 
 def test_storyline_nodes_never_get_the_lit_always_wins_declutter_bypass() -> None:
-    # live-verification finding (mail 11534's own "label overlaps 0" acceptance line):
+    # live-verification finding (the "label overlaps 0" acceptance line):
     # pathReachable IS the whole storyline population during a storyline (chain +
     # sub-agents + ticks, often thousands), so every storyline node reads "lit" -- the
     # ordinary ego-focus "lit always wins its spot" guarantee, unchanged, would disable

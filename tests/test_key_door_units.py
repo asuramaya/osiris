@@ -1,9 +1,9 @@
-"""THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065) — the shipped
+"""THE FIRST KEY MUST COME FROM THE NORMAL CLI, the shipped
 systemd unit files themselves actually parse, and carry `ImportCredential=`
 (never the old `LoadCredentialEncrypted=<name>:<hard path>` shape, which fails a
-unit's own start outright until the credential exists — the exact bootstrap
+unit's own start outright until the credential exists, the exact bootstrap
 deadlock this ruling fixes). Verified with the REAL `systemd-analyze --user verify`
-on this box, not a hand-rolled INI parser — the same tool the operator's own
+on this box, not a hand-rolled INI parser, the same tool the operator's own
 `systemctl --user` would use to reject a broken unit."""
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def test_unit_file_verifies_clean(unit_path: Path) -> None:
         ["systemd-analyze", "--user", "verify", str(unit_path)],
         capture_output=True, text=True, timeout=30, check=False)
     # systemd-analyze verify also loads every OTHER unit already installed on this
-    # box (a real dev machine) and reports issues with THOSE too — only lines
+    # box (a real dev machine) and reports issues with THOSE too, only lines
     # naming THIS file are this test's own concern.
     own_lines = [line for line in result.stderr.splitlines() if unit_path.name in line]
     assert own_lines == [], f"{unit_path.name} did not verify clean:\n" + "\n".join(own_lines)
@@ -55,8 +55,8 @@ def test_unit_uses_import_credential_never_the_old_hard_path_shape(
     load_cred = [ln for ln in directive_lines if ln.startswith("LoadCredentialEncrypted=")]
     assert load_cred == [], (
         f"{unit_path.name} still carries a real LoadCredentialEncrypted= directive "
-        f"(not just a comment mentioning it) — the exact bootstrap deadlock THE "
-        f"FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065) fixed: a hard "
+        f"(not just a comment mentioning it), the exact bootstrap deadlock THE "
+        f"FIRST KEY MUST COME FROM THE NORMAL CLI fixed: a hard "
         f"path fails the unit's own start outright until the credential already "
         f"exists: {load_cred}")
 

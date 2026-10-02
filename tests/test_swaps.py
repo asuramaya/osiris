@@ -1,8 +1,8 @@
-"""Swap-detector — the silent fable→opus demotion (on danger-sense) made a first-class event.
+"""Swap-detector, the silent fable→opus demotion (on danger-sense) made a first-class event.
 
 Observation captures the model that ANSWERED but is blind to the swap itself; classify_swap reads
-both signals off the history + observed model — divergence from the operator's intent, and a
-within-session transition. Pure, so these are pure. (ruling f2ae6346)
+both signals off the history + observed model, divergence from the operator's intent, and a
+within-session transition. Pure, so these are pure.
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def test_within_session_transition_is_a_swap() -> None:
 
 
 def test_within_session_back_on_intent_names_the_intent() -> None:
-    # oscillated but currently BACK on the intended model — the banner says so, not "NOT intended"
+    # oscillated but currently BACK on the intended model, the banner says so, not "NOT intended"
     v = classify_swap([FABLE, OPUS], FABLE, expected=FABLE)
     assert v.within_session is True and v.diverged_from_intent is False
     banner = swap_banner(v)
@@ -50,7 +50,7 @@ def test_oscillation_is_labelled_by_current_not_last_seen() -> None:
 
 
 def test_cold_demotion_diverges_from_intent_without_a_transition() -> None:
-    # the whole transcript is opus — the swap predates it, so there's no in-session transition,
+    # the whole transcript is opus, the swap predates it, so there's no in-session transition,
     # only divergence from the intended fable. This is the case _record_swap misses entirely.
     v = classify_swap([OPUS], OPUS, expected=FABLE)
     assert v.within_session is False
@@ -64,11 +64,11 @@ def test_cold_demotion_diverges_from_intent_without_a_transition() -> None:
 
 
 def test_deliberate_swap_is_a_seam_never_a_sin() -> None:
-    """The operator's own /model on the record: the swap is CHOSEN — the verdict still says
-    swapped (a seam is a seam, ruling a882b334) but the banner drops the confession demand
+    """The operator's own /model on the record: the swap is CHOSEN, the verdict still says
+    swapped (a seam is a seam) but the banner drops the confession demand
     and the marker names the hand (operator complaint, 2026-07-10)."""
     v = classify_swap([FABLE, OPUS], OPUS, expected=FABLE, deliberate=True)
-    assert v.swapped is True and v.deliberate is True     # still a seam — heirs still mint
+    assert v.swapped is True and v.deliberate is True     # still a seam, heirs still mint
     banner = swap_banner(v)
     assert banner is not None and banner.startswith("⇄")
     assert "OPERATOR" in banner and "no confession owed" in banner
@@ -93,14 +93,14 @@ def test_unknown_observed_is_not_a_false_swap() -> None:
 
 
 def test_unanchored_observation_never_swaps() -> None:
-    # the cry-wolf (bonus bug, agent e71b408f): the cwd/box-wide fallback may read a CO-TENANT's
-    # transcript. An UNANCHORED observation — even one that diverges from intent, even a >1-model
-    # history — must NOT assert a swap (a verified fable session was falsely 'demoted to haiku').
+    # the cry-wolf: the cwd/box-wide fallback may read a CO-TENANT's
+    # transcript. An UNANCHORED observation, even one that diverges from intent, even a >1-model
+    # history, must NOT assert a swap (a verified fable session was falsely 'demoted to haiku').
     diverging = classify_swap([], OPUS, expected=FABLE, anchored=False)  # opus != fable, unanchored
     assert diverging.diverged_from_intent is False and diverging.swapped is False
     assert swap_banner(diverging) is None
     neighbor_history = classify_swap([FABLE, OPUS], OPUS, expected=FABLE, anchored=False)
     assert neighbor_history.within_session is False and neighbor_history.swapped is False
     assert swap_banner(neighbor_history) is None
-    # anchored (the default) is unchanged — a true job_dir read still confesses the divergence
+    # anchored (the default) is unchanged, a true job_dir read still confesses the divergence
     assert classify_swap([], OPUS, expected=FABLE, anchored=True).swapped is True

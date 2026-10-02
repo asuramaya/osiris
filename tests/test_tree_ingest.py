@@ -1,4 +1,4 @@
-"""Self-healing tree ingest (thread 5126) — ingest_project's dry-run/write receipt shapes,
+"""Self-healing tree ingest (self-healing alarm): ingest_project's dry-run/write receipt shapes,
 the third-party sibling's required `because`, and the alarm heartbeat's cold-by-default,
 one-per-24h-per-tree mailing."""
 from __future__ import annotations
@@ -103,7 +103,7 @@ async def test_alarm_tick_is_dark_by_default_and_sends_nothing(actions: Actions)
 # shape) and ingest_project_third_party is now a hidden, deprecated alias forwarding to
 # the same shared body. WATCHED FAIL BEFORE THIS CHANGE: `srv.ingest_project(project=...,
 # because="x")` silently ignored `because` entirely (it wasn't a parameter yet) and ran
-# self-service — the receipt never carried a `because` field. ═══════════════════════════
+# self-service: the receipt never carried a `because` field. ═══════════════════════════
 
 class _McpCtx:
     class request_context:  # noqa: N801
@@ -143,7 +143,7 @@ async def test_consolidated_ingest_project_because_param_takes_the_third_party_s
         srv._agents.pop(key, None)
 
     listed = {t.name for t in await srv.mcp.list_tools()}
-    # ingest_project ALSO hidden now (#202 project dispatcher, Thoth dispatch 7095) —
+    # ingest_project ALSO hidden now (project dispatcher):
     # both fold into project(action='ingest'); still fully callable, same mechanism
     # this test's own two calls above just exercised.
     assert "ingest_project_third_party" not in listed
@@ -181,8 +181,8 @@ async def test_alarm_tick_mails_the_owning_seat_when_enabled(actions: Actions) -
 async def test_alarm_tick_re_check_past_cooldown_annotates_not_mails(
     actions: Actions,
 ) -> None:
-    """Thread 358ac1ae's own point: the SECOND time this tree is still found blind (past
-    its own cooldown), the SAME thread is touched again, never a second graded 'ask' DM —
+    """The SECOND time this tree is still found blind (past
+    its own cooldown), the SAME thread is touched again, never a second graded 'ask' DM:
     the grade-inflation defect this whole fix exists to close."""
     from datetime import timedelta
 
@@ -210,7 +210,7 @@ async def test_alarm_tick_re_check_past_cooldown_annotates_not_mails(
     assert second["alarmed"][0]["thread"] == thread_id
     sent = await actions.pool.fetchval(
         "SELECT count(*) FROM fleet_messages WHERE body LIKE '%tree-ingest-alarm%'")
-    assert sent == 1  # still just the one, from the first tick — the re-touch never mails
+    assert sent == 1  # still just the one, from the first tick; the re-touch never mails
     status = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
         "ON a.object_id=o.id WHERE o.id=$1::uuid AND o.type='Thread' AND a.name='status' "
@@ -222,7 +222,7 @@ async def test_alarm_tick_never_reopens_a_thread_a_human_already_resolved(
     actions: Actions,
 ) -> None:
     """`open_or_annotate_persisting_alarm`'s own guard (capture.py, reused as-is): a
-    human resolving the alarm thread is respected — the next tick that still finds the
+    human resolving the alarm thread is respected: the next tick that still finds the
     tree blind annotates the still-present condition instead of silently re-opening what
     a human closed."""
     from datetime import timedelta
@@ -262,8 +262,8 @@ async def test_alarm_tick_never_reopens_a_thread_a_human_already_resolved(
 async def test_alarm_tick_self_clears_when_the_tree_is_no_longer_blind(
     actions: Actions,
 ) -> None:
-    """Defect (3), thread 358ac1ae: once a tree stops reading zero-commits, its own
-    still-open alarm Thread resolves itself on the next tick — nobody has to notice and
+    """Once a tree stops reading zero-commits, its own
+    still-open alarm Thread resolves itself on the next tick; nobody has to notice and
     close it by hand."""
     proj = await actions.create_or_find_object("SoftwareProject", "repo:willclear", "git")
     await actions.assert_property(proj, "on_disk_path", "/home/x/code/willclear",
@@ -275,7 +275,7 @@ async def test_alarm_tick_self_clears_when_the_tree_is_no_longer_blind(
     first = await uningested_trees_alarm_tick(actions, settings=settings)
     thread_id = first["alarmed"][0]["thread"]
 
-    # the tree lands a commit — discover_trees now reports commits > 0 for it
+    # the tree lands a commit: discover_trees now reports commits > 0 for it
     commit = await actions.create_or_find_object(
         "Commit", "commit:deadbeefcafe", "willclear-ingest")
     await actions.create_link(commit, proj, "in_repo", "willclear-ingest",

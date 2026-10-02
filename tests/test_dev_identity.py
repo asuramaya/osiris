@@ -1,9 +1,9 @@
-"""Cross-repo developer-identity resolution — the first real ER case for the developer persona.
+"""Cross-repo developer-identity resolution, the first real ER case for the developer persona.
 
 The same person commits under several emails (personal vs GitHub no-reply) across repos, so a
 multi-repo graph fragments them into multiple `dev:` Person nodes and double-counts you. The
 OSINT resolver misses it (same name, different email, no DOB/employer). This blocks dev Persons
-by name/handle and surfaces the merge for review — never auto-merging (#3), candidate-gated.
+by name/handle and surfaces the merge for review, never auto-merging (#3), candidate-gated.
 """
 from __future__ import annotations
 
@@ -30,10 +30,10 @@ async def _dev(actions: Actions, email: str, name: str) -> str:
 
 
 async def test_find_dev_identity_candidates(actions: Actions) -> None:
-    # the same person, two emails across repos — the no-reply email encodes the handle
+    # the same person, two emails across repos, the no-reply email encodes the handle
     a = await _dev(actions, "dakota.jm@gmail.com", "asuramaya")
     b = await _dev(actions, "69973947+asuramaya@users.noreply.github.com", "asuramaya")
-    # a genuinely different developer — must NOT match
+    # a genuinely different developer, must NOT match
     await _dev(actions, "ada@x.io", "Ada Lovelace")
 
     n = await find_dev_identity_candidates(actions.pool)
@@ -44,15 +44,15 @@ async def test_find_dev_identity_candidates(actions: Actions) -> None:
     assert {row["a"], row["b"]} == {a, b}
     assert row["score"] >= 0.89                                     # ~0.9 (float4); no-reply==name
     assert "github handle" in str(row["reasons"])
-    # ruling #3: never auto-merged — all three dev Persons still active
+    # ruling #3: never auto-merged, all three dev Persons still active
     assert await p.fetchval(
         "SELECT count(*) FROM objects WHERE type='Person' AND status='active'") == 3
-    # idempotent — re-running queues nothing new
+    # idempotent, re-running queues nothing new
     assert await find_dev_identity_candidates(p) == 0
 
 
 async def test_shared_dev_name_is_a_weaker_lead(actions: Actions) -> None:
-    """Two devs with the same plain name but no handle link are a weaker (0.6) candidate —
+    """Two devs with the same plain name but no handle link are a weaker (0.6) candidate ,
     a lead to review, not a confident match."""
     a = await _dev(actions, "j@a.com", "jordan")
     b = await _dev(actions, "j@b.com", "jordan")

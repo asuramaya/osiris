@@ -1,17 +1,17 @@
-"""THE SETTINGS PANE FOLLOW-UP (thread ea9aedba, Thoth mail 13404) — three small fixes
-from Thoth's own live Chrome review of the deployed pane (decision abfc47ac):
+"""THE SETTINGS PANE FOLLOW-UP -- three small fixes
+from a live Chrome review of the deployed pane:
 
   1. The Backup & Offload target-editor's own <input>/<select> elements had no explicit
-     background — the theme's near-white text on the browser's plain white default made
+     background, the theme's near-white text on the browser's plain white default made
      a bound, real value ("nas") read as an empty field. Same gap existed in the Registry
-     section's own field inputs (not reported live, but the identical underlying cause —
+     section's own field inputs (not reported live, but the identical underlying cause:
      button/select/input/textarea's global rule sets `color`, never `background`), so the
      fix is scoped to every input/select an .ee-table renders, not just the offload ones.
   2. The recovery-path warning sentence dangled ("...in your terminal, or</div>") whenever
-     no browser-enroll button followed it (recovery_paths_enrolled.length === 1, not 0) —
+     no browser-enroll button followed it (recovery_paths_enrolled.length === 1, not 0):
      the trailing ", or" had nothing after it.
   3. space.js: positionLabels' own `_placed`/`overlapsPlaced` were declared as a `const`/
-     function right next to positionLabels itself, far below markDirty/forceRender — both
+     function right next to positionLabels itself, far below markDirty/forceRender, both
      of which can reach positionLabels (forceRender directly, markDirty via its
      requestAnimationFrame(renderIfDirty) chain). An early call hit the temporal dead zone
      ("Cannot access '_placed' before initialization"). Hoisted above every reachable path.
