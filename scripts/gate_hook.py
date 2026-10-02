@@ -635,16 +635,26 @@ def shadow_before_use_violations(repo_root: Path, changed_files: list[str]) -> d
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
-def _run_fixture_only_batch(files: list[str], repo_root: Path) -> tuple[str, str]:
-    """The budgeted second run: `files` in one pytest invocation capped at
-    `_FIXTURE_ONLY_BUDGET_SECS`. Returns ("passed" | "failed" | "timeout", output); a run
-    that collected nothing counts as passed (a file with no tests is not a failure)."""
+def _fixture_only_budget() -> int:
+    """`_FIXTURE_ONLY_BUDGET_SECS` scaled by live load the way the main run's timeout is
+    (same threshold, same cap), so a busy box does not make the batch pointless. The file
+    count never scales it: the batch is always at most `_PYTEST_FANOUT_CAP` files."""
+    return _load_scaled_pytest_timeout(0, _FIXTURE_ONLY_BUDGET_SECS)[0]
+
+
+def _run_fixture_only_batch(
+    files: list[str], repo_root: Path, budget: int = _FIXTURE_ONLY_BUDGET_SECS,
+) -> tuple[str, str]:
+    """The budgeted second run: `files` in one pytest invocation capped at `budget`
+    seconds (`_fixture_only_budget()`, the base scaled by load). Returns ("passed" |
+    "failed" | "timeout", output); a run that collected nothing counts as passed (a file
+    with no tests is not a failure)."""
     pytest_env, _ = _pytest_env(os.environ, {"TMPDIR": _SAFE_TMPDIR})
     try:
         proc = subprocess.run(
             [str(VENV_BIN / "pytest"), *files, "-q", "-p", "no:cacheprovider",
              "-n", str(_PYTEST_XDIST_CAP)], cwd=repo_root, capture_output=True, text=True,
-            check=False, env=pytest_env, timeout=_FIXTURE_ONLY_BUDGET_SECS)
+            check=False, env=pytest_env, timeout=budget)
     except subprocess.TimeoutExpired:
         return "timeout", ""
     out = ((proc.stdout or "") + (proc.stderr or "")).strip()
@@ -720,19 +730,22 @@ def run_gates(
     batch_files: list[str] = []
     batch_status: str | None = None
     batch_out = ""
+    batch_budget = _FIXTURE_ONLY_BUDGET_SECS
     if len(fixture_only) > _PYTEST_FANOUT_CAP:
         ordered = sorted(fixture_only)
         batch_files = ordered[:_PYTEST_FANOUT_CAP]
-        batch_status, batch_out = _run_fixture_only_batch(batch_files, repo_root)
+        batch_budget = _fixture_only_budget()
+        batch_status, batch_out = _run_fixture_only_batch(batch_files, repo_root, batch_budget)
+        info["fixture_budget_secs"] = batch_budget
         ran = batch_files if batch_status in ("passed", "failed") else []
         unrun = [f for f in ordered if f not in ran]
         omitted = (f"{len(unrun)} fixture-only files (hub-module fan-out, over cap "
                    f"{_PYTEST_FANOUT_CAP}): [{' '.join(unrun)}]")
         info["omitted_files"] = unrun
         outcome = (
-            f"the first {_PYTEST_FANOUT_CAP} were tried inside a {_FIXTURE_ONLY_BUDGET_SECS}s "
+            f"the first {_PYTEST_FANOUT_CAP} were tried inside a {batch_budget}s "
             f"budget and did not finish, so none of them ran" if batch_status == "timeout"
-            else f"the first {_PYTEST_FANOUT_CAP} ran inside a {_FIXTURE_ONLY_BUDGET_SECS}s "
+            else f"the first {_PYTEST_FANOUT_CAP} ran inside a {batch_budget}s "
                  f"budget, so these {len(unrun)} are the rest")
         info["omitted_reason"] = (
             f"each of these files imports a touched module only to seed data for some "
@@ -952,7 +965,7 @@ def run_gates(
         main_ok, main_msg = results.get("pytest", (True, ""))
         results["pytest"] = (
             False,
-            f"[fixture-only files run inside the {_FIXTURE_ONLY_BUDGET_SECS}s budget: "
+            f"[fixture-only files run inside the {batch_budget}s budget: "
             f"{' '.join(batch_files)}]\n{batch_out}"
             + ("" if main_ok else f"\n--- main run ---\n{main_msg}"))
     if always_included and "pytest" in results:

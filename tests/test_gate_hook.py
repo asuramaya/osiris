@@ -204,6 +204,7 @@ def test_run_gates_runs_the_first_fixture_only_files_in_a_budgeted_batch(
 ) -> None:
     monkeypatch.setattr(gate_hook, "_PYTEST_FANOUT_CAP", 2)
     monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (1.0, 1.0, 1.0))
     _write(tmp_path, "src/pkg/hub.py")
     for name in ("f1", "f2", "f3"):
         _write(tmp_path, f"tests/test_{name}.py", "from src.pkg.hub import common\n")
@@ -1684,6 +1685,7 @@ def _fake_batch_and_main(
     monkeypatch.setattr(gate_hook.subprocess, "run", _fake_run)
     monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
     monkeypatch.setattr(gate_hook, "_PYTEST_FANOUT_CAP", 2)
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (1.0, 1.0, 1.0))
 
 
 def test_a_batch_that_outruns_its_budget_is_named_not_failed(
@@ -1729,3 +1731,24 @@ def test_both_runs_report_their_own_summary_line(tmp_path: Path, monkeypatch: An
     assert info["summary"] == "3 passed in 0.5s; fixture-only batch: 2 passed in 0.2s"
     assert info["omitted_files"] == ["tests/test_f3.py"]
     assert "ran inside a 90s budget" in info["omitted_reason"]
+
+
+def test_the_batch_budget_scales_with_live_load_like_the_main_timeout(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """At twice the load threshold the 90s budget doubles, and the receipt names the
+    budget that was actually used, not the base."""
+    _hub_with_a_direct_test(tmp_path)
+    _fake_batch_and_main(monkeypatch, batch_timeout=True)
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (16.0, 12.0, 10.0))
+    info: dict[str, Any] = {}
+
+    run_gates(tmp_path, ["src/pkg/hub.py"], info)
+
+    assert info["fixture_budget_secs"] == 2 * gate_hook._FIXTURE_ONLY_BUDGET_SECS
+    assert f"inside a {info['fixture_budget_secs']}s budget" in info["omitted_reason"]
+
+
+def test_the_batch_budget_is_the_base_on_a_quiet_box(monkeypatch: Any) -> None:
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (1.0, 1.0, 1.0))
+    assert gate_hook._fixture_only_budget() == gate_hook._FIXTURE_ONLY_BUDGET_SECS
