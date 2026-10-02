@@ -63,9 +63,10 @@ async def run(apply: bool, batch_size: int) -> dict[str, Any]:
         # The same clarity every other soul-key-aware door gives (soul_crypto.py):
         # never an uncaught traceback naming an internal function an operator never called.
         print(f"osiris_encrypt_soul_lines: {exc}", file=sys.stderr)
-        print("run `osiris soul-key init` (or the console's Init button) first, then "
-              "restart osiris-mcp/osiris-worker (--restart does this), then re-run this "
-              "script.", file=sys.stderr)
+        print("run `osiris deploy` (it creates the key and restarts the services), or "
+              "`osiris soul-key init --restart` by hand, then re-run this script. Note "
+              "the worker already encrypts old rows by itself once a key exists.",
+              file=sys.stderr)
         await pool.close()
         raise SystemExit(1) from exc
     finally:

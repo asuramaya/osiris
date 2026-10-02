@@ -12721,11 +12721,11 @@ def main() -> None:
     if transport in ("streamable-http", "sse"):
         mcp.settings.host = s.osiris_mcp_host
         mcp.settings.port = s.osiris_mcp_port
-        # Soul-key boot gate, a genuine refusal again: the operator has now minted the
-        # key through the normal CLI, so the earlier degrade-not-fatal tolerance (which
-        # existed only so `osiris soul-key init` could run at all on a fresh box, before
-        # this already-deployed MCP server was up to serve it) has done its job and is
-        # retired. At the same scope `_boot_check` already holds (the persistent systemd
+        # Soul-key boot gate, a genuine refusal again: `osiris deploy` now creates the
+        # key by itself, before it restarts any service, so the earlier degrade-not-fatal
+        # tolerance (which existed only so a fresh box could mint its key by hand through
+        # an already-running server) has no job left and is retired. At the same scope
+        # `_boot_check` already holds (the persistent systemd
         # osiris-mcp unit only, never a per-session stdio subprocess), `get_soul_fernet()`'s
         # `SoulKeyMissing` is left uncaught: it propagates out and crashes the boot, the
         # original requirement this gate enforced before that temporary bootstrap window
