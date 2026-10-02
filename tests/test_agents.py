@@ -691,7 +691,7 @@ async def test_register_never_stamps_a_stable_anchor_slug_as_the_session_propert
     returns the anchor's own basename unvalidated. register_agent must NEVER assert that as
     `session`: the property must be absent, not confidently wrong. Absent is what lets
     osiris resume's resident-unknown gate say 'no signed testimony' (honest) instead of
-    'try --resume seat-bdbe031e' (a command that can never work)."""
+    'try --resume <anchor slug>' (a command that can never work)."""
     ident = resolve_identity(cwd="/x/marquee", job_dir="/home/x/.claude/jobs/seat-bdbe031e",
                              model="claude-sonnet-5")
     assert ident.session == "seat-bdbe031e"  # the poisoned value still flows through identity
@@ -2155,7 +2155,7 @@ async def test_the_house_the_seat_and_the_holders(actions: Actions) -> None:
     bad = await claim_name(actions, heir_anchor, "Soundwave VIII", source=heir_anchor)
     assert "SEAT LABEL" in bad["error"] and "Soundwave" in bad["error"]
 
-    # a new conversation in the same house inherits the seat, it is Soundwave II,
+    # a new conversation in the same house inherits the seat, it is the second occupant,
     # not a stranger forced to invent a name.
     heir = await claim_name(actions, heir_anchor, "Soundwave", source=heir_anchor)
     assert heir["seat"] == "Soundwave II"
@@ -2262,7 +2262,7 @@ async def test_you_do_not_take_a_living_minds_name(actions: Actions) -> None:
     sitting = await mind("agent:dddd1111", "sibling-eight")
     await claim_name(actions, sitting, "Ra", source=sitting)
     # the match key is exactly 8 chars (registry_census keys agent_mounts.job_dir's own
-    # basename against sessionId[:8]), "dddd1111" is 8 characters on purpose, so the fake
+    # basename against sessionId[:8]), the job id is 8 characters on purpose, so the fake
     # harness census below can confirm this row as a real, live, occupied body (one
     # liveness authority: claim_name's own refusal now cross-checks
     # is_occupied_by_a_live_body, never trusts a fresh mount row alone).
@@ -2293,7 +2293,7 @@ async def test_you_do_not_take_a_living_minds_name(actions: Actions) -> None:
 async def test_a_name_resolves_to_the_LIVE_seat_and_never_silently_to_a_grave(
         actions: Actions) -> None:
     """The grave-delivery bug, found independently in two places within one hour:
-    send(to_agent='Soundwave') delivered into a seat three days dead, returned sent=360,
+    send(to_agent=<handle>) delivered into a seat three days dead, returned sent=360,
     and the only signal was a boolean the caller had to notice. One session's whole port
     report died in a corpse's inbox, and its receipt said live=true.
 
@@ -2308,7 +2308,7 @@ async def test_a_name_resolves_to_the_LIVE_seat_and_never_silently_to_a_grave(
         await claim_name(actions, a, "Quokka", source=a)
     # the ancestor has a stale mount row; the heir has none at all, the exact shape that used to
     # make a corpse outrank a successor (ORDER BY last_seen DESC NULLS LAST). job_dir's own
-    # basename is exactly 8 chars ("beef0001") so a fake harness census can later confirm
+    # basename is exactly 8 chars so a fake harness census can later confirm
     # this exact row as occupied (registry_census keys agent_mounts.job_dir's basename
     # against sessionId[:8]).
     await actions.pool.execute(
@@ -2420,7 +2420,7 @@ async def test_is_occupied_by_a_live_body_the_claude_path_is_unchanged(
 
 
 async def test_a_grave_is_never_a_delivery_target(actions: Actions) -> None:
-    """A real case: send(to_agent='Nebbercracker') resolved to a false_mint phantom, live=false,
+    """A real case: send(to_agent=<handle>) resolved to a false_mint phantom, live=false,
     seen=null, never a real session. Reaching a retired or phantom seat must take an explicit agent
     id: an act of intent, never a name lookup a tired mind followed off a banner."""
     from datetime import UTC, datetime
@@ -3324,7 +3324,7 @@ async def test_write_attribution_normalizes_through_merged_into(actions: Actions
     await register_agent(actions, ident, actor="test")
 
     assert ident.write_attribution_agreement == "confirms", (
-        "the pin still says 'henry', but henry IS shellbiz now (merged_into). The raw-"
+        "the pin still says the old label, but it IS the survivor now (merged_into). The raw-"
         "string comparison must not false-fire 'disagrees' on a folded project")
     assert ident.write_attribution_top == "shellbiz"
     assert ident.project == "henry", "normalization is for the COMPARISON only"
@@ -4961,7 +4961,7 @@ async def test_fleet_harness_registry_survives_a_blind_census(actions: Actions) 
 
 
 async def test_fleet_groups_a_folded_project_under_its_survivor(actions: Actions) -> None:
-    """The repo:henry->repo:shellbiz specimen: an Agent's raw `project` assertion still
+    """The folded-project specimen: an Agent's raw `project` assertion still
     names the FOLDED label after a fold_project. fold_project re-addresses
     agent_mounts.project and the ownership link types, but never the Agent's own
     current_assertions property. fleet()'s grouping must normalize through merged_into or
@@ -6456,7 +6456,7 @@ async def test_resolve_handle_still_resolves_an_eligible_holder(actions: Actions
 
 # ═══ THE ANCHOR-MIS-RESOLUTION REFUSAL GATE (porting #48's shape
 # to the name-claim path) ══════════════════════════════════════════════
-# THE MARQUEE SPECIMEN: a session spawned into a seat's own office (or carrying its own
+# THE MIS-RESOLUTION SPECIMEN: a session spawned into a seat's own office (or carrying its own
 # `--bg` job_dir anchor) asked claim_name for THAT seat's name, was correctly refused
 # (held by a different lineage), then successfully claimed a totally different, unconflicted
 # name instead, minting a stranger Agent + Seat (+ a downstream orphan SoftwareProject)
@@ -6475,7 +6475,7 @@ async def _seated_object_counts(actions: Actions) -> tuple[int, int, int]:
 async def test_claim_name_refuses_the_whole_call_when_cwd_anchors_a_different_seat(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE CWD SHAPE of the specimen: the caller's own office IS Marquee's, a different
+    """THE CWD SHAPE of the specimen: the caller's own office IS the seat's, a different
     lineage already holds that name, and the caller then reaches for an unrelated,
     unconflicted name ("Awning") instead. Must refuse the WHOLE claim, zero writes,
     never silently mint the substitute."""

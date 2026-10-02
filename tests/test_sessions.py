@@ -1451,7 +1451,7 @@ async def test_the_miner_stops_plagiarising_its_most_diligent_authors(actions: A
     from src.orchestrator.capture import record_decision
 
     pool = actions.pool
-    # a session whose transcript is 513aa520... but which MOUNTED and took a named seat
+    # a session whose transcript id is one thing but which MOUNTED and took a named seat
     await pool.execute(
         "INSERT INTO agent_mounts (agent_id, job_dir, cwd, last_seen) "
         "VALUES ($1,$2,$3, now()) ON CONFLICT (job_dir) DO UPDATE SET agent_id=EXCLUDED.agent_id",
