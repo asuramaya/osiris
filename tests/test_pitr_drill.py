@@ -186,7 +186,8 @@ def test_soul_round_trip_samples_pages_never_sorts_the_whole_table(monkeypatch) 
         return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
 
     monkeypatch.setattr(drill.subprocess, "run", fake_run)
-    assert drill._soul_round_trip_check("scratch") is None   # only plaintext rows: not a failure
+    monkeypatch.setattr(drill, "_soul_encryption_state", lambda: "pending")
+    assert drill._soul_round_trip_check("scratch") is None   # plaintext only, unfinished: unproven
     assert "TABLESAMPLE SYSTEM" in seen[0] and "random()" not in " ".join(seen)
     assert "TABLESAMPLE" not in seen[1] and seen[1].endswith("LIMIT 50")
 
@@ -215,3 +216,63 @@ def test_soul_round_trip_decrypts_a_long_row_it_reads_back_as_hex(monkeypatch) -
     assert drill._soul_round_trip_check("scratch") is None
     monkeypatch.setattr(drill.subprocess, "run", reply(other.encrypt(long_line)))
     assert "round-trip FAILED" in (drill._soul_round_trip_check("scratch") or "")
+
+
+def _sample_reply(monkeypatch, drill, rows: list[bytes]) -> None:  # noqa: ANN001
+    import subprocess
+
+    def fake_run(cmd, **kw):  # noqa: ANN001, ANN202
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout="".join(r.hex() + "\n" for r in rows), stderr="")
+
+    monkeypatch.setattr(drill.subprocess, "run", fake_run)
+
+
+def test_soul_round_trip_with_rows_but_none_encrypted_fails_when_encryption_is_complete(
+    monkeypatch,
+) -> None:
+    from scripts import osiris_pitr_drill as drill
+
+    _sample_reply(monkeypatch, drill, [b'{"plain":"json line"}', b'{"another":"one"}'])
+    monkeypatch.setattr(drill, "_soul_encryption_state", lambda: "complete")
+    fail = drill._soul_round_trip_check("scratch")
+    assert fail is not None and "proved NOTHING" in fail and "sampled 2 row(s)" in fail
+
+
+def test_soul_round_trip_unproven_is_named_but_not_a_failure_when_encryption_is_unfinished(
+    monkeypatch, capsys,
+) -> None:
+    from scripts import osiris_pitr_drill as drill
+
+    for state in ("no_key", "pending", "running", "unknown"):
+        _sample_reply(monkeypatch, drill, [b'{"plain":"json line"}'])
+        monkeypatch.setattr(drill, "_soul_encryption_state", lambda state=state: state)
+        assert drill._soul_round_trip_check("scratch") is None
+        out = capsys.readouterr().out
+        assert "UNPROVEN" in out and state in out
+
+
+def test_soul_round_trip_on_an_empty_table_passes_quietly(monkeypatch, capsys) -> None:
+    from scripts import osiris_pitr_drill as drill
+
+    _sample_reply(monkeypatch, drill, [])
+    monkeypatch.setattr(drill, "_soul_encryption_state", lambda: "complete")
+    assert drill._soul_round_trip_check("scratch") is None
+    assert "UNPROVEN" not in capsys.readouterr().out
+
+
+def test_soul_encryption_state_reads_the_progress_record_and_never_raises(monkeypatch) -> None:
+    from scripts import osiris_pitr_drill as drill
+
+    monkeypatch.setattr("src.orchestrator.soul_encrypt_progress.read_progress",
+                        lambda: {"state": "complete"})
+    monkeypatch.setattr("src.ingest.soul_crypto.soul_key_status", lambda **k: {"present": True})
+    assert drill._soul_encryption_state() == "complete"
+    monkeypatch.setattr("src.ingest.soul_crypto.soul_key_status", lambda **k: {"present": False})
+    assert drill._soul_encryption_state() == "no_key"
+
+    def boom() -> dict:
+        raise OSError("unreadable")
+
+    monkeypatch.setattr("src.orchestrator.soul_encrypt_progress.read_progress", boom)
+    assert drill._soul_encryption_state() == "unknown"
