@@ -303,35 +303,100 @@ def test_cli_reports_and_prunes_basebackups_as_their_own_population(
 
 # --- WAL retention -----------------------------------------------
 
-def _w(path: str, hours_ago: float) -> WalSegment:
-    return WalSegment(path, NOW - timedelta(hours=hours_ago))
+def _seg(name: str) -> WalSegment:
+    return WalSegment(f"/vault/wal_archive/{name}", NOW)
 
 
-def test_wal_segments_older_than_the_oldest_kept_backup_are_removed() -> None:
-    old = _w("old", hours_ago=100)
-    kept = _w("kept", hours_ago=10)
-    plan = plan_prune_wal([old, kept], oldest_kept_backup_when=NOW - timedelta(hours=50))
-    assert plan["keep"] == [kept]
+def _write_base_backup(path: Path, start_file: str) -> None:
+    """A real gzip tarball whose first member is a `backup_label` naming `start_file`."""
+    import io
+    import tarfile
+
+    label = (f"START WAL LOCATION: 1A/17A00028 (file {start_file})\n"
+             "BACKUP METHOD: streamed\n").encode()
+    with tarfile.open(path, "w:gz") as tf:
+        info = tarfile.TarInfo("backup_label")
+        info.size = len(label)
+        tf.addfile(info, io.BytesIO(label))
+        data = b"x" * 100
+        info2 = tarfile.TarInfo("PG_VERSION")
+        info2.size = len(data)
+        tf.addfile(info2, io.BytesIO(data))
+
+
+A = "000000010000001A00000017"
+
+
+def test_wal_segments_before_the_oldest_kept_backups_start_are_removed() -> None:
+    old, at, later = (_seg("000000010000001A00000016"), _seg(A),
+                      _seg("000000010000001A00000018"))
+    plan = plan_prune_wal([old, at, later], kept_start_segments=[A])
     assert plan["remove"] == [old]
+    assert plan["keep"] == [at, later]
 
 
-def test_a_segment_exactly_at_the_anchor_is_kept_not_removed() -> None:
-    """>= the anchor, not only strictly after it: the base backup's own moment is
-    still needed for a restore starting exactly there."""
-    anchor = NOW - timedelta(hours=50)
-    at_anchor = _w("at_anchor", hours_ago=50)
-    plan = plan_prune_wal([at_anchor], oldest_kept_backup_when=anchor)
-    assert plan["keep"] == [at_anchor]
-    assert plan["remove"] == []
+def test_wal_retention_is_by_position_never_by_file_time() -> None:
+    """A segment's file time is when it was pulled into the vault and a backup's file name
+    is local wall-clock time parsed as UTC; neither says what a restore needs. A segment
+    that LOOKS ancient by file time is kept when the backup still needs it."""
+    ancient = WalSegment("/v/000000010000001A00000020", NOW - timedelta(days=400))
+    plan = plan_prune_wal([ancient], kept_start_segments=[A])
+    assert plan["keep"] == [ancient] and plan["remove"] == []
+
+
+def test_wal_retention_keeps_what_the_oldest_of_several_kept_backups_needs() -> None:
+    newer_start = "000000010000001B00000005"
+    mid, early = _seg("000000010000001A00000020"), _seg("000000010000001A00000010")
+    plan = plan_prune_wal([early, mid], kept_start_segments=[newer_start, A])
+    assert plan["keep"] == [mid] and plan["remove"] == [early]
+
+
+def test_wal_retention_keeps_later_timelines_and_never_removes_other_files() -> None:
+    """A backup replays its own timeline and then follows the history onto later ones, so a
+    later-timeline segment is needed even though its name sorts after; an earlier-timeline
+    segment is not. History, backup-label and partial files are never removed."""
+    later_tl = _seg("000000020000000100000001")
+    earlier_tl = _seg("000000010000000100000001")
+    hist = _seg("0000000A.history")
+    label = _seg("000000010000000100000001.000000A8.backup")
+    plan = plan_prune_wal([later_tl, earlier_tl, hist, label],
+                          kept_start_segments=["000000020000000000000005"])
+    assert earlier_tl in plan["remove"]
+    assert later_tl in plan["keep"] and hist in plan["keep"] and label in plan["keep"]
 
 
 def test_no_kept_backup_at_all_keeps_every_segment() -> None:
     """Nothing to anchor a retention point to: refusing to guess is safer than
     deleting WAL that might still be needed for the very next backup taken."""
-    segs = [_w("a", 100), _w("b", 5)]
-    plan = plan_prune_wal(segs, oldest_kept_backup_when=None)
-    assert plan["keep"] == segs
-    assert plan["remove"] == []
+    segs = [_seg("000000010000001A00000001"), _seg("000000010000001A00000099")]
+    for anchors in (None, []):
+        plan = plan_prune_wal(segs, kept_start_segments=anchors)
+        assert plan["keep"] == segs and plan["remove"] == []
+
+
+def test_backup_start_segment_is_read_from_the_tarballs_own_label(tmp_path: Path) -> None:
+    from scripts.osiris_prune_ladder import _backup_start_segment
+
+    good = tmp_path / "first.tar.gz"
+    _write_base_backup(good, A)
+    assert _backup_start_segment(str(good)) == A
+    junk = tmp_path / "second.tar.gz"
+    junk.write_bytes(b"not a tarball")
+    assert _backup_start_segment(str(junk)) is None
+    assert _backup_start_segment(str(tmp_path / "missing.tar.gz")) is None
+
+
+def test_an_unreadable_kept_backup_keeps_all_wal(tmp_path: Path) -> None:
+    from scripts.osiris_prune_ladder import _kept_backup_start_segments
+
+    good = tmp_path / "a.tar.gz"
+    _write_base_backup(good, A)
+    junk = tmp_path / "b.tar.gz"
+    junk.write_bytes(b"x")
+    assert _kept_backup_start_segments(
+        {"keep": [DumpFile(str(good), NOW)], "remove": []}) == [A]
+    assert _kept_backup_start_segments(
+        {"keep": [DumpFile(str(good), NOW), DumpFile(str(junk), NOW)], "remove": []}) is None
 
 
 def test_wal_retention_end_to_end_via_the_cli(tmp_path, capsys) -> None:  # noqa: ANN001
@@ -345,17 +410,12 @@ def test_wal_retention_end_to_end_via_the_cli(tmp_path, capsys) -> None:  # noqa
     vault.mkdir()
     basebackups.mkdir()
     wal_dir.mkdir()
-    # one recent base backup, its own timestamp becomes the WAL retention anchor
-    (basebackups / "osiris-basebackup-20260908-000000.tar.gz").write_bytes(b"x" * 10)
-    # a WAL segment older than the backup: removable
-    old_seg = wal_dir / "000000010000000000000001"
-    old_seg.write_bytes(b"x" * 10)
-    import os
-    import time
-    old_time = time.time() - 90 * 86400
-    os.utime(old_seg, (old_time, old_time))
-    # a WAL segment newer than the backup: kept
-    (wal_dir / "000000010000000000000002").write_bytes(b"x" * 10)
+    # one recent base backup; its label's start segment is the retention anchor
+    _write_base_backup(basebackups / "osiris-basebackup-20260908-000000.tar.gz",
+                       "000000010000000000000002")
+    (wal_dir / "000000010000000000000001").write_bytes(b"x" * 10)   # before the start: removable
+    (wal_dir / "000000010000000000000002").write_bytes(b"x" * 10)   # the start segment: kept
+    (wal_dir / "000000010000000000000003").write_bytes(b"x" * 10)   # after it: kept
 
     rc = main(["--backups", str(backups), "--vault", str(vault)])
 
@@ -364,6 +424,7 @@ def test_wal_retention_end_to_end_via_the_cli(tmp_path, capsys) -> None:  # noqa
     assert "vault/wal_archive" in out
     assert "000000010000000000000001" in out
     assert "000000010000000000000002" not in out
+    assert "000000010000000000000003" not in out
 
 
 # ── legacy transcript tarballs: pre-week-key files that

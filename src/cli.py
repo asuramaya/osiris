@@ -1042,7 +1042,7 @@ async def cmd_soul_key(
     action: str, *, owner: str | None = None, path: str | None = None,
     backend: str | None = None, finish: bool = False, print_recovery: bool = False,
     repo_url: str | None = None, restart: bool = False, as_json: bool = False,
-    exact: bool = False, recovery_file: str | None = None,
+    exact: bool = False, recovery_file: str | None = None, full: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris soul-key <status|init|rotate|restore-drill|enroll-recovery|verify-recovery|
@@ -1140,7 +1140,8 @@ async def cmd_soul_key(
             out = await soul_key_orchestrator.soul_key_rotate(
                 pool, path=path, finish=finish, print_recovery=print_recovery)
         elif action == "restore-drill":
-            out = await soul_key_orchestrator.soul_key_restore_drill(pool, repo_url=repo_url)
+            out = await soul_key_orchestrator.soul_key_restore_drill(
+                pool, repo_url=repo_url, full=full)
         else:  # enroll-recovery / verify-recovery / recover: rp_id off settings
             from src.orchestrator.settings_service import get_setting
 
@@ -1208,17 +1209,19 @@ async def cmd_offload_runner(
     action: str, *, vault: str | None = None, as_json: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris offload-runner tick: ONE tick of THE OPPORTUNISTIC OFFLOAD RUNNER, meant as
-    `osiris-offload.timer`'s own `ExecStart` but safe to run by hand any time (idempotent,
-    never blocks on an absent target). `action` stays a real parameter (matching
-    `soul-key`'s own shape) even though `tick` is the only one today: the natural slot for
-    a future `status`/`history` action reading `offload_runner.offload_receipts()`
-    directly, without a second CLI command to remember."""
+    """osiris offload-runner <tick|drill>: `drill` is one pass of the scheduled restore test
+    (`osiris-restore-drill.timer`, `scheduled_drill.run_drill_pass`). `tick`: ONE tick of
+    THE OPPORTUNISTIC OFFLOAD RUNNER, meant as `osiris-offload.timer`'s own `ExecStart` but
+    safe to run by hand any time (idempotent, never blocks on an absent target). `action`
+    stays a real parameter (matching `soul-key`'s own shape): the natural slot for a future
+    `status`/`history` action reading `offload_runner.offload_receipts()` directly, without
+    a second CLI command to remember."""
     from src import cli_render as render
     from src.orchestrator.offload_runner import run_offload_tick
+    from src.orchestrator.scheduled_drill import run_drill_pass
 
-    if action != "tick":
-        print(f"osiris offload-runner: action must be 'tick' (got {action!r})",
+    if action not in ("tick", "drill"):
+        print(f"osiris offload-runner: action must be 'tick' or 'drill' (got {action!r})",
               file=sys.stderr)
         return 1
     owns_pool = pool is None
@@ -1241,7 +1244,10 @@ async def cmd_offload_runner(
     try:
         from pathlib import Path as _Path
 
-        out = await run_offload_tick(pool, vault=_Path(vault) if vault else None)
+        if action == "drill":
+            out = await run_drill_pass(pool)
+        else:
+            out = await run_offload_tick(pool, vault=_Path(vault) if vault else None)
     finally:
         if owns_pool:
             await pool.close()
@@ -8051,6 +8057,10 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="recover only: a copy of the recovery file taken from a "
                                  "backup destination (the osiris-recovery/ folder beside "
                                  "each target), for a machine that lost everything")
+    p_soul_key.add_argument("--full", action="store_true",
+                            help="restore-drill only: restore the WHOLE latest snapshot "
+                                 "(can move gigabytes) instead of the bounded check and "
+                                 "sample restore the scheduled test runs")
     p_soul_key.add_argument("--exact", action="store_true",
                             help="status only: count the rows still stored in plain "
                                  "text exactly (decrypts every row, can take minutes on a "
@@ -8090,10 +8100,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "vault to it via restic, recording a result per target. This is meant to run "
         "as the offload timer's own scheduled job, and is safe to run by hand any "
         "time too."),
-        epilog="example: osiris offload-runner tick")
-    p_offload_runner.add_argument("action", choices=["tick"],
+        epilog="example: osiris offload-runner tick\n"
+               "example: osiris offload-runner drill")
+    p_offload_runner.add_argument("action", choices=["tick", "drill"],
                                   help="tick: run one pass over every enabled, present "
-                                       "offload target")
+                                       "offload target. drill: run the bounded restore "
+                                       "test for every present target that is due one "
+                                       "(its own timer runs this; it never runs inside a "
+                                       "tick)")
     p_offload_runner.add_argument("--vault", default=None,
                                   help="override the vault directory being synced "
                                        "(defaults to $OSIRIS_VAULT or ~/osiris-vault)")
@@ -9611,7 +9625,7 @@ def main(argv: list[str] | None = None) -> int:
             args.action, owner=args.owner, path=args.path, backend=args.backend,
             finish=args.finish, print_recovery=args.print_recovery,
             repo_url=args.repo_url, restart=args.restart, as_json=args.as_json,
-            exact=args.exact, recovery_file=args.recovery_file))
+            exact=args.exact, recovery_file=args.recovery_file, full=args.full))
     if args.command == "restic-key":
         return asyncio.run(cmd_restic_key(
             args.action, path=args.path, backend=args.backend, as_json=args.as_json))

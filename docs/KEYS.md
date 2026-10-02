@@ -198,7 +198,7 @@ osiris soul-key <status|init|rotate|restore-drill|enroll-recovery|verify-recover
 | `enroll-recovery` | link the live key to a FIDO2 Security Key (PIN and touch). Command-line only, never over the network API |
 | `recover` | restore a key from a Security Key enrollment onto a machine with no live key yet. Command-line only, never over the network API |
 | `rotate` | mint a new key and re-encrypt every row onto it. `--finish` once the result is clean |
-| `restore-drill` | prove that an off-box backup repository actually restores. Runs against every configured off-box backup URL, or one named target via `--repo-url` |
+| `restore-drill` | prove that an off-box backup repository actually restores. Runs the bounded test (repository check with a read-data subset, the newest dump's header, a verified restore of a few small files; the same one the scheduled test runs) against every configured off-box backup URL, or one named target via `--repo-url`. `--full` restores the whole latest snapshot instead |
 
 Flags: `--recovery-file PATH` applies to `recover` only (see below). `--path P` overrides the automatically resolved key file location. `--backend
 host-cred|host+tpm2|file` applies to `init`/`recover` only. `--owner USER` applies to `init`

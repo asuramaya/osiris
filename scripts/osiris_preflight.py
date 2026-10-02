@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 DSN = "postgresql://osiris:osiris@127.0.0.1:5601/osiris"
 UNITS = ["osiris-mcp", "osiris-worker", "osiris-pulse", "osiris-console"]
-TIMERS = ["osiris-backup.timer"]
+TIMERS = ["osiris-backup.timer", "osiris-base-backup.timer"]
 CONTAINERS = ["osiris-pg", "osiris-redis"]
 NAMED_VOLUMES = {"osiris-pg-data", "osiris-redis-data"}
 # Portable: derive the repo from THIS file, never a hardcoded home. A path baked to one
@@ -54,6 +54,10 @@ BACKUP_DIR = REPO / "backups"
 VAULT_DIR = Path(os.environ.get("OSIRIS_VAULT") or Path.home() / "osiris-vault")
 BACKUP_MAX_AGE_H = 48
 VAULT_MAX_AGE_D = 8
+# The base backup runs weekly and a restore replays every WAL segment since the newest one,
+# so a silently failing weekly run must show within one more week, not a month: past this
+# the audit fails and names the unit to read.
+BASE_BACKUP_MAX_AGE_D = 10
 DEFAULT_PORTS = ["5432", "6379"]  # the shadow-trap band: settings' fallback DSN aims here
 # EARLY-WARNING FOR THE ENOSPC INCIDENT: /tmp (tmpfs, 1,048,576 inodes) hit 99.98% inode
 # use at ~07:00Z 2026-09-04. Every Bash tool call in every live seat failed with ENOSPC
@@ -174,6 +178,11 @@ def collect() -> dict:
     if dumps:
         m["backup_age_h"] = (time.time() - dumps[-1].stat().st_mtime) / 3600
         m["newest_dump"] = str(dumps[-1])
+    base_backups = sorted((VAULT_DIR / "basebackups").glob("osiris-basebackup-*.tar.gz"),
+                          key=lambda p: p.stat().st_mtime) \
+        if (VAULT_DIR / "basebackups").is_dir() else []
+    m["base_backup_age_d"] = (
+        (time.time() - base_backups[-1].stat().st_mtime) / 86400 if base_backups else None)
     vault = sorted(VAULT_DIR.glob("*"), key=lambda p: p.stat().st_mtime) \
         if VAULT_DIR.is_dir() else []
     if vault:
@@ -343,6 +352,20 @@ def evaluate(m: dict) -> list[str]:
         fails.append("NO backups exist")
     elif m["backup_age_h"] > BACKUP_MAX_AGE_H:
         fails.append(f"newest backup is {m['backup_age_h']:.0f}h old (max {BACKUP_MAX_AGE_H}h)")
+    if "base_backup_age_d" in m:
+        age = m["base_backup_age_d"]
+        timer = m["timers"].get("osiris-base-backup.timer")
+        if age is None:
+            if timer and timer["enabled"] == "enabled":
+                fails.append("NO base backup exists although osiris-base-backup.timer is "
+                             "enabled: a point-in-time restore has nothing to start from "
+                             "(journalctl --user -u osiris-base-backup)")
+        elif age > BASE_BACKUP_MAX_AGE_D:
+            fails.append(
+                f"newest base backup is {age:.0f}d old (max {BASE_BACKUP_MAX_AGE_D}d): the "
+                "weekly osiris-base-backup.timer is failing or not running, and every "
+                "restore replays that much more WAL "
+                "(journalctl --user -u osiris-base-backup)")
     if m["vault_age_d"] is None:
         fails.append("vault is empty or missing")
     elif m["vault_age_d"] > VAULT_MAX_AGE_D:

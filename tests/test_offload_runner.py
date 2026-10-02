@@ -160,16 +160,15 @@ async def test_the_recovery_copies_still_happen_when_the_backup_password_is_miss
     assert out["recovery_copies"] == [{"dest": "(vault)", "ok": True}]
 
 
-async def test_the_first_successful_offload_is_followed_by_a_restore_drill_then_not_again(
+async def test_the_tick_never_runs_a_restore_drill_even_when_one_is_due(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from src.orchestrator import scheduled_drill, soul_key
-
-    drilled: list[str] = []
+    """The drill re-reads data, so it has its own timer and must never delay an offload tick:
+    a tick that just made a first successful offload (a drill is due) still runs none."""
+    from src.orchestrator import scheduled_drill
 
     def _drill(url: str) -> str | None:
-        drilled.append(url)
-        return None
+        raise AssertionError("the offload tick must never run a restore drill")
 
     monkeypatch.setattr(scheduled_drill, "_real_run_drill", _drill)
     monkeypatch.setattr(offload_runner, "_run_restic_backup", lambda **kw: None)
@@ -178,32 +177,9 @@ async def test_the_first_successful_offload_is_followed_by_a_restore_drill_then_
         offload_targets=[{"name": "nas", "kind": "restic", "path_or_url": "sftp:nas:/r",
                           "schedule": "*-*-* 03:00:00", "enabled": True}])
 
-    first = await offload_runner.run_offload_tick(actions.pool)
-    second = await offload_runner.run_offload_tick(actions.pool)
-
-    assert first["drills"] == [{"name": "nas", "ok": True}]
-    assert "drills" not in second
-    assert drilled == ["sftp:nas:/r"]
-    assert soul_key.restore_drill_receipts()["sftp:nas:/r"]["last_passed_at"]
-
-
-async def test_no_drill_runs_when_the_backup_itself_failed(
-    actions: Actions, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from src.orchestrator import scheduled_drill
-
-    def _drill(url: str) -> str | None:
-        raise AssertionError("must not drill a target that never had a good offload")
-
-    monkeypatch.setattr(scheduled_drill, "_real_run_drill", _drill)
-    monkeypatch.setattr(offload_runner, "_run_restic_backup", lambda **kw: "boom")
-    await write_backup_settings(
-        actions.pool, actor="operator", because="x",
-        offload_targets=[{"name": "nas", "kind": "restic", "path_or_url": "sftp:nas:/r",
-                          "schedule": "*-*-* 03:00:00", "enabled": True}])
-
     out = await offload_runner.run_offload_tick(actions.pool)
 
+    assert out["targets"] == [{"name": "nas", "ok": True}]
     assert "drills" not in out
 
 
