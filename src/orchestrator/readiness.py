@@ -22,6 +22,7 @@ compositions.py's own read half).
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 StepStatus = Literal["done", "missing", "needs_attention"]
@@ -113,6 +114,43 @@ def _tpm_step(soul_key: dict[str, Any], key_present: bool) -> dict[str, Any]:
     return _step("key_tpm_sealed", label, "missing", reason,
                  {"kind": "tpm_setup", "commands": TPM_JOIN_COMMANDS}, mode="hands",
                  optional=True)
+
+
+def _when(value: Any) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _restore_test_step(
+    enabled_targets: list[dict[str, Any]], restore_drill_receipts: dict[str, Any],
+) -> dict[str, Any]:
+    """DONE ONLY FOR A TARGET THAT IS CONFIGURED NOW: a restore test passed against that
+    target's own repository AFTER its first successful offload. A receipt for some other
+    repository, or one that predates the target ever holding a backup (a drill run by hand
+    before any destination existed, a destination since removed), proves nothing about the
+    backups this machine is actually making, and used to read as done."""
+    label = "Restore test passed"
+    failed: str | None = None
+    for target in enabled_targets:
+        receipt = restore_drill_receipts.get(str(target.get("path_or_url") or ""), {})
+        first_offload = _when(target.get("first_successful_offload")
+                              or target.get("last_successful_offload"))
+        passed = _when(receipt.get("last_passed_at"))
+        if first_offload is not None and passed is not None and passed >= first_offload:
+            return _step("restore_test_passed", label, "done", None, None)
+        if first_offload is not None and receipt.get("last_error"):
+            failed = str(receipt["last_error"])
+    if failed:
+        return _step("restore_test_passed", label, "needs_attention",
+                     f"The last restore test failed and will be retried: {failed}", None)
+    if not enabled_targets:
+        return _step("restore_test_passed", label, "missing",
+                     "Runs automatically once a backup target is set up and has had a "
+                     "first backup.", None)
+    return _step("restore_test_passed", label, "missing",
+                 "Runs automatically after the first backup, then weekly.", None)
 
 
 def compute_readiness_steps(
@@ -242,17 +280,7 @@ def compute_readiness_steps(
             "offload_run", "First offload run", "missing",
             "Runs automatically once a backup target is present.", None))
 
-    drill_passed = any(r.get("last_passed_at") for r in restore_drill_receipts.values())
-    if drill_passed:
-        steps.append(_step("restore_test_passed", "Restore test passed", "done", None, None))
-    else:
-        failed = next((r["last_error"] for r in restore_drill_receipts.values()
-                       if r.get("last_error")), None)
-        steps.append(_step(
-            "restore_test_passed", "Restore test passed",
-            "needs_attention" if failed else "missing",
-            f"The last restore test failed and will be retried: {failed}" if failed
-            else "Runs automatically after the first backup, then weekly.", None))
+    steps.append(_restore_test_step(enabled_targets, restore_drill_receipts))
 
     steps.append(_tpm_step(soul_key, key_present))
 
