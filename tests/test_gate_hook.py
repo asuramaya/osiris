@@ -160,6 +160,21 @@ def test_classify_reproduces_the_mounts_split(tmp_path: Path) -> None:
     assert fixture_only == {"tests/test_x1.py", "tests/test_x2.py", "tests/test_x3.py"}
 
 
+def test_classify_a_modules_own_test_is_direct_even_when_it_imports_only_common_names(
+    tmp_path: Path,
+) -> None:
+    """In a hub module most files import the same few names, so the module's own test can
+    import only those and read as common by majority. It is still the file written to
+    exercise the module, so it runs; the unrelated files that merely seed a row do not."""
+    _write(tmp_path, "src/orchestrator/hub.py")
+    for name in ("x1", "x2", "hub"):
+        _write(tmp_path, f"tests/test_{name}.py",
+               "from src.orchestrator.hub import save_row\n")
+    direct, fixture_only = classify_test_files(["src/orchestrator/hub.py"], tmp_path)
+    assert direct == {"tests/test_hub.py"}
+    assert fixture_only == {"tests/test_x1.py", "tests/test_x2.py"}
+
+
 def test_classify_a_touched_test_file_is_always_direct(tmp_path: Path) -> None:
     out_direct, out_fixture = classify_test_files(["tests/test_cli.py"], tmp_path)
     assert out_direct == {"tests/test_cli.py"}
@@ -175,6 +190,11 @@ def test_classify_with_no_split_needed_everything_is_direct(tmp_path: Path) -> N
     direct, fixture_only = classify_test_files(["src/orchestrator/widget.py"], tmp_path)
     assert direct == {"tests/test_widget.py"}
     assert fixture_only == set()
+
+
+def _gates(results: dict[str, tuple[bool, str]]) -> Any:
+    """A stand-in for run_gates carrying its real signature (the report reads `info`)."""
+    return lambda root, changed, info=None: results
 
 
 # --- run_gates: the fanout cap applies ONLY to the fixture-only tier ----------------
@@ -338,7 +358,7 @@ def test_precommit_passes_clean_regardless_of_enforce(monkeypatch: Any) -> None:
     monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
     monkeypatch.setattr(
         gate_hook, "run_gates",
-        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+        _gates({"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")}))
     monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
     assert cmd_precommit(enforce=False) == 0
     assert cmd_precommit(enforce=True) == 0
@@ -348,7 +368,7 @@ def test_precommit_lets_a_failure_through_when_not_enforced(monkeypatch: Any) ->
     monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
     monkeypatch.setattr(
         gate_hook, "run_gates",
-        lambda root, changed: {"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")})
+        _gates({"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")}))
     monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
     assert cmd_precommit(enforce=False) == 0
 
@@ -357,7 +377,7 @@ def test_precommit_refuses_a_failure_when_enforced(monkeypatch: Any) -> None:
     monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
     monkeypatch.setattr(
         gate_hook, "run_gates",
-        lambda root, changed: {"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")})
+        _gates({"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")}))
     monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
     assert cmd_precommit(enforce=True) == 1
 
@@ -861,11 +881,11 @@ def test_precommit_prints_the_derivation_trace_question_when_a_tool_is_touched(
     monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["src/pkg/x.py"])
     monkeypatch.setattr(
         gate_hook, "run_gates",
-        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+        _gates({"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")}))
     monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
     monkeypatch.setattr(
         gate_hook, "receipt_shaped_touches",
-        lambda root, changed: {"src/pkg/x.py": ["real_tool"]})
+        _gates({"src/pkg/x.py": ["real_tool"]}))
     assert cmd_precommit(enforce=True) == 0
     out = capsys.readouterr().out
     assert DERIVATION_TRACE_QUESTION in out
@@ -878,7 +898,7 @@ def test_precommit_is_silent_about_derivation_trace_when_nothing_receipt_shaped_
     monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
     monkeypatch.setattr(
         gate_hook, "run_gates",
-        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+        _gates({"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")}))
     monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
     monkeypatch.setattr(gate_hook, "receipt_shaped_touches", lambda root, changed: {})
     assert cmd_precommit(enforce=True) == 0
@@ -894,11 +914,11 @@ def test_derivation_trace_question_never_changes_the_verdict_on_a_failing_gate(
     monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["src/pkg/x.py"])
     monkeypatch.setattr(
         gate_hook, "run_gates",
-        lambda root, changed: {"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")})
+        _gates({"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")}))
     monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
     monkeypatch.setattr(
         gate_hook, "receipt_shaped_touches",
-        lambda root, changed: {"src/pkg/x.py": ["real_tool"]})
+        _gates({"src/pkg/x.py": ["real_tool"]}))
     assert cmd_precommit(enforce=True) == 1
     out = capsys.readouterr().out
     assert DERIVATION_TRACE_QUESTION in out
@@ -933,7 +953,7 @@ def test_precommit_detects_a_stage_race_and_refuses_when_enforced(
     monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
     monkeypatch.setattr(
         gate_hook, "run_gates",
-        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+        _gates({"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")}))
     digests = iter(["before", "after"])
     monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: next(digests))
     assert cmd_precommit(enforce=True) == 1
@@ -948,7 +968,7 @@ def test_precommit_stage_race_is_advisory_when_not_enforced(
     monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
     monkeypatch.setattr(
         gate_hook, "run_gates",
-        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+        _gates({"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")}))
     digests = iter(["before", "after"])
     monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: next(digests))
     assert cmd_precommit(enforce=False) == 0
@@ -965,7 +985,7 @@ def test_precommit_stage_race_names_the_files_that_appeared(
     monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: next(file_calls))
     monkeypatch.setattr(
         gate_hook, "run_gates",
-        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+        _gates({"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")}))
     digests = iter(["before", "after"])
     monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: next(digests))
     assert cmd_precommit(enforce=True) == 1
@@ -981,7 +1001,7 @@ def test_precommit_a_stage_race_takes_priority_even_when_gates_all_passed(
     monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
     monkeypatch.setattr(
         gate_hook, "run_gates",
-        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+        _gates({"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")}))
     digests = iter(["before", "after"])
     monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: next(digests))
     assert cmd_precommit(enforce=True) == 1
@@ -1001,7 +1021,7 @@ def test_precommit_race_refusal_reads_differently_from_a_gate_failure_refusal(
 
     monkeypatch.setattr(
         gate_hook, "run_gates",
-        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+        _gates({"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")}))
     race_digests = iter(["before", "after"])
     monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: next(race_digests))
     assert cmd_precommit(enforce=True) == 1
@@ -1011,7 +1031,7 @@ def test_precommit_race_refusal_reads_differently_from_a_gate_failure_refusal(
 
     monkeypatch.setattr(
         gate_hook, "run_gates",
-        lambda root, changed: {"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")})
+        _gates({"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")}))
     monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
     assert cmd_precommit(enforce=True) == 1
     fail_out = capsys.readouterr().out
@@ -1030,7 +1050,7 @@ def test_precommit_no_race_is_unaffected_when_digest_is_stable(
     monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
     monkeypatch.setattr(
         gate_hook, "run_gates",
-        lambda root, changed: {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")})
+        _gates({"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, "")}))
     monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "stable")
     assert cmd_precommit(enforce=True) == 0
     out = capsys.readouterr().out
@@ -1268,7 +1288,7 @@ def test_main_a_real_gate_failure_still_refuses_normally(monkeypatch: Any) -> No
     monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
     monkeypatch.setattr(
         gate_hook, "run_gates",
-        lambda root, changed: {"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")})
+        _gates({"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")}))
     monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
     from src.config.settings import get_settings
 
@@ -1444,3 +1464,185 @@ def test_run_gates_shadow_lint_is_a_plain_ok_with_nothing_to_flag(
     _write(tmp_path, "src/orchestrator/clean.py", "def f():\n    return 1\n")
     results = run_gates(tmp_path, ["src/orchestrator/clean.py"])
     assert results["shadow_lint"] == (True, "")
+
+
+# --- the ratchet lints always run, and every run says what it did -------------------------
+
+_RATCHET_NAMES = {
+    "tests/test_taxonomy_drift.py",
+    "tests/test_product_voice.py",
+    "tests/test_command_names.py",
+    "tests/test_no_real_home_state.py",
+    "tests/test_tool_contract_diet.py",
+}
+
+
+def _capture_pytest(monkeypatch: Any, *, stdout: str = "", returncode: int = 0) -> dict[str, Any]:
+    captured: dict[str, Any] = {}
+
+    class _Proc:
+        pass
+
+    proc = _Proc()
+    proc.returncode = returncode  # type: ignore[attr-defined]
+    proc.stdout = stdout  # type: ignore[attr-defined]
+    proc.stderr = ""  # type: ignore[attr-defined]
+
+    def _fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        return proc
+
+    monkeypatch.setattr(gate_hook.subprocess, "run", _fake_run)
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    return captured
+
+
+def test_the_ratchet_lints_are_pinned_and_always_included() -> None:
+    assert gate_hook._RATCHET_LINTS == _RATCHET_NAMES
+    assert gate_hook._RATCHET_LINTS <= gate_hook._ALWAYS_INCLUDED_STATIC_SCANNERS
+
+
+def test_the_ratchet_lints_run_even_when_the_fixture_only_tier_is_over_the_cap(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """The commit that tripped a ratchet but passed this hook: the fan-out cap omitted its
+    files and nothing else selected the lint. The lints are selected unconditionally."""
+    monkeypatch.setattr(gate_hook, "_PYTEST_FANOUT_CAP", 1)
+    captured = _capture_pytest(monkeypatch, stdout="7 passed in 1.0s")
+    _write(tmp_path, "src/pkg/hub.py")
+    for name in ("f1", "f2"):
+        _write(tmp_path, f"tests/test_{name}.py", "from src.pkg.hub import common\n")
+    for rel in _RATCHET_NAMES:
+        _write(tmp_path, rel)
+    info: dict[str, Any] = {}
+
+    run_gates(tmp_path, ["src/pkg/hub.py"], info)
+
+    for rel in _RATCHET_NAMES:
+        assert rel in captured["cmd"]
+    assert set(info["files_run"]) == _RATCHET_NAMES
+    assert info["omitted_files"] == ["tests/test_f1.py", "tests/test_f2.py"]
+    assert "fan-out cap of 1" in info["omitted_reason"]
+    assert "seed data" in info["omitted_reason"]
+
+
+def test_run_gates_records_pytests_own_summary_line(tmp_path: Path, monkeypatch: Any) -> None:
+    _capture_pytest(monkeypatch, stdout="....\n12 passed, 2 warnings in 3.2s\n")
+    _write(tmp_path, "tests/test_a.py")
+    info: dict[str, Any] = {}
+
+    run_gates(tmp_path, ["tests/test_a.py"], info)
+
+    assert info["summary"] == "12 passed, 2 warnings in 3.2s"
+    assert info["rc"] == 0
+    assert info["files_run"] == ["tests/test_a.py"]
+
+
+def test_run_gates_records_none_when_pytest_printed_no_summary(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    _capture_pytest(monkeypatch, stdout="", returncode=3)
+    _write(tmp_path, "tests/test_a.py")
+    info: dict[str, Any] = {}
+
+    run_gates(tmp_path, ["tests/test_a.py"], info)
+
+    assert info["summary"] is None and info["rc"] == 3
+
+
+def test_pytest_summary_line_reads_the_closing_line_only() -> None:
+    from scripts.gate_hook import pytest_summary_line
+
+    assert pytest_summary_line("....\n256 passed, 5 warnings in 25.65s") == (
+        "256 passed, 5 warnings in 25.65s")
+    assert pytest_summary_line("x\n3 failed, 253 passed in 30.1s\n") == (
+        "3 failed, 253 passed in 30.1s")
+    assert pytest_summary_line("======= 1 error in 2.1s =======") == "1 error in 2.1s"
+    assert pytest_summary_line("no tests ran in 0.01s") == "no tests ran in 0.01s"
+    # a counts-looking line earlier in the output never beats the real closing line
+    assert pytest_summary_line("captured: 1 failed in setup\n9 passed in 1.0s") == (
+        "9 passed in 1.0s")
+    assert pytest_summary_line("") is None
+    assert pytest_summary_line("collected in the cache directory") is None
+
+
+def test_pytest_summary_line_reads_the_colour_coded_line_this_repos_pytest_prints() -> None:
+    """The shape the hook really receives: pytest here colours its output even when piped,
+    and an escape code sits directly against the count. A plain-text-only parser found no
+    summary on a clean run (caught live on this hook's own first commit)."""
+    from scripts.gate_hook import pytest_summary_line
+
+    coloured = ("\x1b[33m\x1b[32m117 passed\x1b[0m, \x1b[33m\x1b[1m3 warnings\x1b[0m"
+                "\x1b[33m in 3.16s\x1b[0m\x1b[0m")
+    assert pytest_summary_line(f"-- Docs: see the docs\n{coloured}") == (
+        "117 passed, 3 warnings in 3.16s")
+    failing = "\x1b[31m\x1b[1m2 failed\x1b[0m, \x1b[32m10 passed\x1b[0m\x1b[31m in 1.00s\x1b[0m"
+    assert pytest_summary_line(failing) == "2 failed, 10 passed in 1.00s"
+
+
+def _info(**over: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {"files_run": ["tests/test_a.py", "tests/test_b.py"],
+                            "omitted_files": [], "omitted_reason": "", "always_included": [],
+                            "rc": 0, "summary": "2 passed in 1.0s"}
+    base.update(over)
+    return base
+
+
+def test_a_plain_pass_still_prints_counts_and_files(capsys: Any) -> None:
+    gate_hook._report(
+        "staged", {"ruff": (True, ""), "pytest": (True, "[tests/test_a.py]\n2 passed")},
+        _info())
+    out = capsys.readouterr().out
+    assert "gate_hook[staged]: PASS" in out
+    assert "result: 2 passed in 1.0s; files run: 2; files omitted: 0" in out
+
+
+def test_unverified_names_every_omitted_file_and_the_reason(capsys: Any) -> None:
+    omitted = [f"tests/test_fx{n}.py" for n in range(35)]
+    info = _info(omitted_files=omitted, omitted_reason="seed-only files over the cap")
+    gate_hook._report(
+        "staged",
+        {"ruff": (True, ""),
+         "pytest": (True, "SKIPPED (partial): ran 2 clean, omitted 35 fixture-only files\nout")},
+        info)
+    out = capsys.readouterr().out
+    assert "PASS (UNVERIFIED: 35 file(s) did NOT run, named below)" in out
+    assert "UNVERIFIED, NOT RUN (35 file(s)): seed-only files over the cap" in out
+    for name in omitted:
+        assert out.count(name) == 1  # every one named, none listed twice
+    assert "files run: 2; files omitted: 35" in out
+
+
+def test_a_run_with_no_pytest_summary_says_so_in_words(capsys: Any) -> None:
+    gate_hook._report(
+        "staged", {"ruff": (True, ""), "pytest": (False, "[tests/test_a.py]\n")},
+        _info(summary=None, rc=1))
+    out = capsys.readouterr().out
+    assert "NO SUMMARY LINE in pytest's output (exit code 1)" in out
+
+
+def test_a_pytest_timeout_is_named_as_having_no_summary(capsys: Any) -> None:
+    gate_hook._report(
+        "staged", {"pytest": (False, "TIMED OUT TWICE: 180s")}, _info(summary=None, rc="timeout"))
+    assert "NO SUMMARY (pytest timed out)" in capsys.readouterr().out
+
+
+def test_a_run_where_no_test_file_resolved_says_pytest_did_not_run(capsys: Any) -> None:
+    gate_hook._report(
+        "staged", {"pytest": (True, "no resolvable test files touched")},
+        _info(files_run=[], summary=None, rc=None))
+    out = capsys.readouterr().out
+    assert "pytest did not run (no test files resolved); files run: 0" in out
+
+
+def test_precommit_prints_the_result_line(monkeypatch: Any, capsys: Any) -> None:
+    def _fake_gates(root: Any, changed: Any, info: Any = None) -> dict[str, tuple[bool, str]]:
+        info.update(_info(summary="5 passed in 0.5s"))
+        return {"ruff": (True, ""), "pytest": (True, "[tests/test_a.py]\n5 passed")}
+
+    monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
+    monkeypatch.setattr(gate_hook, "run_gates", _fake_gates)
+    monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
+    monkeypatch.setattr(gate_hook, "receipt_shaped_touches", lambda root, changed: {})
+    assert cmd_precommit(enforce=False) == 0
+    assert "result: 5 passed in 0.5s; files run: 2; files omitted: 0" in capsys.readouterr().out

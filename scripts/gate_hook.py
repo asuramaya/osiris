@@ -118,8 +118,10 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from scripts.push_guard import git_common_dir
 
@@ -171,6 +173,21 @@ _PYTEST_TIMEOUT_SECS = 180
 # column`) is the repo-wide scanner this belongs here for, so it's named by NODE ID, not
 # by whole file, to avoid dragging in the other 25 tests' own DB fixture cost on every
 # commit regardless of relevance.
+#
+# THE RATCHET LINTS, a second kind of the same thing: each pins a repo-wide count or
+# surface that any tree can move without touching a module its test imports, so import
+# correlation can never select it, and a commit that tripped one passed this hook and
+# failed the full gate. Two full gates failed that way in one week (the taxonomy drift
+# baseline on a stacked tree; a group of tests reading the real credential store).
+# They run on every commit, never subject to the fan-out cap. Measured together at about
+# 11 seconds of test time, which is why they are cheap enough to be unconditional.
+_RATCHET_LINTS: frozenset[str] = frozenset({
+    "tests/test_taxonomy_drift.py",
+    "tests/test_product_voice.py",
+    "tests/test_command_names.py",
+    "tests/test_no_real_home_state.py",
+    "tests/test_tool_contract_diet.py",
+})
 _ALWAYS_INCLUDED_STATIC_SCANNERS: frozenset[str] = frozenset({
     "tests/test_unbounded_wait.py",
     "tests/test_link_classes.py",
@@ -178,7 +195,7 @@ _ALWAYS_INCLUDED_STATIC_SCANNERS: frozenset[str] = frozenset({
     "tests/test_sql_hygiene.py",
     "tests/test_inbox_catalog.py",
     "tests/test_actions.py::test_static_check_only_two_sites_write_the_supersedes_column",
-})
+}) | _RATCHET_LINTS
 
 # THE INSTRUMENT FIX (after three consecutive TIMED-OUT-TWICE
 # refusals on a genuinely clean commit under a measured 1-minute load of 15-32): a FIXED
@@ -391,8 +408,14 @@ def classify_test_files(
                 counts[n] = counts.get(n, 0) + 1
         n_files = len(per_file_names)
         common = {n for n, c in counts.items() if c * 2 > n_files}
+        # THE MODULE'S OWN TEST IS NEVER FIXTURE-ONLY: tests/test_<stem>.py is the file
+        # written to exercise this module, whatever names it happens to import. In a hub
+        # module most files import the same few names, so the own-test file can import only
+        # those and read as "common" by majority; it was being omitted past the cap while
+        # unrelated files that merely seed a row for it ran.
+        own = f"tests/test_{Path(f).stem}.py"
         for tf, names in per_file_names.items():
-            if names and names <= common:
+            if tf != own and names and names <= common:
                 fixture_only.add(tf)
             else:
                 direct.add(tf)
@@ -603,8 +626,34 @@ def shadow_before_use_violations(repo_root: Path, changed_files: list[str]) -> d
     return out
 
 
-def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool, str]]:
-    """ruff/mypy stay whole-project (already single-digit seconds, no scoping needed);
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_PYTEST_SUMMARY_RE = re.compile(
+    r"\b(?:\d+ (?:passed|failed|errors?|skipped|xfailed|xpassed|deselected|rerun)"
+    r"|no tests ran)\b")
+
+
+def pytest_summary_line(out: str) -> str | None:
+    """pytest's own closing line (`3 failed, 253 passed, 5 warnings in 30.1s`), or None when
+    the output has none (a crash before collection, a kill, an empty capture). Read from the
+    end, since it is the last thing pytest prints. This repo's pytest colours its output even
+    when piped, so the escape codes are stripped first: left in, one sits between the digits
+    and whatever precedes them and a word-boundary match finds nothing."""
+    for line in reversed(_ANSI_RE.sub("", out).splitlines()):
+        text = line.strip().strip("=").strip()
+        if " in " in text and _PYTEST_SUMMARY_RE.search(text):
+            return text
+    return None
+
+
+def run_gates(
+    repo_root: Path, changed_files: list[str], info: dict[str, Any] | None = None,
+) -> dict[str, tuple[bool, str]]:
+    """`info`, when given, is filled with the structured facts the report prints on every
+    run so a pass is never a bare word: `files_run`, `omitted_files`, `omitted_reason`,
+    `always_included`, `rc` (pytest's exit code, or "timeout", or None if it never ran)
+    and `summary` (pytest's own closing line, or None).
+
+    ruff/mypy stay whole-project (already single-digit seconds, no scoping needed);
     pytest is the one gate that must be scoped, or it re-imports the 209s full-suite cost
     this mechanism exists to avoid. `classify_test_files` splits the resolved set into DIRECT
     (always run, no cap) and FIXTURE-ONLY (subject to `_PYTEST_FANOUT_CAP`): a hub-module
@@ -626,6 +675,10 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
     AND nothing omitted -> `(True, "no resolvable test files touched")`, the one case that
     is honestly a plain, unqualified "ok": there was nothing to skip in the first place."""
     results: dict[str, tuple[bool, str]] = {}
+    if info is None:
+        info = {}
+    info.update(files_run=[], omitted_files=[], omitted_reason="", always_included=[],
+                rc=None, summary=None)
     results["ruff"] = _run(
         [str(VENV_BIN / "ruff"), "check", "src", "tests", "scripts"], repo_root)
     results["mypy"] = _run([str(VENV_BIN / "mypy"), "src"], repo_root)
@@ -641,6 +694,12 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
     if len(fixture_only) > _PYTEST_FANOUT_CAP:
         omitted = (f"{len(fixture_only)} fixture-only files (hub-module fan-out, over cap "
                    f"{_PYTEST_FANOUT_CAP}): [{' '.join(sorted(fixture_only))}]")
+        info["omitted_files"] = sorted(fixture_only)
+        info["omitted_reason"] = (
+            f"each of these files imports a touched module only to seed data for some "
+            f"other module's test (it does not exercise the touched module's own logic), "
+            f"and there are {len(fixture_only)} of them, over the fan-out cap of "
+            f"{_PYTEST_FANOUT_CAP}, so none of them ran")
     else:
         selected |= fixture_only
     # THE gate_hook CORRELATION GAP:
@@ -661,6 +720,7 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
         if (repo_root / s.split("::", 1)[0]).is_file()
     }
     always_included = sorted(existing_scanners - selected)
+    info["always_included"] = always_included
     selected |= existing_scanners
     if not selected:
         # Unreachable while _ALWAYS_INCLUDED_STATIC_SCANNERS stays non-empty (every commit
@@ -673,6 +733,7 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
         import os
 
         test_files = sorted(selected)
+        info["files_run"] = test_files
         env = dict(**{"TMPDIR": _SAFE_TMPDIR})
 
         # SCRUB GIT_* BEFORE SPAWNING PYTEST -- the 2026-08-27 shared-repo corruption
@@ -755,6 +816,8 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
                 proc = _run_pytest()
             ok = proc.returncode == 0
             out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+            info["rc"] = proc.returncode
+            info["summary"] = pytest_summary_line(out)
             if proc.returncode == _PYTEST_EXIT_NO_TESTS_COLLECTED:
                 # THE SAME DISEASE THIS FUNCTION'S OWN DOCSTRING NAMES, ONE LAYER DOWN.
                 # The "nothing SELECTED" case above is handled honestly. This is "something
@@ -825,6 +888,7 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
             # still refuses unconditionally. `_status_word` below renders this as TIMEOUT,
             # never FAILED.
             tail = f" (also omitted {omitted})" if omitted else ""
+            info["rc"] = "timeout"
             results["pytest"] = (
                 False,
                 f"TIMED OUT TWICE: {pytest_timeout}s{load_note} on the first attempt AND an "
@@ -1010,13 +1074,46 @@ def _print_skip_detail(out: str, indent: str = "    ") -> None:
             print(f"{indent}{line}")
 
 
-def _report(label: str, results: dict[str, tuple[bool, str]]) -> bool:
+def _pytest_result_line(info: dict[str, Any]) -> str:
+    """The one line every run prints about pytest, a pass included: pytest's own closing
+    line (counts), how many files ran and how many were left out. A run with no closing
+    line says so in words instead of printing nothing."""
+    files_run = info.get("files_run") or []
+    omitted = info.get("omitted_files") or []
+    summary = info.get("summary")
+    if not files_run:
+        result = "pytest did not run (no test files resolved)"
+    elif summary:
+        result = summary
+    elif info.get("rc") == "timeout":
+        result = "NO SUMMARY (pytest timed out)"
+    else:
+        result = f"NO SUMMARY LINE in pytest's output (exit code {info.get('rc')})"
+    return f"  result: {result}; files run: {len(files_run)}; files omitted: {len(omitted)}"
+
+
+def _print_unverified(info: dict[str, Any]) -> None:
+    """Every file that did NOT run and why, in full: the verdict word alone ("UNVERIFIED")
+    says something was left out, this says what."""
+    omitted = info.get("omitted_files") or []
+    print(f"  UNVERIFIED, NOT RUN ({len(omitted)} file(s)): {info.get('omitted_reason')}")
+    print(textwrap.fill(" ".join(omitted), width=100, initial_indent="    ",
+                        subsequent_indent="    ", break_long_words=False,
+                        break_on_hyphens=False))
+
+
+def _report(
+    label: str, results: dict[str, tuple[bool, str]], info: dict[str, Any] | None = None,
+) -> bool:
     all_ok = all(ok for ok, _ in results.values())
     statuses = {name: _status_word(ok, out) for name, (ok, out) in results.items()}
+    omitted_files = list(info.get("omitted_files") or []) if info else []
     if not all_ok:
         verdict = "FAIL"
     elif "SKIPPED" in statuses.values():
-        verdict = "PASS (UNVERIFIED: see SKIPPED below, not the same as a real pass)"
+        verdict = (f"PASS (UNVERIFIED: {len(omitted_files)} file(s) did NOT run, named below)"
+                   if omitted_files else
+                   "PASS (UNVERIFIED: see SKIPPED below, not the same as a real pass)")
     elif "RATCHET-DEBT" in statuses.values():
         verdict = "PASS (RATCHET DEBT: see below, the next commit must raise the ceiling)"
     elif "PASSED-ON-RETRY" in statuses.values():
@@ -1025,9 +1122,19 @@ def _report(label: str, results: dict[str, tuple[bool, str]]) -> bool:
     else:
         verdict = "PASS"
     print(f"gate_hook[{label}]: {verdict}")
+    if info is not None and "pytest" in results:
+        print(_pytest_result_line(info))
+        if omitted_files:
+            _print_unverified(info)
     for name, (ok, out) in results.items():
         print(f"  {name}: {statuses[name]}")
         if statuses[name] in ("SKIPPED", "RATCHET-DEBT", "PASSED-ON-RETRY"):
+            if name == "pytest" and statuses[name] == "SKIPPED" and omitted_files:
+                # the names are already printed in full above; do not list them twice
+                _, _, body = out.partition("\n")
+                out = (f"SKIPPED (partial): {len(info['files_run'])} ran clean, "
+                       f"{len(omitted_files)} omitted (named above)\n{body}"
+                       if info else out)
             _print_skip_detail(out)
         elif not ok:
             for line in out.splitlines()[-15:]:
@@ -1048,9 +1155,10 @@ def cmd_precommit(*, enforce: bool | None = None) -> int:
         print("gate_hook: nothing staged, nothing to gate")
         return 0
     stage_before = _staged_diff_digest(REPO_ROOT)
-    results = run_gates(REPO_ROOT, changed)
+    info: dict[str, Any] = {}
+    results = run_gates(REPO_ROOT, changed, info)
     stage_after = _staged_diff_digest(REPO_ROOT)
-    all_ok = _report("staged", results)
+    all_ok = _report("staged", results, info)
     touches = receipt_shaped_touches(REPO_ROOT, changed)
     if touches:
         print(DERIVATION_TRACE_QUESTION)
