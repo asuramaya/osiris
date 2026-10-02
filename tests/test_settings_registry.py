@@ -1,5 +1,5 @@
-"""THE SETTINGS REGISTRY's own declarations (THE SETTINGS MENU, thread f4498ab304e4
-piece 1) — src/config/settings_registry.py's SETTINGS tuple, the pure metadata half
+"""THE SETTINGS REGISTRY's own declarations (THE SETTINGS MENU, piece 1),
+src/config/settings_registry.py's SETTINGS tuple, the pure metadata half
 service/door tests all read against."""
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def test_spec_by_key_finds_a_registered_knob_and_none_for_a_stranger() -> None:
 
 def test_every_env_field_actually_exists_on_settings() -> None:
     """A SettingSpec naming a stale/misspelled env_field would silently no-op the
-    overlay forever — caught here, once, for every registered knob at once."""
+    overlay forever, caught here, once, for every registered knob at once."""
     settings = get_settings()
     for spec in SETTINGS:
         if spec.env_field is not None:
@@ -32,13 +32,13 @@ def test_every_env_field_actually_exists_on_settings() -> None:
 
 def test_every_default_matches_the_live_settings_default() -> None:
     """The registry's own `default` is a SEPARATE literal from settings.py's own field
-    default — this test is the one place that keeps them from silently drifting apart.
+    default, this test is the one place that keeps them from silently drifting apart.
 
-    Compares against `Settings.model_fields[...].default` — the MODEL's own declared
-    default, never `get_settings()` (Thoth's mail 10158: under the gate's real -n 4
+    Compares against `Settings.model_fields[...].default`, the MODEL's own declared
+    default, never `get_settings()` (under the gate's real -n 4
     worker environment, OSIRIS_WAKE_HOURLY_BUDGET/etc. are genuinely set in that shell,
     so a live `Settings()` instance picks up the box's actual env rather than the bare
-    field default — order/worker-dependent flakiness, passing alone but failing under
+    field default, order/worker-dependent flakiness, passing alone but failing under
     the gate. `model_fields` reads the class declaration itself, no env involved."""
     for spec in SETTINGS:
         if spec.env_field is not None:
@@ -92,7 +92,7 @@ def test_diag_worker_boot_memtrace_is_registered_restart_osiris_worker() -> None
     assert spec.env_field == "osiris_worker_boot_memtrace_enabled"
 
 
-# --- WAVE 22 (ruling 7be61879, thread 40d6eef3): daemon unit literals ---------------
+# --- daemon unit literals ---------------
 
 def test_daemon_memory_max_specs_are_next_deploy_and_reject_a_bad_value() -> None:
     for key in ("daemon.osiris_mcp.memory_max", "daemon.osiris_worker.memory_max",
@@ -105,7 +105,7 @@ def test_daemon_memory_max_specs_are_next_deploy_and_reject_a_bad_value() -> Non
 
 
 def test_pulse_memory_max_alone_defaults_to_empty_no_cap() -> None:
-    """osiris-pulse ships with no MemoryMax= line at all today — the one spec among the
+    """osiris-pulse ships with no MemoryMax= line at all today, the one spec among the
     four whose default isn't the shipped literal of a real cap."""
     spec = spec_by_key("daemon.osiris_pulse.memory_max")
     assert spec is not None and spec.default == ""
@@ -139,7 +139,7 @@ def test_console_host_and_port_default_to_the_shipped_values() -> None:
 
 
 def test_pg_autotune_schedule_is_registered_like_a_backup_timer_but_not_one() -> None:
-    """Grouped under 'daemon' (a Postgres-maintenance timer, not a backup one) — kept
+    """Grouped under 'daemon' (a Postgres-maintenance timer, not a backup one), kept
     OUT of BACKUP_TIMER_UNITS, which stays exactly the 5 backup-lane units."""
     from src.config.settings_registry import BACKUP_TIMER_UNITS
 
@@ -150,7 +150,7 @@ def test_pg_autotune_schedule_is_registered_like_a_backup_timer_but_not_one() ->
 
 
 def test_the_four_pool_sizes_restart_the_exact_units_pool_health_names() -> None:
-    """No drift — src/orchestrator/pool_health.py's own `_KNOWN_DAEMON_POOL_SETTINGS`
+    """No drift, src/orchestrator/pool_health.py's own `_KNOWN_DAEMON_POOL_SETTINGS`
     names the exact unit each pool-size field restarts under (osiris_api_pool_size
     restarts osiris-console, not a unit named "osiris-api")."""
     from src.orchestrator.pool_health import _KNOWN_DAEMON_POOL_SETTINGS

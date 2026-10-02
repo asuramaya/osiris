@@ -1,12 +1,11 @@
-"""Miners as last resort (decision ac892cd9). Item 1: the Proposal object type + the
+"""Miners as last resort. Item 1: the Proposal object type + the
 propose() write door, with the last-resort law wired against derive_or_abstain's own
 abstention shape. Item 2: accept()/reject() and the read-only proposals_band(). Item
 3: the daily budget per (miner, owner) pair, scaled by the trailing 30-day acceptance
 rate, hard-stopped to zero on a 7-day window of rejections with no acceptances (with a
 receipt Thread to the owner). Item 4: guarded_miner_tick, the failure-receipt-first
 tick discipline (per-pair telemetry itself lives in test_digest.py, beside the rest of
-fleet_digest's own streams). No miner wiring here — that's its own, later commit, per
-Thoth's "one commit per item" instruction."""
+fleet_digest's own streams). No miner wiring here: that's its own, later commit."""
 from __future__ import annotations
 
 import uuid
@@ -48,7 +47,7 @@ async def test_propose_mints_when_a_live_abstention_exists(actions: Actions) -> 
     assert "error" not in out
     assert out["owner"] == "operator"
     assert out["status"] == "proposed"
-    # confidence CAPPED at the DERIVED tier (0.4) regardless of the 0.9 passed in — a
+    # confidence CAPPED at the DERIVED tier (0.4) regardless of the 0.9 passed in: a
     # miner's own guess is never graded above what a mechanical sweep already earns.
     assert out["confidence"] == 0.4
 
@@ -84,9 +83,9 @@ async def test_propose_refuses_without_any_abstention_at_all(actions: Actions) -
 async def test_propose_refuses_when_the_abstention_is_already_resolved(
     actions: Actions,
 ) -> None:
-    """A successful mint SUPERSEDES the abstention with a resolved:true marker — Khnum
-    (mail 8849) and Sekhmet (mail 8857) both independently: a resolved abstention is a
-    settled question, never a genuine gap a miner should propose against."""
+    """A successful mint SUPERSEDES the abstention with a resolved:true marker: a
+    resolved abstention is a settled question, never a genuine gap a miner should
+    propose against."""
     orphan = await _mint_bare(actions, "GateWidget")
     target = await _mint_bare(actions, "GateWidget")
     await capture.derive_or_abstain(actions, orphan, "implements", [], "test")
@@ -267,7 +266,7 @@ async def test_proposals_band_counts_and_groups_by_owner(actions: Actions) -> No
     out1 = await propose(actions, from_id=orphan1, link_type="implements",
                          candidate=_LINK_CANDIDATE, confidence=0.9, owner="operator",
                          miner="test-miner", actor="test-miner")
-    # a DIFFERENT miner for the second one — the band groups by owner regardless of
+    # a DIFFERENT miner for the second one: the band groups by owner regardless of
     # miner, and this keeps the two calls out of the same (miner, owner) daily budget
     # (item 3), which this test predates and isn't about.
     out2 = await propose(actions, from_id=orphan2, link_type="implements",
@@ -286,7 +285,7 @@ async def _seed_resolved(
     actions: Actions, miner: str, owner: str, status: str, observed_at: datetime,
 ) -> None:
     """A resolved Proposal's own history shape, minted directly (never through
-    propose(), which would trip the very budget these fixtures set up to test) — only
+    propose(), which would trip the very budget these fixtures set up to test): only
     the three properties `_throttle_status`'s own queries read."""
     canonical = f"proposal:{uuid.uuid4()}"
     proposal_id = await actions.create_or_find_object("Proposal", canonical, miner)

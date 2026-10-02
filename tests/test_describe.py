@@ -1,4 +1,4 @@
-"""describe(table) — the physical schema get_schema doesn't give you (thread 1aa2ff36)."""
+"""describe(table), the physical schema get_schema doesn't give you."""
 from __future__ import annotations
 
 from src.actions.core import Actions
@@ -27,16 +27,16 @@ async def test_describes_a_real_tables_indexes(actions: Actions) -> None:
 
 
 async def test_a_table_that_does_not_exist_says_so_honestly(actions: Actions) -> None:
-    """exists=False, not a silently-empty shape indistinguishable from a real, empty table —
-    the same discipline Wave 0's receipts are held to."""
+    """exists=False, not a silently-empty shape indistinguishable from a real, empty table ,
+    the same discipline the receipts are held to."""
     out = await describe_table(actions.pool, "not_a_real_table_at_all")
     assert out == {"table": "not_a_real_table_at_all", "exists": False,
                    "columns": [], "indexes": []}
 
 
 async def test_the_mcp_tool_wrapper_delegates_to_describe_table(actions: Actions) -> None:
-    """The wiring check for the actual MCP verb (mirrors the srv._pool swap pattern Wave 0
-    established in test_capture.py) — proves `describe` the tool, not just describe_table
+    """The wiring check for the actual MCP verb (mirrors the srv._pool swap pattern
+    established in test_capture.py), proves `describe` the tool, not just describe_table
     the function, resolves the pool and returns the same shape."""
     from src import mcp_server as srv
 
@@ -51,8 +51,8 @@ async def test_the_mcp_tool_wrapper_delegates_to_describe_table(actions: Actions
 
 
 async def test_describe_seat_lists_every_manual_verb(actions: Actions) -> None:
-    """THE SEAT MANUAL MOVE (dispatch e6585927): commands/seat.md shrank from 12.9 KB to
-    a bare subcommand list — describe('seat') is where the verb list now lives."""
+    """THE SEAT MANUAL MOVE commands/seat.md shrank from 12.9 KB to
+    a bare subcommand list, describe('seat') is where the verb list now lives."""
     from src import mcp_server as srv
 
     out = await srv.describe("seat")
@@ -78,7 +78,7 @@ async def test_describe_seat_colon_unknown_verb_says_so_honestly(actions: Action
 
 async def test_get_schema_reads_the_live_catalog_not_the_static_seed(actions: Actions) -> None:
     """Task #97 workstream 2: get_schema must read the graph-backed Type catalog, not
-    schema.py's static seed manifest — a type minted through accretion (or ensure_type
+    schema.py's static seed manifest, a type minted through accretion (or ensure_type
     directly) shows up here the moment it exists, with no deploy/reseed in between."""
     from src import mcp_server as srv
 

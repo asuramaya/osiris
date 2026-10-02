@@ -1,4 +1,4 @@
-"""PRODUCT VOICE, THE CONSOLE (operator ruling 1e2ef5c3, Thoth mail 13501): "this is
+"""PRODUCT VOICE, THE CONSOLE (standing ruling): "this is
 public facing and it has to be treated as a product not a single owner project" --
 every user-facing string in the console reads as a product written for a stranger.
 BANNED: fleet agent/seat names, ruling/decision/thread id citations and wave/gate
@@ -8,7 +8,7 @@ citations stay in code comments and commit messages (explicitly out of this ruli
 scope) -- these tests only ever look at STRING CONTENT, never comments.
 
 Scope: THE SETTINGS PANE (src/ui/static/console.js, the reviewed surface the ruling's
-own specimen came from -- "over Khnum's soul-key door" in the Key blurb) plus a sweep
+own specimen came from -- an internal agent name in the Key blurb) plus a sweep
 of the same three shared static files (console.js, osiris.js, space.js) for em dashes
 and banned coinages outside comments. A full line-by-line rewrite of every string in
 every surface (Repairs panel's own deep ontology vocabulary, the mailbox/composer

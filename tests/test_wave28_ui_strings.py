@@ -1,13 +1,11 @@
-"""WAVE 28, THE TAXONOMY SWEEP, Seshat's UI-strings piece (ruling 70c001ec, thread a47a0c7f,
-Thoth mail 12011/12063/12200): the one reader-visible retired-word string in the UI static
+"""THE TAXONOMY SWEEP, UI-strings piece: the one reader-visible retired-word string in the UI static
 files (osiris.js's own bundle-composition summary, "fan out by neighborhood") and the two
 identifiers a reader can meet in devtools (the district-label CSS class, the
-`district:<name>` synthetic pseudo-node id) -- census's own Surface-1 finding, decision
-70c001ec's own NEIGHBORHOOD -> project/focus and district (PROJECT) ruling. Landed first,
-its own tip (eab3434d/06108d26); the internal data-model naming and every code comment
+`district:<name>` synthetic pseudo-node id), per the NEIGHBORHOOD -> project/focus and
+district (PROJECT) ruling. Landed first; the internal data-model naming and every code comment
 (districts/districtByName/buildDistrictModel/landmarks/hub, all bare code identifiers never
-shown to a reader) followed as the "second pass" once Imhotep's ratchet fix let it strip
-`/* */` block comments too (mail 12200) -- see tests/test_drawing_tip.py and
+shown to a reader) followed as a second pass once the ratchet could strip
+`/* */` block comments too -- see tests/test_drawing_tip.py and
 tests/test_community_regions.py for that pass's own coverage. Mirrors the repo's existing
 static-source-guard convention: string/substring proofs against the served JS/HTML, no
 browser harness.

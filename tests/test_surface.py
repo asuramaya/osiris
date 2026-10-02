@@ -1,4 +1,4 @@
-"""THE SURFACE — one segment authority above vitals (thread 109b6c48, ruling e9ef7373).
+"""THE SURFACE, one segment authority above vitals.
 
 These tests pin the RULES (thresholds, scope, dark-until-matters) that the old per-surface
 copies drifted on, so a future drift fails here instead of quietly disagreeing across
@@ -68,7 +68,7 @@ async def test_briefs_total_is_the_desk_briefs_mine_is_this_agents_own(
 
 
 async def test_dm_lights_the_mail_segment_by_itself(actions: Actions) -> None:
-    """The Alfred chain, 2026-07-19: seven DMs waiting, mail 0, flight 0 — a render
+    """A chain observed 2026-07-19: seven DMs waiting, mail 0, flight 0, a render
     condition that forgot `dm` alone rendered a dim 'mail 0' over live traffic."""
     await save_mount(actions.pool, job_dir="/j/a", agent_id="agent:aaa11111",
                      project="osiris", cwd="/w", model=None, session_key="sid:a")
@@ -109,12 +109,12 @@ async def test_sensing_is_dark_until_a_job_actually_goes_sick(actions: Actions) 
 async def test_a_fast_cadence_job_survives_a_deploy_restart_under_the_floor(
     actions: Actions,
 ) -> None:
-    """drain_cascade/evaluate_watch run every=5s — 3x that is 15s, which a routine deploy
+    """drain_cascade/evaluate_watch run every=5s, 3x that is 15s, which a routine deploy
     restart's cancel-and-resume cost (measured up to ~43s, 2026-09-01) blows past on its own.
     `monitor._SICK_FLOOR_SECS` exists so THIS job survives that cost without reading sick,
     while a job that is actually dead for longer than the floor still does. surface.py imports
-    the shared `sick_after_secs` from monitor.py (Thoth msg 6327: one threshold, not three
-    hand-copies) — this test exercises it through surface.fetch, its real caller."""
+    the shared `sick_after_secs` from monitor.py (one threshold, not three
+    hand-copies), this test exercises it through surface.fetch, its real caller."""
     p = actions.pool
     now = datetime.now(UTC)
 
@@ -165,7 +165,7 @@ async def test_spend_lights_amber_at_60_and_red_at_85_percent(
 async def test_an_unpriced_call_is_loud_regardless_of_the_percent_gate(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A PRODUCER THAT CANNOT PRICE ITSELF MAY NOT SPEND — blind is never scored as zero,
+    """A PRODUCER THAT CANNOT PRICE ITSELF MAY NOT SPEND, blind is never scored as zero,
     and it outranks the ordinary amber/red thresholds even at a trivial spend level."""
     monkeypatch.setattr("src.ingest.providers.spend_is_metered", lambda s=None: True)
     await actions.pool.execute(
@@ -179,7 +179,7 @@ async def test_an_unpriced_call_is_loud_regardless_of_the_percent_gate(
 async def test_spend_on_a_subscription_is_never_computed_at_all(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Thoth LIII, 2026-07-21: the CLI's cost is notional on a subscription — the segment
+    """2026-07-21: the CLI's cost is notional on a subscription, the segment
     must not exist as a phantom '$X/$10', not even a hidden one carrying real numbers."""
     monkeypatch.setattr("src.ingest.providers.spend_is_metered", lambda s=None: False)
     await actions.pool.execute(

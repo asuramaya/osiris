@@ -1,7 +1,7 @@
-"""sweep_ledger — Finding A (thread 5177057a, Thoth's design approval DM 1326): PreCompact ->
+"""sweep_ledger, Finding A: PreCompact ->
 sweep_route only ever ENQUEUED an async arq job with no confirmation it ran. B7 (the orphan
 reaper) catches a transcript that never got ANY successful sweep, ever, but mark_swept's
-watermark is a one-time-ever boolean per file — so it goes permanently blind to a dropped
+watermark is a one-time-ever boolean per file, so it goes permanently blind to a dropped
 enqueue on a lineage's 2nd/3rd/Nth compaction once the 1st already succeeded. This ledger
 tracks one row per ENQUEUE ATTEMPT so a lightweight watchdog can retry (or, past a ceiling,
 escalate loudly rather than loop forever) exactly that gap, without reviving the crawl.
@@ -91,13 +91,13 @@ async def test_sweep_route_writes_one_ledger_row_alongside_the_enqueue(
         "WHERE session_id = 'sess3'")
     assert row is not None
     assert row["transcript_path"] == "/t/three.jsonl"
-    assert row["completed_at"] is None, "just enqueued — not yet swept"
+    assert row["completed_at"] is None, "just enqueued, not yet swept"
 
 
 async def test_sweep_session_marks_the_ledger_done_even_when_the_subsystem_is_dark(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The FIRST early return (osiris_sense_sessions unset — mining is off entirely) must not
+    """The FIRST early return (osiris_sense_sessions unset, mining is off entirely) must not
     leave a ledger row stuck forever: nothing will ever retry it into existing, so the
     watchdog must not nag (and eventually poison-pill escalate) something that was never
     going to run by design."""
@@ -116,7 +116,7 @@ async def test_sweep_session_marks_the_ledger_done_when_out_of_scope(
     actions: Actions, monkeypatch: pytest.MonkeyPatch, tmp_path: Any,
 ) -> None:
     """The SECOND early return (out-of-scope defer, task #37) is a deliberate, stable
-    decision — same reasoning as the dark-subsystem case: the ledger row must not sit
+    decision, same reasoning as the dark-subsystem case: the ledger row must not sit
     incomplete waiting for a retry that scope will never allow."""
     import src.workers.arq_worker as worker
 
@@ -155,7 +155,7 @@ async def test_reap_stuck_sweeps_retries_a_row_inside_the_ceiling(
 async def test_reap_stuck_sweeps_ignores_a_row_still_inside_its_sla(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Below SWEEP_RETRY_SLA a healthy attempt is probably just still running — nagging it
+    """Below SWEEP_RETRY_SLA a healthy attempt is probably just still running, nagging it
     this early would be the watchdog racing a normal in-flight sweep."""
     import src.workers.arq_worker as worker
 
@@ -171,8 +171,8 @@ async def test_reap_stuck_sweeps_ignores_a_row_still_inside_its_sla(
 async def test_reap_stuck_sweeps_escalates_past_the_ceiling_instead_of_retrying_forever(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A genuinely poisoned transcript must not re-enqueue forever (Thoth's explicit ask,
-    DM 1326 refinement #4) — past SWEEP_RETRY_CEILING, stop and confess loudly instead."""
+    """A genuinely poisoned transcript must not re-enqueue forever: past SWEEP_RETRY_CEILING,
+    stop and confess loudly instead."""
     import src.workers.arq_worker as worker
 
     retried: list[str] = []

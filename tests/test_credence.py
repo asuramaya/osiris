@@ -1,10 +1,10 @@
-"""Credence — the upstream dual of the authority chain: a re-report can't out-credence its source.
+"""Credence, the upstream dual of the authority chain: a re-report can't out-credence its source.
 
-The spawned_by/succeeded_from forest is the independence oracle (PROVENANCE PIECE 3, ruling
-bb3e4422, widened the oracle from spawned_by alone to include a minted successor's own
-succeeded_from edge). These tests drive the pure resolver — the relay clamp, the Tier-2
+The spawned_by/succeeded_from forest is the independence oracle (PROVENANCE PIECE 3: widened
+from spawned_by alone to include a minted successor's own
+succeeded_from edge). These tests drive the pure resolver, the relay clamp, the Tier-2
 relay-vs-dispute split, the verification rebuttal, independent corroboration, the deepest-first
-no-leak invariant, and the laundering flag — plus end-to-end passes over real Postgres, both for
+no-leak invariant, and the laundering flag, plus end-to-end passes over real Postgres, both for
 a spawned sub-agent and for a minted successor.
 """
 from __future__ import annotations
@@ -45,7 +45,7 @@ def test_no_ancestry_reduces_to_grade_then_recency() -> None:
 
 
 def test_relay_ancestor_is_clamped_to_origin() -> None:
-    # agent:b is a child of agent:a. a RELAYED the SAME claim (reworded — case/punctuation) at an
+    # agent:b is a child of agent:a. a RELAYED the SAME claim (reworded, case/punctuation) at an
     # inflated grade and never looked → a is capped at b's origin grade, so the observed child
     # wins over the louder ancestor. Tier-2 reads the paraphrase as a relay, not a dispute.
     claims = [
@@ -63,7 +63,7 @@ def test_relay_ancestor_is_clamped_to_origin() -> None:
 def test_verification_rebuttal_survives_the_clamp() -> None:
     # same shape, but the ancestor performed its OWN observation (backed_by_observation) → it
     # VERIFIED, and verification is corroboration, not relay: NOT clamped, it keeps its grade.
-    # Even with a DIFFERENT value, a looker is neither clamped NOR disputed — rebuttal unchanged.
+    # Even with a DIFFERENT value, a looker is neither clamped NOR disputed, rebuttal unchanged.
     claims = [
         _c("o1", "status", "verified", "agent:a", 0.9),
         _c("o1", "status", "observed", "agent:b", 0.6),
@@ -94,7 +94,7 @@ def test_independent_corroboration_is_not_clamped() -> None:
 def test_deepest_first_prevents_inflation_leak() -> None:
     # chain root A → B → C, C the deepest observer. B and A each relay the SAME claim (reworded) at
     # inflated grades and never looked. Deepest-first, B is clamped to C's 0.6 BEFORE A reads it,
-    # so A also caps at 0.6 — B's inflation can't leak upward. Were it to leak, A would win at 0.95.
+    # so A also caps at 0.6, B's inflation can't leak upward. Were it to leak, A would win at 0.95.
     claims = [
         _c("o1", "s", "Service is degraded!", "agent:a", 0.95),
         _c("o1", "s", "service is degraded", "agent:b", 0.9),
@@ -142,7 +142,7 @@ def test_genuine_disagreement_is_a_dispute_not_a_clamp() -> None:
     res = resolve_credence(claims, parent_of={"agent:b": "agent:a"}, looked={})
     (w,) = res.winners
     assert w.laundering == ()                            # NOT accused of laundering
-    assert w.confidence == 0.9 and w.source_id == "agent:a"  # not clamped — a keeps its grade
+    assert w.confidence == 0.9 and w.source_id == "agent:a"  # not clamped, a keeps its grade
     (d,) = res.disputes
     assert d.object_id == "o1" and d.name == "build"
     assert {p[0] for p in d.positions} == {"agent:a", "agent:b"}       # both sources surfaced
@@ -178,7 +178,7 @@ async def test_credence_props_clamps_a_relay_over_the_graph(actions: Actions) ->
     res = await credence_props(actions, [o])
     winners = {w.name: w for w in res.winners}
     assert winners["status"].source_id == "agent:bbb"   # the origin, not the louder relay
-    # clamped to the origin grade (approx: confidence rides a PG `real` — float32 round-trip)
+    # clamped to the origin grade (approx: confidence rides a PG `real`, float32 round-trip)
     assert winners["status"].confidence == pytest.approx(0.6, abs=1e-6)
     assert "agent:aaa" in winners["status"].laundering  # the relay flagged (non-empty = clamp)
     assert res.disputes == []                            # a paraphrase relay is not a dispute
@@ -207,15 +207,15 @@ async def test_credence_props_surfaces_a_genuine_dispute_over_the_graph(actions:
     assert {p[1] for p in d.positions} == {"the migration is safe", "the migration is unsafe"}
 
 
-# --- PROVENANCE PIECE 3 (ruling bb3e4422): succession in the independence oracle ----
-# `_parent_forest` now unions succeeded_from with spawned_by — a minted successor sits
+# --- PROVENANCE PIECE 3: succession in the independence oracle ----
+# `_parent_forest` now unions succeeded_from with spawned_by, a minted successor sits
 # in the SAME child→parent forest as an ordinary spawned sub-agent, so the identical
 # three outcomes (relay / dispute / observation-rebuttal) apply across a succession edge.
 
 async def test_credence_props_clamps_a_successor_relay_over_the_graph(
     actions: Actions,
 ) -> None:
-    # agent:anc-a (ancestor) and agent:anc-b (its MINTED SUCCESSOR, succeeded_from — not
+    # agent:anc-a (ancestor) and agent:anc-b (its MINTED SUCCESSOR, succeeded_from, not
     # spawned_by) assert the SAME claim (reworded); the ancestor never looked and relays at
     # an inflated grade → clamped to the successor's own origin grade, same as a spawned child.
     o = await actions.create_or_find_object("SoftwareProject", "repo:succ-relay-demo", "test")

@@ -1,6 +1,6 @@
-"""dsh00001 identity reconciliation (Thoth DM 5442 leg 2, ruling eb642d37, build ruling
-DM 5461) — a synthetic 3-stint DSH session (unstamped → model-a → model-b, writes
-attributed only inside the model-a stint) exercises the whole shape: mint the lineage,
+"""dsh00001 identity reconciliation (leg 2), a synthetic 3-stint DSH session
+(unstamped → model-a → model-b, writes attributed only inside the
+model-a stint) exercises the whole shape: mint the lineage,
 place `wrote_as` on exactly the generation whose stint owns the writes, leave the 185
 (here: 3) original rows untouched, and idempotency on a second run.
 """
@@ -25,7 +25,7 @@ def _session_line(**kw: object) -> str:
 
 def _write_dsh_fixture(root: Path, anchor_sid: str, lines: list[str]) -> None:
     """Lay down a real zstd-compressed session file at the actual on-disk shape
-    (`<root>/<slug>/session-<anchor_sid>-.../session.jsonl.zstd`) — the SAME nested
+    (`<root>/<slug>/session-<anchor_sid>-.../session.jsonl.zstd`), the SAME nested
     shape `_find_dsh_session_file` walks, so this test exercises the real path, not a
     monkeypatched shortcut."""
     session_dir = root / "test-slug" / f"session-{anchor_sid}-0000-0000-000000000000"
@@ -166,7 +166,7 @@ async def test_reconcile_mints_the_lineage_and_places_wrote_as_on_the_owning_gen
             "AND name='wrote_as'", oid)
         assert (wa == root_agent_id) == expect, f"{canon}: wrote_as={wa!r}"
 
-    # the original attributed row is UNTOUCHED — still stamped from the raw root string
+    # the original attributed row is UNTOUCHED, still stamped from the raw root string
     original = await actions.pool.fetchval(
         "SELECT source_id FROM assertions WHERE object_id=$1 AND name='note'", obj)
     assert original == root_agent_id
@@ -190,8 +190,8 @@ async def test_reconcile_is_idempotent(actions: Actions, tmp_path: Path) -> None
 async def test_reconcile_never_touches_the_root_agent_id_itself_as_retired_or_folded(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thoth's hard rule: dsh00001 is never retired, never folded into another
-    lineage — this verb only ever ADDS its own lineage."""
+    """Hard rule: dsh00001 is never retired, never folded into another
+    lineage, this verb only ever ADDS its own lineage."""
     _write_dsh_fixture(tmp_path, "fixtureG", _build_fixture_lines())
     root_agent_id = "agent:fixtureG-root"
     await reconcile(actions, anchor_sid="fixtureG", root_agent_id=root_agent_id,
