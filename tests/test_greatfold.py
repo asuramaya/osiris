@@ -80,7 +80,7 @@ async def test_survey_takes_each_sessions_own_resident_never_its_quotes(
     _office(offices, "fenwick", "riverhouse")
     await _agent(actions, "agent:aaaa1111")
     await _agent(actions, "agent:bbbb2222-ii")
-    # one session: quotes bbbb2222 mid-file (a census query, a read fixture), quotes an id
+    # one session: quotes the second id mid-file (a census query, a read fixture), quotes an id
     # the graph never registered last. its own resident signature sits between them.
     _transcript(projects, "fenwick", "s1",
                 _SEND.format(agent="agent:bbbb2222-ii"),
@@ -264,8 +264,8 @@ async def test_a_differently_rooted_agent_sharing_a_string_prefix_is_never_swall
     LIKE query alone would match. fold_seat's own exact-base filter
     (`_generation(row)[0] != base: continue`) is what protects this; this pins it still
     holds under the recursive-unwind `_generation` (modeled on
-    test_fold_seat_by_handle_claim_alone's own shape: a DIFFERENT root, bbbb2222,
-    claims the seat's name, so aaaa1111's whole family folds into it)."""
+    test_fold_seat_by_handle_claim_alone's own shape: a DIFFERENT root (the second fixture id),
+    claims the seat's name, so the first fixture id's whole family folds into it)."""
     offices = tmp_path / "offices"
     projects = tmp_path / "projects"
     projects.mkdir()

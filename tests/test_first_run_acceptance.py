@@ -24,7 +24,7 @@ FIDO2 is stubbed at the exact boundary `test_soul_crypto.py` already established
 imported cross-file, matching this suite's own convention of keeping each test file's
 fixtures self-contained.
 
-THE NAMED GAP THIS SEQUENCE ONCE HAD IS CLOSED (obligation 8971e4e5): `scripts.
+THE NAMED GAP THIS SEQUENCE ONCE HAD IS CLOSED: `scripts.
 osiris_offbox_restore_drill.run_drill` used to read `RESTIC_PASSWORD` from the ambient
 process environment directly, bypassing `restic_credential.get_restic_password()`'s
 systemd-creds-aware resolution the offload runner itself uses; this test used to bridge

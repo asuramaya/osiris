@@ -111,7 +111,7 @@ async def test_lift_refuses_a_live_target(actions: Actions, tmp_path: Path) -> N
     liveness check (lift's pre-claim gate) and establish_office's own separate one now
     cross-check registry_census, so this test injects a fake confirming occupancy, a bare
     fresh mount row alone is no longer sufficient to prove liveness, by design (the
-    atlas-shape fix)."""
+    map-view fix)."""
     cwd = str(tmp_path / "livecwd")
     Path(cwd).mkdir()
     await _rogue(actions, "agent:livrogue1", cwd, live=True)
@@ -138,7 +138,7 @@ async def test_lift_refuses_a_live_target(actions: Actions, tmp_path: Path) -> N
 async def test_lift_no_longer_refuses_on_a_fresh_but_bodiless_target(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE ATLAS SHAPE ITSELF: a fresh/refreshing mount row with NO harness-confirmed body
+    """THE MAP-VIEW CASE ITSELF: a fresh/refreshing mount row with NO harness-confirmed body
     behind it must not block a lift, the exact false refusal this fix closes."""
     cwd = str(tmp_path / "unhauntedcwd")
     Path(cwd).mkdir()

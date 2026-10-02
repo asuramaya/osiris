@@ -47,7 +47,7 @@ async def test_message_object_id_resolves_the_existing_message_object(actions: A
 
 
 async def test_message_object_id_returns_none_for_operator_sender(actions: Actions) -> None:
-    # NEVER an edge to the operator's own words: refused at the door, even when a
+    # NEVER an edge to the operator's quoted text: refused at the door, even when a
     # Message object genuinely exists for this id.
     await actions.create_or_find_object("Message", "message:99", "operator")
     assert await message_object_id(actions.pool, 99, "operator") is None
@@ -355,5 +355,5 @@ async def test_inbox_door_never_stamps_a_read_to_the_operators_own_words(
         "SELECT count(*) FROM session_reads WHERE object_id=$1", op_msg_oid)
     n_peer = await actions.pool.fetchval(
         "SELECT count(*) FROM session_reads WHERE object_id=$1", peer_msg_oid)
-    assert n_op == 0     # never an edge to the operator's own words
+    assert n_op == 0     # never an edge to the operator's quoted text
     assert n_peer == 1   # an ordinary peer message in the SAME inbox call IS stamped

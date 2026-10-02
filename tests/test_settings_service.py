@@ -172,7 +172,7 @@ def test_invalidate_overlay_cache_is_idempotent_on_an_empty_cache() -> None:
 # --- f4498ab304e4's own follow-up): the real value goes into the ---------------------
 # --- spec's own backing_file, never the settings table, never echoed back -------------
 
-# --- `live`: the running/shipped counterpart, null when not cheap (thread c5ba8681) ---
+# --- `live`: the running/shipped counterpart, null when not cheap ---
 
 async def test_live_value_immediate_reads_the_overlay(actions: Actions) -> None:
     from src.config.settings_registry import spec_by_key

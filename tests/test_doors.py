@@ -46,7 +46,7 @@ async def test_agent_ref_with_no_evidence_at_all_is_unresolved(actions: Actions)
 
 
 async def test_a_fresh_but_bodiless_mount_row_is_not_live(actions: Actions) -> None:
-    """THE ATLAS SHAPE (door census item 4): a
+    """THE MAP-VIEW CASE (census item 4): a
     fresh/refreshing agent_mounts row alone used to be enough to call an identity 'live',
     even with no harness-confirmed body behind it. doors()'s own `_record` now requires
     registry_census confirmation too; lift()'s pre-claim refusal reads exactly this field."""
@@ -119,7 +119,7 @@ async def test_unknown_handle_is_unresolved(actions: Actions) -> None:
 async def test_handle_with_only_an_ineligible_holder_names_why_instead_of_a_wrong_match(
     actions: Actions,
 ) -> None:
-    """task #142 punch-list item 3 : John's exact live shape,
+    """A punch-list case: the exact live shape of one renamed seat,
     reproduced against doors(): a unique seat, one active holder marked false_mint, and an
     older generation still carrying the same `handle` assertion. doors() never refuses (it's
     read-only), so this is DISTINGUISH not ESCALATE: zero matches plus a note naming why,

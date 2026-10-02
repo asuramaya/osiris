@@ -131,7 +131,7 @@ async def test_a_fresh_mint_stamps_anchor_cwd_to_its_own_office(
 ) -> None:
     """task #68: a fresh mint used to scaffold an office on disk but never told the Seat
     object where it lived. launch() (which reads anchor_cwd) refused every never-launched
-    seat with 'no anchor_cwd — establish_office first', a circular ask for a room that
+    seat with 'no anchor_cwd: establish_office first', a circular ask for a room that
     already existed. anchor_cwd must land in the SAME act as the mint, at the exact path
     the office scaffold uses."""
     await _seat(actions, "Steward", "osiris")

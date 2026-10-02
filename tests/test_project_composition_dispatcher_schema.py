@@ -188,7 +188,7 @@ async def test_project_forwards_merge_into_to_the_implementation(monkeypatch: An
     """THE DROPPED FLAG (2026-09-06, the handlingtheloop fold): project()'s own
     signature accepted `merge_into` and its schema advertised it, but the forwarding call
     to _project_impl never passed it, so rename refused the collision it had been told
-    to accept, twice, on the operator's word. A schema promise the wrapper does not keep."""
+    to accept, twice, on the caller's say-so. A schema promise the wrapper does not keep."""
     seen: dict[str, Any] = {}
 
     async def _fake(action: str, **kw: Any) -> dict[str, Any]:
