@@ -13,6 +13,20 @@ transcript, and answers two askers:
 Window tiers come from the harness's display id: a bracketed variant (claude-opus-4-8[1m])
 is the 1M-context tier of the same weights; the bare id gets the 200k default. The bracket
 never reaches identity logic (normalize_model strips it); here it is exactly the signal.
+
+WHICH NUMBER THIS IS, AND WHICH IT IS NOT. Every percentage here (the `context_pct` that
+settle() and the other tools report, the chrome glance, `context_window`) is occupancy
+computed from the transcript's last main-loop usage block, divided by a window: the
+harness's own `context_window_size` when a mount row carries it, else a tier inferred from
+the model id (flagged assumed, and never alarmed on). The harness also computes its own
+`used_percentage` and hands it to hooks and the status line only; nothing stores it. So two
+sources exist for one figure: the status line and the settle gate prefer the harness's, while
+settle(), the stop hook's stamped reading and `context_window` use this module's. They share
+the input-plus-cache-read-plus-cache-creation formula and the harness's window, and settle()
+and `context_window` report the same percentage on the same transcript. But this module has
+never been compared against the harness's own number on a paired reading, so rounding and
+the exact usage block each picks are unconfirmed. Treat a one-point difference as unexplained
+rather than as an error until that comparison exists.
 """
 from __future__ import annotations
 
