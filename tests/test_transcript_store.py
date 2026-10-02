@@ -834,7 +834,7 @@ async def test_rederive_resets_and_reeats_with_new_facts(
         "UPDATE harness_turns SET reminders=NULL, is_compaction=false")
     gone.unlink()  # this session's source vanishes; its rows must survive the reset
     n = await store.rederive("claude-code")
-    assert n == 1  # beef0001 reset; dead0002 guarded
+    assert n == 1  # the stale session resets; the guarded one is untouched
     assert await store.pool.fetchval(
         "SELECT count(*) FROM harness_turns WHERE anchor_sid='dead0002'") == 1
     assert await store.pool.fetchval(

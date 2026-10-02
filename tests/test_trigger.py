@@ -540,7 +540,7 @@ async def _stale_resumable_owner(actions: Actions, tmp_path: Path,
     `bind_seat=False` skips the seat-binding half only: a caller that ALSO calls
     `_managed_pair` for agent:abcd1234 must bind its own seat there instead (`bind_holder`
     never invalidates an agent's holds on a DIFFERENT seat, only a different agent's hold
-    on the SAME seat: two calls would leave abcd1234 holding two seats at once, breaking
+    on the SAME seat: two calls would leave that agent holding two seats at once, breaking
     seat-scoped lookups like the pair rate cap)."""
     import os
     import time as _time
@@ -1173,7 +1173,8 @@ async def test_wake_gate_preflight_reports_fresh_heir_available_past_the_seam(
     # THE JOB_DIR ANCHOR (`_job_id`/`locate_current_transcript`): the transcript-locating
     # gate matches on job_dir's OWN last path segment as a PREFIX of the session id, never
     # on cwd: `_lineage_holder_with_session` always names its file FULL_SID.jsonl
-    # ("abcd1234-…"), so the job_dir here must end in "abcd1234" to anchor onto it.
+    # (the first 8 hex chars of the sid), so the job_dir here must end in that prefix to
+    # anchor onto it.
     await save_mount(actions.pool, job_dir="/x/jobs/abcd1234", agent_id="agent:wg0001",
                      project="osiris", cwd="/repo/demo", model=None,
                      session_key=None)
@@ -2913,7 +2914,7 @@ async def test_registry_corroborates_refuses_a_reassigned_door(
         actions, tmp_path, agent_id="agent:newowner")  # registry NOW says newowner
     job_dir = str(tmp_path / "jobs" / "abcd1234")
     # the deep-scan signature (baked into the transcript by the helper) still names
-    # abcd1234, the registry disagrees, so corroboration must refuse FOR abcd1234
+    # the old agent, the registry disagrees, so corroboration must refuse for that agent
     assert not await trigger_module._registry_corroborates(
         actions.pool, job_dir, t, "agent:abcd1234", seat_id=None)
 
@@ -3177,7 +3178,7 @@ async def test_dispatch_dm_still_refuses_when_deep_history_is_a_different_mind(
 async def test_dispatch_dm_still_refuses_a_reassigned_door_end_to_end(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A named case: the transcript's stale deep history still says abcd1234, but
+    """A named case: the transcript's stale deep history still names the old owner, but
     the door has been legitimately reassigned: the CURRENT registry says otherwise. The
     fallback must not resurrect an addressee's access to a door that moved on."""
     sense, _t = await _mounted_deep_agent(
@@ -3195,8 +3196,8 @@ async def test_dispatch_dm_still_refuses_a_reassigned_door_end_to_end(
                           spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
     # the old identity's OWN mounts are gone (the door reassigned to newowner): dispatch_dm
     # never reaches the crossed-registry guard at all here, it stops one step earlier at
-    # wakeable_identity finding nothing for abcd1234 specifically (#156.2 clarified the
-    # label; the underlying refusal was already this, unchanged by that fix).
+    # wakeable_identity finding nothing for the old owner specifically (the label was
+    # clarified later; the underlying refusal was already this).
     assert d["mode"] == "never-mounted"
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
 
@@ -3885,7 +3886,7 @@ async def test_wake_reports_queued_when_the_marker_never_lands(
     of the window reaches the SAME injected `spawn`/`windows`, so it stays fully hermetic
     even though it fires a second real `dispatch_dm` resolution."""
     sense = await _stale_resumable_owner(actions, tmp_path, bind_seat=False)
-    # knock DOWN on a worker (abcd1234), the injectable direction: a manager target would be
+    # knock DOWN on a worker, the injectable direction: a manager target would be
     # pull-only by the human-attended guard and never reach the marker-downgrade path this pins.
     worker_seat, manager_seat = await _managed_pair(
         actions, worker_agent="agent:abcd1234", manager_agent="agent:sender")
@@ -4890,7 +4891,7 @@ async def test_bind_before_spawn_never_adopts_another_agents_live_job_dir_as_an_
     became the ancestor fallback. Live, that edge named `agent:9c9a534f`: not a real
     identity at all, but a borrowed harness session id. The real
     agent (a different canonical, `agent:dustinreal-xv` here) is genuinely mounted
-    under job_dir `.../jobs/9c9a534f` at the moment this fires: the exact collision
+    under a job_dir whose last segment equals that borrowed id when this fires: the exact collision
     this door must catch and refuse, falling through to a genuinely fresh, seat-
     derived root instead of inheriting a lineage that was never actually its own,
     or anyone's."""
@@ -5005,7 +5006,7 @@ async def test_bind_before_spawn_never_chains_two_self_managed_seats_under_the_s
     then surfaces AT RESUME TIME (walking B's own holder backward through
     succeeded_from lands on A's real session; measured live in the resume_seat
     acceptance test: a synthetic seat 3 inherited seat 2's own dormant session, both
-    founded `--actor khnum`). found_seat's own per-seat founder source (seats.py's
+    founded by the same actor). found_seat's own per-seat founder source (seats.py's
     `_FOUNDER_SOURCE_PREFIX`) fixes this at the root: both seats always mint a bare,
     independent `agent:seat-<id>` root, never an heir of anyone else's lineage: so
     resume(B) can never continue A, because nothing ever chained them together."""
@@ -5454,7 +5455,7 @@ async def test_launch_names_lineage_delivery_when_the_nudge_resumes_a_dormant_se
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """One live specimen:
-    the nudge genuinely delivered the brief (session 7806f810's real transcript grew
+    the nudge genuinely delivered the brief (the dormant session's real transcript grew
     69MB two seconds later), but by RESUMING a dormant session in the seat's own
     lineage, not the literal harness session launch just spawned. THE DESIGN DECISION:
     "mint a body, deliver through the lineage" is the accepted shape, named honestly
@@ -7769,7 +7770,7 @@ def test_job_id_anchors_on_the_innermost_jobs_component():
 async def test_bind_before_spawn_trusts_tenure_over_the_handle_assertions_author(
     actions: Actions,
 ) -> None:
-    """THE WERNER/TILL SPECIMEN (2026-09-05): both seats were FOUNDED
+    """THE FOUNDED-SEAT SPECIMEN: two seats were FOUNDED
     by a founder in July, so their `handle` assertions are sourced from that founder's lineage,
     while their own lineages held them across eleven generations
     each. Post-reboot launches minted both bodies as that founder's own generations 37
@@ -7790,7 +7791,7 @@ async def test_bind_before_spawn_trusts_tenure_over_the_handle_assertions_author
         current_holder=heir, office="/tmp/werner", anchor="/tmp/anchors/werner",
         source="agent:alfred01")
 
-    assert out["agent"] == "agent:wernerline-iii"  # werner's own lineage, never Thoth's
+    assert out["agent"] == "agent:wernerline-iii"  # the seat's own lineage, never the founder's
     assert "thothfounder" not in out["agent"]
     row = await actions.pool.fetchrow(
         "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
@@ -7837,7 +7838,7 @@ async def test_bind_before_spawn_a_single_holder_with_a_mount_in_the_office_is_t
         current_holder="agent:cassline", office="/home/x/.osiris/seats/cassandra2",
         anchor="/tmp/anchors/cass2", source="agent:alfred01")
 
-    assert out["agent"] == "agent:cassline-ii"  # cassandra's own lineage, never Thoth's
+    assert out["agent"] == "agent:cassline-ii"  # the seat's own lineage, never the founder's
     assert "thothfounder" not in out["agent"]
 
 

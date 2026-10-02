@@ -216,7 +216,7 @@ def test_find_is_anchored_not_a_substring_match(tmp_path: Path) -> None:
     with it, would wrongly match. `_find` must return the genuine stem-prefix match and
     never a look-alike."""
     real = _write(tmp_path, "-repo", "aaaaaaaa", [_turn("u1")])
-    # a look-alike: "aaaaaaaa" appears as a SUBSTRING, but the stem does not START with it,
+    # a look-alike: the id appears as a SUBSTRING, but the stem does not START with it,
     # the old bare-substring glob would have matched this one too (whichever sorts first).
     _write(tmp_path, "-repo", "zzzz-aaaaaaaa", [_turn("u9")])
 

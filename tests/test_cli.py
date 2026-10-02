@@ -325,7 +325,7 @@ async def test_cmd_show_exits_nonzero_when_recall_refuses(monkeypatch: Any) -> N
     assert await cmd_show("nope") == 1
 
 
-# --- cmd_fleet (ruling f6b758fc, SPLIT after a live regression): --json
+# --- cmd_fleet (SPLIT after a live regression): --json
 # keeps the OLD wire contract (the caller's own `full`); human mode passes the SAME `full`
 # through and prints the SERVER's own `tree` (always computed over the complete node set, 
 # never re-derived client-side from `registered`, the receipt diet's own capped sample,
@@ -463,7 +463,7 @@ async def test_cmd_soul_key_init_writes_and_reports_the_path(
 ) -> None:
     """No dedicated service account is assumed (the test process's own
     real, non-root uid is already a valid caller, no getuid/getuser mock needed.
-    `backend="file"` (KEY CUSTODY REWRITTEN, ruling e0b98ff2): the default systemd-creds
+    `backend="file"` (KEY CUSTODY REWRITTEN): the default systemd-creds
     backend gets its OWN dedicated CLI test below; this one is about the CLI plumbing."""
     key_file = tmp_path / "soul.key"
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
@@ -756,7 +756,7 @@ async def test_cmd_team_seat_is_honest_when_the_manager_manages_nobody(
     assert await cmd_team(seat="Cliteamlone", pool=actions.pool) == 1
 
 
-# --- backlog/threads/roster/team paint parity (thread bad45d61, ): human mode asks
+# --- backlog/threads/roster/team paint parity (): human mode asks
 # the server for render='text' and paints that VERBATIM; --json keeps the old wire contract
 # unchanged. Proven here by asserting the ARGUMENTS each mode sends, never by asserting on
 # color codes (that's cli_render's own test file's job). ------------------------------------
@@ -1027,7 +1027,7 @@ async def test_cmd_launch_spawns_and_confirms_an_honest_mount(actions: Actions) 
 
 
 async def test_cmd_launch_names_a_model_mismatch_honestly(actions: Actions) -> None:
-    """thread 20e4feb6's own bug class, caught by the CLI's own receipt: requested one model,
+    """a past bug class, caught by the CLI's own receipt: requested one model,
     the body that actually mounted reports a different one."""
     await ensure_seat(actions, house="osiris", handle="wrongmodel",
                       anchor_cwd="/home/x/.osiris/seats/wrongmodel", source="test")
@@ -1055,8 +1055,8 @@ async def test_cmd_launch_names_a_model_mismatch_honestly(actions: Actions) -> N
     assert "claude-fable-5" in buf.getvalue()
 
 
-# --- THE BEHAVIOUR-LEVEL PARITY TEST ( item 3,  a793b01b, "UNIFY LAUNCH"):
-# thread a793b01b's own finding was that the CLI/MCP parity census only ever checked that
+# --- THE BEHAVIOUR-LEVEL PARITY TEST ("UNIFY LAUNCH"):
+# the earlier finding was that the CLI/MCP parity census only ever checked that
 # `launch` EXISTS as a name on both surfaces, never that the CLI path actually calls
 # trigger.launch_seat rather than reimplementing it, a name-only check a full,
 # independently-drifting reimplementation still passes. This proves DELEGATION directly: a
@@ -1175,7 +1175,7 @@ async def test_cmd_launch_harness_returns_the_existing_body_instead_of_twinning(
 async def test_cmd_resume_refuses_an_already_live_seat_same_occupancy_gate_as_launch(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A VERB SPLIT MUST NOT BECOME A GUARD HOLE (operator ruling 60c78788, own
+    """A VERB SPLIT MUST NOT BECOME A GUARD HOLE (an
     explicit instruction): `osiris resume` shares launch's exact twin/occupancy check
     via `_resolve_and_guard_launch`, a seat already holding a live body refuses resume
     too, same success-shaped exit 0, never a spawn attempt."""
@@ -1202,7 +1202,7 @@ async def test_cmd_launch_harness_catches_a_resumed_body_the_harness_roster_cann
     agents --json` is invisible to a resumed (`-p --resume`) body by construction, so an
     EMPTY harness roster used to mean "safe to mint" even with a genuinely live resumed
     session at this exact cwd, reachable only via agent_mounts. Shares launch_seat's own
-    _launch_twin_check now (ruling 983ec87a, two doors one receipt), never a second,
+    _launch_twin_check now (two doors, one receipt), never a second,
     differently-shaped guard on the same class."""
     from src.orchestrator.mounts import save_mount
 
@@ -1285,7 +1285,7 @@ async def test_cmd_launch_harness_spawns_and_confirms(
 async def test_cmd_launch_harness_refuses_an_over_budget_mint(
     actions: Actions, monkeypatch: Any, tmp_path: Path,
 ) -> None:
-    """THE SPEND GAP (lane B design's own finding on 9d2aaf4d): this
+    """THE SPEND GAP (the lane B design's own finding): this
     door is a SEPARATE implementation from trigger.launch_seat (own docstring), never
     covered by that verb's own may_spend gate, a new body is a real turn, same dollar
     wall dispatch_dm/wake_worker already stand behind. `_cmd_launch_harness` reads
@@ -1329,7 +1329,7 @@ async def test_cmd_launch_harness_refuses_an_over_budget_mint(
 async def test_cmd_launch_harness_confesses_dormant_history_to_stderr(
     actions: Actions, monkeypatch: Any, tmp_path: Path,
 ) -> None:
-    """Thread fc69b9b4: a substantial transcript already sitting at the target office is
+    """A substantial transcript already sitting at the target office is
     named, not silently spawned into, before `claude --bg` fires. Disclosure only: the
     spawn still happens."""
     import io
@@ -1409,15 +1409,15 @@ async def test_cmd_launch_harness_gives_up_honestly_when_never_visible(
     assert "not yet visible" in buf.getvalue()
 
 
-# ═══ cmd_resume's own RESUME lane (task #136, 2026-08-05, decision 536de12f; split into
-# its own verb by operator ruling 60c78788, 2026-09-01; PERSISTENT since dispatch
-# 6484/6515): mirrors launch_seat's own already-proven resume branch exactly, 
+# ═══ cmd_resume's own RESUME lane (task #136, 2026-08-05, split into
+# its own verb 2026-09-01; PERSISTENT since
+# the split): mirrors launch_seat's own already-proven resume branch exactly, 
 # _lineage_resume_candidate/_resume_guard/resume_spawn, reused verbatim, never
 # reimplemented (test_trigger.py's own identically-shaped fixtures already exhaust the
 # underlying gate logic, the guard, the compaction/ceiling math, the lineage walk, so
 # these tests only prove _cmd_resume_harness WIRES it correctly, not re-derive it).
 #
-# VISIBILITY NOW RIDES `claude agents --json` TOO, decision 536de12f/a829a15d's "a
+# VISIBILITY NOW RIDES `claude agents --json` TOO: the earlier claim "a
 # resumed body cannot appear there" was true of the old one-shot `-p --resume` lane and
 # is false of `--bg --resume` (verified live against harness 2.1.258, see
 # `_spawn_claude_bg`'s own docstring). ═══
@@ -1448,7 +1448,7 @@ async def _resumable_seat(
     old = _time.time() - 3600
     os.utime(t, (old, old))
 
-    # THE ONE-SIDED GUARD FAMILY fix (decision 27259e4d, thread bc11a2d3): osiris launch
+    # THE ONE-SIDED GUARD FAMILY fix: osiris launch
     # now requires a seat's own anchor_cwd to exist on disk, this helper already has real
     # filesystem access (the transcript above), so it makes the real thing.
     Path(anchor_cwd).mkdir(parents=True, exist_ok=True)
@@ -1473,8 +1473,8 @@ def _resume_settings(sense: Path, *, min_tail_bytes: int = 0) -> SimpleNamespace
 async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE PAYOFF, now cmd_resume's own (operator ruling 60c78788's verb split, made
-    persistent by ): a seat whose holder left a resumable
+    """THE PAYOFF, now cmd_resume's own (after the verb split, made
+    persistent ): a seat whose holder left a resumable
     session is CONTINUED via resume_spawn's own `--bg --resume` lane. `agents_json` is
     consulted ONCE, for the shared pre-resume already-live twin check both verbs use, 
     the resumed body's own post-resume visibility is `claude agents`'s job now, not
@@ -1573,7 +1573,7 @@ async def test_cmd_resume_harness_clears_a_stale_stopped_record_before_spawning(
 async def test_cmd_resume_harness_resumes_a_zero_hop_candidate_with_no_signed_testimony(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """#173a's own door, mirrored through this CLI-facing lane (ruling 983ec87a, two doors
+    """#173a's own door, mirrored through this CLI-facing lane (two doors,
     one receipt, launch_seat's own sibling fix): the seat's CURRENT holder (0 hops back)
     has a real, anchored, resumable transcript that never wrote a single signed osiris
     act. The testimony arm alone would refuse this resident-unknown; the zero-hop graph
@@ -1614,7 +1614,7 @@ async def test_cmd_resume_harness_resumes_a_zero_hop_candidate_with_no_signed_te
 async def test_cmd_launch_harness_falls_through_with_a_named_reason_when_not_resumable(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """NEVER FALLS THROUGH TO FRESH ANYMORE (operator ruling 60c78788's verb split, the
+    """NEVER FALLS THROUGH TO FRESH ANYMORE (the verb split, the
     whole point of it): a holder whose transcript compacted past the gate used to fall
     through to `claude --bg`; `osiris resume` now REFUSES cleanly instead, nothing
     spawned, the refusal reason still NAMED, never silent. Minting fresh on a failed
@@ -1652,8 +1652,8 @@ async def _resumable_seat_no_signed_testimony(
     actions: Actions, tmp_path: Path, *, handle: str, agent_id: str, anchor_cwd: str,
 ) -> Path:
     """Same graph shape as `_resumable_seat`, a real, uncompacted transcript the seat's own
-    `session` property points at, but with NO signed testimony anywhere in it: thread
-    ef88e2bb's own specimen (workerk's real, sizeable transcript, 0 hops back, nothing
+    `session` property points at, but with NO signed testimony anywhere in it:
+    a past specimen (a real, sizeable transcript, 0 hops back, nothing
     that scans as signed), the `resident-unknown` class."""
     import os
     import time as _time
@@ -1667,7 +1667,7 @@ async def _resumable_seat_no_signed_testimony(
     old = _time.time() - 3600
     os.utime(t, (old, old))
 
-    # same fix as _resumable_seat's own (decision 27259e4d, thread bc11a2d3)
+    # same fix as _resumable_seat's own
     Path(anchor_cwd).mkdir(parents=True, exist_ok=True)
     seat = await ensure_seat(actions, house="osiris", handle=handle, anchor_cwd=anchor_cwd,
                              source="test")
@@ -1684,12 +1684,12 @@ async def _resumable_seat_no_signed_testimony(
 async def test_cmd_launch_harness_refuses_outright_one_hop_back_with_no_signed_testimony(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE FIX FOR ef88e2bb (operator, 2026-08-17), through the CLI-facing path: a
+    """THE FIX FOR a resident-unknown fall-through, through the CLI-facing path: a
     resumable session with NO signed testimony, ONE HOP BACK (the predecessor's own
     session, not the seat's current holder), not eligible for #173a's zero-hop graph
     door (see the sibling zero-hop test above, and test_trigger.py's own
     `test_zero_hop_graph_door_never_fires_one_hop_back` for the launch_seat side of this
-    same contract), must refuse the WHOLE launch. Before ef88e2bb this fell through to
+    same contract), must refuse the WHOLE launch. Before the fix this fell through to
     the same `claude --bg` mint as a genuine crossed-registry finding, exactly how
     workerk's real, resumable session got a stranger minted over it."""
     from src.cli import _cmd_resume_harness
@@ -1742,7 +1742,7 @@ async def test_cmd_launch_harness_refuses_outright_one_hop_back_with_no_signed_t
     assert "claude -p --resume" in err and _RESUME_SID in err.split("claude -p --resume")[1]
 
 
-# ═══ tree_cwd (task #135/#136, 2026-08-03, ruling 983ec87a): `osiris launch` had drifted
+# ═══ tree_cwd (task #135/#136, 2026-08-03): `osiris launch` had drifted
 # from launch_seat's own #103 update, hardcoded to `office`, never reading `tree_cwd` at
 # all. Same three proofs test_trigger.py already carries for launch_seat itself, mirrored
 # here for the CLI path, two doors onto one act must return the same receipt. ═══
@@ -1750,7 +1750,7 @@ async def test_cmd_launch_harness_refuses_outright_one_hop_back_with_no_signed_t
 async def test_cmd_launch_harness_refuses_a_tree_cwd_that_does_not_exist_on_disk(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """OSIRIS NEVER PROVISIONS THE TREE (ff3bdc37: harness owns isolation), a seat naming a
+    """OSIRIS NEVER PROVISIONS THE TREE (the harness owns isolation), a seat naming a
     tree_cwd the harness never actually created is refused, cleanly, before anything spawns,
     exactly matching launch_seat's own refusal shape.
 
@@ -1916,7 +1916,7 @@ async def test_cmd_launch_harness_refuses_a_fabricated_project_when_the_charter_
 async def test_cmd_launch_harness_refuses_an_anchor_cwd_that_does_not_exist_on_disk(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE ONE-SIDED GUARD FAMILY, NEXT SPECIMEN (decision 27259e4d, thread bc11a2d3): the
+    """THE ONE-SIDED GUARD FAMILY, NEXT SPECIMEN the
     operator's real specimen, `osiris launch workerx` died with a raw FileNotFoundError
     because tree_cwd got an existence check and anchor_cwd/office never did. A seat with NO
     tree_cwd binding (the workerx shape exactly) falls back to office as launch_cwd, so a
@@ -2018,7 +2018,7 @@ async def test_cmd_launch_harness_idempotency_matches_on_tree_cwd_not_office(
     assert out == 0  # returned the existing body, never twinned
 
 
-# --- osiris deploy: pure decision layer (task e51a841c) -----------------------------------------
+# --- osiris deploy: pure decision layer -----------------------------------------
 
 def test_dirty_tracked_src_files_flags_modified_tracked_files() -> None:
     status = [(" M", "src/foo.py"), ("M ", "src/bar.py"), ("??", "src/new_untracked.py"),
@@ -2096,7 +2096,7 @@ def test_composition_gap_notes_extra_user_saved_rows_never_mask_a_missing_defaul
     assert "'b'" in notes[0]
 
 
-# --- composition_drift_notes: MISSING-OR-DIFFERENT, not just missing (e4612853/38c71544) -------
+# --- composition_drift_notes: MISSING-OR-DIFFERENT, not just missing -------
 
 def test_composition_drift_notes_flags_a_differing_spec_by_name() -> None:
     live = {"a": {"op": "select", "object_type": "Commit"}}
@@ -2719,7 +2719,7 @@ async def test_cmd_deploy_records_normally_when_the_whisper_probe_succeeds(
     assert out == 0
 
 
-# --- THE ANCHOR INVARIANT (ruling 23771416, informational, never gating ----
+# --- THE ANCHOR INVARIANT (informational, never gating ----
 
 async def test_cmd_deploy_notes_but_never_blocks_on_an_anchor_invariant_violation(
     actions: Actions, tmp_path: Path,
@@ -2787,7 +2787,7 @@ async def test_cmd_deploy_prints_no_anchor_note_when_the_fleet_is_clean(
 async def test_cmd_deploy_skips_the_full_suite_gate_by_default(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """thread be24817b: this asserts the FIELD'S OWN DEFAULT in source, never ambient env, 
+    """This asserts the FIELD'S OWN DEFAULT in source, never ambient env, 
     an explicitly constructed Settings() is the claim; reading get_settings() here would be
     testing whatever the process's environment happens to hold (which, the moment this very
     gate is armed for a real deploy, is exactly the flag this test exists to disprove, the
@@ -2815,7 +2815,7 @@ async def test_cmd_deploy_skips_the_full_suite_gate_by_default(
 async def test_cmd_deploy_records_normally_when_the_full_suite_gate_holds(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """thread be24817b: an explicit Settings object arms the flag for THIS call only, 
+    """An explicit Settings object arms the flag for THIS call only, 
     never ambient env, which a real armed deploy's own subprocess would otherwise inherit
     into every test in the suite it spawns, this one included."""
     async def _restart(units: list[str]) -> tuple[int, str]:
@@ -2897,7 +2897,7 @@ async def test_cmd_deploy_refuses_to_record_when_the_full_suite_gate_finds_a_rea
 async def test_cmd_deploy_skips_the_chaos_gate_by_default(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """thread be24817b: an explicitly constructed Settings() pins the claim to the field's
+    """An explicitly constructed Settings() pins the claim to the field's
     own default in source, not to whatever the process's ambient environment holds, see
     the full-suite gate's twin test above for the full self-refutation this closes."""
     async def _restart(units: list[str]) -> tuple[int, str]:
@@ -2923,7 +2923,7 @@ async def test_cmd_deploy_skips_the_chaos_gate_by_default(
 async def test_cmd_deploy_records_normally_when_the_chaos_gate_holds(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """thread be24817b: see the full-suite gate's twin test above, an explicit Settings
+    """See the full-suite gate's twin test above, an explicit Settings
     object arms the flag for this call only, never ambient env."""
     async def _restart(units: list[str]) -> tuple[int, str]:
         return 0, "done"
@@ -3041,7 +3041,7 @@ async def test_cmd_deploy_refuses_when_a_false_mint_live_specimen_exists(
 async def test_check_false_mint_live_excludes_an_already_retired_candidate(
     actions: Actions,
 ) -> None:
-    """THE 2464d3ad SPECIMEN : task #204's bg-spare heartbeat bug left a
+    """THE BG-SPARE HEARTBEAT SPECIMEN: task #204's bg-spare heartbeat bug left a
     false_mint=true generation's mount row refreshing for a while AFTER phantom-fold had
     already correctly retired it, five real deploys (abc056a/89d4605/cc3e4a3/eda0459/
     f66654a) ran unrecorded over exactly this shape. A candidate already carrying
@@ -3419,7 +3419,7 @@ async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # a real deploy/user/*.service pair, deploy_unit_names is DERIVED from these
-    # (thread 2a280e07's own follow-up: never a hand-listed default), so a test exercising
+    # (never a hand-listed default), so a test exercising
     # the restart step needs real sources to derive from, same as production always has.
     # THE LIVE INCIDENT THIS GUARDS AGAINST (this test doesn't pass
     # its own `install_units=` stub, so `cmd_deploy`'s default `_real_install_user_units`
@@ -3478,7 +3478,7 @@ async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
 async def test_cmd_deploy_broadcasts_a_disconnect_warning_before_and_after_the_restart(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thread d96167c6: a deploy restart drops every live streamable-HTTP session
+    """A deploy restart drops every live streamable-HTTP session
     silently, and health/smoke can never see it (they probe a FRESH connection). 
     plan: broadcast an fyi before the restart and another once health confirms it's back
 , reconnect itself is the harness client's own job."""
@@ -3538,7 +3538,7 @@ async def test_cmd_deploy_restart_failure_is_honest(actions: Actions, tmp_path: 
     assert out == 1
 
 
-# --- osiris deploy records the ledger a boot-time reboot guard confesses against (489a39d0) ----
+# --- osiris deploy records the ledger a boot-time reboot guard confesses against ----
 
 async def test_cmd_deploy_records_the_deployed_head_on_a_successful_restart(
     actions: Actions, tmp_path: Path,
@@ -3694,7 +3694,7 @@ async def test_cmd_migrate_upgrade_failure_is_honest(actions: Actions, tmp_path:
 async def test_apply_pending_migrations_names_an_unrecognized_revision(
     actions: Actions,
 ) -> None:
-    """Decision 8d3f5e2d, task #142 follow-up: a DB carrying a revision this tree's own
+    """A DB carrying a revision this tree's own
     alembic chain has never heard of used to be refused only by ACCIDENT, alembic's own
     `command.upgrade` errors on it, and the generic except around `run_migrations` reported
     whatever opaque text that exception happened to carry. This checks it explicitly first,
@@ -4010,7 +4010,7 @@ async def test_cmd_deploy_name_alias_automerge_opts_out_under_the_env_flag(
     assert row["status"] == "active", "OSIRIS_CASEFOLD_AUTOMERGE=0 must never fold anything"
 
 
-# --- dev-box systemd USER units are repo-managed (thread e6fd3772 piece 3-infra) ---------------
+# --- dev-box systemd USER units are repo-managed ---------------
 # `osiris deploy` installs deploy/user/*.service over ~/.config/systemd/user/ before restarting
 #, these units were previously five hand-installed files this box's own operator diverged from
 # the /opt SYSTEM templates by hand; nothing in git was ever the sandbox's actual running config.
@@ -4025,7 +4025,7 @@ _REQUIRED_UNIT_ENV = {
         "DATABASE_URL=", "application_name=osiris-worker", "REDIS_URL=",
         "OSIRIS_WORKER_ROLE=primary", "OSIRIS_PHANTOM_HEAL_ENABLED=1",
         "OOMScoreAdjust=-500",  # thread #175, systemd's own "Failed with result 'oom-kill'"
-        "HF_HUB_OFFLINE=1",  # thread 5cd49217: cached model, skip the HF CDN round-trip
+        "HF_HUB_OFFLINE=1",  # cached model, skip the HF CDN round-trip
     ],
     "osiris-console.service": ["DATABASE_URL=", "application_name=osiris-console", "REDIS_URL="],
     "osiris-pulse.service": ["DATABASE_URL=", "application_name=osiris-pulse", "REDIS_URL="],
@@ -4063,7 +4063,7 @@ def test_deploy_user_units_contract_every_required_env_line_present() -> None:
 
 
 def test_deploy_user_units_all_carry_reboot_survival_hardening() -> None:
-    """REBOOT SURVIVAL, the units half (thread 194eac83, operator ruling aaa8e841): every
+    """REBOOT SURVIVAL, the units half every
     daemon unit, not just the ones already using Restart=always, must survive a cold
     boot where postgres (docker-compose.full.yml) answers late, without systemd's own
     default 5-tries/10s start-limit permanently stranding it as 'failed'. Reads the REAL
@@ -4114,7 +4114,7 @@ def test_user_unit_sources_missing_dir_is_empty(tmp_path: Path) -> None:
 def test_deploy_unit_names_is_derived_from_installed_units_never_hand_listed(
     tmp_path: Path,
 ) -> None:
-    """Thread 2a280e07's own follow-up: `osiris-pulse` was already installed via
+    """`osiris-pulse` was already installed via
     deploy/user/osiris-pulse.service (and covered by `_REQUIRED_UNIT_ENV`'s own contract
     test above) but was never in the old hand-typed DEPLOY_UNITS restart tuple, a unit
     a plain main merge doesn't reach ran two-day-stale code through two separate merged
@@ -4581,7 +4581,7 @@ async def test_cmd_deploy_actually_runs_install_prune_timers_sh(
     assert (target / "osiris-base-backup.service").read_text() == "# osiris-base-backup service\n"
 
 
-# --- deploy snapshot (thread e29b260c, --------------------------------------
+# --- deploy snapshot --------------------------------------
 
 def _git_init_and_commit(repo: Path) -> str:
     """Same shape as `_git_init` above, but returns the resulting commit sha, needed here
@@ -4826,8 +4826,8 @@ async def test_cmd_deploy_skips_the_snapshot_when_head_is_unknown(
 def test_install_prune_timers_sh_now_covers_all_eight_timer_lane_units(
     tmp_path: Path,
 ) -> None:
-    """ (thread f04cce36 piece 3) widened this from three to five; 
-    (ruling 7be61879, thread 40d6eef3) widened it once more to six, osiris-pg-autotune
+    """The set was widened from three to five; 
+    then widened once more to six, osiris-pg-autotune
     was the last hand-installed timer the census named (osiris-preflight was already
     covered by piece 3); THE OPPORTUNISTIC OFFLOAD RUNNER widens it
     again to seven, osiris-offload; THE SCHEDULED RESTORE TEST makes it eight. A config
@@ -5105,7 +5105,7 @@ async def test_cmd_sweep_seat_trees_dry_run_reports_json(
     assert "entries" in payload
 
 
-# --- cmd_lint: the graph_lint mirror (item 2, thread bf10608b), a real
+# --- cmd_lint: the graph_lint mirror, a real
 # pool, never mocked, same as every other CLI test in this file. Finding-triggering recipes
 # reuse test_compositions.py's own cheap fixtures (the edgeless-closure-growth ceiling
 # monkeypatch) rather than inventing a second one for the identical population. ---------------
@@ -5173,7 +5173,7 @@ async def test_cmd_lint_json_mode_emits_the_full_receipt(
 async def test_cmd_lint_project_filter_keeps_a_matching_finding(
     actions: Actions, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The client-side --project filter (thread bf10608b, graph_lint has no SQL-level
+    """The client-side --project filter (graph_lint has no SQL-level
     scoping to mirror) matches on the finding's own subject/detail text, the
     edgeless-closure-growth finding's own `detail` always names 'bypass' verbatim
     (compositions.py's own land() call site), a real substring, not a fabricated one."""
@@ -5595,7 +5595,7 @@ async def test_cmd_charter_for_refuses_a_non_manager(actions: Actions) -> None:
 
 async def test_cmd_charter_for_ruling_bypasses_the_manager_check(actions: Actions) -> None:
     """`osiris charter-for <seat> --ruling <decision id>`, the console-script's own
-    plumbing for (93b25ddc), CLI side."""
+    plumbing for it, CLI side."""
     from src.orchestrator.capture import record_decision
     from src.orchestrator.charter import charter_of
     from src.orchestrator.seats import bind_holder, ensure_seat
@@ -5733,7 +5733,7 @@ async def test_cli_parser_accepts_settings(actions: Actions) -> None:
     assert args.key == "daemon.pit_watch.enabled"
 
 
-# --- backup-settings: PARITY GAPS,  item 3, thread 45aff160 ----------------------------
+# --- backup-settings: PARITY GAPS ----------------------------
 
 async def test_cmd_backup_settings_get_reports_the_seeded_defaults(actions: Actions) -> None:
     import io
@@ -6085,7 +6085,7 @@ async def test_cmd_amend_practice_amends_and_reports(actions: Actions) -> None:
     assert out == 0
     assert f"amended {p}" in buf.getvalue()
     assert "confirmed live on gestalt, 2026-08-02" in buf.getvalue()
-    # thread 55e5ac72: this door's own receipt mirrors the MCP wrapper's `practice` row
+    # this door's own receipt mirrors the MCP wrapper's `practice` row
     assert "practice now reads: always vendor the lockfile before a release" in buf.getvalue()
 
     amendments = await practice_amendments(actions.pool, p)
@@ -6302,7 +6302,7 @@ async def test_cli_parser_accepts_amend_decision(actions: Actions) -> None:
     assert args.actor == "operator"
 
 
-# --- send / decide / thread: THE WRITE TRIANGLE (dispatch a354ba28)
+# --- send / decide / thread: THE WRITE TRIANGLE
 # each calls the SAME orchestrator function its MCP twin wraps, guard untouched ------------------
 
 async def test_cmd_send_broadcasts_and_reports(actions: Actions) -> None:
@@ -6611,7 +6611,7 @@ async def test_cmd_correct_pin_value_adds_a_genuinely_missing_key(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """No parallel guard logic, the underlying correct_own_pin_value's own widened
-    behavior (operator ruling b5663511, PROJECT IDENTITY DRIFT: a missing key is
+    behavior (PROJECT IDENTITY DRIFT: a missing key is
     ADDED via write_pin_additions, never refused) surfaces through this door
     unchanged."""
     import io
@@ -7060,7 +7060,7 @@ async def test_cmd_mint_seat_mints_fresh_worker_and_reports(
     assert "minted CliMintWorker1" in text and "project=clihouse" in text
     assert "seat directory:" in text
     assert f"manager: {manager['seat_id']} (linked)" in text
-    # THE MCP-SYNTAX LEAK, FIXED (thread bc11a2d3/, this assertion used to
+    # THE MCP-SYNTAX LEAK, FIXED (this assertion used to
     # PROVE the bug, not catch it: a terminal caller was handed `launch(target=...)`,
     # syntax that cannot run in a shell. next_step_cli is the terminal-appropriate twin.
     assert "occupancy: vacant" in text
@@ -7257,7 +7257,7 @@ async def test_cmd_unmerge_dry_run_by_default(actions: Actions) -> None:
 
 
 async def test_cmd_retention_dry_run_by_default(actions: Actions) -> None:
-    """Cold by default (thread e6fd3772 piece 1): no --execute counts only."""
+    """Cold by default: no --execute counts only."""
     import io
     from contextlib import redirect_stdout
 
@@ -7302,7 +7302,7 @@ async def test_cmd_retention_refuses_an_unknown_table(actions: Actions) -> None:
 async def test_cmd_mint_seat_infers_manager_from_the_sole_seat_in_house(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ , implements 70c001ec: no --house flag any more, --manager
+    """No --house flag any more, --manager
     omitted infers the ONE seat in the project pinned at the cwd (--house retired,
     no alias)."""
     import io
@@ -7421,10 +7421,10 @@ async def test_cmd_new_founds_a_self_managed_seat_and_prints_the_launch_line(
     assert out == 0
     text = buf.getvalue()
     assert "founded Workern" in text and "self-managed, no manager" in text
-    # NO FABRICATION (the operator, 2026-09-02: "falsely creates a workerq project and a
-    # workerf project", decision 24e0b761): no --project given, so none is invented, and
+    # NO FABRICATION (a bare invocation used to create a project falsely):
+    # no --project given, so none is invented, and
     # the receipt confesses it plainly rather than staying silent. No separate --house
-    # print any more either (implements 70c001ec): house is always
+    # print any more either: house is always
     # project's own value now, never a second line to confess separately.
     assert "project: unset" in text and "none invented" in text
     assert "project: Workern" not in text
@@ -7459,7 +7459,7 @@ async def test_cmd_new_with_explicit_project_writes_it_and_prints_it(
 async def test_cmd_new_confesses_before_writing_when_cwd_disagrees_with_the_default(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE OPERATOR'S REAL SPECIMEN (thread bc11a2d3/: `mkdir cdking && cd
+    """THE OPERATOR'S REAL SPECIMEN (`mkdir cdking && cd
     cdking && osiris new Workerf` silently created ~/code/workerf, cdking was left an
     orphan. No path given, standing somewhere that isn't $HOME and isn't the default
     target: confess BEFORE anything writes, name both paths, give the exact remedy.
@@ -7605,7 +7605,7 @@ async def test_cmd_bootstrap_ingests_memory_and_registers_the_project(
 async def test_cmd_bootstrap_refuses_the_live_db_fallback_without_confirmation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """9b9ba394's own specimen: this exact command wrote a real project into the shared
+    """A real specimen: this exact command wrote a real project into the shared
     fleet graph because apply_dev_fallback()'s "dev" DSN and every deployed service's
     own DATABASE_URL are the SAME database on this box. No `pool=` passed here (the
     real no-pool path this guard sits in front of), neither DATABASE_URL nor
@@ -7732,7 +7732,7 @@ class _NoRows:
 
 
 async def test_window_tag_never_falls_back_to_osiris() -> None:
-    """Ruling 860b0306 (operator, 2026-09-06): a house is OPTIONAL, and an empty one must
+    """A house is OPTIONAL, and an empty one must
     never render as osiris's own tag, "[OS] Workeru" sat in the agents list beside the real
     osiris seats. House code when present, else the governed project's code, else no
     brackets at all.
@@ -7769,7 +7769,7 @@ async def test_governed_project_name_falls_back_to_the_seat_pin(tmp_path: Path) 
 
 
 def test_cli_has_no_private_house_tag_copy() -> None:
-    """The CLI's own `_house_tag` mirror kept the pre-860b0306 "OS" fallback for three
+    """The CLI's own `_house_tag` mirror kept the earlier "OS" fallback for three
     launch/resume doors after trigger.py dropped it, two resolvers, one drifted. One
     resolver now: the CLI imports trigger's `_window_name`."""
     from src import cli
