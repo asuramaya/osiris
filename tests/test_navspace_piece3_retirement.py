@@ -1,13 +1,12 @@
-"""NAVIGABLE SPACE, PIECE 3: RETIRE (Thoth's original NAVIGABLE SPACE dispatch, thread
-71c4ca0d/b6cb1d7c0b36; reconfirmed and dispatched for real in mail 10596/10619/10631 once
+"""NAVIGABLE SPACE, PIECE 3: RETIRE (once
 THE READING LAYER, parts A/B/C landed). At parity with the space.js renderer, cytoscape and
 its neighborhood-graph board are retired outright: the vendored cytoscape/fcose/cose-base/
 layout-base files, osiris.js's own makeBoard (~400 lines -- the whole cytoscape board
-implementation, WAVE A's own subject, thread 8839), console.js's ensureBoard()/board var/
+implementation, the first board build), console.js's ensureBoard()/board var/
 #cy-legacy mount, the Board kanban projection (renderBoardProjection/Lane/Card,
 BOARD_GROUP_BY), the whole-graph LOD toggle (GRAPH_MODE, already gone since the INTEGRATION
 piece), and #viewsw/the old view-tab switcher markup. This is a REMOVAL, not a rewrite --
-one reversible commit, per Thoth's own instruction -- so these tests prove absence, mirroring
+one reversible commit, as planned -- so these tests prove absence, mirroring
 the repo's existing static-source-guard convention.
 
 test_graph_visualizer_wave_a.py (WAVE A's own readability proofs against makeBoard) is
@@ -69,8 +68,8 @@ def test_index_html_drops_the_legacy_mount_and_old_switcher() -> None:
 
 
 def test_whole_graph_lod_toggle_is_gone() -> None:
-    # already retired in the earlier INTEGRATION piece (mail 10550) -- re-confirmed here as
-    # part of piece 3's own explicit scope (Thoth's dispatch names it again).
+    # already retired in the earlier INTEGRATION piece -- re-confirmed here as
+    # part of piece 3's own explicit scope.
     for needle in ("GRAPH_MODE", "toggleGraphMode", "graph-mode-btn", "graph-zoomout-btn",
                    "graph-relayout-btn", "expandFocusOneHop", "collapseFocusOneHop"):
         assert needle not in _CONSOLE_JS
@@ -85,7 +84,7 @@ def test_dead_viewswitcher_css_is_gone_too() -> None:
 # --- still-alive concerns from the retired WAVE A file, carried forward -------------------
 
 def test_breadcrumbs_are_still_wired_in_console_js() -> None:
-    # stepBackBreadcrumb is gone (TIP 1c review flaw #2, Thoth mail 10891) -- Escape now
+    # stepBackBreadcrumb is gone (review flaw) -- Escape now
     # clears the focus outright instead of stepping back one crumb, per the amendment's own
     # ruling ("Escape clears, Back walks the stack"); the function had no other caller left.
     assert "function pushBreadcrumb(id, label)" in _CONSOLE_JS
@@ -102,7 +101,7 @@ def test_escape_clears_the_focus_when_nothing_more_local_consumed_it() -> None:
 
 def test_breadcrumb_markup_still_exists() -> None:
     # the graph's OWN in-canvas search box (id="graph-search") is gone as of THE LEGIBILITY
-    # PASS, TIP 1(e) (ruling e1cb9e3b, mail 10708) -- superseded by the header omnibox, not
+    # PASS: superseded by the header omnibox, not
     # migrated. Breadcrumbs are untouched by that tip.
     assert 'id="graph-search"' not in _INDEX_HTML
     assert 'id="graph-breadcrumbs"' in _INDEX_HTML

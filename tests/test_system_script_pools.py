@@ -1,10 +1,10 @@
-"""THE MAILBOX GRAPH-EDGE WRITE FAILS ON A BARE POOL (thread 8542ee89): every system:*
+"""THE MAILBOX GRAPH-EDGE WRITE FAILS ON A BARE POOL: every system:*
 script's own desk-alarm helper built its pool via bare `asyncpg.create_pool`, which never
-registers the jsonb codec `src.db.pool.create_pool` does — so the very first jsonb write
+registers the jsonb codec `src.db.pool.create_pool` does, so the very first jsonb write
 `send_message`'s graph-edge block makes (`ensure_type`'s own `kind="object"` property
 assertion, inside `create_or_find_object`, upstream of the message's own summary/grade/
 status) hits Postgres as unquoted raw text and fails as invalid JSON. The relational mail
-row still lands (a separate, non-jsonb table); only the graph edge silently never did —
+row still lands (a separate, non-jsonb table); only the graph edge silently never did ,
 "visible in the mailbox, untraceable in the graph" for every alarm any of these scripts
 ever sent. Fixed by switching all three to `src.db.pool.create_pool`.
 
@@ -25,9 +25,9 @@ async def test_a_bare_asyncpg_pool_genuinely_reproduces_the_graph_edge_failure(
     pg_dsn: str, actions: Actions,
 ) -> None:
     """The regression this whole thread chases, reproduced directly against a real,
-    catalog-seeded schema (the `actions` fixture — same seeded 'Message' type
-    production already carries — isolates this from the DIFFERENT, test-DB-only
-    "undeclared object type" failure a truly empty catalog would raise instead) —
+    catalog-seeded schema (the `actions` fixture, same seeded 'Message' type
+    production already carries, isolates this from the DIFFERENT, test-DB-only
+    "undeclared object type" failure a truly empty catalog would raise instead) ,
     confirms the diagnosis (no jsonb codec = ensure_type's own property assertion
     fails as invalid JSON) rather than assuming it."""
     del actions  # depended on only to trigger the fixture's own catalog seeding
@@ -44,7 +44,7 @@ async def test_a_bare_asyncpg_pool_genuinely_reproduces_the_graph_edge_failure(
 async def test_the_fixed_pool_writes_a_real_graph_edge(
     pg_dsn: str, actions: Actions,
 ) -> None:
-    """`src.db.pool.create_pool` — the fix every affected script now uses — must NOT
+    """`src.db.pool.create_pool`, the fix every affected script now uses, must NOT
     reproduce the failure: the message's own summary/grade/status assertions land as
     real jsonb, queryable afterward."""
     del actions  # depended on only to trigger the fixture's own catalog seeding
@@ -80,7 +80,7 @@ def test_no_desk_alarm_function_calls_bare_asyncpg_create_pool(
     THREE affected functions. If a fourth desk-alarm helper is ever added with a bare
     `asyncpg.create_pool` again, this must catch it, not rely on someone re-deriving the
     same investigation from scratch. Scoped to the specific function, not the whole
-    file — those same modules' READ-ONLY collectors (collect_miner,
+    file, those same modules' READ-ONLY collectors (collect_miner,
     collect_schema_drift, collect_soul_store_coverage) never touch a jsonb write and
     are correctly left on a bare pool."""
     import importlib
@@ -88,6 +88,6 @@ def test_no_desk_alarm_function_calls_bare_asyncpg_create_pool(
 
     mod = importlib.import_module(modname)
     src = inspect.getsource(getattr(mod, funcname))
-    # the exact CALL shape, not the bare words — this function's own docstring
+    # the exact CALL shape, not the bare words, this function's own docstring
     # legitimately names "asyncpg.create_pool" in prose, explaining what NOT to do
     assert "asyncpg.create_pool(" not in src

@@ -1,9 +1,9 @@
-"""project_of (decision 68fba2e4, thread 19d6bdcb7fa9 — the operator's own house/project
+"""project_of (the house/project
 ruling): the resolving reader every DISPLAY/PROPAGATION caller of the old, misleadingly
-named house_of should use instead — pin (if cwd given) -> charter (exactly one repo) ->
+named house_of should use instead, pin (if cwd given) -> charter (exactly one repo) ->
 lineage_works_in (merge-normalized) -> None. Never house, never a raw stale copy. house_of
 itself stays, narrowed to its two remaining raw-read callers (correct_agent_house's
-before/after snapshot, claim_name's generation-counting comparison) — see its own
+before/after snapshot, claim_name's generation-counting comparison), see its own
 docstring.
 """
 from __future__ import annotations
@@ -19,10 +19,10 @@ from src.orchestrator.seats import bind_holder, ensure_seat
 
 
 def _real_repo_with_worktree(tmp_path: Path, repo_name: str, wt_name: str) -> Path:
-    """A real git repo (no `.osiris` anywhere) plus one real worktree of it — the
-    ballgem-wt-* shape (census 583e2669): an UNPINNED repo, so read_project_label's own
+    """A real git repo (no `.osiris` anywhere) plus one real worktree of it, the
+    ballgem-wt-* shape (census): an UNPINNED repo, so read_project_label's own
     climb (task #128) never finds anything to win with, leaving project_of's disk-
-    structure rung (thread 922d920c) as the only signal that isn't charter/lineage."""
+    structure rung as the only signal that isn't charter/lineage."""
     repo = tmp_path / repo_name
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
@@ -66,7 +66,7 @@ async def test_project_of_falls_back_to_a_single_chartered_repo_no_cwd(
     from src.orchestrator.charter import set_charter
 
     anchor = tmp_path / "charteredpo"
-    anchor.mkdir()  # no .osiris — no pin to win
+    anchor.mkdir()  # no .osiris, no pin to win
     agent = await _seated(actions, handle="Charteredpo", house="Charteredpo",
                           anchor_cwd=str(anchor))
     proj = await actions.create_or_find_object("SoftwareProject", "repo:cdking2", "test")
@@ -108,7 +108,7 @@ async def test_project_of_stays_none_with_no_signal_never_house(
 
 async def test_project_of_ignores_a_disagreeing_lineage(actions: Actions, tmp_path: Path) -> None:
     """lineage_works_in's own ABSTAIN law (two distinct projects across the lineage) must
-    survive unchanged through project_of — a genuine disagreement is never broken by
+    survive unchanged through project_of, a genuine disagreement is never broken by
     picking one, and never falls through to house either."""
     anchor = tmp_path / "disagreepo"
     anchor.mkdir()
@@ -128,9 +128,9 @@ async def test_project_of_ignores_a_disagreeing_lineage(actions: Actions, tmp_pa
 async def test_project_of_resolves_an_unpinned_worktree_to_its_registered_parent(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thread 922d920c/census 583e2669: a worktree of a repo with NO `.osiris` pin
+    """A worktree of a repo with NO `.osiris` pin
     anywhere (task #128's climb-fix has nothing to find) must still resolve to its
-    parent's own registered project name — a disk-structure signal, not a charter/
+    parent's own registered project name, a disk-structure signal, not a charter/
     lineage guess."""
     wt = _real_repo_with_worktree(tmp_path, "wtparentpo", "wtparentpo-branch")
     (tmp_path / "elsewhere").mkdir()
@@ -147,7 +147,7 @@ async def test_project_of_resolves_an_unpinned_worktree_to_its_registered_parent
 async def test_project_of_falls_through_when_the_worktree_parent_is_not_yet_registered(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """No SoftwareProject registered at the parent's on_disk_path yet (never censused) —
+    """No SoftwareProject registered at the parent's on_disk_path yet (never censused) :
     the worktree rung stays silent (never mints, never guesses) and falls to charter/
     lineage/None like any other unresolved cwd."""
     wt = _real_repo_with_worktree(tmp_path, "wtunregisteredpo", "wtunregisteredpo-branch")

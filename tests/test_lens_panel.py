@@ -1,7 +1,7 @@
-"""WAVE 27, THE LENS PANEL (Thoth mail 11754): the Legend gains a real lens -- edge classes
+"""THE LENS PANEL: the Legend gains a real lens -- edge classes
 (semantic / structural / container, container now kept distinct instead of normalizing to
 structural), communities and high-degree objects (the old "landmark" badges -- retired noun,
-operator ruling 52a59652), each switchable on/off per class. "A reader's lens, never a
+), each switchable on/off per class. "A reader's lens, never a
 default hide": every new toggle defaults to shown/checked, same convention the existing
 node-type/edge-class/edge-type checkboxes already use. State lives on the URL hash so a view
 is shareable -- read once at load, written after every toggle. Mirrors the repo's existing
@@ -166,7 +166,7 @@ def test_read_lens_state_never_throws_on_malformed_hash_json() -> None:
 
 
 def test_lens_hash_round_trips_all_five_keys_symmetrically() -> None:
-    # Thoth mail 11981: hiddenNodeTypes was written to the hash but never restored on load --
+    # hiddenNodeTypes was written to the hash but never restored on load --
     # the write side and the read side had silently drifted apart. This locks the two
     # functions' own key lists together so that kind of drift fails a test instead of a
     # live tab: every key writeLensStateToHash serializes must be one applyLensStateFromHash
@@ -186,7 +186,7 @@ def test_lens_hash_round_trips_all_five_keys_symmetrically() -> None:
 
 
 def test_set_hidden_types_mutates_in_place_like_the_hash_restore_path_does() -> None:
-    # THE LENS PANEL hash-restore bug (mail 11981): the header taxonomy pills drive the same
+    # THE LENS PANEL hash-restore bug: the header taxonomy pills drive the same
     # hiddenNodeTypes Set through setHiddenTypes, which used to reassign it wholesale
     # (`hiddenNodeTypes = new Set(...)`) instead of mutating in place -- the one place this
     # file broke its own applyLensStateFromHash/hiddenEdgeClasses/hiddenEdgeTypes convention.
@@ -197,7 +197,7 @@ def test_set_hidden_types_mutates_in_place_like_the_hash_restore_path_does() -> 
 
 
 def test_hashchange_reapplies_lens_state_and_rebuilds_every_dependent_view() -> None:
-    # THE LENS PANEL hash-restore bug, root cause (Thoth mail 11981/12052): navigating to the
+    # THE LENS PANEL hash-restore bug, root cause: navigating to the
     # same page with a different #lens fragment is a same-document hash navigation -- no
     # reload, so applyLensStateFromHash's own once-at-load call (above) never re-runs, and the
     # new hash's state was silently ignored until the next manual toggle overwrote it with

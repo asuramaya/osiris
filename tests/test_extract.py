@@ -1,7 +1,7 @@
-"""Phase 4 — the AI-extraction driver (universal parser).
+"""Phase 4, the AI-extraction driver (universal parser).
 
 Proves: a messy document becomes graded graph nodes with no bespoke parser, via an
-INJECTED LLM (hermetic — canned JSON, no network/cost). The parse is tolerant of bad
+INJECTED LLM (hermetic, canned JSON, no network/cost). The parse is tolerant of bad
 shapes (an extractor must not crash a cron), and everything lands DERIVED so an AI
 guess is a speculative leaf, not an authoritative fact.
 """
@@ -33,7 +33,7 @@ _DOC_JSON = """
 class _FakeLLM:
     """Returns a fixed completion; records the model it was asked to use. `usage` (when
     given) is appended to `usage_out`, the same shape a real provider's own envelope
-    reader populates it with — lets tests prove record_usage's own wiring."""
+    reader populates it with, lets tests prove record_usage's own wiring."""
 
     def __init__(self, reply: str, usage: Any = None) -> None:
         self.reply = reply
@@ -91,7 +91,7 @@ async def test_extract_document_emits_graded_nodes(actions: Actions, case_id: st
         "entities": 2, "relationships": 1,
         "canonicals": ["extracted-org:neuralink-corp", "extracted-person:elon-musk"],
     }
-    # everything the LLM read is graded DERIVED (a lead to verify, not a fact) — excludes
+    # everything the LLM read is graded DERIVED (a lead to verify, not a fact), excludes
     # the session-persistent Type catalog (task #97), not this test's business
     classes = {
         r["evidence_class"]
@@ -105,8 +105,8 @@ async def test_extract_document_emits_graded_nodes(actions: Actions, case_id: st
 
 
 async def test_extract_document_records_its_own_usage(actions: Actions, case_id: str) -> None:
-    """Auto-ingest cost levers (thread ccee2304, mail 9873): before this, only
-    session-extract called record_usage — usage_summary's own totals were the
+    """Auto-ingest cost levers: before this, only
+    session-extract called record_usage, usage_summary's own totals were the
     auto-ingest's cost, not all LLM spend, silently missing every document-extract call.
     A distinct purpose ('document-extract') keeps its own line in the telemetry."""
     from src.ingest.providers import Usage
@@ -143,7 +143,7 @@ async def test_extract_uses_configured_model(actions: Actions, case_id: str) -> 
 async def test_extract_requires_a_provider_when_none_injected(
     actions: Actions, case_id: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With no client injected and no key configured, extraction fails loudly — the
+    """With no client injected and no key configured, extraction fails loudly, the
     deployment must wire the model (a key), not silently produce nothing."""
     monkeypatch.setattr("src.ingest.extract.llm_provider", lambda: None)
     with pytest.raises(RuntimeError, match="LLM provider"):
@@ -155,7 +155,7 @@ async def test_unknown_relationship_demotes_to_controlled_vocab(
 ) -> None:
     """An LLM emits free-form relationship phrases; link types are a CONTROLLED
     vocabulary. An undeclared phrase becomes a generic `related_to` link with the raw
-    phrase kept in `relation` — nuance survives as data, the catalog stays clean."""
+    phrase kept in `relation`, nuance survives as data, the catalog stays clean."""
     doc = ('{"entities":[{"name":"Acme","type":"Organization"},'
            '{"name":"Globex","type":"Organization"}],'
            '"relationships":[{"from":"Acme","to":"Globex","type":"acquired_by"}]}')
