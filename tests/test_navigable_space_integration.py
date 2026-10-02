@@ -94,11 +94,12 @@ def test_search_around_and_omni_picks_delegate_to_the_mounted_space_instance() -
 # --- the wire contract: GET /graph/stream, decoded client-side, no more tiling -------------
 
 def test_space_decodes_the_graph_stream_binary_header() -> None:
-    assert 'fetch("/graph/stream")' in _SPACE_JS
+    assert 'fetch("/graph/stream" + (fresh ? "?fresh=1" : ""))' in _SPACE_JS
     assert "getUint32(0, true)" in _SPACE_JS  # 4-byte LE header length, per graph_stream.py
     assert "/objects/viewport" not in _SPACE_JS  # the old tiled loader is fully retired
 
 
 def test_space_consumes_the_deltas_sse_stream() -> None:
-    assert 'new EventSource("/graph/stream/deltas")' in _SPACE_JS
+    # resumed from the snapshot's own watermark (the snapshot may come from the server's cache)
+    assert '"/graph/stream/deltas" + (watermark != null ? `?since=${watermark}` : "")' in _SPACE_JS
     assert '"retired"' in _SPACE_JS and '"moved"' in _SPACE_JS

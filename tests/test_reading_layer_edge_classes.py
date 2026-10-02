@@ -38,7 +38,7 @@ def test_classification_reads_the_wire_field_link_type_class_not_edge_classes() 
     # outright as a live READ (an explanatory comment naming it, for the historical record,
     # is fine and expected -- checked as a real indexing expression, not a bare substring,
     # so the comment prose doesn't false-negative this).
-    body = _SPACE_JS.split("async function fetchStreamSnapshot()", 1)[1].split(
+    body = _SPACE_JS.split("async function fetchStreamSnapshot(", 1)[1].split(
         "\n  return { nodes, edges, edgeClassByType };", 1)[0]
     assert "snap.edge_classes[" not in body
     assert "snap.link_type_class[i]" in body
@@ -51,7 +51,7 @@ def test_header_container_class_no_longer_normalizes_to_structural() -> None:
     # everything else) -- now kept distinct so the legend can offer it as its own lens
     # toggle, alongside semantic/structural. Every call site that relied on the old
     # normalization goes through isStructuralLike() instead (see tests/test_lens_panel.py).
-    body = _SPACE_JS.split("async function fetchStreamSnapshot()", 1)[1][:3200]
+    body = _SPACE_JS.split("async function fetchStreamSnapshot(", 1)[1][:3200]
     assert 'if (cls === "container") cls = "structural";' not in body
     assert "function isStructuralLike(edgeClass)" in _SPACE_JS
 
@@ -60,7 +60,7 @@ def test_a_header_class_overrides_the_client_fallback_table() -> None:
     # live-verified regression: the browser marked authored_by "semantic"
     # (STRUCTURAL_EDGE_TYPES doesn't list it) while the header's own link_type_class says
     # authored_by is structural -- edgeClassByType must prefer the header's own value.
-    body = _SPACE_JS.split("async function fetchStreamSnapshot()", 1)[1][:3400]
+    body = _SPACE_JS.split("async function fetchStreamSnapshot(", 1)[1][:3400]
     assert "const cls = snap.link_type_class && snap.link_type_class[i];" in body
     assert "edgeClassByType[t] = cls || classOfEdgeType(t);" in body
 
