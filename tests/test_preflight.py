@@ -810,3 +810,38 @@ def test_every_script_a_deploy_unit_runs_directly_is_executable() -> None:
             if m and not os.access(_REPO / m.group(1), os.X_OK):
                 bad.append(f"{unit.name}: {m.group(1)}")
     assert bad == []
+
+
+# --- the weekly base backup must not fail silently for a month ---------------------------------
+
+def _with_base_timer(age: float | None, enabled: str = "enabled") -> dict:
+    m = _green()
+    m["timers"]["osiris-base-backup.timer"] = {"enabled": enabled, "active": "active"}
+    m["base_backup_age_d"] = age
+    return m
+
+
+def test_a_fresh_base_backup_is_green() -> None:
+    assert evaluate(_with_base_timer(6.5)) == []
+
+
+def test_a_stale_base_backup_is_named_with_its_age_and_the_unit_to_read() -> None:
+    fails = "\n".join(evaluate(_with_base_timer(24.0)))
+    assert "newest base backup is 24d old (max 10d)" in fails
+    assert "journalctl --user -u osiris-base-backup" in fails
+
+
+def test_a_base_backup_just_inside_the_window_is_green() -> None:
+    assert evaluate(_with_base_timer(9.9)) == []
+
+
+def test_no_base_backup_fails_only_when_the_weekly_timer_is_enabled() -> None:
+    assert "NO base backup exists" in "\n".join(evaluate(_with_base_timer(None)))
+    assert evaluate(_with_base_timer(None, enabled="disabled"))[0].startswith(
+        "osiris-base-backup.timer is not enabled")
+
+
+def test_the_base_backup_timer_is_part_of_the_audited_set() -> None:
+    from scripts import osiris_preflight as pf
+
+    assert "osiris-base-backup.timer" in pf.TIMERS
