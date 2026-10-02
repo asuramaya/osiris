@@ -1,5 +1,5 @@
-"""LANE 1 (thread 33962e00, decision 18464c67): the boot-startup watchdog's own
-UNREVIEWED BOOT alarm Threads carry a sha in their own summary text — link it to the
+"""The boot-startup watchdog's own
+UNREVIEWED BOOT alarm Threads carry a sha in their own summary text, link it to the
 Commit that sha already resolves to, via Lane 0's `derive_or_abstain`, never a guess.
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ async def _mint_commit(actions: Actions, sha: str) -> uuid.UUID:
 
 async def _boot_alarm(pool, sha: str, service: str = "osiris-mcp") -> uuid.UUID:
     """`alarm_unreviewed_boot` returns None (fire-and-forget, same shape as its sibling
-    `alarm_schema_drift`) — the id has to be looked up back out, same as test_deploy_
+    `alarm_schema_drift`), the id has to be looked up back out, same as test_deploy_
     guard.py's own tests do."""
     await alarm_unreviewed_boot(
         pool, f"running HEAD {sha!r} was never recorded by `osiris deploy`.",
@@ -81,10 +81,10 @@ async def test_backfill_abstains_when_no_commit_exists(actions: Actions) -> None
 
 
 async def test_backfill_abstains_on_an_ambiguous_sha_prefix(actions: Actions) -> None:
-    """Two Commits sharing the same 12-char prefix — a real, if rare, collision — must
+    """Two Commits sharing the same 12-char prefix, a real, if rare, collision, must
     abstain rather than guess which one the alarm meant. Real Commit canonicals are
     always exactly `commit:<12 hex>` (gitlog.py's own convention, find-or-create means
-    two calls with the same 12 chars always collide onto one object) — this constructs
+    two calls with the same 12 chars always collide onto one object), this constructs
     the collision directly, at a longer canonical, to prove the LIKE-prefix match still
     abstains rather than guessing if that convention ever changes."""
     sha = "abc1234def5678901234567890123456789012"
@@ -114,7 +114,7 @@ async def test_backfill_abstains_when_the_summary_has_no_sha(actions: Actions) -
 async def test_backfill_never_touches_a_thread_that_already_has_a_link(
     actions: Actions,
 ) -> None:
-    """Scoped to zero-live-link orphans only — a boot alarm someone already linked (by
+    """Scoped to zero-live-link orphans only, a boot alarm someone already linked (by
     hand or a prior lane) is out of this repair's population entirely."""
     sha = "abc1234def5678901234567890123456789012"
     commit = await _mint_commit(actions, sha)

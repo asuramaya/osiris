@@ -1,12 +1,12 @@
-"""agents.resolve_fleet_projects — the async, DB-backed half of ruling f6b758fc's
-requirement 1: resolve each fleet() node's REAL graph project (an active SoftwareProject
+"""agents.resolve_fleet_projects: the async, DB-backed half of
+fleet project resolution: resolve each fleet() node's REAL graph project (an active SoftwareProject
 matching its own raw label, else a Worktree's parent / project_of's own cwd-pin fallback,
-else None — unfiled), batched by distinct raw label and distinct cwd, never per-row.
+else None, unfiled), batched by distinct raw label and distinct cwd, never per-row.
 
-fleetview.py stays pure and untested here — its own test_fleetview.py proves the render
+fleetview.py stays pure and untested here; its own test_fleetview.py proves the render
 consumes `resolved_project` correctly. This file proves the RESOLUTION itself, against a
 real Postgres (hermetic, testcontainers) the same way test_project_of.py proves
-`project_of` — reusing that file's own repo/worktree/seat-fixture shapes.
+`project_of`, reusing that file's own repo/worktree/seat-fixture shapes.
 """
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ async def _seated(actions: Actions, *, handle: str, house: str, anchor_cwd: str)
 async def test_an_active_softwareproject_label_wins_first(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Rung 1: the node's own raw `project` label already names an ACTIVE SoftwareProject —
+    """Rung 1: the node's own raw `project` label already names an ACTIVE SoftwareProject,
     resolved outright, no cwd/project_of round trip needed at all."""
     proj = await actions.create_or_find_object("SoftwareProject", "repo:activelabel", "test")
     await actions.assert_property(proj, "name", "activelabel", "test", datetime.now(UTC), 0.9)
@@ -69,7 +69,7 @@ async def test_a_worktree_session_resolves_through_its_registered_parent(
 ) -> None:
     """Rung 2 (a Worktree's parent, via project_of's own worktree-parent-path rung): the
     raw label ('junkbasename') names NOTHING active, but the session's cwd is a real git
-    worktree of a registered parent project — resolves to the PARENT's name, never the
+    worktree of a registered parent project, resolves to the PARENT's name, never the
     worktree's own basename."""
     wt = _real_repo_with_worktree(tmp_path, "wtparent-rfp", "wtparent-rfp-branch")
     (tmp_path / "elsewhere").mkdir()
@@ -107,7 +107,7 @@ async def test_junk_labels_with_no_resolvable_cwd_resolve_to_none(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """A raw label naming no active project, AND a cwd with no pin/worktree-parent/charter/
-    lineage signal at all, resolves to None — honestly unfiled, never a guess."""
+    lineage signal at all, resolves to None, honestly unfiled, never a guess."""
     anchor = tmp_path / "nosignalrfp"
     anchor.mkdir()
     agent = await _seated(actions, handle="Nosignalrfp", house="Nosignalrfp",
@@ -120,7 +120,7 @@ async def test_junk_labels_with_no_resolvable_cwd_resolve_to_none(
 
 
 async def test_a_node_with_no_label_and_no_cwd_resolves_to_none(actions: Actions) -> None:
-    """No raw label, no cwd at all — nothing to resolve through, honestly None rather than
+    """No raw label, no cwd at all, nothing to resolve through, honestly None rather than
     a crash on a missing key."""
     nodes = {"agent:bare": {"project": None, "cwd": None}}
 

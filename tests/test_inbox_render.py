@@ -1,13 +1,13 @@
-"""The front door's own overflow bug (Seshat's sweep, Thoth DM 1992 fix 1): app.css:111-118's
+"""The front door's own overflow bug (front-door sweep): app.css:111-118's
 `.queue-row-title` declared `flex:1 1 auto; overflow:hidden; text-overflow:ellipsis;
-white-space:nowrap` — textbook, except flex items default to `min-width:auto` (sized to
+white-space:nowrap`, textbook, except flex items default to `min-width:auto` (sized to
 content), which defeats the very shrink the ellipsis rule depends on. Every row on :8011's
-front door overflowed the viewport with NO ellipsis, NO wrap, silently clipped mid-sentence —
+front door overflowed the viewport with NO ellipsis, NO wrap, silently clipped mid-sentence:
 worse than any composition bug because there was no truncation indicator at all.
 
 Same harness class as test_ui_render.py: load the REAL app.css into a headless page (no
 backend) with the exact queue-row markup catalog.html.j2 emits, and assert no horizontal
-overflow at a narrow viewport — the width the bug hid at (it only showed up narrow; a wide
+overflow at a narrow viewport, the width the bug hid at (it only showed up narrow; a wide
 viewport had enough slack to mask it).
 """
 from __future__ import annotations
@@ -59,7 +59,7 @@ async def test_queue_row_title_never_overflows_a_narrow_viewport(
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         # the bug hid at wide viewports (enough slack to absorb the un-shrunk title) and only
-        # showed at narrow ones — this IS the regression, not an arbitrary choice.
+        # showed at narrow ones, this IS the regression, not an arbitrary choice.
         page = await browser.new_page(viewport={"width": 380, "height": 400})
         await page.set_content(_HARNESS)
         page_overflow = await page.evaluate(

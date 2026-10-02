@@ -1,7 +1,7 @@
-"""WAVE 26, PIECE 2: COMMUNITY REGIONS (Thoth mail 11592/11664, thread 3683a12a). At mid
+"""Community regions. At mid
 zoom inside a project, each community is a labelled region refined from the project
-fill -- never replacing it. Reuses Khnum's own `community_code`/`communities` wire fields
-(the SAME Leiden partition his compact-arrangement layout is already built on) rather than
+fill -- never replacing it. Reuses the existing `community_code`/`communities` wire fields
+(the SAME Leiden partition the compact-arrangement layout is already built on) rather than
 re-deriving anything. Same-community edges draw as lines; cross-community edges (within one
 project only -- a community never spans two) aggregate into a per-(community,community,
 type) ribbon that resolves the same per-ribbon-screen-distance way project ribbons do.
@@ -10,7 +10,7 @@ ordinary same-project line until the reader is zoomed in enough to see the refin
 Mirrors the repo's existing static-source-guard convention: string/substring proofs against
 the served JS, no browser harness.
 
-WAVE 28, THE TAXONOMY SWEEP (ruling 70c001ec): district -> project, landmark -> high-degree
+Taxonomy: district -> project, landmark -> high-degree
 object, renamed here in step with space.js itself.
 """
 from __future__ import annotations
@@ -102,7 +102,7 @@ def test_community_ribbon_lines_never_draw_below_mid_zoom() -> None:
 
 
 def test_sync_community_visibility_only_rebuilds_when_something_actually_changed() -> None:
-    # WAVE 27, THE LENS PANEL: the zoom gate is now AND-ed with the lens's own hide -- a
+    # Lens panel: the zoom gate is now AND-ed with the lens's own hide -- a
     # checkbox toggle re-invokes this same function directly (see tests/test_lens_panel.py).
     body = _SPACE_JS.split("function syncCommunityVisibility()", 1)[1][:1100]
     assert "communityRegionsVisible = !communitiesHiddenByLens &&\n      " \

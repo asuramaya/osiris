@@ -1,5 +1,5 @@
-"""THE LEGIBILITY PASS, TIP 1c (Thoth mail 10891, off w276's own deploy e432672). Thoth's
-own live review of w276 accepted click=focus, hide, ego row, fit, and pick tolerance, but
+"""THE LEGIBILITY PASS, TIP 1c (follow-on to the earlier legibility deploy). The
+live review accepted click=focus, hide, ego row, fit, and pick tolerance, but
 found six new issues:
 
 (1) the inspector stayed empty after a focus -- objectDetail() throws synchronously on a
@@ -21,8 +21,8 @@ layout's own spacing tracked whatever zoom the camera was already at (a scale-in
 feedback loop for small foci), and the fit's own floor was too low regardless.
 
 Mirrors the existing static-source-guard convention; no browser test harness exists in this
-repo. Live verification (before/after screenshots) is reported separately on thread
-71c4ca0d once a Chrome connection is available.
+repo. Live verification (before/after screenshots) is reported separately
+once a Chrome connection is available.
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def test_escape_clears_focus_stepbackbreadcrumb_is_gone() -> None:
 # --- (3) the omnibox fallback awaits space readiness, not just a truthy global check ------
 
 def test_omnibox_agent_fallback_awaits_space_readiness() -> None:
-    # TIP 3b (Thoth mail 10953) replaced the `hits.length === 0`-gated fallback this test
+    # A later change replaced the `hits.length === 0`-gated fallback this test
     # used to assert with an unconditional client-side scan run inside a single Promise.all
     # alongside the server search -- see test_legibility_pass_tip3b.py for the full rewrite;
     # this still confirms the readiness promise is part of that combined wait.

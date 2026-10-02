@@ -1,10 +1,10 @@
-"""outbox/audit_log retention — thread e6fd3772 piece 1. Cold by default: execute=False
+"""outbox/audit_log retention. Cold by default: execute=False
 (the parameter default in src.orchestrator.retention, and the CLI's own --execute flag
 default) only counts; nothing is ever deleted without an explicit opt-in.
 
 Every row this file inserts carries a MARKER (event_type/action = _MARKER) distinct from
 anything real code ever writes (`Actions._audit`/outbox emission use real action/
-event_type names like 'object_created') — the `actions` fixture's own Type-catalog seed
+event_type names like 'object_created'), the `actions` fixture's own Type-catalog seed
 writes real rows into both tables as a side effect of every create_or_find_object/
 assert_property call it makes, so a bare `SELECT count(*) FROM outbox` after this file's
 own inserts is NOT this file's own row count. Retention's window filtering (eligible =
@@ -63,7 +63,7 @@ async def test_outbox_retention_dry_run_counts_without_deleting(actions: Actions
 async def test_outbox_retention_never_counts_or_deletes_unpublished_rows(
     actions: Actions,
 ) -> None:
-    """An unpublished row is still awaiting the worker's own drain — no matter its age,
+    """An unpublished row is still awaiting the worker's own drain, no matter its age,
     retention must never touch it; a stuck backlog is a different alarm, not a reason
     for retention to quietly erase it."""
     await _outbox_row(actions, created_at=OLD, published=False)
@@ -122,8 +122,8 @@ async def test_audit_log_retention_respects_a_custom_window(actions: Actions) ->
     assert out2["eligible"] >= marked_eligible_5
 
 
-# ═══ THE GRAPH IS NEVER A RETENTION TARGET (wave 12 item 1's own acceptance test) ══════════
-# `table` is f-string-interpolated straight into the DELETE inside _dry_run/_apply — this
+# ═══ THE GRAPH IS NEVER A RETENTION TARGET ══════════
+# `table` is f-string-interpolated straight into the DELETE inside _dry_run/_apply, this
 # proves the one guard standing between this module and a graph-eating prune actually
 # refuses every graph table by name, never just outbox/audit_log's own two callers by
 # convention. pool=None is safe: the guard raises before either function ever touches it.
@@ -146,7 +146,7 @@ async def test_apply_refuses_every_graph_table(table: str) -> None:
         await _apply(None, table, "1=1", 90, 100)  # type: ignore[arg-type]
 
 
-# ═══ the daily cron shim (wave 12 item 1, Thoth DM 8378) ═══════════════════════════════════
+# ═══ the daily cron shim ═══════════════════════════════════
 
 async def test_retention_heartbeat_is_a_no_op_when_the_flag_is_off(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,

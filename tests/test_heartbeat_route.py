@@ -1,8 +1,8 @@
-"""`/heartbeat` — the statusline's server half (thread #180, 2026-08-18). Every rendering
-tab used to fork a fresh `asyncpg.connect()` per render (Thoth's measurement: 138 tx/s, 23
+"""`/heartbeat`, the statusline's server half. Every rendering
+tab used to fork a fresh `asyncpg.connect()` per render (measured: 138 tx/s, 23
 backends against an idle fleet of 16). This route runs the SAME logic the retired
-`scripts/osiris_statusline.py::_counts` used to run — see
-`src.orchestrator.heartbeat.compute_heartbeat`'s own module docstring — against the MCP
+`scripts/osiris_statusline.py::_counts` used to run (see
+`src.orchestrator.heartbeat.compute_heartbeat`'s own module docstring) against the MCP
 server's already-warm shared pool instead. `_FakeRequest` mirrors test_sweep_ledger.py's own
 pattern for exercising a `@mcp.custom_route` handler directly, no ASGI stack needed.
 """
@@ -89,7 +89,7 @@ async def test_heartbeat_route_with_no_session_id_still_answers_project_counts(
     actions: Actions,
 ) -> None:
     """A blank statusline render (no session id yet resolved) is a real, accepted shape in
-    `_counts` too — the route must answer with the project-scoped numbers, not refuse."""
+    `_counts` too: the route must answer with the project-scoped numbers, not refuse."""
     from src import mcp_server as srv
 
     saved_pool = srv._pool
@@ -108,8 +108,8 @@ async def test_heartbeat_route_accepts_cwd_and_the_pin_wins_regardless(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The route's own JSON contract still accepts `cwd` (a hook sending it must not error)
-    even though compute_heartbeat's resolution no longer branches on it at all (operator
-    bug, msg 6934, thread 19d6bdcb7fa9: the pin wins outright everywhere now — see
+    even though compute_heartbeat's resolution no longer branches on it at all (the pin
+    wins outright everywhere now; see
     test_heartbeat.py for the resolution law itself)."""
     from src import mcp_server as srv
     from src.orchestrator.seats import bind_holder, ensure_seat
@@ -140,6 +140,6 @@ async def test_heartbeat_route_accepts_cwd_and_the_pin_wins_regardless(
     payload = json.loads(out.body)
     assert "error" not in payload
     assert payload["resolved_seat_handle"] == "Routecwdcase"
-    # the PIN wins outright, even at the seat's own anchor (operator bug fix) — proves
+    # the PIN wins outright, even at the seat's own anchor: proves
     # `cwd` really made it through the route's JSON body, not that it changed the outcome
     assert payload["resolved_project"] == "StaleRouteName"

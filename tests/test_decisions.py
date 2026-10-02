@@ -1,4 +1,4 @@
-"""Decision mining — the project's WHY, over its own self-tracking.
+"""Decision mining: the project's WHY, over its own self-tracking.
 
 The least-recoverable memory: code shows WHAT, the DAG shows WHEN, only the commit rationale
 holds WHY. This mines the backward-looking decisions into `Decision` objects (decided_in the
@@ -71,7 +71,7 @@ async def test_mine_decisions_links_and_dedups(actions: Actions) -> None:
     kinds = {r["k"] for r in await p.fetch(
         "SELECT value #>> '{}' AS k FROM current_assertions WHERE name='kind'")}
     assert {"reset", "choice", "ruling"} <= kinds
-    # idempotent — a re-run mints no new Decisions or edges (content-hash canonical)
+    # idempotent: a re-run mints no new Decisions or edges (content-hash canonical)
     again = await mine_decisions(actions)
     assert again["decisions"] == 3
     assert await p.fetchval("SELECT count(*) FROM objects WHERE type='Decision'") == 3
@@ -79,7 +79,7 @@ async def test_mine_decisions_links_and_dedups(actions: Actions) -> None:
 
 
 async def test_decision_log_is_a_sections_op_tree(actions: Actions) -> None:
-    """The eviction proof: `decision-log` is no longer a SQL Function — it's a `sections` op-tree
+    """The eviction proof: `decision-log` is no longer a SQL Function; it's a `sections` op-tree
     (select Decision → table with `of:"first"` show-original rollups plucking the decided_in
     commit's hash + date → order). Same WHY-log, newest first; the show-original rollup names the
     commit. A kind filter is a `where`, not a bespoke arg."""
@@ -96,7 +96,7 @@ async def test_decision_log_is_a_sections_op_tree(actions: Actions) -> None:
     log = next(iter(res["items"].values()))
     assert len(log) == 2 and log[0]["when"][:10] == "2026-06-24"  # newest first (full ISO)
     assert log[0]["kind"] == "reset" and log[0]["in"] == "commit:b"   # show-original: the hash
-    # a kind filter is now just a `where` on the select the user forks in — not a Function arg
+    # a kind filter is now just a `where` on the select the user forks in, not a Function arg
     choices = await run_spec(actions.pool, {"op": "table",
         "from": {"op": "select", "object_type": "Decision",
                  "where": [{"property": "kind", "op": "eq", "value": "choice"}]},

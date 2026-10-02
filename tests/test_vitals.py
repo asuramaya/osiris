@@ -1,5 +1,5 @@
-"""THE VITALS — one authority per fact (operator ruling 2026-07-19: 'the chrome and the
-harness disagree on briefs, mail, owe'). These tests pin the shapes the old inline copies
+"""THE VITALS: one authority per fact (the chrome and the
+harness must not disagree on briefs, mail, owe). These tests pin the shapes the old inline copies
 got wrong, so a future copy-drift fails loudly instead of quietly disagreeing."""
 from __future__ import annotations
 
@@ -30,8 +30,8 @@ async def test_live_counts_souls_not_rows_and_confesses_visitors(
 async def test_live_counts_a_g_n_generation_as_the_same_soul_not_a_new_one(
     actions: Actions,
 ) -> None:
-    """The live specimen (thread 25b57dca): a lineage past generation 39 carries a
-    `-g<N>` suffix, not a roman numeral — the SQL soul-fold used to only strip
+    """The live specimen: a lineage past generation 39 carries a
+    `-g<N>` suffix, not a roman numeral; the SQL soul-fold used to only strip
     `[ivxlcdm]+`, so a g<N> door counted as a brand-new soul beside its own ancestor."""
     p = actions.pool
     await save_mount(p, job_dir="/j/soulg1", agent_id="agent:ab99cd99-g40",
@@ -64,9 +64,9 @@ async def _mint_agent(actions: Actions, canonical: str, *, handle: str | None = 
 async def test_agent_class_counts_splits_named_visit_and_unresolved(
     actions: Actions,
 ) -> None:
-    """THE VISIT CLASS (9dc3ce8b): a handle-claiming generation is named; an agent_class=
+    """THE VISIT CLASS: a handle-claiming generation is named; an agent_class=
     'visit' generation (greatfold.py's own doorbell-ring demotion) is a visit family,
-    never counted as a soul; anything with neither is unresolved — not yet examined by
+    never counted as a soul; anything with neither is unresolved, not yet examined by
     a fold pass. A named generation beside an unnamed sibling of the SAME soul (the
     fold's own generation-suffix folding) still counts as one named soul, not two."""
     await _mint_agent(actions, "agent:aaaa1111", handle="Alfred")
