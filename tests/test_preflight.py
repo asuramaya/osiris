@@ -709,3 +709,104 @@ def test_mcp_journal_kill_events_reads_the_real_journal_or_degrades_quietly() ->
     # confirmed live on this exact box: journalctl inserts its own boundary markers
     # between boots regardless of -g, and those must never count as a kill event
     assert not any(ln.startswith("-- ") for ln in result)
+
+
+# --- the boot race: a catch-up run at boot must wait for the daemons it audits -------------
+
+def test_units_active_with_grace_waits_for_a_unit_that_is_still_starting() -> None:
+    from scripts.osiris_preflight import _units_active_with_grace
+
+    reads = {"osiris-mcp": iter(["inactive", "activating", "active"]),
+             "osiris-worker": iter(["active"])}
+    slept: list[float] = []
+    tick = iter(range(0, 1000))
+    states = _units_active_with_grace(
+        ["osiris-mcp", "osiris-worker"], grace=100, step=5,
+        read=lambda u: next(reads[u]), sleep=slept.append, clock=lambda: next(tick))
+    assert states == {"osiris-mcp": "active", "osiris-worker": "active"}
+    assert slept == [5, 5]
+
+
+def test_units_active_with_grace_still_fails_a_unit_that_stays_down() -> None:
+    from scripts.osiris_preflight import _units_active_with_grace
+
+    clock = iter([0.0, 1.0, 2.0, 3.0, 400.0, 400.0])
+    states = _units_active_with_grace(
+        ["osiris-pulse"], grace=180, step=5, read=lambda u: "inactive",
+        sleep=lambda s: None, clock=lambda: next(clock))
+    assert states == {"osiris-pulse": "inactive"}
+
+
+def test_units_active_with_grace_does_not_wait_on_a_failed_unit() -> None:
+    from scripts.osiris_preflight import _units_active_with_grace
+
+    slept: list[float] = []
+    states = _units_active_with_grace(
+        ["osiris-console"], grace=180, step=5, read=lambda u: "failed",
+        sleep=slept.append, clock=lambda: 0.0)
+    assert states == {"osiris-console": "failed"} and slept == []
+
+
+# --- the kill count must count kills, not repeated traceback text --------------------------
+
+def test_mcp_kill_pattern_counts_systemd_exit_lines_not_traceback_text() -> None:
+    import re
+
+    from scripts.osiris_preflight import _MCP_KILL_PATTERN
+
+    rx = re.compile(_MCP_KILL_PATTERN)
+    real = [
+        "osiris-mcp.service: Main process exited, code=killed, status=9/KILL",
+        "osiris-mcp.service: Main process exited, code=dumped, status=11/SEGV",
+        "osiris-mcp.service: Failed with result 'oom-kill'.",
+        "osiris-mcp.service: A process of this unit has been killed by the OOM killer.",
+    ]
+    noise = [
+        "    self.was_killed.wait(self.sleep_interval)",
+        "Stopping osiris-mcp.service - Osiris persistent MCP server...",
+        "osiris-mcp.service: Deactivated successfully.",
+        "osiris-mcp.service: Main process exited, code=exited, status=0/SUCCESS",
+        "osiris-mcp.service: Main process exited, code=exited, status=143/n/a",
+        "Out of memory while rendering the console lens",
+    ]
+    assert all(rx.search(ln) for ln in real)
+    assert not any(rx.search(ln) for ln in noise)
+
+
+def test_mcp_kill_events_read_only_the_unit_managers_own_lines(monkeypatch) -> None:
+    from scripts import osiris_preflight as pf
+
+    seen: list[list[str]] = []
+    monkeypatch.setattr(pf, "_run", lambda cmd: (seen.append(cmd) or
+                                                  "-- Boot abc --\nline one\n"))
+    assert pf._mcp_journal_kill_events("2026-09-29 12:00:00") == ["line one"]
+    assert "-t" in seen[0] and seen[0][seen[0].index("-t") + 1] == "systemd"
+
+
+# --- the shipped units -----------------------------------------------------------------------
+
+_REPO = Path(__file__).resolve().parent.parent
+
+
+def test_preflight_unit_orders_after_the_daemons_and_bounds_its_memory() -> None:
+    text = (_REPO / "deploy" / "osiris-preflight.service").read_text()
+    for unit in ("osiris-mcp", "osiris-worker", "osiris-pulse", "osiris-console"):
+        assert f"{unit}.service" in text.split("[Service]")[0]
+    assert "After=" in text and "Wants=" not in text
+    assert "MemoryHigh=" in text and "MemoryMax=" in text
+
+
+def test_every_script_a_deploy_unit_runs_directly_is_executable() -> None:
+    """A unit whose ExecStart names a script that is not executable fails at spawn with
+    status 203/EXEC and never runs: the weekly base backup failed twice that way, silently,
+    because its script was committed without the executable bit."""
+    import os
+    import re
+
+    bad: list[str] = []
+    for unit in sorted((_REPO / "deploy").rglob("*.service")):
+        for line in unit.read_text().splitlines():
+            m = re.match(r"ExecStart=%h/code/osiris/(scripts/\S+)", line)
+            if m and not os.access(_REPO / m.group(1), os.X_OK):
+                bad.append(f"{unit.name}: {m.group(1)}")
+    assert bad == []

@@ -49,3 +49,122 @@ def test_a_custom_target_action_is_honored() -> None:
     conf = postgresql_auto_conf_pitr("cp /wal/%f %p", "2026-09-08T21:50:00+00:00",
                                      target_action="pause")
     assert "recovery_target_action = 'pause'" in conf
+
+
+# --- the drill must wait for recovery to END, not for the server to answer -----------------
+
+class _FakeRun:
+    """A scripted `subprocess.run`: each call is matched on a fragment of its argv."""
+
+    def __init__(self, replies: list[tuple[str, int, str]]) -> None:
+        self.replies = list(replies)
+        self.calls: list[list[str]] = []
+
+    def __call__(self, cmd: list[str], **kw: object):  # noqa: ANN204
+        import subprocess
+
+        self.calls.append(cmd)
+        fragment, code, out = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
+        assert fragment in " ".join(cmd), (fragment, cmd)
+        return subprocess.CompletedProcess(cmd, code, stdout=out, stderr="")
+
+
+def test_wait_for_recovery_end_keeps_waiting_while_the_server_answers_in_recovery(
+    monkeypatch,
+) -> None:
+    """A server in archive recovery answers read-only queries as soon as it is consistent,
+    long before the archive is fully replayed. The drill used to treat that first answer
+    as 'ready' and looked for a post-backup marker in a half-replayed copy."""
+    from scripts import osiris_pitr_drill as drill
+
+    fake = _FakeRun([
+        ("pg_is_in_recovery", 0, "t|1A/17A00028"),
+        ("inspect", 0, "running"),
+        ("pg_is_in_recovery", 0, "t|2B/7A000000"),
+        ("inspect", 0, "running"),
+        ("pg_is_in_recovery", 0, "f|2B/7B000000"),
+    ])
+    monkeypatch.setattr(drill.subprocess, "run", fake)
+    monkeypatch.setattr(drill.time, "sleep", lambda s: None)
+    assert drill._wait_for_recovery_end("scratch") is None
+    assert sum("pg_is_in_recovery" in " ".join(c) for c in fake.calls) == 3
+
+
+def test_wait_for_recovery_end_reports_a_stalled_recovery_with_its_last_position(
+    monkeypatch,
+) -> None:
+    import subprocess
+
+    from scripts import osiris_pitr_drill as drill
+
+    def fake(cmd, **kw):  # noqa: ANN001, ANN202
+        out = "running" if "inspect" in cmd else "t|2B/7A000000"
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(drill.subprocess, "run", fake)
+    monkeypatch.setattr(drill.time, "sleep", lambda s: None)
+    clock = iter([0.0, 1.0, 2.0, 99999.0, 99999.0])
+    monkeypatch.setattr(drill.time, "monotonic", lambda: next(clock))
+    fail = drill._wait_for_recovery_end("scratch")
+    assert fail is not None and "had not finished" in fail and "2B/7A000000" in fail
+
+
+def test_wait_for_recovery_end_names_a_container_that_died(monkeypatch) -> None:
+    from scripts import osiris_pitr_drill as drill
+
+    fake = _FakeRun([
+        ("pg_is_in_recovery", 1, ""), ("inspect", 0, "exited"), ("logs", 0, "boom"),
+    ])
+    monkeypatch.setattr(drill.subprocess, "run", fake)
+    monkeypatch.setattr(drill.time, "sleep", lambda s: None)
+    fail = drill._wait_for_recovery_end("scratch")
+    assert fail is not None and "stopped during recovery (exited)" in fail
+
+
+def test_gather_does_not_copy_what_the_vault_already_holds(tmp_path: Path, monkeypatch) -> None:
+    """The vault archive is mounted into the drill container and read in place; only a
+    segment still staged inside the live container, and not yet in the vault, is copied."""
+    import subprocess
+
+    from scripts import osiris_pitr_drill as drill
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "000000010000000100000001").write_bytes(b"v")
+    scratch = tmp_path / "scratch"
+
+    def fake_run(cmd, **kw):  # noqa: ANN001, ANN202
+        if cmd[:3] == ["docker", "exec", "pg"] and cmd[3] == "ls":
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="000000010000000100000001\n000000010000000100000002\n", stderr="")
+        if cmd[3] == "cat":
+            kw["stdout"].write(b"staged")
+            return subprocess.CompletedProcess(cmd, 0)
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(drill.subprocess, "run", fake_run)
+    total = drill._gather_wal_segments("pg", vault, scratch)
+    assert [p.name for p in scratch.iterdir()] == ["000000010000000100000002"]
+    assert total == 2
+
+
+def test_wait_for_archive_waits_for_the_archiver_to_pass_the_marker_segment(
+    monkeypatch,
+) -> None:
+    from scripts import osiris_pitr_drill as drill
+
+    fake = _FakeRun([("pg_stat_archiver", 0, "f"), ("pg_stat_archiver", 0, "t")])
+    monkeypatch.setattr(drill.subprocess, "run", fake)
+    monkeypatch.setattr(drill.time, "sleep", lambda s: None)
+    assert drill._wait_for_archive("pg", "000000010000000100000009") is True
+    assert len(fake.calls) == 2
+
+
+def test_scratch_postgres_never_inherits_production_sizing() -> None:
+    from scripts import osiris_pitr_drill as drill
+
+    args = " ".join(drill.SCRATCH_POSTGRES_ARGS)
+    assert "shared_buffers=512MB" in args and "autovacuum=off" in args
+    # recovery aborts if max_connections is below the primary's (72 at last measure)
+    assert "max_connections=72" in args
+    assert drill.SCRATCH_MEMORY == "6g"

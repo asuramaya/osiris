@@ -27,7 +27,7 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -113,16 +113,43 @@ def _disk_free_pct(path: Path) -> float | None:
     return 100.0 * du.free / du.total
 
 
+_UNIT_START_GRACE_SECS = 180.0
+_UNIT_START_POLL_SECS = 5.0
+_STILL_STARTING = ("activating", "inactive", "reloading", "")
+
+
+def _units_active_with_grace(
+    units: Sequence[str], *, grace: float = _UNIT_START_GRACE_SECS,
+    step: float = _UNIT_START_POLL_SECS,
+    read: Callable[[str], str] | None = None, sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> dict[str, str]:
+    """Each unit's `is-active` state, waiting (one shared bound, not one per unit) for any
+    that is still coming up. This audit also runs as a missed-run catch-up at boot, when the
+    daemons it checks have not started yet; reporting that moment as "not active" is a boot
+    race presented as a failure. A unit that is `failed`, `deactivating` or otherwise not
+    merely starting is read as is, and one still inactive when the bound runs out is
+    reported inactive, so a genuinely stopped service still fails the audit."""
+    read = read or (lambda u: _run(["systemctl", "--user", "is-active", u]))
+    states = {u: read(u) for u in units}
+    deadline = clock() + grace
+    while clock() < deadline and any(st in _STILL_STARTING for st in states.values()):
+        sleep(step)
+        states = {u: (read(u) if st in _STILL_STARTING else st) for u, st in states.items()}
+    return states
+
+
 def collect() -> dict:
     """Gather the survival matrix. Thin collectors; all judgment lives in evaluate()."""
     m: dict = {"units": {}, "timers": {}, "containers": {}, "ports": [],
                "backup_age_h": None, "vault_age_d": None, "unpushed": None,
                "tmp_inode_pct": _tmp_inode_pct(),
                "disk_free_pct": _disk_free_pct(VAULT_DIR)}
+    active = _units_active_with_grace(UNITS)
     for u in UNITS:
         m["units"][u] = {
             "enabled": _run(["systemctl", "--user", "is-enabled", u]),
-            "active": _run(["systemctl", "--user", "is-active", u]),
+            "active": active[u],
         }
     for t in TIMERS:
         m["timers"][t] = {
@@ -416,7 +443,8 @@ def drill(newest_dump: str) -> str | None:
         # forever. A field report measured 11GB across 4 weekly Mondays,
         # tracking the growing dump size, ~180GB/year on an unfixed laptop.
         subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True, timeout=30)
-        subprocess.run(["docker", "run", "-d", "--name", name, "-e", "POSTGRES_USER=osiris",
+        subprocess.run(["docker", "run", "-d", "--name", name, "--memory", "6g",
+                        "--memory-swap", "6g", "-e", "POSTGRES_USER=osiris",
                         "-e", "POSTGRES_PASSWORD=osiris", "-e", "POSTGRES_DB=osiris",
                         "postgres:16"], capture_output=True, timeout=60, check=True)
         for _ in range(30):
@@ -803,7 +831,16 @@ async def brief_abstention_weekly(m: dict[str, Any]) -> None:
 _MCP_LIVENESS_NRESTARTS_CURSOR_KEY = "preflight:mcp_liveness_nrestarts"
 _MCP_LIVENESS_JOURNAL_CURSOR_KEY = "preflight:mcp_liveness_journal_since"
 _MCP_LIVENESS_UNIT = "osiris-mcp"
-_MCP_KILL_PATTERN = "killed|Out of memory|oom-kill|segfault"
+# SYSTEMD'S OWN EXIT-STATUS LINES ONLY, read from the unit manager's syslog identifier. A
+# free-text search for "killed" matched a library's `was_killed` attribute inside every
+# repeated traceback line (763 of one run's 764 "kills"), so the count measured traceback
+# length, not kills. These three are what systemd writes when the main process dies to a
+# signal or the kernel's OOM killer takes it; a clean stop, a deploy restart and a SIGTERM
+# do not match.
+_MCP_KILL_PATTERN = (
+    r"Main process exited, code=(killed|dumped)|"
+    r"Failed with result '(oom-kill|signal|core-dump)'|"
+    r"A process of this unit has been killed by the OOM killer")
 
 
 def _mcp_nrestarts() -> int | None:
@@ -827,7 +864,7 @@ def _mcp_journal_kill_events(since_utc: str | None) -> list[str]:
     output regardless of the `-g` grep filter (confirmed live, 10 lines back for 3 real
     kill lines). These are journalctl's own formatting, never a real log line, and are
     filtered out here so a boot boundary alone can never be counted as a kill event."""
-    cmd = ["journalctl", "--user", "-u", _MCP_LIVENESS_UNIT, "--utc",
+    cmd = ["journalctl", "--user", "-u", _MCP_LIVENESS_UNIT, "--utc", "-t", "systemd",
            "-g", _MCP_KILL_PATTERN]
     if since_utc:
         cmd += ["--since", since_utc]
