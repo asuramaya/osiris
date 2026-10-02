@@ -144,12 +144,14 @@ import contextlib
 import json
 import logging
 import math
+import os
 import re
 import struct
 import time
 import uuid
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -899,6 +901,42 @@ async def deltas_since(
 FRESH_SECONDS = 60.0
 MAX_STALE_SECONDS = 1800.0   # bounded: the deltas replayed after a snapshot grow with its age
 REFRESH_SECONDS = 300.0
+_SNAPSHOT_FILE_ENV = "OSIRIS_GRAPH_SNAPSHOT_FILE"
+_DEFAULT_SNAPSHOT_FILE = "~/.local/state/osiris/graph_snapshot.bin"
+
+
+def snapshot_file_path() -> Path:
+    """Where the last snapshot is kept so a restart does not begin with an empty cache."""
+    return Path(os.environ.get(_SNAPSHOT_FILE_ENV) or _DEFAULT_SNAPSHOT_FILE).expanduser()
+
+
+def _write_snapshot_file(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(path)
+
+
+def _read_snapshot_file(path: Path, max_age: float) -> tuple[bytes, float] | None:
+    """`(bytes, age seconds)` of a persisted snapshot that is young enough and whole, else
+    None. Whole = its header parses, carries this build's schema version, and the file is
+    long enough to hold what the header promises; anything else is ignored, never served."""
+    try:
+        age = time.time() - path.stat().st_mtime
+        if age > max_age:
+            return None
+        data = path.read_bytes()
+        (header_len,) = struct.unpack_from("<I", data, 0)
+        header = json.loads(bytes(data[4:4 + header_len]).decode())
+        if header.get("schema_version") != SCHEMA_VERSION:
+            return None
+        end = max(int(m["offset"]) + int(m["length"]) * struct.calcsize(str(m["dtype"]))
+                  for m in header["arrays"].values())
+        if len(data) < 4 + header_len + end:
+            return None
+    except (OSError, ValueError, KeyError, struct.error):
+        return None
+    return data, max(age, 0.0)
 
 
 class SnapshotCache:
@@ -907,6 +945,7 @@ class SnapshotCache:
         refresh_secs: float = REFRESH_SECONDS,
         build: Callable[[asyncpg.Pool], Awaitable[bytes]] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        persist_path: Path | None = None,
     ) -> None:
         self.fresh_secs = fresh_secs
         self.max_stale_secs = max_stale_secs
@@ -918,6 +957,23 @@ class SnapshotCache:
         self._inflight: asyncio.Task[bytes] | None = None
         self._inflight_started = 0.0
         self.builds = 0
+        self.persist_path = persist_path
+        self._restored = False
+
+    async def restore(self) -> bool:
+        """Load the snapshot the previous process left behind, if it is young enough, so the
+        first viewer after a restart is served at once (the delta stream catches it up from
+        its own watermark). Does nothing once a snapshot is held."""
+        if self.persist_path is None or self._restored or self._data is not None:
+            return False
+        self._restored = True
+        found = await asyncio.to_thread(
+            _read_snapshot_file, self.persist_path, self.max_stale_secs)
+        if found is None or self._data is not None:
+            return False
+        self._data, age = found
+        self._built_at = self._clock() - age
+        return True
 
     def age(self) -> float | None:
         return None if self._data is None else self._clock() - self._built_at
@@ -932,6 +988,11 @@ class SnapshotCache:
         data = await self._build(pool)
         self._data, self._built_at = data, self._clock()
         self.builds += 1
+        if self.persist_path is not None:
+            try:
+                await asyncio.to_thread(_write_snapshot_file, self.persist_path, data)
+            except OSError:
+                _log.warning("could not persist the graph snapshot", exc_info=True)
         return data
 
     async def get(self, pool: asyncpg.Pool, *, fresh: bool = False) -> tuple[bytes, float]:
@@ -949,6 +1010,7 @@ class SnapshotCache:
             if running is None or running.done() or self._inflight_started < requested:
                 running = self._start_build(pool)
             return await asyncio.shield(running), 0.0
+        await self.restore()
         age = self.age()
         if self._data is not None and age is not None and age <= self.max_stale_secs:
             if age > self.fresh_secs:
@@ -963,6 +1025,8 @@ class SnapshotCache:
     async def run_refresher(self, pool: asyncpg.Pool, stop: asyncio.Event) -> None:
         """Warms the cache, then rebuilds it every `refresh_secs` until `stop` is set. A
         failed build is logged and retried next round, never fatal to the console."""
+        with contextlib.suppress(Exception):
+            await self.restore()
         while not stop.is_set():
             try:
                 await self._start_build(pool)

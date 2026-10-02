@@ -69,7 +69,7 @@ from src.orchestrator.compositions import (
 from src.orchestrator.console import get_console, set_console
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.federation import federated_query, promote, to_preview
-from src.orchestrator.graph_stream import SnapshotCache
+from src.orchestrator.graph_stream import SnapshotCache, snapshot_file_path
 from src.orchestrator.handoff import abandon, open_handoff, post_back
 from src.orchestrator.handoff import tray as handoff_tray
 from src.orchestrator.manifests import load_manifests, project_triggers
@@ -2263,7 +2263,7 @@ def _snapshot_cache(app: FastAPI) -> SnapshotCache:
     (the test fixtures) still has one."""
     cache = getattr(app.state, "graph_snapshots", None)
     if cache is None:
-        cache = app.state.graph_snapshots = SnapshotCache()
+        cache = app.state.graph_snapshots = SnapshotCache(persist_path=snapshot_file_path())
     return cache
 
 
