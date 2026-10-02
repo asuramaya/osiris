@@ -1,0 +1,9 @@
+[Unit]
+Description=Osiris scheduled restore test (checked hourly, runs only when one is due)
+
+[Timer]
+OnCalendar=*:17
+Persistent=true
+
+[Install]
+WantedBy=timers.target

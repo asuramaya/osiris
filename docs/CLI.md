@@ -481,6 +481,7 @@ osiris soul-key rotate --finish
 osiris soul-key recover
 osiris soul-key recover --recovery-file ./soul.key.recovery.json
 osiris soul-key restore-drill
+osiris soul-key restore-drill --full
 osiris soul-key reseal
 ```
 
@@ -498,7 +499,11 @@ osiris restic-key init
 osiris restic-key status
 ```
 
-## `osiris offload-runner tick [--vault P] [--json]`
+## `osiris offload-runner <tick|drill> [--vault P] [--json]`
+
+`drill` runs one pass of the scheduled restore test (its own timer runs it hourly; it does
+nothing unless a present target is due one, and it never runs inside a `tick`). See
+[`BACKUP.md`](BACKUP.md#the-scheduled-restore-test). The rest of this section describes `tick`.
 
 Runs one pass of the opportunistic offload runner over every enabled offload target:
 an absent `local` target (for example, an unplugged drive) is skipped silently, while

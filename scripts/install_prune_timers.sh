@@ -1,7 +1,8 @@
 #!/bin/sh
-# Installs + enables the timer lane's SEVEN timer pairs: osiris-prune-manifest,
+# Installs + enables the timer lane's EIGHT timer pairs: osiris-prune-manifest,
 # osiris-prune-apply, osiris-base-backup, osiris-backup, osiris-preflight,
-# osiris-pg-autotune, and osiris-offload (the opportunistic offload runner). This is
+# osiris-pg-autotune, osiris-offload (the opportunistic offload runner), and
+# osiris-restore-drill (the scheduled, bounded restore test). This is
 # the SAME idempotent copy-and-compare mechanism install_commands.sh already uses for
 # the slash-command surface, on the principle that deploy is the one sanctioned agent
 # that writes machine files, so a fresh box gets these units without a human hand.
@@ -33,7 +34,7 @@ TOPLEVEL="$(git rev-parse --show-toplevel)"
 REAL_TARGET_DIR="$HOME/.config/systemd/user"
 TARGET_DIR="${OSIRIS_SYSTEMD_USER_DIR:-$REAL_TARGET_DIR}"
 
-UNITS="osiris-prune-manifest osiris-prune-apply osiris-base-backup osiris-backup osiris-preflight osiris-pg-autotune osiris-offload"
+UNITS="osiris-prune-manifest osiris-prune-apply osiris-base-backup osiris-backup osiris-preflight osiris-pg-autotune osiris-offload osiris-restore-drill"
 
 mkdir -p "$TARGET_DIR"
 
@@ -67,7 +68,7 @@ if [ "$TARGET_DIR" = "$REAL_TARGET_DIR" ]; then
     systemctl --user enable --now \
         osiris-prune-manifest.timer osiris-prune-apply.timer osiris-base-backup.timer \
         osiris-backup.timer osiris-preflight.timer osiris-pg-autotune.timer \
-        osiris-offload.timer
+        osiris-offload.timer osiris-restore-drill.timer
 fi
 
 echo "install_prune_timers: $installed installed/updated, $current already current — $TARGET_DIR"

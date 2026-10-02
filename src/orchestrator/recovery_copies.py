@@ -9,9 +9,9 @@ plain file BESIDE each target, and also into the vault (which every backup then 
 second layer, not a substitute).
 
 WHERE: `<vault>/osiris-recovery/`, `<mountpoint>/osiris-recovery/` on every present local
-target, and `<repository's parent>/osiris-recovery/` on sftp targets (over ssh/scp, bounded,
-never prompting). Other restic kinds (rest:, s3:, b2:, ...) cannot hold a plain file and are
-reported as such, never counted.
+target, and `<repository's parent>/osiris-recovery/` on sftp targets (over the real sftp
+client in batch mode, bounded, never prompting). Other restic kinds (rest:, s3:, b2:, ...)
+cannot hold a plain file and are reported as such, never counted.
 
 WHEN: every offload tick, at enrollment, and at deploy, all through `sync_recovery_copies`.
 Idempotent: a copy that already matches the current file is left alone, so a tick that finds
@@ -41,6 +41,7 @@ _DEFAULT_RECEIPTS_FILE = "~/.local/state/osiris/recovery_copies.json"
 COPY_DIR = "osiris-recovery"
 COPY_NAME = "soul.key.recovery.json"
 VAULT_KEY = "(vault)"
+_SSH_CONFIG_ENV = "OSIRIS_SSH_CONFIG"
 _SFTP_TIMEOUT_SECONDS = 60
 _SFTP_RECHECK_SECONDS = 7 * 86400.0  # a remote copy is trusted from its receipt for a week
 
@@ -128,27 +129,52 @@ def _parse_sftp(url: str) -> tuple[str, str] | None:
     return (host, path) if sep and host and path.startswith("/") else None
 
 
+def _sftp_quote(path: str) -> str:
+    """One path as an sftp batch-file word: double-quoted, with quote and backslash escaped."""
+    return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _ssh_config_args() -> list[str]:
+    """`OSIRIS_SSH_CONFIG`: a dedicated ssh config file for the backup targets (a host alias,
+    a port, a key), passed as `-F`. Unset, the user's ordinary `~/.ssh/config` applies, which
+    is what restic itself uses to reach the same sftp target."""
+    cfg = os.environ.get(_SSH_CONFIG_ENV)
+    return ["-F", cfg] if cfg else []
+
+
 def _copy_sftp(src: Path, url: str) -> str | None:
+    """Copies `src` to `<repository's parent>/osiris-recovery/` over the real `sftp` client in
+    batch mode: the same SFTP subsystem restic itself talks to, so it works for an sftp-only
+    account (a NAS user with no shell) where `ssh host mkdir` would not. The file is uploaded
+    under a temporary name and renamed into place, so a reader never sees a half-written
+    copy. BatchMode: never prompts, a missing key or an unknown host fails cleanly."""
     parsed = _parse_sftp(url)
     if parsed is None:
         return f"cannot copy a plain file to {url!r}: only sftp:host:/path targets are supported"
     host, repo_path = parsed
     directory = posixpath.join(posixpath.dirname(repo_path.rstrip("/")) or "/", COPY_DIR)
-    ssh = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+    final = posixpath.join(directory, COPY_NAME)
+    temp = final + ".tmp"
+    # a leading `-` makes sftp carry on when that one command fails (the directory already
+    # exists, there is no older copy to remove)
+    batch = "\n".join([
+        f"-mkdir {_sftp_quote(directory)}",
+        f"put {_sftp_quote(str(src))} {_sftp_quote(temp)}",
+        f"-rm {_sftp_quote(final)}",
+        f"rename {_sftp_quote(temp)} {_sftp_quote(final)}",
+    ]) + "\n"
     try:
-        made = subprocess.run(
-            ["ssh", *ssh, host, "mkdir", "-p", directory],
-            capture_output=True, timeout=_SFTP_TIMEOUT_SECONDS, check=False)
-        if made.returncode != 0:
-            return f"ssh mkdir failed: {made.stderr.decode(errors='replace').strip()}"
-        sent = subprocess.run(
-            ["scp", "-q", *ssh, str(src), f"{host}:{directory}/{COPY_NAME}"],
-            capture_output=True, timeout=_SFTP_TIMEOUT_SECONDS, check=False)
-        if sent.returncode != 0:
-            return f"scp failed: {sent.stderr.decode(errors='replace').strip()}"
-        return None
+        run = subprocess.run(
+            ["sftp", "-q", "-b", "-", *_ssh_config_args(), "-o", "BatchMode=yes",
+             "-o", "ConnectTimeout=10", host],
+            input=batch.encode(), capture_output=True, timeout=_SFTP_TIMEOUT_SECONDS,
+            check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return f"{type(exc).__name__}: {exc}"
+    if run.returncode != 0:
+        detail = (run.stderr or run.stdout).decode(errors="replace").strip()
+        return f"sftp failed (exit {run.returncode}): {detail}"
+    return None
 
 
 def copy_to_vault(vault: Path, *, path: str | None = None) -> dict[str, Any] | None:

@@ -1,0 +1,26 @@
+# THE SCHEDULED RESTORE TEST: proves each present backup target is actually recoverable, on
+# its own timer so it can never delay an offload tick (the offload runner only copies; this
+# unit only restores). One pass finds every present target that has a successful offload and
+# is due a drill (never drilled, or last passed more than a week ago, retried no sooner than
+# six hours after a failure) and runs the BOUNDED drill for it: a repository check with a
+# read-data subset, the newest database dump's header, and a verified restore of a few small
+# sample files. A pass that finds nothing due costs a few file reads. The whole pass is held
+# to a time budget and a hard stop below. DEPLOY-MANAGED (scripts/install_prune_timers.sh),
+# the same mechanism as the offload timer beside it.
+[Unit]
+Description=Osiris scheduled restore test (bounded, never delays an offload tick)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/osiris
+Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris?application_name=osiris-restore-drill
+Environment=REDIS_URL=redis://127.0.0.1:6396/0
+# Same custody as osiris-offload.service: the backup password is imported from the per-user
+# credential store when present; a missing entry degrades the pass to one named error.
+ImportCredential=restic.password
+# Never let a stuck network target hold this open: the pass has its own budget, this is the
+# backstop. Low priority, because it re-reads data.
+TimeoutStartSec=1800
+Nice=10
+IOSchedulingClass=idle
+ExecStart=%h/code/osiris/.venv/bin/python -m src.cli offload-runner drill

@@ -121,9 +121,10 @@ async def run_offload_tick(pool: asyncpg.Pool, *, vault: Path | None = None) -> 
 
     BEFORE any backup, the security-key recovery file is copied to the vault and, as a plain
     file, beside every present target (`recovery_copies`, reported under `recovery_copies`,
-    never an error for the tick). AFTER the backups, a restore drill runs for any target that
-    now holds a successful offload and is due one (`scheduled_drill`, reported under `drills`)."""
-    from src.orchestrator import recovery_copies, scheduled_drill
+    never an error for the tick). The restore test is NOT run here: it re-reads data and
+    would delay the next tick, so it has its own timer (`scheduled_drill.run_drill_pass`,
+    `osiris offload-runner drill`)."""
+    from src.orchestrator import recovery_copies
     from src.orchestrator.backup_settings import get_backup_settings
     from src.orchestrator.backup_validation import check_local_target_presence
     from src.orchestrator.restic_credential import ResticPasswordMissing, get_restic_password
@@ -178,7 +179,4 @@ async def run_offload_tick(pool: asyncpg.Pool, *, vault: Path | None = None) -> 
             _write_receipt(name, {"last_attempt_at": now, "last_error": fail})
             results.append({"name": name, "ok": False, "error": fail})
 
-    drills = await scheduled_drill.run_due_drills(present, _read_receipts())
-    if drills:
-        extra["drills"] = drills
     return {"as_of": now, "targets": results, **extra}
