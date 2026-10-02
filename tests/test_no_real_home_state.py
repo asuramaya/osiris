@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from src.ingest import soul_crypto, systemd_credential
 from src.orchestrator import (
+    graph_stream,
     offload_runner,
     recovery_copies,
     restic_credential,
@@ -39,6 +40,7 @@ def _resolved_paths() -> dict[str, Path]:
         "encryption progress": soul_encrypt_progress._progress_path(),
         "restore drill receipts": soul_key._restore_drill_receipts_path(),
         "recovery verify receipt": soul_key._verify_receipt_path(),
+        "graph snapshot": graph_stream.snapshot_file_path(),
     }
 
 
@@ -46,7 +48,7 @@ _NAMES = [
     "credential store", "soul key (logical)", "soul key (credential)",
     "soul key recovery file", "backup password (logical)", "backup password (credential)",
     "offload receipts", "recovery copies receipts", "encryption progress",
-    "restore drill receipts", "recovery verify receipt",
+    "restore drill receipts", "recovery verify receipt", "graph snapshot",
 ]
 
 

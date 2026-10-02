@@ -1,7 +1,9 @@
 """The whole-graph typed-array snapshot and its outbox-backed delta poll."""
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1289,3 +1291,72 @@ def test_the_console_resumes_its_delta_stream_from_the_snapshots_own_watermark()
     assert "watermark: snap.watermark" in js
     # a resync and the empty-graph poll must not be answered from the cache
     assert js.count("fetchStreamSnapshot(true)") == 2
+
+
+# --- a restart does not start with an empty cache ------------------------------------------
+
+
+def _tiny_snapshot() -> bytes:
+    return encode_snapshot(
+        object_ids=["a"], x=[1.0], y=[2.0], type_code=[0], project_code=[0], weight=[1.0],
+        status_flag=[0], edge_src=[], edge_dst=[], edge_type_code=[], edge_weight=[],
+        types=["Thread"], projects=["repo:x"], edge_types=[], link_type_class=[],
+        labels=["Thread a"], created_at=[1.0], watermark=7, community_code=[0], communities=[])
+
+
+async def test_a_restart_serves_the_previous_snapshot_at_once_while_a_new_one_builds(
+    tmp_path: Path,
+) -> None:
+    from src.orchestrator.graph_stream import SnapshotCache
+
+    path = tmp_path / "snap.bin"
+    first_build = _tiny_snapshot()
+
+    async def _first(pool: Any) -> bytes:
+        return first_build
+
+    before = SnapshotCache(build=_first, persist_path=path)
+    await before.get(None)  # type: ignore[arg-type]
+    assert path.read_bytes() == first_build
+
+    gate = asyncio.Event()
+
+    async def _slow(pool: Any) -> bytes:
+        await gate.wait()
+        return first_build
+
+    after = SnapshotCache(build=_slow, persist_path=path)  # a new process: empty memory
+    data, age = await asyncio.wait_for(after.get(None), timeout=5)  # type: ignore[arg-type]
+    assert data == first_build
+    assert age < 60
+    gate.set()
+
+
+async def test_a_persisted_snapshot_that_is_too_old_truncated_or_foreign_is_not_served(
+    tmp_path: Path,
+) -> None:
+    import os as _os
+
+    from src.orchestrator.graph_stream import SnapshotCache
+
+    good = _tiny_snapshot()
+    path = tmp_path / "snap.bin"
+
+    async def _build(pool: Any) -> bytes:
+        return b"rebuilt"
+
+    for label, content, mtime_ago in (
+        ("too old", good, 3600.0), ("truncated", good[:-4], 0.0),
+        ("garbage", b"not a snapshot", 0.0),
+    ):
+        path.write_bytes(content)
+        stamp = time.time() - mtime_ago
+        _os.utime(path, (stamp, stamp))
+        cache = SnapshotCache(build=_build, persist_path=path)
+        assert await cache.restore() is False, label
+
+
+def test_the_apps_cache_persists_to_the_configured_file() -> None:
+    from src.orchestrator.graph_stream import snapshot_file_path
+
+    assert snapshot_file_path().name == "graph_snapshot.bin"
