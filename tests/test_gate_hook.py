@@ -1551,6 +1551,20 @@ def test_pytest_summary_line_reads_the_closing_line_only() -> None:
     assert pytest_summary_line("collected in the cache directory") is None
 
 
+def test_pytest_summary_line_reads_the_colour_coded_line_this_repos_pytest_prints() -> None:
+    """The shape the hook really receives: pytest here colours its output even when piped,
+    and an escape code sits directly against the count. A plain-text-only parser found no
+    summary on a clean run (caught live on this hook's own first commit)."""
+    from scripts.gate_hook import pytest_summary_line
+
+    coloured = ("\x1b[33m\x1b[32m117 passed\x1b[0m, \x1b[33m\x1b[1m3 warnings\x1b[0m"
+                "\x1b[33m in 3.16s\x1b[0m\x1b[0m")
+    assert pytest_summary_line(f"-- Docs: see the docs\n{coloured}") == (
+        "117 passed, 3 warnings in 3.16s")
+    failing = "\x1b[31m\x1b[1m2 failed\x1b[0m, \x1b[32m10 passed\x1b[0m\x1b[31m in 1.00s\x1b[0m"
+    assert pytest_summary_line(failing) == "2 failed, 10 passed in 1.00s"
+
+
 def _info(**over: Any) -> dict[str, Any]:
     base: dict[str, Any] = {"files_run": ["tests/test_a.py", "tests/test_b.py"],
                             "omitted_files": [], "omitted_reason": "", "always_included": [],

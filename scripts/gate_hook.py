@@ -620,6 +620,7 @@ def shadow_before_use_violations(repo_root: Path, changed_files: list[str]) -> d
     return out
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _PYTEST_SUMMARY_RE = re.compile(
     r"\b(?:\d+ (?:passed|failed|errors?|skipped|xfailed|xpassed|deselected|rerun)"
     r"|no tests ran)\b")
@@ -628,8 +629,10 @@ _PYTEST_SUMMARY_RE = re.compile(
 def pytest_summary_line(out: str) -> str | None:
     """pytest's own closing line (`3 failed, 253 passed, 5 warnings in 30.1s`), or None when
     the output has none (a crash before collection, a kill, an empty capture). Read from the
-    end, since it is the last thing pytest prints."""
-    for line in reversed(out.splitlines()):
+    end, since it is the last thing pytest prints. This repo's pytest colours its output even
+    when piped, so the escape codes are stripped first: left in, one sits between the digits
+    and whatever precedes them and a word-boundary match finds nothing."""
+    for line in reversed(_ANSI_RE.sub("", out).splitlines()):
         text = line.strip().strip("=").strip()
         if " in " in text and _PYTEST_SUMMARY_RE.search(text):
             return text
