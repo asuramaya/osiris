@@ -1,9 +1,9 @@
-"""PROVENANCE PIECE 3(c), THE GROUNDS-LAW MEASURE (thread b4477e9e/e055e43d, ruling bb3e4422,
-operator 2026-09-14): MEASURE ONLY, no enforcement. `grounds_law_measure` counts, over the
-last N days of fact writes, how many would be refused by a hypothetical grounds law — a write
+"""PROVENANCE PIECE 3(c), THE GROUNDS-LAW MEASURE: MEASURE ONLY, no
+enforcement. `grounds_law_measure` counts, over the
+last N days of fact writes, how many would be refused by a hypothetical grounds law: a write
 carrying NONE of: an observation act (backed_by_observation on the writer's own Agent),
 grounds (grounded_by link), cites, refs (a link to a Reference object), or a read-set entry
-(session_reads before the write) — broken down by writer and by channel (source_id prefix,
+(session_reads before the write), broken down by writer and by channel (source_id prefix,
 the closest per-write signal to "door" that actually exists; see the thread's own scope note).
 """
 from __future__ import annotations
@@ -113,7 +113,7 @@ async def test_writes_outside_the_window_are_excluded(actions: Actions) -> None:
     # created_at is stamped at INSERT time (append-only kernel, never rewritten after the
     # fact), so the window boundary is exercised via `days` rather than backdating a row:
     # days=-1 puts the cutoff a day in the FUTURE, which every real write necessarily
-    # predates — the same population-scoping code path a genuinely-30-days-old write would
+    # predates, the same population-scoping code path a genuinely-30-days-old write would
     # hit, without fighting the event-sourced kernel's own append-only invariant.
     o = await actions.create_or_find_object("SoftwareProject", "repo:glm-old", "test")
     await actions.assert_property(o, "status", "green", "agent:old-writer", NOW, 0.9,

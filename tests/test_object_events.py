@@ -1,5 +1,5 @@
-"""object_events — the witness surface dossier() deliberately hides (thread 085039cc,
-Thoth DM 2469): merge/unmerge/split events plus same_as links for one object."""
+"""object_events: the witness surface dossier() deliberately hides:
+merge/unmerge/split events plus same_as links for one object."""
 from __future__ import annotations
 
 import uuid
@@ -41,7 +41,7 @@ async def test_merge_then_unmerge_both_show_up_for_both_objects(
     assert winner_view["merged_into"] is None
 
     # unmerge adds a SECOND event, still visible from both sides, and clears the
-    # projection — but the merge event and same_as link stay as witnesses (never
+    # projection, but the merge event and same_as link stay as witnesses (never
     # deleted, per Actions.unmerge_objects's own docstring)
     await actions.unmerge_objects(loser, "wrong pair", "analyst:test", case_id)
     loser_view2 = await object_events(actions.pool, loser)
@@ -69,7 +69,7 @@ async def test_event_type_filter_narrows_to_one_kind(
 async def test_an_object_with_no_merge_history_has_no_merge_events_or_links(
     actions: Actions, case_id: str,
 ) -> None:
-    """create_or_find_object writes its own 'create' event — this checks the
+    """create_or_find_object writes its own 'create' event, this checks the
     absence of merge-shaped activity specifically, not a bare empty list."""
     lone = await actions.create_or_find_object("Person", "oe-lone", "analyst:test", case_id)
     out = await object_events(actions.pool, lone)

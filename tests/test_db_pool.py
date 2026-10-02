@@ -1,4 +1,4 @@
-"""create_pool's application_name tagging (task #180 piece 2 (c)) — the per-daemon
+"""create_pool's application_name tagging, the per-daemon
 pg_stat_activity grouping fleet()'s new pool_health surface depends on."""
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ async def test_create_pool_tags_connections_with_application_name(pg_dsn: str) -
 
 
 async def test_create_pool_without_application_name_keeps_the_default(pg_dsn: str) -> None:
-    """No caller is forced to opt in — the existing untagged shape must survive unchanged."""
+    """No caller is forced to opt in, the existing untagged shape must survive unchanged."""
     pool = await create_pool(pg_dsn, min_size=1, max_size=1)
     try:
         name = await pool.fetchval("SELECT current_setting('application_name')")
@@ -35,7 +35,7 @@ async def test_acquire_wait_stats_start_empty(pg_dsn: str) -> None:
 
 
 async def test_acquire_wait_stats_unwrapped_pool_reads_empty() -> None:
-    """A pool this module never created (no subclass swap) has nothing to read — the
+    """A pool this module never created (no subclass swap) has nothing to read, the
     read side degrades honestly rather than raising."""
     class _Bare:
         pass
@@ -44,8 +44,8 @@ async def test_acquire_wait_stats_unwrapped_pool_reads_empty() -> None:
 
 
 async def test_acquire_wait_stats_records_both_calling_forms(pg_dsn: str) -> None:
-    """Both `await pool.acquire()` and `async with pool.acquire() as conn:` — the two
-    forms asyncpg's own PoolAcquireContext supports — must each add a sample."""
+    """Both `await pool.acquire()` and `async with pool.acquire() as conn:`, the two
+    forms asyncpg's own PoolAcquireContext supports, must each add a sample."""
     pool = await create_pool(pg_dsn, min_size=1, max_size=2)
     try:
         conn = await pool.acquire()
@@ -61,9 +61,9 @@ async def test_acquire_wait_stats_records_both_calling_forms(pg_dsn: str) -> Non
 
 
 async def test_acquire_wait_stats_measures_real_contention(pg_dsn: str) -> None:
-    """The whole point of thread e4a5755a: prove queueing is actually visible, not just
+    """The whole point: prove queueing is actually visible, not just
     that the plumbing runs. A max_size=1 pool, one task holds the only connection for
-    200ms while a second task's acquire() blocks behind it — its wait must measurably
+    200ms while a second task's acquire() blocks behind it, its wait must measurably
     include that hold time, not read as near-zero."""
     pool = await create_pool(pg_dsn, min_size=1, max_size=1)
     try:

@@ -1,8 +1,8 @@
 """THE OPPORTUNISTIC OFFLOAD RUNNER (src/orchestrator/offload_runner.py, operator
-ruling be21384a, Thoth mail 12813) — one tick per test, exercising the real
+ruling), one tick per test, exercising the real
 receipt-file mechanics and the real presence/skip/error branches. `restic` itself is
 never actually invoked here for the happy path (no repository to sync to in a test
-sandbox) — `_run_restic_backup` is monkeypatched at its own call site, the same
+sandbox), `_run_restic_backup` is monkeypatched at its own call site, the same
 seam `test_soul_store.py`'s own rewrap tests use for their own subprocess-free
 edges; the REAL subprocess boundary (`restic snapshots`/`init`/`backup`) is
 exercised once, against a genuinely local `local:` repository, to prove the
@@ -121,7 +121,7 @@ async def test_run_offload_tick_records_a_failure_receipt_never_raises(
     assert out["targets"] == [{"name": "nas", "ok": False, "error": "restic backup failed: boom"}]
     receipt = offload_runner.offload_receipts()["nas"]
     assert receipt["last_error"] == "restic backup failed: boom"
-    assert "last_successful_offload" not in receipt  # never had one yet — not fabricated
+    assert "last_successful_offload" not in receipt  # never had one yet, not fabricated
 
 
 async def test_run_offload_tick_degrades_the_whole_tick_on_a_missing_password(
@@ -210,7 +210,7 @@ async def test_the_tick_never_runs_a_restore_drill_even_when_one_is_due(
 
 @pytest.mark.skipif(shutil.which("restic") is None, reason="restic not installed on this box")
 def test_run_restic_backup_real_round_trip_against_a_local_repository(tmp_path: Path) -> None:
-    """The ONE real subprocess exercise of the actual restic boundary — a genuine
+    """The ONE real subprocess exercise of the actual restic boundary, a genuine
     `local:` repository under tmp_path, no network, proving the env-var contract
     (RESTIC_REPOSITORY/RESTIC_PASSWORD), the init-if-needed guard, and the return
     convention (None on success) all actually work, not just the mocked-out unit

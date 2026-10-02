@@ -1,4 +1,4 @@
-"""THE HANDOFF COMPILER (Thoth's dispatch, DM 2338) — compile_handoff/render_handoff_
+"""THE HANDOFF COMPILER: compile_handoff/render_handoff_
 briefing (src/orchestrator/handoff_compiler.py) plus the handoff_briefing MCP tool."""
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from src.orchestrator.monitor import set_cursor
 
 
 def _rev(rev: str) -> str:
-    """A REAL sha from the repo this test suite itself runs in — same reuse of the running
+    """A REAL sha from the repo this test suite itself runs in, same reuse of the running
     checkout `test_deploy_guard.py`'s own unreviewed-boot tests already lean on
     (`guard._REPO_ROOT`), never a fabricated throwaway repo."""
     return subprocess.run(
@@ -27,7 +27,7 @@ def _rev(rev: str) -> str:
     ).stdout.strip()
 
 
-# ═══════════ _deploy_verdict — pure git ancestry, no DB ═══════════
+# ═══════════ _deploy_verdict, pure git ancestry, no DB ═══════════
 
 async def test_deploy_verdict_unknown_with_no_repo_root() -> None:
     deployed, note = await _deploy_verdict(None, "abc1234", "def5678")
@@ -121,7 +121,7 @@ async def test_compile_handoff_shipped_carries_no_commit_when_none_cited(
 async def test_compile_handoff_deploy_status_unknown_with_no_on_disk_path(
     actions: Actions,
 ) -> None:
-    """A decided_in commit exists, but this project never registered on_disk_path — deploy
+    """A decided_in commit exists, but this project never registered on_disk_path, deploy
     status must read unknown, never guessed."""
     await actions.create_or_find_object("Commit", "commit:aaaabbbbcccc", "git")
     did = await record_decision(

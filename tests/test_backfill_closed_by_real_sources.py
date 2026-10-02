@@ -60,7 +60,7 @@ async def test_live_run_repoints_operator_edge_to_the_real_person_and_retires_pl
         "SELECT source_id, confidence, evidence_class FROM links "
         "WHERE from_id=$1 AND to_id=$2 AND type='closed_by'", t, placeholder)
     out = await backfill_closed_by_real_sources(
-        actions, actor="test", dry_run=False, because="closed_by compensating fold")
+        actions, actor="test", dry_run=False, because="wave 18 item 1 compensating fold")
     assert out["retired"] == ["analyst:operator"]
     row = await actions.pool.fetchrow(
         "SELECT o.type, o.canonical, l.source_id, l.confidence, l.evidence_class "
@@ -90,7 +90,7 @@ async def test_live_run_repoints_session_edge_to_the_real_system_source(
     t, placeholder = await _mint_placeholder_closed_by(
         actions, placeholder_canonical="session", edge_source="session")
     out = await backfill_closed_by_real_sources(
-        actions, actor="test", dry_run=False, because="closed_by compensating fold")
+        actions, actor="test", dry_run=False, because="wave 18 item 1 compensating fold")
     assert out["retired"] == ["session"]
     row = await actions.pool.fetchrow(
         "SELECT o.type, o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
@@ -114,7 +114,7 @@ async def test_placeholder_is_never_retired_while_still_load_bearing(
     await actions.create_link(t2, placeholder, "closed_by", "session", now, 0.6,
                               evidence_class="direct_observation")
     out = await backfill_closed_by_real_sources(
-        actions, actor="test", dry_run=False, because="closed_by compensating fold")
+        actions, actor="test", dry_run=False, because="wave 18 item 1 compensating fold")
     assert set(out["retired"]) == {"session"}
     status = await actions.pool.fetchval(
         "SELECT status FROM objects WHERE id=$1", placeholder)

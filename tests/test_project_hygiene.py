@@ -1,4 +1,4 @@
-"""Project hygiene sweep (thread 14fae7d3, wave 6 dispatch msg 8063): SoftwareProject
+"""Project hygiene sweep: SoftwareProject
 junk retired the same way migration_0060's EXPIRY law retires an unclaimed derived Thread
 -- see src/orchestrator/project_hygiene.py's own docstring for the two doors (ongoing rule,
 one-shot legacy backlog) and the shared guard (no thread/decision/governing seat).
@@ -140,7 +140,7 @@ async def test_a_legacy_named_canonical_still_respects_the_shared_guard(
 ) -> None:
     name = "khnum-launch-acceptance-4-analog"
     canon = f"repo:{name}"
-    # simulate the real khnum-launch-acceptance-4 exception: a legacy name WOULD match if
+    # simulate a real legacy-name exception: a legacy name WOULD match if
     # listed, but here we prove the guard, not the list -- attach a decision to a
     # test-actor project and confirm the guard alone is enough to exclude it.
     await _project(actions, name, actor="test")

@@ -1,6 +1,6 @@
-"""The disk guard (vault lane, ruling 39384a87/c53a5fc0 item 5) — `has_room` is pure logic;
+"""The disk guard (vault lane), `has_room` is pure logic;
 the CLI is a thin scan-and-decide shell exercised separately, against a real scratch
-directory (no filesystem mocking — `shutil.disk_usage` reads the real one `tmp_path` sits
+directory (no filesystem mocking, `shutil.disk_usage` reads the real one `tmp_path` sits
 on, which is exactly what the real script does at runtime)."""
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def test_custom_margin_is_honored() -> None:
 def test_cli_with_no_prior_dump_never_refuses(
     tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A brand-new, empty backup directory has nothing to compare against — refusing a
+    """A brand-new, empty backup directory has nothing to compare against, refusing a
     FIRST dump on an empty disk would be exactly backwards."""
     rc = main([str(tmp_path)])
     assert rc == 0

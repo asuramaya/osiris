@@ -1,4 +1,4 @@
-"""File substrate — a repo's tree as File nodes (metadata only) with a normalized role.
+"""File substrate, a repo's tree as File nodes (metadata only) with a normalized role.
 
 The role is the blocking key the cross-repo family audit compares on (every repo's `license`,
 every repo's `ci`), so analogous files line up without an all-files-all-pairs scan.
@@ -51,7 +51,7 @@ async def test_ingest_files(actions: Actions, tmp_path: Path) -> None:
     assert await p.fetchval("SELECT count(*) FROM links WHERE type='in_repo'") == 4
     ec = await p.fetchval("SELECT evidence_class FROM links WHERE type='in_repo' LIMIT 1")
     assert ec == "authoritative_api"                   # the tracked tree is ground truth
-    # idempotent — re-ingest adds no File or edge (the gitlog re-ingest lesson)
+    # idempotent, re-ingest adds no File or edge (the gitlog re-ingest lesson)
     again = await ingest_files(actions, str(repo))
     assert again["files"] == 4
     assert await p.fetchval("SELECT count(*) FROM objects WHERE type='File'") == 4
@@ -61,7 +61,7 @@ async def test_ingest_files(actions: Actions, tmp_path: Path) -> None:
 async def test_ingest_files_resolves_an_existing_project_by_name_not_canonical(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """PROJECT IDENTITY DRIFT (operator ruling b5663511, live specimen: a repo folder
+    """PROJECT IDENTITY DRIFT (live specimen: a repo folder
     still on disk under its OLD basename after rename_project moved the graph's own
     `name` on -- or a folder itself renamed to match -- must resolve to the EXISTING
     object, never mint a fresh stub twin under a canonical matching the disk basename
@@ -90,10 +90,10 @@ async def test_ingest_files_resolves_an_existing_project_by_name_not_canonical(
 async def test_ingest_files_relinks_a_file_whose_edge_was_retracted(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE IN-REPO JOIN AUDIT (Thoth DM 7112/7163): the dedup-before-create-link check
+    """THE IN-REPO JOIN AUDIT: the dedup-before-create-link check
     (`existing = {(from,to) for ... WHERE type='in_repo'}`) had no `valid_until` filter,
     so a RETRACTED edge still counted as "already linked" and silently blocked a real
-    re-link forever — the mirror image of the ramstein double-thread bug: there a dead
+    re-link forever, the mirror image of the ramstein double-thread bug: there a dead
     edge caused a phantom duplicate, here it would cause a phantom no-op."""
     repo = tmp_path / "util2"
     repo.mkdir()
@@ -127,7 +127,7 @@ def test_classify_license() -> None:
 
 
 async def test_ingest_records_content_facts(actions: Actions, tmp_path: Path) -> None:
-    """Role-bearing files carry a content_hash (identity drift) and, for a license, its TYPE —
+    """Role-bearing files carry a content_hash (identity drift) and, for a license, its TYPE:
     the facts the drift audit compares (the body itself is never stored)."""
     repo = tmp_path / "u"
     repo.mkdir()
