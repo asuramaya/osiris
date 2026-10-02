@@ -1,9 +1,9 @@
-"""`/diag/memory` — read-only, BOUNDED memory diagnostics (thread 4746e7f4, operator "why
-osiris uses so much ram" 2026-09-06). `_FakeRequest` mirrors test_heartbeat_route.py's own
+"""`/diag/memory`: read-only, BOUNDED memory diagnostics, added to answer why the server
+uses so much RAM. `_FakeRequest` mirrors test_heartbeat_route.py's own
 pattern for exercising a `@mcp.custom_route` handler directly, no ASGI stack needed.
 
-THE REDESIGN (same thread, ~23:20Z the same night): the FIRST version had no bound at
-all — tracemalloc(25) traced every allocation on the live server indefinitely; its own
+THE REDESIGN: the FIRST version had no bound at
+all: tracemalloc(25) traced every allocation on the live server indefinitely; its own
 bookkeeping alone peaked over 1 GB within minutes, the event loop starved, /heartbeat
 timed out fleet-wide, SIGTERM did not stop it, only SIGKILL did. These tests prove the
 new safety rails directly: a bounded window (auto-stops on its own, no poller required),
@@ -74,7 +74,7 @@ async def test_diag_memory_route_second_call_never_restarts_the_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The whole point: a second call while a window is already running must NEVER
-    restart tracing — there is no ?reset=1 anymore. It just reports the live snapshot."""
+    restart tracing: there is no ?reset=1 anymore. It just reports the live snapshot."""
     from src import mcp_server as srv
 
     monkeypatch.setenv("OSIRIS_MEMORY_DIAG_ENABLED", "1")
@@ -134,8 +134,8 @@ async def test_diag_memory_route_refuses_to_start_over_the_rss_line(
 async def test_diag_window_guard_auto_stops_after_its_hard_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE ACTUAL FIX for the incident: the window ends ON ITS OWN, with nobody polling
-    — a background task, not a poller's own continued cooperation."""
+    """THE ACTUAL FIX for the incident: the window ends ON ITS OWN, with nobody polling:
+    a background task, not a poller's own continued cooperation."""
     import tracemalloc
 
     from src import mcp_server as srv
@@ -152,7 +152,7 @@ async def test_diag_window_guard_aborts_early_on_the_rss_tripwire(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The OTHER half: even inside a still-valid duration window, a live RSS breach ends
-    tracing immediately rather than waiting out the full 300s — tracemalloc's own
+    tracing immediately rather than waiting out the full 300s; tracemalloc's own
     overhead is worst exactly when memory is already tight."""
     import time
     import tracemalloc

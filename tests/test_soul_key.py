@@ -1,6 +1,6 @@
-"""THE KEY DOOR's own orchestration layer (src.orchestrator.soul_key, Thoth mail
-12810/12830): direct coverage of the three pool-backed functions BOTH `osiris
-soul-key <action>` and the `/soul-key/*` REST routes call — the exhaustive
+"""THE KEY DOOR's own orchestration layer (src.orchestrator.soul_key):
+direct coverage of the three pool-backed functions BOTH `osiris
+soul-key <action>` and the `/soul-key/*` REST routes call, the exhaustive
 key-management/rewrap-mechanics coverage lives in test_soul_crypto.py and
 test_soul_store.py; this file only proves the composition itself is wired right.
 """
@@ -30,8 +30,8 @@ async def test_soul_key_status_absent(tmp_path, actions: Actions) -> None:
     out = await soul_key.soul_key_status(actions.pool, path=str(tmp_path / "no-such-file"))
     assert out["present"] is False
     assert out["legacy_plaintext_rows"] is None
-    # Thoth mail 13006: the live soul_key.rp_id setting, off the registry's own
-    # default — surfaced so Seshat's console reads it here instead of hard-coding
+    # The live soul_key.rp_id setting, off the registry's own
+    # default, surfaced so the console reads it here instead of hard-coding
     # a second copy that could drift from what a real enrollment used.
     assert out["rp_id"] == "localhost"
 

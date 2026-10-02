@@ -1,11 +1,11 @@
-"""WAVE 27, THE INSPECTOR (Thoth mail 11754/11874): the right rail shows the newer
+"""THE INSPECTOR: the right rail shows the newer
 relationship types as their own clickable rows. Five of the six are REAL links
-(recorded_by, owned_by, admitted_by, vendor_of, and committed_by once Sekhmet's lane
+(recorded_by, owned_by, admitted_by, vendor_of, and committed_by once that lane
 lands) and already flow through the existing 1-hop graph walk (osiris.js's own loadRels)
 unchanged -- data-driven by construction, no code needed there, no hardcoded type list to
 update when a new type starts being minted. `supersedes`/`superseded_by` is the one
 exception: declared as a LinkType at birth but never actually instantiated as a link row
-(ruling dd04d7dd, decision 5dea28e5) -- shipped as a PROPERTY PAIR on the Decision objects
+-- shipped as a PROPERTY PAIR on the Decision objects
 themselves instead. loadRels gained a synthetic group for these two property names,
 resolved via a second /objects/{id} fetch since the pointer is a bare id with no label.
 Mirrors the repo's existing static-source-guard convention for this file

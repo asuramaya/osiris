@@ -1,5 +1,5 @@
-"""PROVENANCE SWEEP, WAVE 15, DECISION/THREAD LANE REFINEMENT (mail 8840): the finer rung
-named as follow-up scope by `backfill_lineage_repo_links` itself (decision 69277bd3) — an
+"""DECISION/THREAD LANE REFINEMENT: the finer rung
+named as follow-up scope by `backfill_lineage_repo_links` itself: an
 object left abstained by that lane's CURRENT-unanimous check can still resolve against what
 its own lineage's works_in looked like AT THE OBJECT'S OWN write time, via
 `lineage_works_in_at` (agents.py). Never a guess: still cardinality-1-or-abstain.
@@ -16,7 +16,7 @@ async def test_resolves_when_the_lineage_was_unanimous_at_write_time_but_not_now
     actions: Actions,
 ) -> None:
     """The exact shape the plain lane leaves behind: a lineage that had ONE project live
-    when the object was captured, and only PICKED UP a second project afterward — current-
+    when the object was captured, and only PICKED UP a second project afterward: current-
     unanimous abstains (2 live now), write-time resolves (1 live then)."""
     earlier = datetime.now(UTC) - timedelta(days=10)
     later = datetime.now(UTC) + timedelta(days=1)
@@ -74,7 +74,7 @@ async def test_abstains_when_the_lineage_had_no_works_in_yet_at_write_time(
     actions: Actions,
 ) -> None:
     """A project link that only appears AFTER the object's own observed_at must not count
-    — the window is a strict `first_seen <= at`, not "ever, eventually"."""
+    the window is a strict `first_seen <= at`, not "ever, eventually"."""
     now = datetime.now(UTC)
     later = now + timedelta(days=5)
     thread = await open_thread(actions, "written before the lineage had a project at all",

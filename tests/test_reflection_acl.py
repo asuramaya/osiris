@@ -1,8 +1,8 @@
-"""The reflection ACL — house-scoped memories (ruling 6c18709f, task #42).
+"""The reflection ACL: house-scoped memories.
 
 A Reflection is a memory lived with the operator's agents, not work knowledge: readable
 within its OWN HOUSE and by the operator, opaque to other houses. Work knowledge stays
-fleet-readable — cross-repo recall is the product; the boundary is reflections ONLY.
+fleet-readable, cross-repo recall is the product; the boundary is reflections ONLY.
 Enforcement is at the read lenses; the record stays append-only and whole.
 """
 from __future__ import annotations
@@ -82,7 +82,7 @@ async def test_the_id_door_respects_the_boundary(actions: Actions) -> None:
 
 async def test_select_op_filters_by_run_spec_caller(actions: Actions) -> None:
     """The composition door: a select over Reflections (typed or select-all) reads only
-    the caller's house — run_spec's caller rides the contextvar into the op tree."""
+    the caller's house, run_spec's caller rides the contextvar into the op tree."""
     rid = await _kept_memory(actions, "the composed memory", repo="osiris")
     await _agent_in(actions, "agent:home1234", "osiris")
     spec = {"op": "select", "object_type": "Reflection"}
@@ -102,7 +102,7 @@ async def test_select_op_filters_by_run_spec_caller(actions: Actions) -> None:
 
 
 async def test_lap_answers_like_a_missing_object(actions: Actions) -> None:
-    """The provenance lens serves the BODY — a foreign house's reflection laps exactly
+    """The provenance lens serves the BODY, a foreign house's reflection laps exactly
     like an object that does not exist (a boundary that names what it hides has already
     leaked that it exists)."""
     rid = await _kept_memory(actions, "the deepest read", repo="osiris")
@@ -116,7 +116,7 @@ async def test_lap_answers_like_a_missing_object(actions: Actions) -> None:
 
 async def test_work_knowledge_stays_fleet_readable(actions: Actions) -> None:
     """The boundary is reflections ONLY (the ruling's other half): a foreign caller still
-    reads another house's decisions — cross-repo recall is the product."""
+    reads another house's decisions, cross-repo recall is the product."""
     await record_decision(actions, "the credence clamp ships tonight",
                           kind="ruling", source="agent:home1234", repo="osiris")
     out = await _search(actions, "credence clamp", "agent:away5678")

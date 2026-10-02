@@ -1,9 +1,9 @@
-"""NAVIGABLE SPACE, INTEGRATION (decision "NAVIGABLE SPACE, INTEGRATION SHAPE", mail 10550):
+"""NAVIGABLE SPACE, INTEGRATION:
 the three.js renderer (space.js) replaces the #cy cytoscape container in /ui/'s own browse
 stage -- no separate page, graph and table coexist (the canvas fills the section, the table
 sits in a collapsible drawer beneath it), Board is dropped from the switcher (its code stays
 for piece 3's removal alongside the retired cytoscape mount). This supersedes, rather than
-extends, test_graph_visualizer_fold.py's own Atlas-fold/whole-graph-LOD proofs -- that toggle
+extends, test_graph_visualizer_fold.py's own fold/whole-graph-LOD proofs -- that toggle
 lived inside the exact #cy content this integration replaces. Mirrors the existing
 static-source-guard convention: no browser test harness exists in this repo, so these are
 string-presence proofs against the served JS/HTML, not DOM assertions.
@@ -36,7 +36,7 @@ def test_index_mounts_space_via_a_module_script() -> None:
 
 
 def test_the_legacy_cytoscape_board_is_gone_for_real_now() -> None:
-    # piece 3 (ruling c5953bb1, Thoth DM 10596/10619/10631): the hidden #cy-legacy mount
+    # piece 3: the hidden #cy-legacy mount
     # this integration piece deliberately kept ensureBoard()/Osiris.makeBoard on is now
     # actually deleted, not just unreachable from the UI -- see
     # tests/test_navspace_piece3_retirement.py for the fuller retirement proof.
@@ -78,7 +78,7 @@ def test_space_onfocus_hook_repaints_the_table_selection() -> None:
 
 def test_a_table_row_click_highlights_the_canvas_too() -> None:
     # THE READING LAYER, part B/C built select-vs-focus for a table row click; THE
-    # LEGIBILITY PASS TIP 1's own amendment (mail 10726) retired that split outright -- a
+    # A later legibility amendment retired that split outright -- a
     # row click always focuses now, still sharing selection with the canvas either way.
     body = _CONSOLE_JS.split("function inspectOnly(id)", 1)[1].split("\n}\n", 1)[0]
     assert "if (space) space.focusObject(id);" in body

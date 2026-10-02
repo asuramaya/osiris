@@ -1,6 +1,6 @@
-"""PROVENANCE PIECE 2, TRANSCRIPT PROVENANCE FOR MINED FACTS (ruling bb3e4422, thread
-8b18040a): a mined Thread's `possible_upstream` edges to the exact ids its own
-transcript's preceding tool results actually produced — never a text-similarity guess.
+"""PROVENANCE PIECE 2, TRANSCRIPT PROVENANCE FOR MINED FACTS: a mined Thread's
+`possible_upstream` edges to the exact ids its own transcript's preceding tool results
+actually produced, never a text-similarity guess.
 Hermetic: synthetic JSONL lines, real Postgres (never mocked) for the object/link reads.
 """
 from __future__ import annotations
@@ -38,7 +38,7 @@ def test_distill_default_output_is_unchanged() -> None:
 def test_distill_tag_lines_prefixes_the_original_line_index() -> None:
     lines = [_tool_result("irrelevant"), _line("user", "hello"), _claude("hi back")]
     text, _cwd = distill(lines, tag_lines=True)
-    # the tool_result line (index 0) is never distilled at all — only the surviving
+    # the tool_result line (index 0) is never distilled at all, only the surviving
     # user/assistant lines get a tag, carrying THEIR OWN original index (1 and 2).
     assert "[L1] OPERATOR: hello" in text
     assert "[L2] CLAUDE: hi back" in text
@@ -168,14 +168,14 @@ async def test_emit_yield_with_no_source_line_mints_nothing(actions: Actions) ->
 
 
 async def test_emit_yield_walk_back_is_bounded_by_window(actions: Actions) -> None:
-    """A message id sitting further back than the window's own reach is never linked —
+    """A message id sitting further back than the window's own reach is never linked:
     the ruling's own "small N of prior tool results", never the whole transcript."""
     now = datetime.now(UTC)
     far_msg = await actions.create_or_find_object("Message", "message:11111", "mailbox")
     await actions.assert_property(far_msg, "grade", "fyi", "mailbox", now, 0.9)
 
     lines = [_tool_result(json.dumps({"sent": 11111}))]
-    # bury it behind more tool_result HITS than the default window scans — filler
+    # bury it behind more tool_result HITS than the default window scans, filler
     # assistant turns alone would never push it out, since the window counts
     # tool_result-bearing lines, not lines in general.
     lines += [_tool_result(json.dumps({"ok": True})) for _ in range(10)]
