@@ -1,13 +1,13 @@
-"""scripts/blob_content_sweep.py — task #30/#182's checked-in, re-runnable full
-blob-content walk (Thoth DM 5574: the prior sweep, decision 55669bac, was run by hand and
+"""scripts/blob_content_sweep.py: task #30/#182's checked-in, re-runnable full
+blob-content walk (the prior sweep was run by hand and
 never committed, so 29+ later commits could not be re-checked without rebuilding the
 method from memory).
 
-SELF-INCIDENT (Thoth DM 5583, commit 17e7fa6): this file's first version wrote the two
-known-real leaked addresses in plain text, twice, to prove the detector caught them —
+SELF-INCIDENT (commit 17e7fa6): this file's first version wrote the two
+known-real leaked addresses in plain text, twice, to prove the detector caught them ,
 exactly the specimen #30 hunts for. Every test below that exercises the known-real-address
 check now uses an entirely SYNTHETIC address and its own hash, injected via `scan_objects`'
-`known_hashes` param — never the module's own `KNOWN_REAL_HASHES`, and never the two real
+`known_hashes` param, never the module's own `KNOWN_REAL_HASHES`, and never the two real
 addresses as a string literal anywhere in this file. See
 `test_this_files_own_source_and_tests_carry_no_literal_leak` below for the guard that makes
 this class of mistake structurally hard to reintroduce."""
@@ -73,7 +73,7 @@ def test_catches_a_hash_matched_address_in_blob_content(repo: Path) -> None:
 
 def test_catches_a_hash_matched_address_in_a_commit_message_only(repo: Path) -> None:
     """The exact shape decision 9ba0bda134e0 found: file content clean, but the address
-    survives as plain commit-message text — invisible to a file-content-only scan."""
+    survives as plain commit-message text, invisible to a file-content-only scan."""
     _commit(repo, "root")
     _commit(repo, f"dev:{_SYNTHETIC_ADDRESS} is a test fixture owner")
     objects = iter_all_objects(repo)
@@ -83,7 +83,7 @@ def test_catches_a_hash_matched_address_in_a_commit_message_only(repo: Path) -> 
 
 
 def test_default_sweep_never_flags_the_synthetic_address(repo: Path) -> None:
-    """Without an injected hash set, `sweep()` uses the module's own KNOWN_REAL_HASHES —
+    """Without an injected hash set, `sweep()` uses the module's own KNOWN_REAL_HASHES:
     a synthetic address never hashes to one of those, so the production path stays quiet
     on test data (same law test_ignores_a_known_synthetic_test_fixture_address checks for
     the regex side)."""
@@ -97,8 +97,8 @@ def test_default_sweep_never_flags_the_synthetic_address(repo: Path) -> None:
 
 def test_catches_a_leak_in_a_dead_end_commit_no_branch_reaches(repo: Path) -> None:
     """The exact gap a ref-walk (git log --all) cannot see: a commit orphaned by a reset,
-    still sitting in the object database until gc — 55669bac's own 'unreachable objects'
-    finding. --batch-all-objects walks the STORE, not the ref graph, so this is caught
+    still sitting in the object database until gc (the 'unreachable objects'
+    finding). --batch-all-objects walks the STORE, not the ref graph, so this is caught
     without a separate unreachable-object enumeration."""
     _commit(repo, "root")
     _commit(repo, "will be orphaned")
@@ -149,7 +149,7 @@ def test_scan_objects_hash_check_is_pure_and_overridable(repo: Path) -> None:
 
 def test_email_token_regex_is_broader_than_the_webmail_shape() -> None:
     """The hash check's own candidate extraction (EMAIL_TOKEN_RE) is deliberately not
-    limited to known webmail domains — a hash comparison has no false-positive cost the
+    limited to known webmail domains, a hash comparison has no false-positive cost the
     way a printed literal would, so a real address on ANY domain is still caught."""
     assert EMAIL_TOKEN_RE.search("contact: someone@example-corp.io") is not None
 
@@ -160,10 +160,10 @@ _SWEEP_TESTS = Path(__file__)
 
 
 def test_this_files_own_source_and_tests_carry_no_literal_leak() -> None:
-    """THE SELF-SCAN (Thoth DM 5583's more valuable half): a detector that cannot detect
+    """THE SELF-SCAN (the more valuable half): a detector that cannot detect
     itself has a permanent blind spot at its most sensitive point. Scans this file's own
     on-disk text AND scripts/blob_content_sweep.py's own on-disk text for any email-shaped
-    token whose hash lands in KNOWN_REAL_HASHES — the same rule every other object this
+    token whose hash lands in KNOWN_REAL_HASHES, the same rule every other object this
     sweep walks is held to. This is what makes the original mistake (the addresses spelled
     out as a literal regex/fixture) impossible to reintroduce silently: it would fail HERE,
     at every test run, not just at the next full live sweep."""

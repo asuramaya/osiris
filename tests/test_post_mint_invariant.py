@@ -1,5 +1,5 @@
-"""THE POST-MINT INVARIANT (Thoth's ruling, DM 9018/thread 9004, THE ORPHAN LAWS item 2
-pass 2) — the two doors that mint across more than one phase under an advisory lock, not
+"""THE POST-MINT INVARIANT (THE ORPHAN LAWS item 2, pass 2):
+the two doors that mint across more than one phase under an advisory lock, not
 one actions.atomic() block, so #189's own refuse-and-rollback gate (_enforce_required_
 links) cannot reach across the gap: claim_name -> ensure_seat/bind_holder (Seat, via
 `holds`) and register_agent (Agent, via `works_in`). Both share
@@ -57,7 +57,7 @@ async def test_confirm_or_confess_link_is_a_no_op_when_a_live_self_declared_link
 
 
 async def test_confirm_or_confess_link_ignores_an_invalidated_link(actions: Actions) -> None:
-    """A vacated seat's own healed prior-holder link must never read as still-satisfied —
+    """A vacated seat's own healed prior-holder link must never read as still-satisfied , 
     `holds` is routinely invalidated (bind_holder heals it on every re-bind), unlike repo/
     grounds/resolves, which _enforce_required_links' own satisfied-check never filters on
     valid_until at all. This is the one place that filter matters."""
@@ -96,7 +96,7 @@ async def test_confirm_or_confess_link_respects_an_already_resolved_abstention_a
     actions: Actions,
 ) -> None:
     """A resolved abstention (derive_or_abstain's own `resolved: true` marker) is NOT what
-    this checks for satisfaction — a real link is — but an object carrying a bare
+    this checks for satisfaction, a real link is, but an object carrying a bare
     unlinked_because from an earlier call must still short-circuit here; this is the
     already-idempotent case above restated against the OTHER hatch half."""
     oid = await _mint_bare(actions, "Seat")
@@ -113,7 +113,7 @@ async def test_confirm_or_confess_link_respects_an_already_resolved_abstention_a
 
 async def test_claim_name_leaves_no_confession_on_the_healthy_path(actions: Actions) -> None:
     """bind_holder always runs right after ensure_seat in the same call, so the invariant
-    check is normally a no-op — proven here so a future refactor that breaks that ordering
+    check is normally a no-op, proven here so a future refactor that breaks that ordering
     trips this test rather than silently confessing on every claim."""
     from src.orchestrator.agents import claim_name
 
@@ -131,7 +131,7 @@ async def test_claim_name_leaves_no_confession_on_the_healthy_path(actions: Acti
 
 async def test_claim_name_confesses_when_the_seat_is_left_unlinked(actions: Actions) -> None:
     """Simulates the crash-between-phases gap directly: a Seat minted (via ensure_seat)
-    with nothing binding it, then claim_name called again for the SAME name — the second
+    with nothing binding it, then claim_name called again for the SAME name, the second
     call's own seat_id resolves to the pre-existing Seat (seats_by_handle finds it), so it
     reaches the `if seat_id:` branch and calls bind_holder itself; to isolate the invariant
     check alone (not bind_holder doing its normal job), this monkeypatches bind_holder to a
@@ -144,7 +144,7 @@ async def test_claim_name_confesses_when_the_seat_is_left_unlinked(actions: Acti
         return {"seat_id": kwargs.get("seat_id"), "old_holder": None, "new_holder": None}
 
     # claim_name imports bind_holder LOCALLY (`from src.orchestrator.seats import
-    # bind_holder, ...`), fresh on every call — patching seats.bind_holder itself, not
+    # bind_holder, ...`), fresh on every call, patching seats.bind_holder itself, not
     # agents.bind_holder, is what that local import actually re-reads.
     orig = seats_mod.bind_holder
     seats_mod.bind_holder = _noop_bind_holder  # type: ignore[assignment]
@@ -166,7 +166,7 @@ async def test_register_agent_leaves_no_confession_when_a_project_resolves(
     actions: Actions,
 ) -> None:
     """A resolved project means works_in gets written a few lines above the invariant
-    check runs — the healthy, overwhelmingly common path — so this must stay a no-op."""
+    check runs, the healthy, overwhelmingly common path, so this must stay a no-op."""
     from src.orchestrator.agents import AgentIdentity, register_agent
 
     ident = AgentIdentity(agent_id="agent:pmi-agent-1", session="sess-pmi-1",
@@ -184,7 +184,7 @@ async def test_register_agent_confesses_when_no_project_ever_resolves(
     actions: Actions,
 ) -> None:
     """A project-less mount (no cwd, no seat, nothing to resolve) is a real, common,
-    legitimate state — not a crash — but it still leaves the Agent with no works_in link,
+    legitimate state, not a crash, but it still leaves the Agent with no works_in link,
     so the invariant confesses it honestly rather than leaving a silent hole."""
     from src.orchestrator.agents import AgentIdentity, register_agent
 
@@ -203,7 +203,7 @@ async def test_register_agent_confesses_when_no_project_ever_resolves(
 async def test_register_agent_confession_is_idempotent_across_repeat_mounts(
     actions: Actions,
 ) -> None:
-    """register_agent runs on EVERY mount — a project-less agent must be confessed once,
+    """register_agent runs on EVERY mount, a project-less agent must be confessed once,
     not re-confessed (and re-timestamped) on every single re-mount."""
     from src.orchestrator.agents import AgentIdentity, register_agent
 

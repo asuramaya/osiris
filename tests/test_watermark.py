@@ -1,9 +1,9 @@
-"""The graph watermark (ruling cf9286b2) — auto-refresh's whole mechanism. Every test here
+"""The graph watermark, auto-refresh's whole mechanism. Every test here
 demonstrates a property the design depends on: each table's marker moves independently
 (no cross-table GREATEST that could mask a smaller table's own change), an empty table
 reads None (never a false 0 == 0 "nothing changed" once it gets its first row), and
-agent_mounts specifically does NOT move on a heartbeat (last_seen) — only on a genuinely
-new mount (mounted_at) — the exact noise this design exists to filter out.
+agent_mounts specifically does NOT move on a heartbeat (last_seen), only on a genuinely
+new mount (mounted_at), the exact noise this design exists to filter out.
 """
 from __future__ import annotations
 
@@ -15,12 +15,12 @@ from src.orchestrator.watermark import graph_watermark
 async def test_six_markers_are_none_on_an_empty_set_of_tables(actions: Actions) -> None:
     """Six of the seven, not all seven: task #97 workstream 1's catalog seed (conftest's
     `actions` fixture, `is_known_object_type`/`seed_catalog`) writes real Actions calls the
-    very first time any test in a pg container's lifetime asks for the catalog — which
+    very first time any test in a pg container's lifetime asks for the catalog, which
     means `audit_log` alone can already be non-None here, depending on whether an earlier
     test in THIS run happened to be the one that triggered the seed. rooms/compositions/
     cases/fleet_messages/agent_mounts/agent_wakes carry no such exception (all six are
     unconditionally emptied by the `actions` fixture on every single test, catalog seed or
-    not) — this asserts what's actually guaranteed, rather than a dict-equality check that
+    not), this asserts what's actually guaranteed, rather than a dict-equality check that
     quietly depends on test collection order the way conftest's own dev_pulses comment
     warns against."""
     mark = await graph_watermark(actions.pool)
@@ -47,19 +47,19 @@ async def test_audit_log_moves_on_any_graph_write_through_actions(actions: Actio
 async def test_fleet_messages_moves_and_audit_log_moves_too_since_mail_is_graph_resident(
     actions: Actions,
 ) -> None:
-    """6a1dd99 (Thoth DM 5442 leg 1b) made mail graph-resident: send_message now ALSO
+    """An earlier change made mail graph-resident: send_message now ALSO
     writes a Message object + sent_by/addressed_to/broadcast_to/in_thread edges through
-    Actions, alongside the fleet_messages row — the same class of write
+    Actions, alongside the fleet_messages row, the same class of write
     test_audit_log_moves_on_any_graph_write_through_actions above already proves moves
     audit_log. `audit_log == before` was the true invariant back when sending mail was
     pure mailbox-table I/O with no graph action at all; it stopped being true the moment
     mail started writing through Actions, and staying green on the old assertion would
     have meant either the graph write silently stopped happening or the test was no
     longer testing what it claims to. agent_mounts/agent_wakes remain genuinely
-    untouched — no mount or wake logic sits anywhere on this path."""
+    untouched, no mount or wake logic sits anywhere on this path."""
     from src.orchestrator.mailbox import send_message
 
-    # send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
+    # send_message refuses a to_project nobody has ever mounted under (shape 3 of
     # #117) -- seeded BEFORE the `before` snapshot, or the seed's own mount row would move
     # agent_mounts' watermark between before/after and break this test's own assertion that
     # only fleet_messages/audit_log move.
@@ -88,14 +88,14 @@ async def test_agent_mounts_moves_on_a_new_mount(actions: Actions) -> None:
 
 async def test_agent_mounts_does_not_move_on_a_heartbeat_re_mount(actions: Actions) -> None:
     """THE WHOLE REASON agent_mounts uses mounted_at, not last_seen (watermark.py's own
-    docstring): last_seen updates on every heartbeat from every live session — using it
+    docstring): last_seen updates on every heartbeat from every live session, using it
     here would make the marker move constantly regardless of whether a human would call
     anything "a change". A re-mount of the SAME job_dir (a heartbeat, not a new agent)
     must leave the marker exactly where it was."""
     await save_mount(actions.pool, job_dir="/j/wm2", agent_id="agent:wm2", project="osiris",
                      cwd="/w/osiris", model=None, session_key=None)
     before = await graph_watermark(actions.pool)
-    # re-mount the SAME job_dir — a heartbeat re-attach, not a new fleet member
+    # re-mount the SAME job_dir, a heartbeat re-attach, not a new fleet member
     await save_mount(actions.pool, job_dir="/j/wm2", agent_id="agent:wm2", project="osiris",
                      cwd="/w/osiris", model="claude-fable-5", session_key="k", alive=True)
     after = await graph_watermark(actions.pool)
@@ -116,7 +116,7 @@ async def test_agent_wakes_moves_on_a_new_wake(actions: Actions) -> None:
 
 
 async def test_rooms_moves_on_a_new_room(actions: Actions) -> None:
-    """task #109 (Thoth DM 2133): the CATALOG half of auto-refresh — the room switcher's
+    """the CATALOG half of auto-refresh, the room switcher's
     own list, not whatever composition happens to be on screen."""
     from src.orchestrator.compositions import create_room
 
@@ -155,7 +155,7 @@ async def test_cases_moves_on_a_new_case(actions: Actions) -> None:
 
 
 async def test_cases_also_moves_on_archival_not_just_creation(actions: Actions) -> None:
-    """list_rooms' own `cases` count (app.py) filters archived_at IS NULL — archiving a
+    """list_rooms' own `cases` count (app.py) filters archived_at IS NULL, archiving a
     case shrinks that count with no new row inserted, so created_at alone would miss it.
     GREATEST(created_at, archived_at) catches both without a migration."""
     cid = await actions.pool.fetchval(
@@ -170,7 +170,7 @@ async def test_cases_also_moves_on_archival_not_just_creation(actions: Actions) 
 async def test_markers_never_get_combined_into_one_cross_table_scalar(actions: Actions) -> None:
     """THE ACTUAL BUG a naive GREATEST() would introduce: once one table's sequence
     outgrows another's, a real change in the smaller table reads as no-change. Proven
-    here by simulating exactly that shape — audit_log pushed far ahead of agent_wakes —
+    here by simulating exactly that shape, audit_log pushed far ahead of agent_wakes:
     and confirming a fresh agent_wakes row still shows up on ITS OWN key, independent of
     audit_log's much larger value."""
     for i in range(20):

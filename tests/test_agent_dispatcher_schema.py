@@ -1,9 +1,8 @@
-"""agent()'s hand-built discriminated-union inputSchema (task #202, Thoth dispatch
-7162, proposal decision 65a6eb73, price-minimizer #1) — the fifth object-type
-dispatcher. tests/test_dispatcher_schema_contract.py already proves every
+"""agent()'s hand-built discriminated-union inputSchema (task #202, price-minimizer #1),
+the fifth object-type dispatcher. tests/test_dispatcher_schema_contract.py already proves every
 _HAND_BUILT_SCHEMAS entry is a well-formed discriminated union, generically; this file
 is the per-action REAL-CLIENT proof, the same discipline test_seat_dispatcher_schema.py
-and its siblings already established — a genuinely independent VALID_PAYLOADS table,
+and its siblings already established, a genuinely independent VALID_PAYLOADS table,
 checked against jsonschema.validate (the exact call the mcp SDK's own server/client
 make internally), not just asserted to agree with _AGENT_ACTION_PARAMS by construction.
 """
@@ -30,13 +29,13 @@ async def test_agent_is_live_and_its_aliases_are_not() -> None:
         "fleet_prune", "file_subagent", "file_subagents",
     ):
         assert hidden not in live_names, f"{hidden} should be hidden, still live"
-    # explicitly declined from this fold — stay live/named or already hidden elsewhere
+    # explicitly declined from this fold, stay live/named or already hidden elsewhere
     for stays in ("retire", "identify_agent", "succession_chain"):
         assert stays in live_names, f"{stays} should still be live-named"
 
 
-# (action, valid_payload_without_action) — one genuinely valid call per action,
-# deliberately independent of _AGENT_ACTION_PARAMS (src/mcp_server.py) — proving the
+# (action, valid_payload_without_action), one genuinely valid call per action,
+# deliberately independent of _AGENT_ACTION_PARAMS (src/mcp_server.py), proving the
 # SCHEMA's own idea of "valid" against a real validator, not just asserting the two
 # tables agree by construction.
 AGENT_VALID_PAYLOADS: dict[str, dict[str, Any]] = {
@@ -62,7 +61,7 @@ async def test_agent_schema_is_a_well_formed_discriminated_union() -> None:
     jsonschema.Draft7Validator.check_schema(schema)
     assert schema["type"] == "object"
     branches = schema["oneOf"]
-    assert len(branches) == 11, "one branch per agent action — update this count and " \
+    assert len(branches) == 11, "one branch per agent action, update this count and " \
         "the ACTION TABLE docstring together if the action set changes"
     actions = {b["properties"]["action"]["const"] for b in branches}
     assert actions == set(AGENT_VALID_PAYLOADS), (
@@ -87,7 +86,7 @@ async def test_a_real_client_rejects_that_agent_action_missing_its_required_para
                  if b["properties"]["action"]["const"] == action)
     required_beyond_action = [r for r in branch["required"] if r != "action"]
     if not required_beyond_action:
-        pytest.skip(f"{action} has no required params beyond action — nothing to omit")
+        pytest.skip(f"{action} has no required params beyond action, nothing to omit")
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(instance={"action": action}, schema=schema)
 
@@ -107,7 +106,7 @@ async def test_a_real_client_rejects_an_unexpected_param_for_a_known_agent_actio
 
 
 async def test_a_real_client_rejects_one_agent_actions_params_on_anothers_const() -> None:
-    """oneOf discriminates on the `action` const alone — claim_name's own `name` must
+    """oneOf discriminates on the `action` const alone, claim_name's own `name` must
     not leak into `retire`'s branch just because both are objects."""
     schema = await _schema("agent")
     with pytest.raises(jsonschema.ValidationError):
@@ -116,8 +115,8 @@ async def test_a_real_client_rejects_one_agent_actions_params_on_anothers_const(
 
 
 async def test_correct_succession_accepts_the_boolean_retract_spelling() -> None:
-    """The harness cannot serialize an explicit "" argument (2026-09-06, Khnum msg 7701 +
-    Thoth's own repro: `"value": ,` is what reaches the server), so the retraction has a
+    """The harness cannot serialize an explicit "" argument (2026-09-06, with
+    a reproduced case: `"value": ,` is what reaches the server), so the retraction has a
     boolean spelling too. Schema-level: retract:true validates without value."""
     schema = await _schema("agent")
     jsonschema.validate(

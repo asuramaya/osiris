@@ -1,9 +1,9 @@
 """project()'s and composition()'s hand-built discriminated-union inputSchemas (task
-#202, Thoth dispatch 7095, price-minimizer #1) — the second and third object-type
+#202, price-minimizer #1), the second and third object-type
 dispatchers after seat. tests/test_dispatcher_schema_contract.py already proves every
 _HAND_BUILT_SCHEMAS entry is a well-formed discriminated union, generically; this file
-is the per-action REAL-CLIENT proof Thoth's dispatch asked for by name, the same
-discipline test_seat_dispatcher_schema.py already established for seat — a genuinely
+is the per-action REAL-CLIENT proof the dispatch asked for by name, the same
+discipline test_seat_dispatcher_schema.py already established for seat, a genuinely
 independent VALID_PAYLOADS table per dispatcher, checked against jsonschema.validate
 (the exact call the mcp SDK's own server/client make internally), not just asserted to
 agree with _PROJECT_ACTION_PARAMS/_COMPOSITION_ACTION_PARAMS by construction.
@@ -40,8 +40,8 @@ async def test_project_and_composition_are_live_and_their_aliases_are_not() -> N
 # project()
 # ---------------------------------------------------------------------------------
 
-# (action, valid_payload_without_action) — one genuinely valid call per action,
-# deliberately independent of _PROJECT_ACTION_PARAMS (src/mcp_server.py) — proving the
+# (action, valid_payload_without_action), one genuinely valid call per action,
+# deliberately independent of _PROJECT_ACTION_PARAMS (src/mcp_server.py), proving the
 # SCHEMA's own idea of "valid" against a real validator, not just asserting the two
 # tables agree by construction.
 PROJECT_VALID_PAYLOADS: dict[str, dict[str, Any]] = {
@@ -62,7 +62,7 @@ async def test_project_schema_is_a_well_formed_discriminated_union() -> None:
     jsonschema.Draft7Validator.check_schema(schema)
     assert schema["type"] == "object"
     branches = schema["oneOf"]
-    assert len(branches) == 9, "one branch per project action — update this count and " \
+    assert len(branches) == 9, "one branch per project action, update this count and " \
         "the ACTION TABLE docstring together if the action set changes"
     actions = {b["properties"]["action"]["const"] for b in branches}
     assert actions == set(PROJECT_VALID_PAYLOADS), (
@@ -87,7 +87,7 @@ async def test_a_real_client_rejects_that_project_action_missing_its_required_pa
                  if b["properties"]["action"]["const"] == action)
     required_beyond_action = [r for r in branch["required"] if r != "action"]
     if not required_beyond_action:
-        pytest.skip(f"{action} has no required params beyond action — nothing to omit")
+        pytest.skip(f"{action} has no required params beyond action, nothing to omit")
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(instance={"action": action}, schema=schema)
 
@@ -108,7 +108,7 @@ async def test_a_real_client_rejects_an_unexpected_param_for_a_known_project_act
 
 
 async def test_a_real_client_rejects_one_project_actions_params_on_another_actions_const() -> None:
-    """oneOf discriminates on the `action` const alone — create's own `name` must not
+    """oneOf discriminates on the `action` const alone, create's own `name` must not
     leak into, say, retire's branch just because both are objects."""
     schema = await _schema("project")
     with pytest.raises(jsonschema.ValidationError):
@@ -132,7 +132,7 @@ async def test_composition_schema_is_a_well_formed_discriminated_union() -> None
     jsonschema.Draft7Validator.check_schema(schema)
     assert schema["type"] == "object"
     branches = schema["oneOf"]
-    assert len(branches) == 3, "one branch per composition action — update this count " \
+    assert len(branches) == 3, "one branch per composition action, update this count " \
         "and the ACTION TABLE docstring together if the action set changes"
     actions = {b["properties"]["action"]["const"] for b in branches}
     assert actions == set(COMPOSITION_VALID_PAYLOADS), (
@@ -157,7 +157,7 @@ async def test_a_real_client_rejects_that_composition_action_missing_its_require
                  if b["properties"]["action"]["const"] == action)
     required_beyond_action = [r for r in branch["required"] if r != "action"]
     if not required_beyond_action:
-        pytest.skip(f"{action} has no required params beyond action — nothing to omit")
+        pytest.skip(f"{action} has no required params beyond action, nothing to omit")
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(instance={"action": action}, schema=schema)
 
@@ -176,7 +176,7 @@ async def test_a_real_client_rejects_an_unexpected_param_for_a_known_composition
 
 
 async def test_a_real_client_rejects_one_composition_actions_params_on_anothers_const() -> None:
-    """oneOf discriminates on the `action` const alone — save's own `spec` must not leak
+    """oneOf discriminates on the `action` const alone, save's own `spec` must not leak
     into `list`'s branch just because both are objects."""
     schema = await _schema("composition")
     with pytest.raises(jsonschema.ValidationError):
@@ -185,9 +185,9 @@ async def test_a_real_client_rejects_one_composition_actions_params_on_anothers_
 
 
 async def test_project_forwards_merge_into_to_the_implementation(monkeypatch: Any) -> None:
-    """THE DROPPED FLAG (Thoth, 2026-09-06, the handlingtheloop fold): project()'s own
+    """THE DROPPED FLAG (2026-09-06, the handlingtheloop fold): project()'s own
     signature accepted `merge_into` and its schema advertised it, but the forwarding call
-    to _project_impl never passed it — so rename refused the collision it had been told
+    to _project_impl never passed it, so rename refused the collision it had been told
     to accept, twice, on the operator's word. A schema promise the wrapper does not keep."""
     seen: dict[str, Any] = {}
 

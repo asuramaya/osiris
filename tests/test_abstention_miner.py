@@ -1,8 +1,8 @@
-"""The first miner (wave 16, decision 4d622aee): one generic abstention miner, lanes as
+"""The first miner (decision): one generic abstention miner, lanes as
 data. Round-robin across (Decision, Thread, Practice, Reference, Agent); each tick reads
 its lane's own text fields against a project-name-mention candidate pool and calls
 propose() with at most one candidate, or writes nothing. Agent's own pool is empty by
-design. Budget/throttle/confidence cap are propose()'s own (wave 15), reused unchanged."""
+design. Budget/throttle/confidence cap are propose()'s own, reused unchanged."""
 from __future__ import annotations
 
 import uuid
@@ -34,7 +34,7 @@ async def _mint_bare(actions: Actions, type_name: str) -> uuid.UUID:
 async def _seed_resolved(
     actions: Actions, miner: str, owner: str, status: str, observed_at: datetime,
 ) -> None:
-    """Same fixture shape test_proposals.py's own budget tests use — a resolved
+    """Same fixture shape test_proposals.py's own budget tests use, a resolved
     Proposal's own history, minted directly (never through propose())."""
     canonical = f"proposal:{uuid.uuid4()}"
     proposal_id = await actions.create_or_find_object("Proposal", canonical, miner)
@@ -64,14 +64,14 @@ async def test_a_lane_with_one_true_candidate_proposes_it(actions: Actions) -> N
         "(SELECT id FROM objects WHERE canonical=$1) AND a.name='candidate'", out["proposal"])
     assert candidate == {"kind": "link", "from_id": str(d), "to_id": str(p),
                          "link_type": "in_repo", "signal": "dominance"}
-    # never a link write — miners remain last resort
+    # never a link write, miners remain last resort
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='in_repo'", d)
     assert n == 0
 
 
 async def test_the_empty_agent_lane_proposes_nothing(actions: Actions) -> None:
-    """Agent's own candidate pool is empty by design — 'never guessing from names'."""
+    """Agent's own candidate pool is empty by design: 'never guessing from names'."""
     a = await _mint_bare(actions, "Agent")
     await capture.derive_or_abstain(actions, a, "works_in", [], "test")
     await actions.assert_property(
@@ -89,8 +89,8 @@ async def test_the_empty_agent_lane_proposes_nothing(actions: Actions) -> None:
 
 
 async def test_a_dominant_mention_proposes_it(actions: Actions) -> None:
-    """THE LANE SIGNAL (Thoth ruling, mail 9847, decision 2406c9c5): the project
-    mentioned most often wins when it leads the runner-up by 2x — here widgetfactory
+    """THE LANE SIGNAL (ruling): the project
+    mentioned most often wins when it leads the runner-up by 2x, here widgetfactory
     (2 mentions) over sidecar (1), a 2x lead, so widgetfactory is proposed with
     signal='dominance'."""
     winner = await actions.create_or_find_object("SoftwareProject", "repo:widgetfactory", "test")
@@ -115,7 +115,7 @@ async def test_a_dominant_mention_proposes_it(actions: Actions) -> None:
 
 
 async def test_a_tied_mention_is_tie_broken_by_author_works_in(actions: Actions) -> None:
-    """Two live projects mentioned EQUALLY OFTEN — no dominant mention — falls back to
+    """Two live projects mentioned EQUALLY OFTEN, no dominant mention, falls back to
     the object's own author's `works_in` project (the `produced` edge, Decision/Thread's
     only authorship edge), proposed with signal='author_tiebreak'."""
     await actions.create_or_find_object("SoftwareProject", "repo:alpha", "test")
@@ -142,7 +142,7 @@ async def test_a_tied_mention_is_tie_broken_by_author_works_in(actions: Actions)
 
 
 async def test_neither_signal_firing_abstains(actions: Actions) -> None:
-    """Tied mentions AND no author (or an authorless object) — neither signal fires, so
+    """Tied mentions AND no author (or an authorless object), neither signal fires, so
     the tick writes nothing, same as the old zero/multiple-candidate case."""
     await actions.create_or_find_object("SoftwareProject", "repo:alpha", "test")
     await actions.create_or_find_object("SoftwareProject", "repo:beta", "test")
@@ -162,7 +162,7 @@ async def test_neither_signal_firing_abstains(actions: Actions) -> None:
 
 
 async def test_round_robin_advances_to_the_next_lane_each_tick(actions: Actions) -> None:
-    """No lane's own backlog starves another — consecutive ticks visit consecutive
+    """No lane's own backlog starves another, consecutive ticks visit consecutive
     lanes, wrapping around."""
     await set_cursor(actions.pool, _CURSOR_KEY, "0")
     seen = []
@@ -173,7 +173,7 @@ async def test_round_robin_advances_to_the_next_lane_each_tick(actions: Actions)
 
 
 async def test_budget_refuses_the_sixth_proposal_in_a_day(actions: Actions) -> None:
-    """propose()'s own daily budget (wave 15), reused unchanged under the miner's own
+    """propose()'s own daily budget, reused unchanged under the miner's own
     identity (miner='abstention', owner='operator'): a good trailing 30-day record earns
     the full base budget of 5/day; the sixth the same day is refused."""
     ten_days_ago = datetime.now(UTC) - timedelta(days=10)
@@ -195,7 +195,7 @@ async def test_budget_refuses_the_sixth_proposal_in_a_day(actions: Actions) -> N
 
 
 async def test_heartbeat_is_scheduled_as_a_cron_job() -> None:
-    """Same proof shape as landing_audit_heartbeat's own registration test — a mechanism
+    """Same proof shape as landing_audit_heartbeat's own registration test, a mechanism
     whose only trigger is `osiris deploy` succeeding is not adopted, it is hostage to
     whatever else can block a deploy."""
     from src.workers.arq_worker import WorkerSettings
@@ -218,7 +218,7 @@ async def test_tick_is_dark_when_the_settings_registry_disables_it_live(
     actions: Actions,
 ) -> None:
     """THE SETTINGS MENU's own overlay (thread f4498ab304e4 piece 1): `miner.abstention.
-    enabled` is registered with effect='immediate' — a write through the settings door
+    enabled` is registered with effect='immediate', a write through the settings door
     (never touching env at all) takes hold on the very NEXT tick, no restart."""
     from src.orchestrator.settings_service import write_setting
 

@@ -1,7 +1,7 @@
-"""THE BACKUP TOPOLOGY VALIDATOR (Thoth mail 12809/12812) — src/orchestrator/
+"""THE BACKUP TOPOLOGY VALIDATOR (,  src/orchestrator/
 backup_validation.py, one shared module for the CLI/MCP/REST doors. Every test mocks the
 real filesystem/mount state it depends on (`_findmnt_mountpoint`, `_is_always_present_
-mountpoint`) rather than asserting against this host's own actual fstab/mount table —
+mountpoint`) rather than asserting against this host's own actual fstab/mount table , 
 deterministic regardless of what box the suite runs on."""
 from __future__ import annotations
 
@@ -44,9 +44,9 @@ def test_validate_vault_path_refuses_an_unwritable_path(
 def test_validate_vault_path_refuses_a_path_under_no_declared_always_present_mount(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """THE HOT-PATH LAW (Thoth mail 12812): a real, writable, on-disk path is STILL
-    refused if it doesn't sit under an fstab/systemd-declared always-present mountpoint
-    — the exact shape of the docked-drive/NAS mistake this check exists to catch."""
+    """THE HOT-PATH LAW: a real, writable, on-disk path is STILL
+    refused if it doesn't sit under an fstab/systemd-declared always-present mountpoint,
+    the exact shape of the docked-drive/NAS mistake this check exists to catch."""
     monkeypatch.setattr(bv, "_is_always_present_mountpoint", lambda p: False)
     out = bv.validate_vault_path(str(tmp_path))
     assert out["ok"] is False
@@ -69,7 +69,7 @@ def test_validate_vault_path_ok_when_every_check_passes(
 def test_validate_vault_path_warns_never_refuses_on_same_device_as_root(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """"warn, never refuse" (Thoth's own exact wording, mail 12812) — same_device_as_root
+    """"warn, never refuse" (the exact wording of the requirement), same_device_as_root
     lands in `warnings`, never `errors`, and never flips `ok` to False by itself."""
     monkeypatch.setattr(bv, "_is_always_present_mountpoint", lambda p: True)
     monkeypatch.setattr(bv, "_device_of", lambda p: 1)
@@ -83,7 +83,7 @@ def test_validate_vault_path_warns_never_refuses_on_same_device_as_root(
 def test_is_always_present_mountpoint_checks_the_resolved_real_mountpoint(
     monkeypatch: Any,
 ) -> None:
-    """A vault_path two directories below a real mount still counts — resolved off the
+    """A vault_path two directories below a real mount still counts, resolved off the
     LIVE mount table (`_real_mountpoint_of`, findmnt --target), not a string prefix
     walk (which cannot tell "same filesystem as a declared parent" from "nothing
     declared at all", the exact false-positive a naive walk up to "/" would hit)."""
@@ -133,7 +133,7 @@ def test_validate_restic_url_refuses_empty_and_shapeless_strings() -> None:
 
 
 def test_validate_restic_url_never_makes_a_network_call(monkeypatch: Any) -> None:
-    """SHAPE ONLY, per Thoth's own repeated instruction — any socket/http attempt fails
+    """SHAPE ONLY, per the repeated requirement, any socket/http attempt fails
     this test outright rather than silently succeeding."""
     import socket
 

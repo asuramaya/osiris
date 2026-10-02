@@ -1,7 +1,7 @@
-"""THE FIRST-BREATH READ LAW (thread afd27e1a, Thoth mail 13003): an heir must never
+"""THE FIRST-BREATH READ LAW (a thread): an heir must never
 settle mail it has not read in full. `inbox(ack=[ids])` refuses an id this agent's own
 generation has never returned through a real inbox() call (session_reads, provenance
-piece 1) — the wake prompt's own headline preview (`_mail_envelope` in trigger.py) is
+piece 1), the wake prompt's own headline preview (`_mail_envelope` in trigger.py) is
 not an inbox() call and stamps nothing, so acking straight off it is refused, not
 silently accepted.
 """
@@ -44,8 +44,8 @@ async def _pool(actions: Actions):
 async def test_heir_acking_straight_off_the_wake_preview_is_refused(
     actions: Actions, _pool,
 ) -> None:
-    """The exact specimen Thoth asked for: a heir minted with an ask DM in flight —
-    never itself having called inbox() — must be refused when it tries to ack the id
+    """The exact specimen asked for: a heir minted with an ask DM in flight , 
+    never itself having called inbox(), must be refused when it tries to ack the id
     straight off the wake prompt's own headline preview. Reading it in full first
     (peek or lease) then allows the ack."""
     from src.mcp_server import inbox as inbox_tool
@@ -60,14 +60,14 @@ async def test_heir_acking_straight_off_the_wake_preview_is_refused(
                              grade="ask")
     msg_id = int(out["id"])
 
-    # the mint: a seam (compaction/succession) lands WHILE the ask is still unread —
+    # the mint: a seam (compaction/succession) lands WHILE the ask is still unread , 
     # the heir inherits the estate, but never the ancestor's own read-set (session_reads
     # is keyed on the exact generation that called inbox(), never carried forward).
     heir, _heir_oid = await mint_heir(actions, "agent:fbreadtest", anc,
                                       because="compaction", succession=None)
 
     ctx = await _mount(heir)
-    # ACKS STRAIGHT FROM THE PREVIEW — no PRIOR inbox() call by this generation at
+    # ACKS STRAIGHT FROM THE PREVIEW, no PRIOR inbox() call by this generation at
     # all. peek=True here only avoids leasing the message as a side effect of this
     # very call (a lease would make it undeliverable to the very next call for the
     # rest of the lease window, muddying the "reads in full -> allowed" step below);
@@ -77,12 +77,12 @@ async def test_heir_acking_straight_off_the_wake_preview_is_refused(
     assert refused["settled"] == []
     assert msg_id in refused["skipped"]
     assert "not yet read in full" in refused["skipped"][msg_id]
-    # never actually settled — redelivers exactly as an unread message should
+    # never actually settled, redelivers exactly as an unread message should
     assert await actions.pool.fetchval(
         "SELECT read_at FROM message_recipients WHERE message_id=$1 AND agent_id=$2",
         msg_id, heir) is None
 
-    # the refusal's OWN read already stamped session_reads (peek or lease, both do) —
+    # the refusal's OWN read already stamped session_reads (peek or lease, both do) , 
     # so a plain retry, one call later, now finds the id already read and settles it.
     allowed = await inbox_tool(ack=[msg_id], ctx=ctx)
     assert allowed["settled"] == [msg_id]
@@ -96,8 +96,8 @@ async def test_heir_acking_straight_off_the_wake_preview_is_refused(
 async def test_a_genuine_lease_before_ack_still_works_the_ordinary_way(
     actions: Actions, _pool,
 ) -> None:
-    """The ordinary, already-documented workflow — lease (peek=False, the default) in
-    one call, settle by acking in a LATER call — must keep working unchanged: the
+    """The ordinary, already-documented workflow, lease (peek=False, the default) in
+    one call, settle by acking in a LATER call, must keep working unchanged: the
     earlier lease already stamped session_reads, so the later ack's own check finds
     it satisfied."""
     from src.mcp_server import inbox as inbox_tool
@@ -109,7 +109,7 @@ async def test_a_genuine_lease_before_ack_still_works_the_ordinary_way(
     msg_id = int(out["id"])
     ctx = await _mount("agent:fbreadtest2")
 
-    leased = await inbox_tool(ctx=ctx)  # peek=False (default) — a real lease
+    leased = await inbox_tool(ctx=ctx)  # peek=False (default), a real lease
     assert [m["id"] for m in leased["messages"]] == [msg_id]
 
     settled = await inbox_tool(ack=[msg_id], ctx=ctx)  # a later, separate call

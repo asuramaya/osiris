@@ -1,11 +1,10 @@
-"""backup_settings — thin door over the settings registry (THE SETTINGS MENU piece 3,
-thread 7eb26f68, Thoth's GO mail 10084/10094), folding Wave 21's own write half (thread
-f04cce36 piece 3b) into `src/config/settings_registry.py`'s SettingSpecs.
+"""backup_settings: thin door over the settings registry (THE SETTINGS MENU piece 3),
+folding the earlier write half into `src/config/settings_registry.py`'s SettingSpecs.
 
 `get_backup_settings`/`write_backup_settings` keep their exact outward dict shape; the
 authority gate (`write_backup_settings` copies from `charter_for`: operator directly, or a
 cited standing ruling that actually names this write) is now `settings_service.write_setting`'s
-own generic authority check, exercised per key rather than reimplemented here — same
+own generic authority check, exercised per key rather than reimplemented here, same
 tests, same behavior, a different (generalized) mechanism underneath.
 """
 from __future__ import annotations
@@ -25,7 +24,7 @@ from src.orchestrator.backup_settings import (
 @pytest.fixture(autouse=True)
 def _vault_path_always_present_mount(monkeypatch: Any) -> None:
     """This file exercises write_backup_settings' own mechanics (partial writes,
-    authority, full-replace semantics) — the hot-path always-present-mount refusal is
+    authority, full-replace semantics), the hot-path always-present-mount refusal is
     tested on its own in test_backup_validation.py, so every real tmp_path used here as
     a vault_path is treated as sitting under a declared mount, independent of whatever
     this box's own real fstab happens to say."""
@@ -52,7 +51,7 @@ async def test_write_backup_settings_is_partial(actions: Actions, tmp_path: Path
 
 
 async def test_write_backup_settings_timer_schedules_is_a_full_replace(actions: Actions) -> None:
-    """Same UX the retired panel had — posting the field's FULL value each save, so a
+    """Same UX the retired panel had, posting the field's FULL value each save, so a
     unit missing from the new dict is explicitly cleared, not left over from an earlier
     write (folded from one shared blob into 5 per-unit keys, piece 3's own design)."""
     p = actions.pool
@@ -122,7 +121,7 @@ async def test_write_backup_settings_accepts_a_well_formed_offbox_repository(
     assert res["offbox_repositories"] == [entry]
 
 
-# --- offload_targets: THE BACKUP TOPOLOGY / INTERMITTENT TARGETS, Thoth mail 12812 -----------
+# --- offload_targets: THE BACKUP TOPOLOGY / INTERMITTENT TARGETS -----------
 
 async def test_write_backup_settings_rejects_a_malformed_offload_target(
     actions: Actions,
@@ -207,7 +206,7 @@ async def test_get_backup_settings_synthesizes_offload_targets_from_legacy_offbo
     actions: Actions,
 ) -> None:
     """A pre-existing offbox_repositories row, never touched by any new write, still
-    surfaces through offload_targets on read — the read-time-only migration (never
+    surfaces through offload_targets on read, the read-time-only migration (never
     writes anything itself)."""
     legacy = {"name": "old-nas", "url": "sftp://old-nas/repo", "schedule": "daily",
              "enabled": True}
@@ -225,7 +224,7 @@ async def test_get_backup_settings_synthesizes_offload_targets_from_legacy_offbo
 async def test_write_backup_settings_offload_targets_wins_over_legacy_synthesis(
     actions: Actions,
 ) -> None:
-    """Once offload_targets has genuinely been written, it wins outright — the legacy
+    """Once offload_targets has genuinely been written, it wins outright, the legacy
     offbox_repositories synthesis only ever fires when offload_targets is EMPTY."""
     await write_backup_settings(
         actions.pool, actor="operator", because="x",
@@ -292,7 +291,7 @@ async def test_write_backup_settings_a_worker_citing_a_matching_ruling_succeeds(
     from src.orchestrator.capture import record_decision
 
     ruling = await record_decision(
-        actions, summary="operator ruling authorizing backup_settings writes for wave 21",
+        actions, summary="operator ruling authorizing backup_settings writes",
         kind="ruling", rationale="backup_settings may be written by the on-call worker")
     res = await write_backup_settings(
         actions.pool, actor="agent:some-worker", because="applying the operator's ruling",
@@ -307,7 +306,7 @@ def test_backup_timer_units_is_a_tuple_of_five() -> None:
 
 
 def test_compositions_backup_status_timer_list_matches_backup_settings_exactly() -> None:
-    """No drift — the read half (compositions.py's `_BACKUP_TIMER_UNITS`, with display
+    """No drift, the read half (compositions.py's `_BACKUP_TIMER_UNITS`, with display
     labels) and the write door (this module's own `BACKUP_TIMER_UNITS`, bare names, used
     to validate writes) must agree on exactly which units exist."""
     from src.orchestrator.compositions import _BACKUP_TIMER_UNITS

@@ -1,6 +1,6 @@
-"""onboard — the LOCAL half of fleet onboarding: `.mcp.json` + statusline config generation.
+"""onboard, the LOCAL half of fleet onboarding: `.mcp.json` + statusline config generation.
 
-Pure filesystem (no DB, no graph) — the graph half is the `bootstrap` MCP tool, tested
+Pure filesystem (no DB, no graph), the graph half is the `bootstrap` MCP tool, tested
 separately. These guard the merge contract that makes onboarding safe to re-run and safe over a
 repo that already has its own MCP servers: never clobber, idempotent, refuse the unmergeable.
 """
@@ -101,7 +101,7 @@ def test_dry_run_writes_nothing(tmp_path: Path) -> None:
 
 def test_anchor_installs_the_pretooluse_mount_hook(tmp_path: Path) -> None:
     """--anchor wires the PreToolUse anchor+spawn-stamp hook, matched to every osiris tool,
-    beside the whisper — idempotent, and it does not clobber a foreign PreToolUse hook."""
+    beside the whisper, idempotent, and it does not clobber a foreign PreToolUse hook."""
     repo = tmp_path / "fleet"
     (repo / ".claude").mkdir(parents=True)
     prior = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
@@ -115,7 +115,7 @@ def test_anchor_installs_the_pretooluse_mount_hook(tmp_path: Path) -> None:
     # the foreign guard survives; ours is added with the osiris-wide matcher
     assert any(g.get("matcher") == "Bash" for g in pre)
     ours = next(g for g in pre if g.get("matcher") == "mcp__osiris__.*")
-    # dispatch 5441 (the hook migration): the unified osiris_hook.py, "anchor" subcommand —
+    # (the hook migration): the unified osiris_hook.py, "anchor" subcommand , 
     # never the retired per-purpose osiris_mount_anchor.py.
     assert ours["hooks"][0]["command"].endswith("scripts/osiris_hook.py anchor")
     # the whisper landed too (SessionStart), and a re-run changes nothing
@@ -126,7 +126,7 @@ def test_anchor_installs_the_pretooluse_mount_hook(tmp_path: Path) -> None:
 
 def test_anchor_retargets_a_stale_matcher_in_place(tmp_path: Path) -> None:
     """The matcher widened (mount → mcp__osiris__.*): a settings.json carrying the SAME
-    command under the OLD narrower matcher gets retargeted in place — appending a second
+    command under the OLD narrower matcher gets retargeted in place, appending a second
     group would double-fire the hook on every osiris tool call. `_merge_hook`'s own
     retargeting keys off an EXACT command-string match, so this must use the unified
     osiris_hook.py's own command shape (dispatch 5441) to exercise it, not the retired
@@ -145,7 +145,7 @@ def test_anchor_retargets_a_stale_matcher_in_place(tmp_path: Path) -> None:
 
 
 def test_spawn_installs_the_subagent_announcements(tmp_path: Path) -> None:
-    """--spawn wires SubagentStart + SubagentStop to the spawn announcement script —
+    """--spawn wires SubagentStart + SubagentStop to the spawn announcement script , 
     the parent is told, never surprised (blessing 2026-07-10)."""
     repo = tmp_path / "fleet"
     (repo / ".claude").mkdir(parents=True)
@@ -162,7 +162,7 @@ def test_spawn_installs_the_subagent_announcements(tmp_path: Path) -> None:
 
 def test_session_end_installs_the_release_hook(tmp_path: Path) -> None:
     """--session-end wires SessionEnd to osiris_hook.py's own "session-end" subcommand
-    (dispatch 5441/5492 — onboard.py never had this flag at all before the gap was found
+    (dispatch 5441/5492, onboard.py never had this flag at all before the gap was found
     while flipping the live settings.json off the retired osiris_sessionend.py)."""
     repo = tmp_path / "fleet"
     (repo / ".claude").mkdir(parents=True)
@@ -176,7 +176,7 @@ def test_session_end_installs_the_release_hook(tmp_path: Path) -> None:
 
 def test_reads_installs_the_zero_token_read_hook(tmp_path: Path) -> None:
     """--reads wires UserPromptSubmit to osiris_hook.py's own "read" subcommand (#92,
-    Thoth mail 11780 item B) — no --project given, so no OSIRIS_HOOK_PROJECT prefix."""
+    item B), no --project given, so no OSIRIS_HOOK_PROJECT prefix."""
     repo = tmp_path / "fleet"
     (repo / ".claude").mkdir(parents=True)
     onboard(repo, reads=True, osiris_home=tmp_path)
@@ -190,7 +190,7 @@ def test_reads_installs_the_zero_token_read_hook(tmp_path: Path) -> None:
 
 def test_reads_with_project_bakes_the_env_prefix(tmp_path: Path) -> None:
     """--reads --name <project> bakes OSIRIS_HOOK_PROJECT=<project> onto the wired command
-    itself (a settings.json is tied to one repo/project by definition — resolved once at
+    itself (a settings.json is tied to one repo/project by definition, resolved once at
     onboarding time, never guessed per-keystroke by the hook)."""
     repo = tmp_path / "fleet"
     (repo / ".claude").mkdir(parents=True)
@@ -202,8 +202,8 @@ def test_reads_with_project_bakes_the_env_prefix(tmp_path: Path) -> None:
 
 
 def test_settle_gate_installs_pretooluse_and_precompact(tmp_path: Path) -> None:
-    """--settle-gate (#93) wires BOTH PreToolUse (the refusal gate, matcher `.*` — every
-    tool, not just osiris ones) AND PreCompact (the machine-handoff fallback) — the gate
+    """--settle-gate (#93) wires BOTH PreToolUse (the refusal gate, matcher `.*`, every
+    tool, not just osiris ones) AND PreCompact (the machine-handoff fallback), the gate
     without the fallback would be half the ruling, so settle_gate implies both on its own
     rather than depending on the caller having separately asked for --precompact."""
     repo = tmp_path / "fleet"
@@ -224,7 +224,7 @@ def test_settle_gate_installs_pretooluse_and_precompact(tmp_path: Path) -> None:
 
 
 def test_settle_gate_never_clobbers_an_existing_anchor_matcher(tmp_path: Path) -> None:
-    """PreToolUse already carries `anchor`'s own scoped `mcp__osiris__.*` group — the new
+    """PreToolUse already carries `anchor`'s own scoped `mcp__osiris__.*` group, the new
     `.*` settle-gate group must land ALONGSIDE it, not replace or merge into it (two
     genuinely different matchers, two genuinely different commands)."""
     repo = tmp_path / "fleet"
