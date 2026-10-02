@@ -160,6 +160,21 @@ def test_classify_reproduces_the_mounts_split(tmp_path: Path) -> None:
     assert fixture_only == {"tests/test_x1.py", "tests/test_x2.py", "tests/test_x3.py"}
 
 
+def test_classify_a_modules_own_test_is_direct_even_when_it_imports_only_common_names(
+    tmp_path: Path,
+) -> None:
+    """In a hub module most files import the same few names, so the module's own test can
+    import only those and read as common by majority. It is still the file written to
+    exercise the module, so it runs; the unrelated files that merely seed a row do not."""
+    _write(tmp_path, "src/orchestrator/hub.py")
+    for name in ("x1", "x2", "hub"):
+        _write(tmp_path, f"tests/test_{name}.py",
+               "from src.orchestrator.hub import save_row\n")
+    direct, fixture_only = classify_test_files(["src/orchestrator/hub.py"], tmp_path)
+    assert direct == {"tests/test_hub.py"}
+    assert fixture_only == {"tests/test_x1.py", "tests/test_x2.py"}
+
+
 def test_classify_a_touched_test_file_is_always_direct(tmp_path: Path) -> None:
     out_direct, out_fixture = classify_test_files(["tests/test_cli.py"], tmp_path)
     assert out_direct == {"tests/test_cli.py"}

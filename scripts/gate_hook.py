@@ -408,8 +408,14 @@ def classify_test_files(
                 counts[n] = counts.get(n, 0) + 1
         n_files = len(per_file_names)
         common = {n for n, c in counts.items() if c * 2 > n_files}
+        # THE MODULE'S OWN TEST IS NEVER FIXTURE-ONLY: tests/test_<stem>.py is the file
+        # written to exercise this module, whatever names it happens to import. In a hub
+        # module most files import the same few names, so the own-test file can import only
+        # those and read as "common" by majority; it was being omitted past the cap while
+        # unrelated files that merely seed a row for it ran.
+        own = f"tests/test_{Path(f).stem}.py"
         for tf, names in per_file_names.items():
-            if names and names <= common:
+            if tf != own and names and names <= common:
                 fixture_only.add(tf)
             else:
                 direct.add(tf)
