@@ -189,29 +189,23 @@ async def startup(ctx: dict[str, Any]) -> None:
     # service, and the live hand-installed dev unit once updated) — never inferred from
     # cwd or branch ancestry, which is exactly the guessing #113 was refused for tonight.
     if settings.osiris_worker_role == "primary":
-        # THE SOUL-KEY BOOT GATE, DEGRADED NOT FATAL (THE FIRST KEY MUST COME FROM THE
-        # NORMAL CLI, Thoth mail 13065 — supersedes this gate's own original "genuine
-        # refusal, not a soft alarm" law): a hard `raise` here recreated the exact
-        # bootstrap deadlock the operator ruled against — a fresh box could never start
-        # this worker AT ALL until the key existed, but minting the key normally means
-        # running `osiris soul-key init` through the ALREADY-DEPLOYED CLI/console, which
-        # needs the worker/MCP units running first. Scoped to the real primary worker
-        # only, same reasoning as the deploy-ordering guard just below — an ad hoc dev
-        # `arq` invocation never carries this role and is never blocked by it either way.
-        # get_soul_fernet() raises SoulKeyMissing (naming the exact `osiris soul-key
-        # init` command) when neither OSIRIS_SOUL_KEY nor the key file is present — now
-        # CAUGHT and logged loudly (never silent) rather than crashing the boot; every
-        # soul_store write already degrades to legacy-plaintext on its own missing-key
-        # path (soul_store.py), so the worker itself is still fully usable meanwhile.
-        from src.ingest.soul_crypto import SoulKeyMissing, get_soul_fernet
+        # Soul-key boot gate, a genuine refusal again: `osiris deploy` now creates the
+        # key by itself, before it restarts any service, so the earlier degrade-not-fatal
+        # tolerance (which existed only so a fresh box could mint its key by hand through
+        # an already-running console) has no job left and is retired. A worker with no
+        # soul key cannot correctly read
+        # or write soul_lines/soul_lines_cold at all, so starting it anyway only defers
+        # the failure to a worse moment: the original requirement this gate enforced
+        # before that temporary bootstrap window opened. Scoped to the real primary
+        # worker only, same reasoning as the deploy-ordering guard just below: an ad
+        # hoc dev `arq` invocation never carries this role and is never blocked by it
+        # either way.
+        # get_soul_fernet() raises SoulKeyMissing (naming the fix) when neither
+        # OSIRIS_SOUL_KEY nor the key file is present,
+        # left uncaught here on purpose, propagating out of startup() to crash the boot.
+        from src.ingest.soul_crypto import get_soul_fernet
 
-        try:
-            get_soul_fernet()
-        except SoulKeyMissing as exc:
-            _log.warning(
-                "osiris-worker starting WITHOUT a soul-store encryption key — new "
-                "soul_lines/soul_lines_cold rows write as legacy plaintext until this "
-                "is fixed: %s", exc)
+        get_soul_fernet()
         # THE DEPLOY-ORDERING GUARD (thread e6f5556f): LOUD ALARM, never a refusal — see
         # deploy_guard's own module docstring for why. Wrapped defensively here too, on top
         # of check_schema_drift's own internal fail-open: nothing here may ever block a boot.
@@ -1343,17 +1337,15 @@ async def soul_encrypt_heartbeat(ctx: dict[str, Any]) -> int:
     cheap file read until the periodic re-check. Returns rows encrypted this tick.
 
     Ordinary boot already requires the key (the boot gate), so a missing key here means
-    a manual removal mid-run; it is recorded as `no_key` and the job simply waits. A
-    database hiccup is recorded in the progress record by `encrypt_tick` and re-raised,
-    so the watch sees the failure and the next tick resumes from the same cursor."""
-    from src.ingest.soul_crypto import SoulKeyMissing, get_soul_fernet
+    a manual removal mid-run, and it is left to fail loudly like the gate itself: the
+    exception propagates to the watch every tick until the key is back, never a quiet
+    zero. A database hiccup is recorded in the progress record by `encrypt_tick` and
+    re-raised the same way, and the next tick resumes from the same cursor."""
+    from src.ingest.soul_crypto import get_soul_fernet
     from src.orchestrator import soul_encrypt_progress
 
     actions: Actions = ctx["cascade"].actions
-    try:
-        fernet = get_soul_fernet()
-    except SoulKeyMissing:
-        return 0
+    fernet = get_soul_fernet()
     before = int(soul_encrypt_progress.read_progress().get("rows_done", 0))
     record = await soul_encrypt_progress.encrypt_tick(actions.pool, fernet)
     return int(record.get("rows_done", 0)) - before

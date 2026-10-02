@@ -263,7 +263,7 @@ async def test_the_worker_job_runs_a_tick_and_reports_rows_encrypted(
     assert await soul_encrypt_heartbeat(ctx) == 0  # finished: a cheap no-op
 
 
-async def test_the_worker_job_waits_quietly_when_there_is_no_key(
+async def test_the_worker_job_fails_loudly_when_there_is_no_key(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from src.ingest import soul_crypto
@@ -272,8 +272,10 @@ async def test_the_worker_job_waits_quietly_when_there_is_no_key(
     def _missing(*_a: Any, **_k: Any) -> MultiFernet:
         raise soul_crypto.SoulKeyMissing("no key")
 
+    # like the boot gate itself: never a quiet zero, the watch sees the failure every tick
     monkeypatch.setattr(soul_crypto, "get_soul_fernet", _missing)
-    assert await soul_encrypt_heartbeat({"cascade": SimpleNamespace(actions=actions)}) == 0
+    with pytest.raises(soul_crypto.SoulKeyMissing):
+        await soul_encrypt_heartbeat({"cascade": SimpleNamespace(actions=actions)})
     assert prog.read_progress() == {}
 
 

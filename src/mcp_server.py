@@ -12721,29 +12721,18 @@ def main() -> None:
     if transport in ("streamable-http", "sse"):
         mcp.settings.host = s.osiris_mcp_host
         mcp.settings.port = s.osiris_mcp_port
-        # Soul-key boot gate, degraded not fatal: the first key must come from the normal
-        # CLI, which supersedes this gate's own original "genuine refusal, not a soft
-        # alarm" behavior, at the same scope _boot_check already holds (the persistent
-        # systemd osiris-mcp unit only, never a per-session stdio subprocess). A hard
-        # `raise` here recreated an exact bootstrap deadlock: a fresh box could never
-        # start this unit at all until the key existed, but minting the key normally
-        # means running `osiris soul-key init` through the already-deployed CLI/console,
-        # which needs the MCP server running first. `get_soul_fernet()`'s
-        # `SoulKeyMissing` is now caught and logged loudly (never silent) rather than
-        # crashing the boot; `soul_store.py`'s own write/read paths already degrade to
-        # legacy plaintext on their own missing-key path, so the server is still fully
-        # usable meanwhile.
-        import logging
+        # Soul-key boot gate, a genuine refusal again: `osiris deploy` now creates the
+        # key by itself, before it restarts any service, so the earlier degrade-not-fatal
+        # tolerance (which existed only so a fresh box could mint its key by hand through
+        # an already-running server) has no job left and is retired. At the same scope
+        # `_boot_check` already holds (the persistent systemd
+        # osiris-mcp unit only, never a per-session stdio subprocess), `get_soul_fernet()`'s
+        # `SoulKeyMissing` is left uncaught: it propagates out and crashes the boot, the
+        # original requirement this gate enforced before that temporary bootstrap window
+        # opened.
+        from src.ingest.soul_crypto import get_soul_fernet
 
-        from src.ingest.soul_crypto import SoulKeyMissing, get_soul_fernet
-
-        try:
-            get_soul_fernet()
-        except SoulKeyMissing as exc:
-            logging.getLogger("osiris.mcp").warning(
-                "osiris-mcp starting WITHOUT a soul-store encryption key: new "
-                "soul_lines/soul_lines_cold rows write as legacy plaintext until "
-                "this is fixed: %s", exc)
+        get_soul_fernet()
         asyncio.run(_boot_check())
         mcp.run(transport=transport)  # type: ignore[arg-type]
     else:
