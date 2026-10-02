@@ -199,15 +199,19 @@ def _gates(results: dict[str, tuple[bool, str]]) -> Any:
 
 # --- run_gates: the fanout cap applies ONLY to the fixture-only tier ----------------
 
-def test_run_gates_caps_only_the_fixture_only_tier(tmp_path: Path, monkeypatch: Any) -> None:
+def test_run_gates_runs_the_first_fixture_only_files_in_a_budgeted_batch(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
     monkeypatch.setattr(gate_hook, "_PYTEST_FANOUT_CAP", 2)
     monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (1.0, 1.0, 1.0))
     _write(tmp_path, "src/pkg/hub.py")
     for name in ("f1", "f2", "f3"):
         _write(tmp_path, f"tests/test_{name}.py", "from src.pkg.hub import common\n")
     _write(tmp_path, "tests/test_direct.py",
            "from src.pkg.hub import common, real_logic\n")
-    captured: dict[str, Any] = {}
+    cmds: list[list[str]] = []
+    timeouts: list[Any] = []
 
     class _FakeProc:
         returncode = 0
@@ -215,46 +219,49 @@ def test_run_gates_caps_only_the_fixture_only_tier(tmp_path: Path, monkeypatch: 
         stderr = ""
 
     def _fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
-        captured["cmd"] = cmd
+        cmds.append(cmd)
+        timeouts.append(kwargs.get("timeout"))
         return _FakeProc()
 
     monkeypatch.setattr(gate_hook.subprocess, "run", _fake_subprocess_run)
-    results = run_gates(tmp_path, ["src/pkg/hub.py"])
+    info: dict[str, Any] = {}
+    results = run_gates(tmp_path, ["src/pkg/hub.py"], info)
     ok, msg = results["pytest"]
     assert ok is True
-    assert msg.startswith("SKIPPED")  # never a plain "ok"
+    assert msg.startswith("SKIPPED")  # one file past the cap did not run: never a plain "ok"
     assert "ran 1 clean" in msg
-    assert "omitted 3 fixture-only files" in msg
+    assert "omitted 1 fixture-only files" in msg
     assert _status_word(ok, msg) == "SKIPPED"
-    cmd = captured["cmd"]
-    assert "tests/test_direct.py" in cmd
-    assert "tests/test_f1.py" not in cmd
-    assert "tests/test_f2.py" not in cmd
-    assert "tests/test_f3.py" not in cmd
+    main = next(c for c in cmds if "tests/test_direct.py" in c)
+    batch = next(c for c in cmds if "tests/test_f1.py" in c)
+    # the first cap-many in sorted order run, in their own invocation, under the budget
+    assert "tests/test_f1.py" in batch and "tests/test_f2.py" in batch
+    assert "tests/test_f3.py" not in batch and "tests/test_f3.py" not in main
+    assert "tests/test_f1.py" not in main
+    assert timeouts[cmds.index(batch)] == gate_hook._FIXTURE_ONLY_BUDGET_SECS
+    assert info["omitted_files"] == ["tests/test_f3.py"]
+    assert {"tests/test_f1.py", "tests/test_f2.py"} <= set(info["files_run"])
 
 
-def test_run_gates_all_fixture_only_and_over_cap_skips_pytest_entirely(
+def test_run_gates_all_fixture_only_and_over_cap_runs_the_batch_and_names_the_rest(
     tmp_path: Path, monkeypatch: Any,
 ) -> None:
     monkeypatch.setattr(gate_hook, "_PYTEST_FANOUT_CAP", 1)
-    calls: list[list[str]] = []
-
-    def _fake_run(cmd: list[str], cwd: Path) -> tuple[bool, str]:
-        calls.append(cmd)
-        return True, ""
-
-    monkeypatch.setattr(gate_hook, "_run", _fake_run)
+    _capture_pytest(monkeypatch, stdout="1 passed in 0.1s")
     _write(tmp_path, "src/pkg/hub.py")
     for name in ("f1", "f2"):
         _write(tmp_path, f"tests/test_{name}.py", "from src.pkg.hub import common\n")
-    results = run_gates(tmp_path, ["src/pkg/hub.py"])
+    info: dict[str, Any] = {}
+    results = run_gates(tmp_path, ["src/pkg/hub.py"], info)
     ok, msg = results["pytest"]
     assert ok is True
     assert msg.startswith("SKIPPED")  # never "no resolvable test files touched"
-    assert "nothing ran" in msg       # that phrase means there was genuinely nothing to run,
-    assert "omitted 2 fixture-only files" in msg  # this is an omission, a different thing
+    assert "nothing ran in the main run" in msg  # the main run had nothing to select
+    assert "the first 1 fixture-only files ran in the budgeted batch" in msg
+    assert "omitted 1 fixture-only files" in msg  # an omission, a different thing
     assert _status_word(ok, msg) == "SKIPPED"
-    assert not any("pytest" in c[0] for c in calls if c)
+    assert info["omitted_files"] == ["tests/test_f2.py"] and info["files_run"] == [
+        "tests/test_f1.py"]
 
 
 def test_run_gates_genuinely_nothing_to_test_is_a_plain_ok(
@@ -1490,6 +1497,7 @@ def _capture_pytest(monkeypatch: Any, *, stdout: str = "", returncode: int = 0) 
 
     def _fake_run(cmd: list[str], **kwargs: Any) -> Any:
         captured["cmd"] = cmd
+        captured.setdefault("cmds", []).append(cmd)
         return proc
 
     monkeypatch.setattr(gate_hook.subprocess, "run", _fake_run)
@@ -1518,10 +1526,11 @@ def test_the_ratchet_lints_run_even_when_the_fixture_only_tier_is_over_the_cap(
 
     run_gates(tmp_path, ["src/pkg/hub.py"], info)
 
+    main = next(c for c in captured["cmds"] if "tests/test_taxonomy_drift.py" in c)
     for rel in _RATCHET_NAMES:
-        assert rel in captured["cmd"]
-    assert set(info["files_run"]) == _RATCHET_NAMES
-    assert info["omitted_files"] == ["tests/test_f1.py", "tests/test_f2.py"]
+        assert rel in main  # the lints ran in the main run, not only in a bonus batch
+    assert set(info["files_run"]) == _RATCHET_NAMES | {"tests/test_f1.py"}
+    assert info["omitted_files"] == ["tests/test_f2.py"]
     assert "fan-out cap of 1" in info["omitted_reason"]
     assert "seed data" in info["omitted_reason"]
 
@@ -1646,3 +1655,100 @@ def test_precommit_prints_the_result_line(monkeypatch: Any, capsys: Any) -> None
     monkeypatch.setattr(gate_hook, "receipt_shaped_touches", lambda root, changed: {})
     assert cmd_precommit(enforce=False) == 0
     assert "result: 5 passed in 0.5s; files run: 2; files omitted: 0" in capsys.readouterr().out
+
+
+# --- the budgeted batch of fixture-only files ---------------------------------------------
+
+def _hub_with_a_direct_test(tmp_path: Path) -> None:
+    _write(tmp_path, "src/pkg/hub.py")
+    for name in ("f1", "f2", "f3"):
+        _write(tmp_path, f"tests/test_{name}.py", "from src.pkg.hub import common\n")
+    _write(tmp_path, "tests/test_direct.py", "from src.pkg.hub import common, real_logic\n")
+
+
+def _fake_batch_and_main(
+    monkeypatch: Any, *, batch_timeout: bool = False, batch_rc: int = 0,
+    batch_out: str = "2 passed in 0.2s",
+) -> None:
+    """The invocation naming tests/test_f1.py is the budgeted batch; any other is the main run."""
+    class _Proc:
+        def __init__(self, returncode: int, stdout: str) -> None:
+            self.returncode, self.stdout, self.stderr = returncode, stdout, ""
+
+    def _fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        if "tests/test_f1.py" in cmd:
+            if batch_timeout:
+                raise gate_hook.subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 0))
+            return _Proc(batch_rc, batch_out)
+        return _Proc(0, "3 passed in 0.5s")
+
+    monkeypatch.setattr(gate_hook.subprocess, "run", _fake_run)
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    monkeypatch.setattr(gate_hook, "_PYTEST_FANOUT_CAP", 2)
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (1.0, 1.0, 1.0))
+
+
+def test_a_batch_that_outruns_its_budget_is_named_not_failed(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """Running out of budget is not a failure: every file in it joins the ones past the cap
+    as not run, and the pass is still reported as unverified."""
+    _hub_with_a_direct_test(tmp_path)
+    _fake_batch_and_main(monkeypatch, batch_timeout=True)
+    info: dict[str, Any] = {}
+
+    ok, msg = run_gates(tmp_path, ["src/pkg/hub.py"], info)["pytest"]
+
+    assert ok is True and _status_word(ok, msg) == "SKIPPED"
+    assert info["omitted_files"] == ["tests/test_f1.py", "tests/test_f2.py", "tests/test_f3.py"]
+    assert "did not finish" in info["omitted_reason"] and "so none of them ran" in info[
+        "omitted_reason"]
+    assert "tests/test_f1.py" not in info["files_run"]
+
+
+def test_a_failure_inside_the_budgeted_batch_refuses(tmp_path: Path, monkeypatch: Any) -> None:
+    _hub_with_a_direct_test(tmp_path)
+    _fake_batch_and_main(monkeypatch, batch_rc=1,
+                         batch_out="FAILED tests/test_f1.py::test_x - assert 0\n1 failed in 0.1s")
+    info: dict[str, Any] = {}
+
+    ok, msg = run_gates(tmp_path, ["src/pkg/hub.py"], info)["pytest"]
+
+    assert ok is False and _status_word(ok, msg) == "FAILED"
+    assert "FAILED tests/test_f1.py::test_x" in msg
+    assert f"{gate_hook._FIXTURE_ONLY_BUDGET_SECS}s budget" in msg
+    assert info["summary"] == "3 passed in 0.5s; fixture-only batch: 1 failed in 0.1s"
+
+
+def test_both_runs_report_their_own_summary_line(tmp_path: Path, monkeypatch: Any) -> None:
+    _hub_with_a_direct_test(tmp_path)
+    _fake_batch_and_main(monkeypatch)
+    info: dict[str, Any] = {}
+
+    ok, _msg = run_gates(tmp_path, ["src/pkg/hub.py"], info)["pytest"]
+
+    assert ok is True
+    assert info["summary"] == "3 passed in 0.5s; fixture-only batch: 2 passed in 0.2s"
+    assert info["omitted_files"] == ["tests/test_f3.py"]
+    assert "ran inside a 90s budget" in info["omitted_reason"]
+
+
+def test_the_batch_budget_scales_with_live_load_like_the_main_timeout(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """At twice the load threshold the 90s budget doubles, and the receipt names the
+    budget that was actually used, not the base."""
+    _hub_with_a_direct_test(tmp_path)
+    _fake_batch_and_main(monkeypatch, batch_timeout=True)
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (16.0, 12.0, 10.0))
+    info: dict[str, Any] = {}
+
+    run_gates(tmp_path, ["src/pkg/hub.py"], info)
+
+    assert info["fixture_budget_secs"] == 2 * gate_hook._FIXTURE_ONLY_BUDGET_SECS
+    assert f"inside a {info['fixture_budget_secs']}s budget" in info["omitted_reason"]
+
+
+def test_the_batch_budget_is_the_base_on_a_quiet_box(monkeypatch: Any) -> None:
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (1.0, 1.0, 1.0))
+    assert gate_hook._fixture_only_budget() == gate_hook._FIXTURE_ONLY_BUDGET_SECS

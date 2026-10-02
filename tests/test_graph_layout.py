@@ -626,3 +626,49 @@ async def test_layout_batch_clusters_semantically_connected_objects_closer_than_
     proj_pos = (await positions_for(actions, [proj]))[proj]
     pos = await positions_for(actions, [connected, halo])
     assert math.dist(proj_pos, pos[connected]) < math.dist(proj_pos, pos[halo])
+
+
+def test_seed_slots_count_only_objects_that_share_the_same_seed() -> None:
+    """The slot is an index among objects seeding at the same centroid, never the object's
+    position in the whole batch: unrelated objects ahead of it must not shift it."""
+    from src.orchestrator.graph_layout import _seed_slots
+
+    proj_a, proj_b = [(100.0, 0.0)], [(0.0, 900.0)]
+    noise = [[] for _ in range(7)]  # isolated objects: seed at the fallback, all alike
+    batch = noise + [proj_a, proj_a, proj_b, proj_a]
+    slots = _seed_slots(batch)
+    assert slots[:7] == list(range(7))                 # the noise shares ONE seed: slots 0..6
+    assert slots[7:] == [0, 1, 0, 2]                   # each cluster counts only its own
+    assert _seed_slots([proj_a, proj_a, proj_a]) == [0, 1, 2]  # same as with the noise ahead
+    assert _seed_slots([[(1.0, 2.0), (3.0, 4.0)], [(3.0, 4.0), (1.0, 2.0)]]) == [0, 1]
+
+
+async def test_the_semantic_clustering_holds_with_unrelated_objects_queued_ahead(
+    actions: Actions,
+) -> None:
+    """THE ORDER-DEPENDENT FLAKE, pinned: on a fresh database the catalog's own unplaced
+    objects sit ahead of any test's objects in the batch, and the acceptance shape (a
+    connected object closer to its project center than an unconnected one) used to fail
+    whenever the test happened to be the first to lay out. A hundred and fifty unrelated
+    unplaced objects older than the cluster reproduce that condition on every run: the
+    offset grows with the object's index in the batch, and from about a hundred and fifty
+    the unconnected object ended up nearer than the connected one."""
+    now = datetime.now(UTC)
+    while await layout_batch(actions, limit=1000) > 0:  # the catalog's own objects first,
+        pass                                            # so the count ahead is exactly 150
+    for i in range(150):
+        await actions.create_or_find_object("Thread", f"thread:zz-n-{i}", "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:gl-lp-cluster", "test")
+    connected = await actions.create_or_find_object("Thread", "thread:gl-lp-cl-a", "test")
+    friend = await actions.create_or_find_object("Thread", "thread:gl-lp-cl-b", "test")
+    halo = await actions.create_or_find_object("Thread", "thread:gl-lp-cl-halo", "test")
+    for oid in (connected, friend, halo):
+        await actions.create_link(oid, proj, "in_repo", "test", now, 1.0)
+    await actions.create_link(connected, friend, "cites", "test", now, 1.0)
+
+    while await layout_batch(actions, limit=1000) > 0:
+        pass
+
+    proj_pos = (await positions_for(actions, [proj]))[proj]
+    pos = await positions_for(actions, [connected, halo])
+    assert math.dist(proj_pos, pos[connected]) < math.dist(proj_pos, pos[halo])

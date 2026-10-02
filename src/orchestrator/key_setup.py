@@ -40,6 +40,9 @@ def ensure_key_setup(*, path: str | None = None, restic_path: str | None = None)
     status = soul_crypto.soul_key_status(path=path)
     if status["present"]:
         report["key"] = "present"
+        # status readers never decrypt the key, so the one decrypt that tells them whether
+        # the recovery enrollment is current happens here, at deploy, and is remembered
+        soul_crypto.ensure_key_fingerprint_cached(path=path)
     elif os.getuid() == 0:
         # Root has no natural owner for the key file (the units are systemd --user under
         # the operator's own login), so guessing one here would seal it to the wrong user.

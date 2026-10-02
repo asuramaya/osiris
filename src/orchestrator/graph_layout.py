@@ -396,6 +396,20 @@ async def _live_containers_of(
     return out
 
 
+def _seed_slots(candidate_lists: list[list[tuple[float, float]]]) -> list[int]:
+    """The sunflower slot of each object: its index among the objects whose candidate set (the
+    placed neighbours and containers it seeds at the centroid of) is EXACTLY the same, in the
+    order given. Objects with different candidate sets seed at different centroids and need
+    no offset from each other, so a slot never counts them."""
+    next_slot: dict[tuple[tuple[float, float], ...], int] = defaultdict(int)
+    slots = []
+    for candidates in candidate_lists:
+        shared_seed = tuple(sorted(candidates))
+        slots.append(next_slot[shared_seed])
+        next_slot[shared_seed] += 1
+    return slots
+
+
 def _centroid_seed(
     local_rank: int, candidates: list[tuple[float, float]],
     fallback: tuple[float, float],
@@ -405,10 +419,11 @@ def _centroid_seed(
     semantic neighbours and live containers a new object has; `fallback` (the
     unfiled origin) only for the rare genuinely isolated new object with none.
 
-    OFFSET BY A SUNFLOWER POINT keyed on `local_rank` (this object's own index
-    within THIS batch, not a stored global rank -- the seed is used exactly once,
-    at first placement, so cross-tick reproducibility of the offset itself doesn't
-    matter the way it does for a position that's read back later). Several siblings
+    OFFSET BY A SUNFLOWER POINT keyed on `local_rank` (this object's own slot among
+    the objects of THIS batch that share its exact seed centroid, see `layout_batch`,
+    not a stored global rank and not its position in the whole batch -- the seed is used
+    exactly once, at first placement, so cross-tick reproducibility of the offset itself
+    doesn't matter the way it does for a position that's read back later). Several siblings
     sharing their ONE sole container (no semantic edges of their own) would
     otherwise all seed at the EXACT same centroid -- a real specimen (40 such
     siblings, one shared project) hit two compounding failures from that: `relax`'s
@@ -1064,10 +1079,22 @@ async def layout_batch(actions: Actions, *, limit: int | None = None) -> int:
             actions, sorted(set(neighbor_ids) | set(container_ids), key=str))
 
         base = {}
-        for local_rank, oid in enumerate(unplaced_regular):
+        # THE SUNFLOWER SLOT IS PER SHARED SEED, never per batch position (`_seed_slots`):
+        # only objects that seed at the SAME centroid need distinct offsets from each
+        # other, so each one takes the next free slot among those sharing its exact
+        # candidate set. An object's seed therefore never depends on how many UNRELATED
+        # unplaced objects happen to sit ahead of it in the same batch (a batch that also
+        # carried the catalog's own unplaced objects once shifted every later object's
+        # offset, so the same graph laid out differently depending on what else was
+        # waiting to be placed).
+        candidate_lists: list[list[tuple[float, float]]] = []
+        for oid in unplaced_regular:
             candidates = [anchors[nb] for nb in neighbors.get(oid, set()) if nb in anchors]
             candidates += [anchors[cid] for cid in containers.get(oid, []) if cid in anchors]
-            base[oid] = _centroid_seed(local_rank, candidates, unfiled_center)
+            candidate_lists.append(candidates)
+        for oid, candidates, slot in zip(
+                unplaced_regular, candidate_lists, _seed_slots(candidate_lists), strict=True):
+            base[oid] = _centroid_seed(slot, candidates, unfiled_center)
 
         intra = _intra_project_neighbors(unplaced_regular, neighbors, proj_type)
         placed = relax(

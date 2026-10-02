@@ -368,3 +368,94 @@ def test_recovering_through_the_orchestrator_seals_the_backup_password_on_the_ne
 
     assert out["restic_password_recovered"] is True
     assert restic_credential.get_restic_password() == password
+
+
+# --- status readers never decrypt the key (the setup stepper sat on "Loading" for seconds) ----
+
+
+def _no_decrypt(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    calls: list[int] = []
+
+    def _boom(blob: bytes) -> bytes:
+        calls.append(1)
+        raise AssertionError("a status reader must never unseal the key")
+
+    monkeypatch.setattr(soul_crypto, "_decrypt_with_systemd_creds", _boom)
+    return calls
+
+
+def test_the_recovery_status_never_decrypts_the_key(
+    fake_security_key: _FakeFido2Client, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_setup.ensure_key_setup()
+    soul_crypto.soul_key_enroll_recovery()
+    calls = _no_decrypt(monkeypatch)
+
+    facts = soul_crypto.soul_key_recovery_facts()
+
+    assert facts["enrolled"] is True and facts["stale"] is False
+    assert calls == []
+
+
+def test_a_key_written_by_init_has_its_fingerprint_cached_without_any_read() -> None:
+    soul_crypto.soul_key_init(backend="file")
+    cached = soul_crypto.cached_key_fingerprint()
+    assert cached == soul_crypto.key_fingerprint(
+        soul_crypto.read_key_bytes_at(Path(soul_crypto.soul_key_status()["path"])))
+
+
+def test_a_rotation_invalidates_the_cache_and_staleness_is_still_reported(
+    fake_security_key: _FakeFido2Client, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    soul_crypto.soul_key_init(backend="file")
+    soul_crypto.soul_key_enroll_recovery()
+    assert soul_crypto.soul_key_recovery_facts()["stale"] is False
+
+    soul_crypto.soul_key_rotate_begin()  # writes the new key, which remembers its own print
+
+    calls = _no_decrypt(monkeypatch)
+    assert soul_crypto.soul_key_recovery_facts()["stale"] is True
+    assert calls == []
+
+
+def test_a_key_file_changed_behind_the_cache_reads_as_unknown_never_as_a_guess(
+    fake_security_key: _FakeFido2Client,
+) -> None:
+    soul_crypto.soul_key_init(backend="file")
+    soul_crypto.soul_key_enroll_recovery()
+    key_file = Path(soul_crypto.soul_key_status()["path"])
+
+    key_file.write_bytes(soul_crypto._generate_key())  # changed with no way to remember it
+
+    assert soul_crypto.cached_key_fingerprint() is None
+    assert soul_crypto.soul_key_recovery_facts()["stale"] is None
+
+
+def test_deploy_fills_a_missing_cache_once_and_status_then_answers(
+    fake_security_key: _FakeFido2Client, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    soul_crypto.soul_key_init(backend="file")
+    soul_crypto.soul_key_enroll_recovery()
+    soul_crypto._fingerprint_cache_path(
+        Path(soul_crypto.soul_key_status()["path"])).unlink()  # a key that predates the cache
+    assert soul_crypto.soul_key_recovery_facts()["stale"] is None
+
+    key_setup.ensure_key_setup()
+
+    calls = _no_decrypt(monkeypatch)
+    assert soul_crypto.soul_key_recovery_facts()["stale"] is False
+    assert calls == []
+
+
+def test_a_reseal_onto_the_tpm_keeps_the_cache_valid(
+    fake_security_key: _FakeFido2Client, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The file changes when the key is resealed but the key does not: the cache is
+    re-stamped, so a status reader still answers without decrypting."""
+    soul_crypto.soul_key_init(backend="file")
+    resolved = Path(soul_crypto.soul_key_status()["path"])
+    key = resolved.read_bytes()
+    resolved.write_bytes(key)  # new mtime, same key, as a reseal leaves the carrier file
+    assert soul_crypto.cached_key_fingerprint() is None
+    soul_crypto._remember_fingerprint(resolved, key, explicit=False)
+    assert soul_crypto.cached_key_fingerprint() == soul_crypto.key_fingerprint(key)
