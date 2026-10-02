@@ -1,4 +1,4 @@
-"""pg_autotune (ruling 45b251ed) — deriving Postgres GUCs from the live host instead of
+"""pg_autotune deriving Postgres GUCs from the live host instead of
 a hand-run postgres_tuning.sql. `apply_tuning` is tested against a FAKE pool, never the
 live `actions` fixture's real shared osiris-pg: `ALTER SYSTEM` is not transactional and
 would persist a test's own tuning values onto the box every other test (and the fleet)
@@ -58,7 +58,7 @@ def test_fmt_mem_and_parse_mem_round_trip() -> None:
 
 
 def test_significant_change_ignores_small_rounding_drift() -> None:
-    # 4GB current vs a recommendation 5% higher — inside the 15% tolerance, not a change.
+    # 4GB current vs a recommendation 5% higher, inside the 15% tolerance, not a change.
     assert not _significant_change("work_mem", "32MB", 33 * 1024 * 1024)
 
 
@@ -93,9 +93,9 @@ async def test_apply_tuning_applies_reloadable_and_reloads_once() -> None:
 
 
 async def test_apply_tuning_never_restarts_postgres_itself() -> None:
-    """A restart-required change is persisted (ALTER SYSTEM, free — takes effect at
+    """A restart-required change is persisted (ALTER SYSTEM, free, takes effect at
     whatever restart happens next) but always comes back deferred: this module has no
-    restart mechanism at all, by design — see pg_autotune.py's own docstring."""
+    restart mechanism at all, by design; see pg_autotune.py's own docstring."""
     pool = _FakePool()
     plan = {"changes": [
         {"name": "shared_buffers", "before": "128MB", "after": "4GB",

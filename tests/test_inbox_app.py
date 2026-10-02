@@ -1,4 +1,4 @@
-"""THE INBOX's wiring — ONE live-route test (test_api.py's own precedent: pure unit tests
+"""THE INBOX's wiring: ONE live-route test (test_api.py's own precedent: pure unit tests
 can't catch whether the route is actually wired to the real pool/registry). Everything
 else about the Inbox is covered by test_inbox_blocks.py (builders) and
 test_inbox_catalog.py (rendering).
@@ -51,8 +51,8 @@ async def client(actions: Actions) -> AsyncIterator[httpx.AsyncClient]:
 
 
 async def test_inbox_shell_route_redirects_to_the_console(client: httpx.AsyncClient) -> None:
-    """The standalone Inbox shell (ruling 0b3dd431) is dead — :8011's front door is /ui,
-    the operator's own consolidation (2026-09-10); GET / just redirects there now."""
+    """The standalone Inbox shell is dead: :8011's front door is /ui,
+    after the consolidation; GET / just redirects there now."""
     r = await client.get("/", follow_redirects=False)
     assert r.status_code in (302, 307)
     assert r.headers["location"] == "/ui/"
@@ -88,10 +88,10 @@ async def test_inbox_action_route_refuses_an_unknown_action(
 async def test_inbox_stream_route_returns_a_datastar_response() -> None:
     """A STRUCTURAL check, not a live SSE round-trip: driving the actual infinite
     generator through httpx's ASGITransport hangs waiting on Starlette's disconnect-
-    listener task (confirmed live, no fix found — and no precedent anywhere in this
+    listener task (confirmed live, no fix found; and no precedent anywhere in this
     suite for testing an SSE route that way; /console/stream isn't tested live either).
     is_disconnected() returning True immediately means the generator's body never runs
-    (no DB call, no side effect) — this only proves the route is wired to build the right
+    (no DB call, no side effect); this only proves the route is wired to build the right
     RESPONSE TYPE. Content correctness is test_inbox_blocks.py/test_inbox_catalog.py's job."""
     from datastar_py.fastapi import DatastarResponse
     from src.api.inbox.app import inbox_stream

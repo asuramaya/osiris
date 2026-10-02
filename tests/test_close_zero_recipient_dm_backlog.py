@@ -1,5 +1,4 @@
-"""Wave 13 item 1 (thread 9d1d41c8's own audit, operator's word 2026-09-09): the
-compensating-write closer for the zero-recipient DM backlog — never a delete, a marker row
+"""The compensating-write closer for the zero-recipient DM backlog: never a delete, a marker row
 per orphaned DM, idempotent on the tracking thread's own ref."""
 from __future__ import annotations
 
@@ -62,7 +61,7 @@ async def test_is_idempotent_on_the_same_thread_ref(actions: Actions) -> None:
 
 
 async def test_never_touches_a_project_broadcast(actions: Actions) -> None:
-    """A broadcast (to_agent IS NULL) is not a DM — every agent in the project is its own
+    """A broadcast (to_agent IS NULL) is not a DM, every agent in the project is its own
     implicit recipient, so it must never be swept into the backlog closure."""
     await actions.pool.execute(
         "INSERT INTO fleet_messages (from_agent, to_project, body) "

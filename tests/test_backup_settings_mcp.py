@@ -1,9 +1,9 @@
-"""backup_settings — the MCP door pair's own tool wrapper (thread f04cce36 piece 3).
+"""backup_settings: the MCP door pair's own tool wrapper.
 
 The pure functions (get_backup_settings/write_backup_settings) are proven directly in
 test_backup_settings.py; this proves the TOOL wrapper resolves the caller's mounted
 identity as `actor` (`_actor_for`'s own convention every other write tool uses) and
-routes action='get'/'write' correctly — same mount-a-fake-ctx harness
+routes action='get'/'write' correctly, using the same mount-a-fake-ctx harness
 test_settle.py's own tools already use.
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ from src.actions.core import Actions
 
 @pytest.fixture(autouse=True)
 def _vault_path_always_present_mount(monkeypatch: Any) -> None:
-    """Same reasoning as test_backup_settings.py's own identical fixture — this file
+    """Same reasoning as test_backup_settings.py's own identical fixture. This file
     proves the MCP tool wrapper's own actor/routing, not the hot-path mount law
     (test_backup_validation.py's own job)."""
     from src.orchestrator import backup_validation

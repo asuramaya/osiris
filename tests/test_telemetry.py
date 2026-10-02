@@ -1,5 +1,5 @@
 """The telemetry reader (neo's second instrument, task #35): retained-events files
-eaten into harness_telemetry — normalized columns only, spend-gated per file, the raw
+eaten into harness_telemetry: normalized columns only, spend-gated per file, the raw
 payload never duplicated. Real Postgres via the actions fixture."""
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def test_rows_of_file_normalizes_and_skips_junk(tmp_path: Path) -> None:
     assert dev == "dev-1"
     assert (ver, model, plat, arch) == (
         "2.1.199", "claude-haiku-4-5-20251001", "linux", "x64")
-    # the second event has no env block — absent fields land as None, never ""
+    # the second event has no env block: absent fields land as None, never ""
     assert rows[1][6] is None and rows[1][8] is None
 
 

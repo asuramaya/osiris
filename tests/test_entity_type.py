@@ -1,4 +1,4 @@
-"""Person vs Organization classification — the real Form D / SPV names it must get right."""
+"""Person vs Organization classification: the real Form D / SPV names it must get right."""
 from __future__ import annotations
 
 import pytest
@@ -56,7 +56,7 @@ def test_generational_suffix_is_not_an_org_signal() -> None:
 
 
 def test_person_with_stray_digits_is_not_an_org() -> None:
-    # a bare digit must NOT trigger org — people carry case/inmate numbers in filings
+    # a bare digit must NOT trigger org; people carry case/inmate numbers in filings
     assert is_organization("Desiree Lambert Inmate No. 13432-046") is False
     assert is_organization("John Smith 3rd") is False
 

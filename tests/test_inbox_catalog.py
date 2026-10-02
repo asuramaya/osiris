@@ -1,6 +1,6 @@
-"""THE CATALOG's golden HTML + the two structural lint gates (task #71): no .j2 file
+"""THE CATALOG's golden HTML + the two structural lint gates: no .j2 file
 exists anywhere under src/ beyond the two frozen ones, and no Python file in the
-subpackage contains an HTML tag literal — the architecture's own promise ("inventing a
+subpackage contains an HTML tag literal. The architecture's own promise ("inventing a
 component is a mypy error, not a review comment") checked directly, not taken on faith."""
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ _FROZEN_TEMPLATES = {"catalog.html.j2", "shell.html.j2"}
 def test_only_the_two_frozen_j2_files_exist_anywhere_under_src() -> None:
     found = {p.name for p in _SRC_ROOT.rglob("*.j2")}
     assert found == _FROZEN_TEMPLATES, (
-        f"unsanctioned template file(s): {found - _FROZEN_TEMPLATES} — a third .j2 needs "
+        f"unsanctioned template file(s): {found - _FROZEN_TEMPLATES}: a third .j2 needs "
         "a human commit to the frozen set, not a quiet addition")
 
 
@@ -52,7 +52,7 @@ def _golden_page() -> Page:
 
 def test_golden_page_renders_byte_for_byte() -> None:
     """PINNED. A deliberate change to catalog.html.j2/shell.html.j2 updates this string in
-    the SAME commit — an accidental drift fails here first, before anyone's browser does."""
+    the SAME commit; an accidental drift fails here first, before anyone's browser does."""
     html = render_page(_golden_page())
     assert '<title>Inbox</title>' in html
     assert '<link rel="stylesheet" href="/static/app.css">' in html
@@ -70,7 +70,7 @@ def test_golden_page_renders_byte_for_byte() -> None:
 
 
 def test_golden_page_escapes_untrusted_text() -> None:
-    """Jinja's autoescape is on (render.py: select_autoescape) — an item title containing
+    """Jinja's autoescape is on (render.py: select_autoescape): an item title containing
     markup must never inject into the page."""
     page = Page(title="Inbox", regions=[
         Region(name="masthead", children=[]),
@@ -98,7 +98,7 @@ def test_inbox_list_renders_the_empty_component_when_clear() -> None:
 
 
 def test_button_primary_marks_the_single_most_likely_action() -> None:
-    """Ruling (msg 1818): 'quiet' is the default; a Button rendered without an explicit
+    """'quiet' is the default; a Button rendered without an explicit
     style never gets the accent treatment."""
     page = Page(title="Inbox", regions=[
         Region(name="masthead", children=[]),
