@@ -518,7 +518,7 @@ def test_settings_panel_shows_structured_per_field_errors_inline() -> None:
     assert "errEl.textContent = res.error" in body
 
 
-# THE ATLAS REMOVAL: the atlas view was redundant with browse in graph mode, and worse to use,
+# THE MAP-VIEW REMOVAL: the map view was redundant with browse in graph mode, and worse to use,
 # so it was cut. The sigma.js/graphology full-graph surface is gone; its useful backend
 # (/graph/supernodes, /graph/clusters, the heartbeat layout) folds into browse's own graph
 # mode as a separate piece: the removal is frontend-only, backend untouched here.

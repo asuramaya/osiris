@@ -118,7 +118,7 @@ async def test_click_posts_to_act_round_trips_args_and_removes_the_row(
         await page.wait_for_function(
             f"document.querySelectorAll('tbody tr').length < {rows_before}")
 
-        # the attribute round-trip is the point: JSON.stringify({"ref":"abc12345"}) is built
+        # the attribute round-trip is the point: JSON.stringify({"ref": <fixture id>}) is built
         # almost entirely of '"' characters. A naive data-args="${...}" would have truncated
         # or corrupted the attribute at the first one, well before it ever reached fetch().
         assert seen["body"] == {"action": "resolve_thread", "args": {"ref": "abc12345"}}

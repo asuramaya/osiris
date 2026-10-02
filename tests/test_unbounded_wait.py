@@ -69,7 +69,7 @@ _MARKER_RE = re.compile(r"#\s*unbounded-wait-ok\b")
 # the real timeout value.
 _SUBPROCESS_BASELINE: dict[str, int] = {
     # 92 -> 93: one new `asyncio.run(cmd_rehold(...))` dispatch line for the new
-    # `rehold` subcommand (obligation 9bab01db), same false-positive class as every
+    # `rehold` subcommand same false-positive class as every
     # other `asyncio.run(cmd_*)` dispatch line already counted here: the scanner's
     # coarse name-match proxy matches `asyncio.run` the same as `subprocess.run`.
     "src/cli.py": 93,

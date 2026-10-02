@@ -124,8 +124,8 @@ async def test_a_resume_wake_s_mismatched_job_dir_still_promotes(
 ) -> None:
     """A resume wake's gap (thread #174, 2026-08-17), the SAME self-evident derivation
     `find_session_row`'s own lane 3 closes: a `-p --resume` wake's mount row carries a
-    job_dir keyed by the WAKE's own fresh job anchor (c8a22a05), unrelated to the resumed
-    transcript's own sid (02eaaa7a), even though 02eaaa7a genuinely IS this agent's own
+    job_dir keyed by the WAKE's own fresh job anchor, unrelated to the resumed
+    transcript's own sid, even though that sid genuinely IS this agent's own
     generation-derived identity. The job-dir join alone would miss this transcript's mtime
     forever; matching also on agent_id (self-evident, no ledger read needed) closes it."""
     await mounts.save_mount(actions.pool, job_dir="/home/x/.claude/jobs/c8a22a05",

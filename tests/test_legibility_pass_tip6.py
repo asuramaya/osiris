@@ -256,7 +256,7 @@ def test_chain_labels_declutter_past_generation_1_not_every_single_one() -> None
     # live-verified: "lit labels always win their spot" flooded the view once a real
     # succession chain (up to 50+ pinned members, ALL lit since they're all in
     # pathReachable) tried to show every single one at once. A chain member keeps the
-    # always-shown guarantee only at generation 1 or a multiple of 5. WAVE 26's own
+    # always-shown guarantee only at generation 1 or a multiple of 5. the later tier()'s own
     # storyline fix (test_storyline.py) narrowed the "always shown" bypass itself from
     # bare `lit` to `alwaysShown` (lit AND NOT storylineActive) -- the chain-generation
     # exception below is unchanged, still keyed off the same `lit`/`generation` values.
@@ -298,7 +298,7 @@ def test_label_pool_fills_lit_nodes_before_ranking_by_degree() -> None:
     body = _SPACE_JS.split("function pickLabels()", 1)[1][:2500]
     assert "const isLit = (nd) => nd.id === pathFocusId || pathReachable.has(nd.id) || " \
         "nd.id === selectedId;" in body
-    # WAVE 26's own tier() wraps isLit -- lit still ranks strictly highest (tier 2), the
+    # the later tier()'s own tier() wraps isLit -- lit still ranks strictly highest (tier 2), the
     # sort's own outcome for a lit node is unchanged; see test_community_regions.py for
     # the tier() rework itself.
     assert "tier(b) - tier(a) || (b.degree || 0) - (a.degree || 0)" in body

@@ -1,5 +1,5 @@
 """BodyProvider: the LOCAL tier (the default product tier, not a test double) and
-the StubRaProvider seam that keeps Phase 3 (Ra/Xen) tested before its metal exists.
+the StubRaProvider seam that keeps Phase 3 (the renamed-seat bodies) tested before its metal exists.
 
 Never real systemd in a unit test: the ProcessRunner seam is a constructor param precisely so
 these tests can fake the subprocess boundary. The one test that DOES touch real `systemd-run`

@@ -122,7 +122,7 @@ async def test_renderer_survives_adversarial_content(chromium_available: bool) -
 # it: a MEDIUM string (short of the >160 "wall of text" bar) sailed through untouched, and a
 # many-short-columns table starves a non-tight column thin enough that overflow-wrap:anywhere +
 # word-break:break-word breaks it mid-word with nowhere else to go. Real specimen: fleet-live's
-# DOORS/ANCESTORS columns, "1 door (session 82d04858 2s ago)" (33 chars), towering into 10+
+# DOORS/ANCESTORS columns, "1 door (session <id> 2s ago)" (33 chars), towering into 10+
 # near-single-character lines next to five other short, tight columns.
 MEDIUM_PROSE = "1 door (session 82d04858 2s ago)"     # the exact live shape, 33 chars
 STARVED_ROWS = [

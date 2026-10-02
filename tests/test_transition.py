@@ -1,7 +1,7 @@
-"""THE SELF-SERVICE TRANSITION VERB (the Jesus/Chad specimen): proves the
+"""THE SELF-SERVICE TRANSITION VERB (the renamed-seat case): proves the
 compose-not-orchestrate contract: invalidate_works_in + correct_own_pin_value
 + set_charter, atomic-or-refused, never rebind_seat (THE ANCHOR INVARIANT:
-that call is exactly what broke Jesus's and Chad's own anchors).
+that call is exactly what broke two renamed seats' own anchors).
 """
 from __future__ import annotations
 

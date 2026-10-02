@@ -82,7 +82,7 @@ async def test_walk_in_named_wants_office_false_skips_the_office(
 async def test_walk_in_named_skips_an_already_claimed_name(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Re-running (the Ooblek shape: two compactions deep, name already claimed from an
+    """Re-running (the compacted-twice case: two compactions deep, name already claimed from an
     earlier turn) never re-claims: it reports the skip honestly and still runs the office
     half fresh if asked."""
 
@@ -377,7 +377,7 @@ async def test_mcp_walk_in_refuses_unmounted_with_no_cwd(actions: Actions) -> No
 async def test_mcp_walk_in_skips_mount_for_an_already_mounted_caller(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The Ooblek shape exactly: already mounted, project already correct, no name yet.
+    """The compacted-twice case exactly: already mounted, project already correct, no name yet.
     walk_in must SKIP the mount step honestly rather than re-run or refuse."""
     import src.mcp_server as srv
     from src.orchestrator.agents import AgentIdentity

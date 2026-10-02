@@ -177,7 +177,7 @@ def test_the_four_most_recent_chains_survive_whole() -> None:
              for i in range(6)]  # W30..W35, oldest first
     plan = plan_prune_transcript_chains(chains, keep_recent=4)
     kept_keys = {c.week_key for c in plan["keep"]}
-    # the 4 NEWEST (W32-W35) survive whole regardless of month bucketing
+    # the 4 NEWEST (the last four weeks) survive whole regardless of month bucketing
     assert {"2026-W32", "2026-W33", "2026-W34", "2026-W35"} <= kept_keys
 
 

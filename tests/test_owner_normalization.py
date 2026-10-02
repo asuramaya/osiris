@@ -192,7 +192,7 @@ async def test_peer_pair_with_no_manager_resolves_project_coordinator_to_operato
 async def test_resolve_owner_seat_falls_a_malformed_agent_id_through_to_the_coordinator(
     actions: Actions,
 ) -> None:
-    """agent:deckard/agent:d00dbe16: a string shaped like an agent id
+    """A renamed-seat handle and an 8-hex agent id: a string shaped like an agent id
     that never was one -- lineage_head/held_seat finds nothing, and this used to return
     None right there, the one prefix that never reached the project-coordinator rung a
     plain string already got. Fixed: it now falls through same as everything else."""

@@ -103,7 +103,7 @@ async def test_the_batch_is_BOUNDED_and_the_oldest_go_first(
     stampeded. Oldest first: the deepest orphan is the one most likely to be lost for good."""
     for i in range(6):
         _transcript(actions_root := tmp_path, f"dead{i:04d}",
-                    quiet_secs=QUIET_SECS + 600 - i * 60)   # dead0000 is the oldest
+                    quiet_secs=QUIET_SECS + 600 - i * 60)   # the first-seeded row is the oldest
     assert actions_root == tmp_path
     found = await find_orphans(actions.pool, tmp_path, limit=3)
     assert [p.stem for p in found] == ["dead0000", "dead0001", "dead0002"]

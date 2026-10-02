@@ -938,7 +938,7 @@ async def test_a_dm_to_the_seats_own_placeholder_resolves_through_the_seat_to_it
 async def test_a_dm_to_the_seats_own_placeholder_refuses_loudly_when_vacant(
     actions: Actions,
 ) -> None:
-    """The vacancy exception (24f52959): a caller who typed `agent:seat-<id>` believed
+    """The vacancy exception: a caller who typed `agent:seat-<id>` believed
     they were naming a specific mind, not a role, unlike an explicit `seat:<id>`
     address (which honestly waits for the next holder), a vacant seat here must refuse
     rather than produce a queued-forever receipt nobody will ever read."""

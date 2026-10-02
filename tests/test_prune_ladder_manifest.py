@@ -1,7 +1,7 @@
 """The vault-stays-tame-without-a-hand obligation, part 1: the ladder's
 own weekly manifest-then-apply-if-clear gate. build_manifest_body is pure and tested
 directly; mail_manifest/find_clear_manifest are proven against a real per-worker database
-(the `actions` fixture's own catalog-seeded pg_dsn, matching thread 8542ee89's own lesson
+(the `actions` fixture's own catalog-seeded pg_dsn, matching an earlier lesson
 about testing jsonb writes against a schema that actually has the Message type declared)."""
 from __future__ import annotations
 

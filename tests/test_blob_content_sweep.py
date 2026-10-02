@@ -172,5 +172,5 @@ def test_this_files_own_source_and_tests_carry_no_literal_leak() -> None:
         for token_match in EMAIL_TOKEN_RE.finditer(text):
             digest = hashlib.sha256(token_match.group(0).lower().encode()).hexdigest()
             assert digest not in KNOWN_REAL_HASHES, (
-                f"{path} contains a literal match for a known-real address — "
+                f"{path} contains a literal match for a known-real address: "
                 "the exact self-incident this test exists to catch")

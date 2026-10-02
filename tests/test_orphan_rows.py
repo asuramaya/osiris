@@ -166,7 +166,7 @@ async def test_the_PULSE_observes_for_free_but_INFERS_only_on_a_LICENCE(
     out = await pulse_mod.pulse(actions, repos, now=NOW)
     assert out["synced"] == ["util"]
     commits, threads = await _counts(actions)
-    assert commits >= 1, "the OBSERVER was blinded — a commit is a fact and must always be sensed"
+    assert commits >= 1, "the OBSERVER was blinded: a commit is a fact and must always be sensed"
     assert threads == 0, "an unlicensed inference minted a duty"
 
     # ARMED (the operator's explicit choice): now, and only now, it may guess.

@@ -333,7 +333,7 @@ async def test_establish_office_refuses_a_live_seat(
     harness appends to its own by path, so a live seat (any generation) is never moved.
 
     Confirmed via a fake harness census: a bare fresh mount row is no longer sufficient
-    by itself. _seat_fixture's own job_dir ("/jobs/0ff1cee1") is exactly 8 chars on
+    by itself. _seat_fixture's own job_dir (the "/jobs/..." fixture value) is exactly 8 chars on
     purpose (registry_census keys agent_mounts.job_dir's basename against
     sessionId[:8])."""
     agent = await _seat_fixture(actions, tmp_path, handle="Butler")

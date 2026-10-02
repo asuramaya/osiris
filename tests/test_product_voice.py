@@ -54,12 +54,23 @@ regrowth, same growth-only shape as tier 1. A separate coinage count (in-session
 phrases like "the ... door", "hot path", "the ladder") is measured and printed on regen
 but asserts nothing -- reported, not yet
 enforced, per the scope-widening ruling's own words.
+
+THE TESTS BUCKET COUNTS PROSE ONLY: in a test file every string constant other than a
+docstring or an assert message is data the code under test is fed or must return (ids,
+seat handles, paths, payloads, expected output), so a handle or an 8-hex id inside one is
+a fixture and cannot be reworded without changing what the test proves. That bucket is
+therefore counted over comments, docstrings and assert messages (`_test_prose`); a file
+that does not parse falls back to its whole text. Everywhere, a calendar token (a dated
+filename stamp or an ISO-week key) is blanked before counting, since neither can cite
+anything.
 """
 from __future__ import annotations
 
 import ast
+import io
 import json
 import re
+import tokenize
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -82,6 +93,13 @@ _COINAGE_RE = re.compile(
     r"\bthe [\w-]+ door\b|\bfirst breath\b|\bthe ladder\b|\bthe law\b|\bthe box\b|"
     r"\bhot path\b|\bstranger\b|\btwin\b|\bwhisper\b|\bceremony\b|\bestate\b",
     re.IGNORECASE)
+
+# CALENDAR TOKENS ARE NOT CITATIONS: a YYYYMMDD stamp (backup filenames, a dated model id)
+# is eight characters of [0-9a-f] and an ISO-week key (`2026-W02`, `W30..W35`) is a
+# "wNN", so the id and wave patterns both mistake them for a ruling id and a wave number.
+# Neither can cite anything, so they are blanked before counting.
+_DATE_STAMP_RE = re.compile(r"\b(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\b")
+_ISO_WEEK_RE = re.compile(r"\b\d{4}-W\d{2}\b|\bW\d{2}\.\.W\d{2}\b")
 
 _TIER2_BUCKETS: list[tuple[str, list[str] | None]] = [
     ("src/ui/static", ["*.js", "*.html"]),
@@ -137,7 +155,12 @@ def _count_id_hits(text: str) -> int:
     return count
 
 
+def _blank_calendar_tokens(text: str) -> str:
+    return _DATE_STAMP_RE.sub(" ", _ISO_WEEK_RE.sub(" ", text))
+
+
 def _count_violations(text: str, names_re: re.Pattern[str]) -> int:
+    text = _blank_calendar_tokens(text)
     return (
         len(names_re.findall(text))
         + len(_MAIL_RE.findall(text))
@@ -146,6 +169,38 @@ def _count_violations(text: str, names_re: re.Pattern[str]) -> int:
         + len(_OPERATOR_QUOTE_RE.findall(text))
         + len(_EM_DASH_RE.findall(text))
     )
+
+
+def _test_prose(source: str) -> str:
+    """The prose of a test file: its comments, its docstrings, and its assert messages.
+    Every other string constant in a test is data the code under test is fed or must
+    return (ids, handles, paths, payloads, expected output), so a fleet name or an 8-hex id
+    in one is a fixture, not working-agent language, and cannot be reworded without
+    changing what the test proves. Falls back to the whole text when the file does not
+    parse, so a broken file is never silently uncounted."""
+    try:
+        tree = ast.parse(source)
+        comments = [t.string for t in tokenize.generate_tokens(io.StringIO(source).readline)
+                    if t.type == tokenize.COMMENT]
+    except (SyntaxError, tokenize.TokenError, IndentationError):
+        return source
+    parts = list(comments)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            doc = ast.get_docstring(node, clean=False)
+            if doc:
+                parts.append(doc)
+        elif isinstance(node, ast.Assert) and node.msg is not None:
+            parts.extend(c.value for c in ast.walk(node.msg)
+                         if isinstance(c, ast.Constant) and isinstance(c.value, str))
+    return "\n".join(parts)
+
+
+def _count_test_prose_violations(source: str, names_re: re.Pattern[str]) -> int:
+    return _count_violations(_test_prose(source), names_re)
+
+
+_PROSE_ONLY_BUCKETS = {"tests"}
 
 
 _PY_SURFACES = ["src/cli.py", "src/mcp_server.py", "src/api/app.py", "src/api/chrome.py"]
@@ -205,7 +260,10 @@ def _tier2_live_counts() -> dict[str, int]:
     for rel, patterns in _TIER2_BUCKETS:
         total = 0
         for path in _tier2_bucket_files(rel, patterns):
-            total += _count_violations(path.read_text(), names_re)
+            if rel in _PROSE_ONLY_BUCKETS:
+                total += _count_test_prose_violations(path.read_text(), names_re)
+            else:
+                total += _count_violations(path.read_text(), names_re)
         if total:
             counts[rel] = total
     return counts
@@ -278,6 +336,52 @@ def test_names_regex_is_whole_word_only() -> None:
     names_re = _names_re()
     assert names_re.search("anubisknight") is None
     assert names_re.search("Anubis") is not None
+
+
+def test_calendar_tokens_are_not_citations() -> None:
+    """A dated filename and an ISO-week key hit the id and wave patterns without citing
+    anything; a real wave number and a real hex id still count."""
+    names_re = _names_re()
+    assert _count_violations("osiris-20260908-163007.dump", names_re) == 0
+    assert _count_violations("model claude-haiku-4-5-20251001", names_re) == 0
+    assert _count_violations("chain keys 2026-W02 and W30..W35", names_re) == 0
+    assert _count_violations("shipped in wave 12", names_re) == 1
+    assert _count_violations("see deadbeef for the ruling", names_re) == 1
+    # eight digits that are not a calendar date stay countable
+    assert _count_violations("ticket 99887766", names_re) == 1
+
+
+_SPECIMEN = (
+    '"""Module docstring cites wave 7."""\n'
+    "# a comment about deadbeef\n"
+    "def test_x():\n"
+    '    """Test docstring."""\n'
+    '    seat = ensure_seat("Anubis", sid="abcd1234", note="a \u2014 b")  # trailing wave 9\n'
+    '    assert seat, "failed for wave 3"\n'
+    '    assert seat.sid == "abcd1234"\n'
+)
+
+
+def test_test_prose_counts_comments_docstrings_and_assert_messages_only() -> None:
+    """In a test file the strings are data: a handle, an id or a dash passed to the code
+    under test, or an expected value, is not working-agent language."""
+    prose = _test_prose(_SPECIMEN)
+    assert "wave 7" in prose and "deadbeef" in prose and "wave 9" in prose
+    assert "wave 3" in prose
+    assert "Anubis" not in prose and "abcd1234" not in prose and "\u2014" not in prose
+    names_re = _names_re()
+    # 3 waves + 1 hex id; the fed handle, id and dash add nothing
+    assert _count_test_prose_violations(_SPECIMEN, names_re) == 4
+    assert _count_violations(_SPECIMEN, names_re) > 4
+
+
+def test_test_prose_falls_back_to_the_whole_text_when_the_file_does_not_parse() -> None:
+    broken = "def oops(:\n    # comment\n    x = 'wave 4'\n"
+    assert _test_prose(broken) == broken
+
+
+def test_only_the_tests_bucket_is_prose_only() -> None:
+    assert _PROSE_ONLY_BUCKETS == {"tests"}
 
 
 def test_product_voice_baseline_file_is_valid_json() -> None:
