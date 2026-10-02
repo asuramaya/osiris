@@ -245,27 +245,101 @@ def test_offload_never_attempted_is_plain_missing() -> None:
     assert steps["offload_run"]["action"] is None
 
 
-def test_restore_drill_passed_reads_from_the_receipts_dict() -> None:
-    receipts = {"sftp:nas.local:/x": {"last_passed_at": "2026-09-01T00:00:00Z"}}
-    steps = _steps(soul_key=KEY_READY, restic_key=RESTIC_READY, services_restarted=True,
-                   restore_drill_receipts=receipts)
-    assert steps["restore_test_passed"]["status"] == "done"
+NAS_URL = "sftp:nas.local:/x"
 
 
-def test_restore_drill_never_passed_is_missing() -> None:
-    receipts = {"sftp:nas.local:/x": {"last_attempt_at": "2026-09-01T00:00:00Z",
-                                       "last_error": "repository not found"}}
+def _nas(**kw: object) -> list[dict[str, object]]:
+    target: dict[str, object] = {
+        "name": "nas", "kind": "restic", "enabled": True, "presence": None,
+        "path_or_url": NAS_URL, "first_successful_offload": "2026-09-10T00:00:00+00:00",
+        "last_successful_offload": "2026-09-12T00:00:00+00:00"}
+    target.update(kw)
+    return [target]
+
+
+def test_restore_test_done_when_a_drill_passed_on_a_configured_target_after_its_first_offload(
+) -> None:
+    receipts = {NAS_URL: {"last_passed_at": "2026-09-11T00:00:00+00:00"}}
+    step = _steps(soul_key=KEY_READY, restic_key=RESTIC_READY, services_restarted=True,
+                  offload_targets=_nas(), restore_drill_receipts=receipts)["restore_test_passed"]
+    assert step["status"] == "done"
+
+
+def test_a_receipt_with_no_destination_configured_is_not_done() -> None:
+    """The live specimen: a drill receipt on a box with no enabled destination and no offload
+    ever run read as done."""
+    receipts = {NAS_URL: {"last_passed_at": "2026-09-11T00:00:00+00:00"}}
+    step = _steps(soul_key=KEY_READY, restic_key=RESTIC_READY, services_restarted=True,
+                  offload_targets=[], restore_drill_receipts=receipts)["restore_test_passed"]
+    assert step["status"] == "missing"
+    assert "once a backup target is set up" in step["reason"]
+
+
+def test_a_drill_that_predates_the_first_successful_offload_is_not_done() -> None:
+    receipts = {NAS_URL: {"last_passed_at": "2026-09-01T00:00:00+00:00"}}  # before any backup
+    step = _steps(soul_key=KEY_READY, restic_key=RESTIC_READY, services_restarted=True,
+                  offload_targets=_nas(), restore_drill_receipts=receipts)["restore_test_passed"]
+    assert step["status"] == "missing"
+
+
+def test_a_pass_against_a_different_repository_does_not_count() -> None:
+    receipts = {"sftp:somewhere-else:/y": {"last_passed_at": "2026-09-11T00:00:00+00:00"}}
+    step = _steps(soul_key=KEY_READY, restic_key=RESTIC_READY, services_restarted=True,
+                  offload_targets=_nas(), restore_drill_receipts=receipts)["restore_test_passed"]
+    assert step["status"] == "missing"
+
+
+def test_a_pass_against_a_disabled_target_does_not_count() -> None:
+    receipts = {NAS_URL: {"last_passed_at": "2026-09-11T00:00:00+00:00"}}
+    step = _steps(soul_key=KEY_READY, restic_key=RESTIC_READY, services_restarted=True,
+                  offload_targets=_nas(enabled=False),
+                  restore_drill_receipts=receipts)["restore_test_passed"]
+    assert step["status"] == "missing"
+
+
+def test_a_target_with_no_successful_offload_yet_waits_for_the_first_backup() -> None:
+    target = _nas(first_successful_offload=None, last_successful_offload=None)
+    receipts = {NAS_URL: {"last_passed_at": "2026-09-11T00:00:00+00:00"}}
+    step = _steps(soul_key=KEY_READY, restic_key=RESTIC_READY, services_restarted=True,
+                  offload_targets=target, restore_drill_receipts=receipts)["restore_test_passed"]
+    assert step["status"] == "missing"
+    assert step["reason"] == "Runs automatically after the first backup, then weekly."
+
+
+def test_an_older_receipt_without_a_first_offload_stamp_falls_back_to_its_last_success() -> None:
+    target = _nas(first_successful_offload=None)  # last success 2026-09-12
+    before = {NAS_URL: {"last_passed_at": "2026-09-11T00:00:00+00:00"}}
+    after = {NAS_URL: {"last_passed_at": "2026-09-13T00:00:00+00:00"}}
+    kw = dict(soul_key=KEY_READY, restic_key=RESTIC_READY, services_restarted=True,
+              offload_targets=target)
+    assert _steps(**kw, restore_drill_receipts=before)["restore_test_passed"][
+        "status"] == "missing"
+    assert _steps(**kw, restore_drill_receipts=after)["restore_test_passed"][
+        "status"] == "done"
+
+
+def test_restore_drill_failure_on_a_configured_target_needs_attention_with_the_error() -> None:
+    receipts = {NAS_URL: {"last_attempt_at": "2026-09-13T00:00:00+00:00",
+                          "last_error": "repository not found"}}
     steps = _steps(soul_key=KEY_READY, restic_key=RESTIC_READY, services_restarted=True,
-                   restore_drill_receipts=receipts)
+                   offload_targets=_nas(), restore_drill_receipts=receipts)
     assert steps["restore_test_passed"]["status"] == "needs_attention"
     assert "repository not found" in steps["restore_test_passed"]["reason"]
     assert steps["restore_test_passed"]["action"] is None
     assert steps["restore_test_passed"]["mode"] == "auto"
 
 
+def test_a_failure_for_a_repository_no_longer_configured_is_not_shown() -> None:
+    receipts = {"sftp:gone:/z": {"last_error": "repository not found"}}
+    step = _steps(soul_key=KEY_READY, restic_key=RESTIC_READY, services_restarted=True,
+                  offload_targets=_nas(), restore_drill_receipts=receipts)["restore_test_passed"]
+    assert step["status"] == "missing"
+
+
 def test_restore_drill_never_attempted_says_it_runs_by_itself() -> None:
-    step = _steps(soul_key=KEY_READY, restic_key=RESTIC_READY,
-                  services_restarted=True)["restore_test_passed"]
+    step = _steps(soul_key=KEY_READY, restic_key=RESTIC_READY, services_restarted=True,
+                  offload_targets=_nas(first_successful_offload=None,
+                                       last_successful_offload=None))["restore_test_passed"]
     assert step["status"] == "missing"
     assert step["reason"] == "Runs automatically after the first backup, then weekly."
     assert step["action"] is None
@@ -305,8 +379,9 @@ def test_recovery_copy_waits_for_the_recovery_method() -> None:
 
 def test_fully_ready_install_has_no_current_step() -> None:
     targets = [{"name": "nas", "kind": "local", "enabled": True,
-                "presence": {"present": True}, "last_successful_offload": "2026-09-01"}]
-    receipts = {"sftp:nas.local:/x": {"last_passed_at": "2026-09-01T00:00:00Z"}}
+                "presence": {"present": True}, "path_or_url": "sftp:nas.local:/x",
+                "last_successful_offload": "2026-09-01T00:00:00+00:00"}]
+    receipts = {"sftp:nas.local:/x": {"last_passed_at": "2026-09-02T00:00:00+00:00"}}
     steps = compute_readiness_steps(
         soul_key=KEY_READY, restic_key=RESTIC_READY, offload_targets=targets,
         restore_drill_receipts=receipts, services_restarted=True)
@@ -367,8 +442,9 @@ def test_already_tpm_sealed_is_done() -> None:
 
 def test_a_skipped_tpm_step_never_becomes_the_current_step_or_blocks_completion() -> None:
     targets = [{"name": "nas", "kind": "local", "enabled": True,
-                "presence": {"present": True}, "last_successful_offload": "2026-09-01"}]
-    receipts = {"x": {"last_passed_at": "2026-09-01T00:00:00Z"}}
+                "presence": {"present": True}, "path_or_url": "x",
+                "last_successful_offload": "2026-09-01T00:00:00+00:00"}]
+    receipts = {"x": {"last_passed_at": "2026-09-02T00:00:00+00:00"}}
     key = dict(KEY_READY, backend="host-cred", tpm=TPM_OFF)
     steps = compute_readiness_steps(
         soul_key=key, restic_key=RESTIC_READY, offload_targets=targets,

@@ -68,6 +68,13 @@ def _write_receipt(name: str, receipt: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     receipts = _read_receipts()
     existing = receipts.get(name, {})
+    if receipt.get("last_successful_offload"):
+        # the moment this target FIRST held a good backup, kept for good (a receipt written
+        # before this field existed starts from its own last success): the restore test only
+        # counts as done when it passed after this
+        existing.setdefault(
+            "first_successful_offload",
+            existing.get("last_successful_offload") or receipt["last_successful_offload"])
     existing.update(receipt)
     receipts[name] = existing
     path.write_text(json.dumps(receipts, indent=2))

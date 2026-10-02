@@ -30,6 +30,31 @@ def _restic_password(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OSIRIS_RESTIC_PASSWORD", "a-test-password")
 
 
+def test_the_first_successful_offload_is_stamped_once_and_kept() -> None:
+    offload_runner._write_receipt("nas", {"last_attempt_at": "T0", "last_error": "unreachable"})
+    assert "first_successful_offload" not in offload_runner.offload_receipts()["nas"]
+
+    offload_runner._write_receipt(
+        "nas", {"last_successful_offload": "T1", "last_attempt_at": "T1", "last_error": None})
+    offload_runner._write_receipt(
+        "nas", {"last_successful_offload": "T2", "last_attempt_at": "T2", "last_error": None})
+    offload_runner._write_receipt("nas", {"last_attempt_at": "T3", "last_error": "unreachable"})
+
+    receipt = offload_runner.offload_receipts()["nas"]
+    assert receipt["first_successful_offload"] == "T1"
+    assert receipt["last_successful_offload"] == "T2"
+
+
+def test_an_older_receipt_without_the_stamp_starts_from_its_own_last_success() -> None:
+    offload_runner._receipts_path().write_text(
+        '{"nas": {"last_successful_offload": "T5", "last_attempt_at": "T5", "last_error": null}}')
+
+    offload_runner._write_receipt(
+        "nas", {"last_successful_offload": "T6", "last_attempt_at": "T6", "last_error": None})
+
+    assert offload_runner.offload_receipts()["nas"]["first_successful_offload"] == "T5"
+
+
 def test_receipts_round_trip_and_merge_never_clobber_a_prior_success() -> None:
     assert offload_runner.offload_receipts() == {}
     offload_runner._write_receipt(
