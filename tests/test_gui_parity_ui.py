@@ -70,7 +70,7 @@ def test_backup_status_fetch_is_its_own_reusable_function() -> None:
     # SAME fetch+render, never a duplicated copy that could drift.
     assert "async function renderBackupStatusSection() {" in _CONSOLE_JS
     body = _CONSOLE_JS.split(
-        "async function renderSettingsSectionOffload() {", 1)[1][:700]
+        "async function renderSettingsSectionOffload() {", 1)[1][:1000]
     assert "renderBackupStatusSection()" in body
 
 

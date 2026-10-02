@@ -36,6 +36,16 @@ button, select, input, textarea {
   font: inherit;
   color: var(--text);
 }
+/* The rule above sets the text colour but never a background, so any text field or menu a
+   class does not style (the Author Composition box, for one) fell back to the browser's
+   white under near-white text. Give them the console's own field look; every class that
+   styles its own field (the search box, .filter, the table editors) still overrides this:
+   :where() keeps this rule at zero specificity, so a plain class always wins. */
+:where(textarea, select, input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="range"])) {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
 
 /* Scrollbars */
 * { scrollbar-width: thin; scrollbar-color: var(--border2) transparent; }
@@ -738,6 +748,47 @@ select.field:focus, input.field:focus { border-color: var(--border-focus); }
 #main.righthidden #right { overflow: hidden; }
 #main.lefthidden.righthidden { grid-template-columns: 0 minmax(0, 1fr) 0; }
 
+/* PHONE WIDTHS: the left rail (230px) and the inspector (330px) together are wider than the
+   screen, which left the centre stage with no width at all. Below 720px the stage always gets
+   the full width, and an opened rail floats over it (toggled from the header, closed by
+   default -- see the matching setup beside toggleLeft in console.js). */
+@media (max-width: 720px) {
+  #main, #main.lefthidden, #main.righthidden, #main.lefthidden.righthidden {
+    grid-template-columns: 0 minmax(0, 1fr) 0;
+  }
+  #main:not(.lefthidden) #left, #main:not(.righthidden) #right {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: min(300px, 85vw);
+    z-index: 60;
+    background: var(--bg, #0d1117);
+    box-shadow: 0 0 24px rgba(0, 0, 0, 0.6);
+    overflow-y: auto;
+  }
+  #main:not(.lefthidden) #left { left: 0; }
+  #main:not(.righthidden) #right { right: 0; }
+  .grip { display: none; }
+  /* wide lens-result tables scroll sideways inside their own box instead of being cut off */
+  .r-table { display: block; max-width: 100%; overflow-x: auto; }
+  /* break at spaces, never inside a number (body: outranks the later base rule): it let every column shrink to one
+     character wide ("4 / 0 / 6" down the screen) instead of scrolling */
+  body .r-table td, body .r-table th { word-break: normal; overflow-wrap: break-word; }
+  /* the search icon sat flush against the settings gear */
+  .search-compact-btn { margin-right: 8px; }
+  .bar-right { gap: 6px; }
+}
+/* the advanced doors (replace the key, run an offload, test a restore) stay out of the setup
+   path: one collapsed section per panel, closed until someone opens it. */
+.adv-section { margin-top: 14px; }
+.adv-section > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 .grip { position: absolute; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 20; }
 .grip:hover, .grip.on { background: var(--blue); opacity: .45; }
 .grip.l { left: calc(var(--lw, 230px) - 3px); }
@@ -1090,6 +1141,33 @@ select.field:focus, input.field:focus { border-color: var(--border-focus); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* .ee-table is built for Browse's object list: fixed layout, every cell one line cut off with an
+   ellipsis. The Settings, Repairs and stepper panels reuse the same table for prose and form
+   fields, where a cut-off cell hides the very text or value the person came to read (setting
+   names, repair descriptions, a stepper reason, an offload location). Those tables carry
+   .ee-form: the browser sizes the columns and long text wraps instead of being clipped. */
+.ee-table.ee-form { table-layout: auto; }
+.ee-table.ee-form td {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+.ee-table.ee-form td:first-child { min-width: 9em; }
+.readiness-label { white-space: nowrap; }
+@media (max-width: 720px) { .readiness-label { white-space: normal; } }
+.ee-table.ee-form button { white-space: nowrap; }
+/* the Offload targets editor has eight columns, wider than the pane beside the inspector:
+   scroll it sideways rather than cutting the last columns off. */
+.ee-form-scroll { overflow-x: auto; }
+.ee-table.ee-form input:not([type="checkbox"]), .ee-table.ee-form select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 4.5em;
+}
+.ee-table.ee-form select { min-width: 9em; }
+.ee-table.ee-form td:has(> input[type="password"]),
+.ee-table.ee-form td:has(> input[type="number"]) { white-space: nowrap; }
 /* THE SETTINGS PANE FOLLOW-UP (thread ea9aedba, Thoth mail 13404, live Chrome review):
    button/select/input/textarea's own global rule (top of this file) sets `color` but
    never `background` -- every editable cell an ee-table renders (the Offload Targets

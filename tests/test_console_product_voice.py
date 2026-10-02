@@ -138,7 +138,7 @@ def test_registry_secret_replace_uses_an_inline_password_field() -> None:
 # --- item 3: layout order -- Readiness moved up near the top --------------------------
 
 def test_section_order_is_key_offload_readiness_registry_desk() -> None:
-    body = _CONSOLE_JS.split("async function renderSettingsPane() {", 1)[1][:600]
+    body = _CONSOLE_JS.split("async function renderSettingsPane() {", 1)[1][:1000]
     key_at = body.index("settingsSectionShell('key'")
     offload_at = body.index("settingsSectionShell('offload'")
     box_at = body.index("settingsSectionShell('box'")

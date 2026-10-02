@@ -662,6 +662,19 @@ function settingsEffectProse(effect) {
 var SETTINGS_LIST = null, SETTINGS_CONTAINER_ID = 'result';
 // THE SETTINGS PANE embeds this section (Registry) too: same containerId-tracking
 // pattern renderKeyInto/renderOffloadInto above already use.
+// The Settings pane wraps each panel in its own titled section, so a panel embedded there
+// drops its own title (the same word twice) and its standalone centring padding.
+function panelEmbedded(containerId) { return /^settings-/.test(containerId || ''); }
+function panelTitleHtml(containerId, title, mb) {
+  return panelEmbedded(containerId) ? '' :
+    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:' + (mb || 4) + 'px">' + title + '</h2>';
+}
+// ISO timestamps with microseconds are for machines: show a person the local date and time.
+function fmtWhen(iso) {
+  var d = new Date(iso);
+  if (!iso || isNaN(d.getTime())) return iso || '';
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
 async function renderSettingsInto(containerId) {
   SETTINGS_CONTAINER_ID = containerId;
   var container = $(containerId);
@@ -770,13 +783,12 @@ function renderSettingsPanelHtml(items) {
         '<td style="vertical-align:top">' + settingsActionCell(it) + '</td></tr>';
     }).join('');
     return '<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin:20px 0 8px">' +
-      esc(g) + '</h3><table class="ee-table"><thead><tr><th>Setting</th><th>Value</th><th>Effect</th><th></th></tr></thead>' +
-      '<tbody>' + rows + '</tbody></table>';
+      esc(g) + '</h3><div class="ee-form-scroll"><table class="ee-table ee-form"><thead><tr><th>Setting</th><th>Value</th><th>Effect</th><th></th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table></div>';
   }).join('');
-  return '<div style="padding:16px 0">' +
-    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Registry</h2>' +
-    '<div class="o-faint" style="margin-bottom:8px">Every configuration setting, in one place. Change a value and save it, ' +
-    'with a short reason where one is required.</div>' +
+  return '<div style="padding:' + (panelEmbedded(SETTINGS_CONTAINER_ID) ? '0' : '16px 0') + '">' +
+    panelTitleHtml(SETTINGS_CONTAINER_ID, 'Registry') +
+    '<div class="o-faint" style="margin-bottom:8px" title="Change a value and save it, with a short reason where one is required.">Every configuration setting.</div>' +
     sections + '</div>';
 }
 function settingsFieldValue(item) {
@@ -893,8 +905,8 @@ function renderRepairsPanel() {
   }).join('');
   container.innerHTML = '<div style="padding:16px;max-width:900px;margin:0 auto">' +
     '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Repairs</h2>' +
-    '<div class="o-faint" style="margin-bottom:8px">The eight backfill repair verbs. Dry run always writes nothing.</div>' +
-    '<table class="ee-table"><thead><tr><th>Target</th><th>What it does</th><th></th><th></th></tr></thead><tbody>' +
+    '<div class="o-faint" style="margin-bottom:8px" title="Dry run always writes nothing.">Backfill repairs.</div>' +
+    '<table class="ee-table ee-form"><thead><tr><th>Target</th><th>What it does</th><th></th><th></th></tr></thead><tbody>' +
     rows + '</tbody></table></div>';
 }
 function repairUpdateButtonState(target) {
@@ -1033,16 +1045,16 @@ function renderKeyPanelHtml(s) {
       '<button class="iconbtn" onclick="recoverKeyBrowser()">Recover using a security key</button>'
     : (s.rotation_in_flight ? '' :
        enrollBtn +
-       '<div style="margin-bottom:8px"><label><input type="checkbox" id="key-rotate-confirm" ' +
+       '<details class="adv-section"><summary>Advanced</summary>' +
+       '<div style="margin:8px 0"><label><input type="checkbox" id="key-rotate-confirm" ' +
        'onchange="$(\'key-rotate-btn\').disabled = !this.checked" /> ' +
        'I understand existing data will move to a new key</label></div>' +
        '<button class="iconbtn" id="key-rotate-btn" disabled onclick="rotateKey()">Replace the encryption key</button> ' +
-       '<button class="iconbtn" onclick="restoreDrillKey()">Test restore</button>');
-  return '<div style="padding:16px;max-width:700px;margin:0 auto">' +
-    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Key</h2>' +
-    '<div class="o-faint" style="margin-bottom:8px">The encryption key that protects stored data. Set it up, replace it, ' +
-    'or add a way to recover it.</div>' +
-    '<table class="ee-table"><tbody>' +
+       '<button class="iconbtn" onclick="restoreDrillKey()">Test restore</button></details>');
+  return '<div style="' + (panelEmbedded(KEY_CONTAINER_ID) ? '' : 'padding:16px;max-width:700px;margin:0 auto') + '">' +
+    panelTitleHtml(KEY_CONTAINER_ID, 'Key') +
+    '<div class="o-faint" style="margin-bottom:8px" title="Set it up, replace it, or add a way to recover it.">The key that protects stored data.</div>' +
+    '<table class="ee-table ee-form"><tbody>' +
     '<tr><td>Set up</td><td>' + (s.present ? 'yes' : 'no') + '</td></tr>' +
     '<tr><td>Storage method</td><td>' + esc(keyBackendLabel(s.backend)) + '</td></tr>' +
     '<tr><td>File location</td><td><code>' + esc(s.path || '') + '</code></td></tr>' +
@@ -1407,14 +1419,13 @@ function removeOffloadRow(i) {
 }
 function renderOffloadPanelHtml() {
   var rows = (OFFLOAD_ROWS || []).map(function(t, i) { return offloadRowHtml(t, i); }).join('');
-  return '<div style="padding:16px 0">' +
-    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Offload targets</h2>' +
-    '<div class="o-faint" style="margin-bottom:4px">Extra backup copies that are only sometimes connected, such as an external drive or ' +
-    'a remote server. Storage location: <code>' + esc(OFFLOAD_VAULT || '(not set, see Registry)') + '</code></div>' +
-    '<div class="o-faint" style="margin-bottom:8px">These are copies only. The main working data is never stored here.</div>' +
-    '<table class="ee-table"><thead><tr><th>Name</th><th>Type</th><th>Location</th>' +
+  return '<div style="padding:' + (panelEmbedded(OFFLOAD_CONTAINER_ID) ? '0' : '16px 0') + '">' +
+    panelTitleHtml(OFFLOAD_CONTAINER_ID, 'Offload targets') +
+    '<div class="o-faint" style="margin-bottom:8px" title="' + esc('Copies only: the main working data is never stored here. Storage location: ' +
+      (OFFLOAD_VAULT || '(not set, see Registry)')) + '">Copies for a drive or server that is only sometimes connected.</div>' +
+    '<div class="ee-form-scroll"><table class="ee-table ee-form"><thead><tr><th>Name</th><th>Type</th><th>Location</th>' +
     '<th>Expected folder</th><th>Schedule</th><th>Enabled</th><th>Status</th><th></th></tr></thead>' +
-    '<tbody>' + rows + '</tbody></table>' +
+    '<tbody>' + rows + '</tbody></table></div>' +
     '<div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
     '<button class="iconbtn" onclick="addOffloadRow()">Add target</button> ' +
     '<label for="offload-reason">Reason for this change:</label>' +
@@ -1457,6 +1468,9 @@ async function saveOffloadTargets() {
 async function renderSettingsPane() {
   const container = $('result'); showPanel();
   $('entity-taxonomy-bar').style.display = 'none';
+  // the header and the left nav still said "Browse" over the Settings pane
+  $('page-title').textContent = 'Settings';
+  document.querySelectorAll('.lens-item').forEach(function(el) { el.classList.remove('sel'); });
   container.innerHTML =
     '<div style="padding:16px;max-width:1100px;margin:0 auto">' +
     '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:12px">Settings</h2>' +
@@ -1491,7 +1505,8 @@ async function renderSettingsSectionOffload() {
   container.innerHTML =
     '<div id="settings-restic-credential" class="o-faint">Loading remote backup password…</div>' +
     '<div id="settings-offload-targets" style="margin-top:12px"></div>' +
-    '<div style="margin-top:16px"><button class="iconbtn" onclick="runOffloadTick()">Run offload now</button></div>' +
+    '<details class="adv-section"><summary>Advanced</summary><div style="margin-top:8px">' +
+    '<button class="iconbtn" onclick="runOffloadTick()">Run offload now</button></div></details>' +
     '<div id="settings-backup-status" class="o-faint" style="margin-top:12px">Loading backup status…</div>';
   await Promise.all([
     renderResticCredentialWidget(), renderOffloadInto('settings-offload-targets'),
@@ -1599,10 +1614,10 @@ function renderBackupStatusHtml(status) {
       '<td class="o-faint">' + esc(t.last_successful_offload || 'never') + '</td>' +
       '<td class="o-faint">' + esc(t.last_error || '') + '</td></tr>';
   }).join('');
-  return '<div class="o-faint" style="margin-bottom:4px">As of ' + esc(status.as_of || '') + '</div>' +
-    '<table class="ee-table"><thead><tr><th>Backup schedule</th><th>Default</th><th>Set to</th>' +
+  return '<div class="o-faint" style="margin-bottom:4px">As of ' + esc(fmtWhen(status.as_of)) + '</div>' +
+    '<table class="ee-table ee-form"><thead><tr><th>Backup schedule</th><th>Default</th><th>Set to</th>' +
     '<th>Status</th></tr></thead><tbody>' + timerRows + '</tbody></table>' +
-    (targetRows ? '<table class="ee-table" style="margin-top:8px"><thead><tr><th>Target</th><th>Type</th>' +
+    (targetRows ? '<table class="ee-table ee-form" style="margin-top:8px"><thead><tr><th>Target</th><th>Type</th>' +
      '<th>Connection</th><th>Last successful offload</th><th>Last error</th></tr></thead><tbody>' +
      targetRows + '</tbody></table>' : '');
 }
@@ -1639,7 +1654,7 @@ function deskCardHtml(c, band) {
     : '';
   var foldedIdsAttr = c.thread_folded ? ' data-folded="' + esc(JSON.stringify(c.thread_folded.ids)) + '"' : '';
   return '<div style="border-bottom:1px solid var(--border);padding:8px 0">' +
-    '<div><strong>' + esc(c.from || '') + '</strong> <span class="o-faint">' + esc(c.when || '') + '</span></div>' +
+    '<div><strong>' + esc(c.from || '') + '</strong> <span class="o-faint">' + esc(fmtWhen(c.when)) + '</span></div>' +
     '<div>' + esc((c.body || '').slice(0, 400)) + '</div>' + foldNote + replyBox +
     '<button class="iconbtn" style="margin-top:6px" data-id="' + c.id + '"' + foldedIdsAttr +
     ' onclick="ackDeskCard(this)">Ack</button></div>';
@@ -1745,8 +1760,8 @@ async function rejectMergeCandidate(btn) {
 var READINESS_STEP_ACTIONS = {
   enroll_recovery: { kind: 'jump', target: 'settings-sec-key', label: 'Enroll' },
   configure_offload: { kind: 'jump', target: 'settings-sec-offload', label: 'Set destination' },
-  // needs a physical touch, so it runs from a terminal: no button, the tooltip names it
-  verify_recovery: { kind: 'hint' },
+  // needs a physical touch, so it runs from a terminal: a button that copies the command
+  verify_recovery: { kind: 'copy', label: 'Copy command', command: 'osiris soul-key verify-recovery' },
   // needs sudo, so it can never be automatic: a button that copies the command
   tpm_setup: { kind: 'copy', label: 'Copy command' },
 };
@@ -1783,8 +1798,8 @@ function readinessStepRow(s) {
   var act = s.action ? READINESS_STEP_ACTIONS[s.action.kind] : null;
   var btn = act && act.kind === 'jump'
     ? '<button class="iconbtn" onclick="readinessJump(' + JSON.stringify(act.target) + ')">' + esc(act.label) + '</button>'
-    : (act && act.kind === 'copy' && s.action.commands
-      ? '<button class="iconbtn" data-cmd="' + esc(s.action.commands[0]) + '" onclick="readinessCopy(this)">' + esc(act.label) + '</button>'
+    : (act && act.kind === 'copy' && (act.command || (s.action.commands && s.action.commands[0]))
+      ? '<button class="iconbtn" data-cmd="' + esc(act.command || s.action.commands[0]) + '" onclick="readinessCopy(this)">' + esc(act.label) + '</button>'
       : '');
   var p = s.progress;
   var pct = p && p.total ? Math.max(0, Math.min(100, Math.round(100 * p.done / p.total))) : null;
@@ -1795,7 +1810,7 @@ function readinessStepRow(s) {
   var reason = s.reason ? esc(s.reason) + (s.progress && s.status !== 'done' ? esc(pctText) : '') : '';
   var tip = READINESS_STEP_TIPS[s.key] ? ' title="' + esc(READINESS_STEP_TIPS[s.key]) + '"' : '';
   return '<tr class="' + (s.current ? 'readiness-current' : '') + '"' + tip + '>' +
-    '<td style="white-space:nowrap">' + readinessStepDot(s.status) + ' ' + esc(s.label) + '</td>' +
+    '<td class="readiness-label">' + readinessStepDot(s.status) + ' ' + esc(s.label) + '</td>' +
     '<td class="o-faint">' + reason + bar + '</td>' +
     '<td>' + btn + '</td>' +
     '</tr>';
@@ -1812,7 +1827,7 @@ function renderReadinessStepperHtml(readiness, deployStatus) {
        (inSync ? ', up to date' : ', update available (' +
         (deployStatus.deploy_snapshot_sha || '').slice(0, 8) + ')'))
     : '';
-  return '<table class="ee-table"><tbody>' + rows + '</tbody></table>' +
+  return '<div class="ee-form-scroll"><table class="ee-table ee-form"><tbody>' + rows + '</tbody></table></div>' +
     (version ? '<div class="o-faint" style="margin-top:6px">' + esc(version) + '</div>' : '');
 }
 // Chrome-walk finding: the Key panel's own init/rotate/enroll/recover buttons, and the
@@ -2015,6 +2030,17 @@ function wireGrips() { const main = $('main'); document.querySelectorAll('[data-
 // was the cytoscape board's own resizeFit, retired with the board itself; the space
 // canvas already resizes itself via its own window "resize" listener.
 function _afterResize() {}
+// On a phone-width screen both rails start closed (osiris.css floats them over the stage
+// when opened) so the centre stage is not squeezed to nothing.
+(function() {
+  function closeRailsOnPhone() {
+    var m = $('main');
+    if (m && window.matchMedia && window.matchMedia('(max-width: 720px)').matches) {
+      m.classList.add('lefthidden', 'righthidden');
+    }
+  }
+  if ($('main')) closeRailsOnPhone(); else window.addEventListener('DOMContentLoaded', closeRailsOnPhone);
+})();
 function toggleLeft() { $('main').classList.toggle('lefthidden'); _afterResize(); }
 function toggleRight() { $('main').classList.toggle('righthidden'); _afterResize(); }
 
