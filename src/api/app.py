@@ -20,7 +20,7 @@ import os
 import re
 import uuid
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -69,6 +69,7 @@ from src.orchestrator.compositions import (
 from src.orchestrator.console import get_console, set_console
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.federation import federated_query, promote, to_preview
+from src.orchestrator.graph_stream import SnapshotCache
 from src.orchestrator.handoff import abandon, open_handoff, post_back
 from src.orchestrator.handoff import tray as handoff_tray
 from src.orchestrator.manifests import load_manifests, project_triggers
@@ -168,10 +169,15 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
                 "project_triggers timed out waiting for a lock on `triggers` (likely a "
                 "concurrent pg_dump or similar); leaving the previous projection in "
                 "place, the console still binds")
+        graph_refresher = asyncio.create_task(
+            _snapshot_cache(app).run_refresher(app.state.pool, app.state.shutting_down))
         try:
             yield
         finally:
             app.state.shutting_down.set()
+            graph_refresher.cancel()
+            with suppress(asyncio.CancelledError):
+                await graph_refresher
             await app.state.arq.aclose()
             await app.state.redis.aclose()
             if own:
@@ -788,15 +794,21 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         ]}
 
     @app.get("/graph/stream")
-    async def graph_stream_snapshot(p: asyncpg.Pool = Depends(get_pool)) -> Response:
+    async def graph_stream_snapshot(
+        request: Request, fresh: bool = Query(False), p: asyncpg.Pool = Depends(get_pool),
+    ) -> Response:
         """NAVIGABLE SPACE, THE SERVER: the whole graph as typed arrays, a shape agreed
         on and frozen before this route landed. See
         src.orchestrator.graph_stream's own module docstring for the exact wire format:
-        this route is a thin wrapper, `fetch_snapshot` does the whole query+encode."""
-        from src.orchestrator.graph_stream import fetch_snapshot
-
-        data = await fetch_snapshot(p)
-        return Response(content=data, media_type="application/octet-stream")
+        `fetch_snapshot` does the whole query+encode. The response comes from
+        `SnapshotCache` (see there): a snapshot built a moment ago is served at once, its
+        own header watermark is where the client's delta stream resumes, and
+        `X-Graph-Snapshot-Age` says how old it is. `?fresh=1` waits for a snapshot built
+        after the request instead (a client that has just learned of a change, or found the
+        graph empty)."""
+        data, age = await _snapshot_cache(request.app).get(p, fresh=fresh)
+        return Response(content=data, media_type="application/octet-stream",
+                        headers={"X-Graph-Snapshot-Age": f"{age:.1f}"})
 
     @app.get("/graph/stream/deltas")
     async def graph_stream_deltas(
@@ -2244,6 +2256,15 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 # from the canonical and `git show` it in the tracked repo (the same repo gitlog ingested).
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 _REPO_DIR = os.environ.get("OSIRIS_REPO_DIR", ".")
+
+
+def _snapshot_cache(app: FastAPI) -> SnapshotCache:
+    """The app's one snapshot cache, made on first use so an app whose lifespan never ran
+    (the test fixtures) still has one."""
+    cache = getattr(app.state, "graph_snapshots", None)
+    if cache is None:
+        cache = app.state.graph_snapshots = SnapshotCache()
+    return cache
 
 
 async def _services_restarted_since_key(key_created_age_seconds: float | None) -> bool | None:

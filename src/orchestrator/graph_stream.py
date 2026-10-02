@@ -139,12 +139,17 @@ change since all three ship together here:
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
+import logging
 import math
 import re
 import struct
+import time
 import uuid
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import asyncpg
@@ -152,6 +157,8 @@ import asyncpg
 from src.ontology.link_classes import link_class
 from src.orchestrator.capture import CONTESTED_SQL
 from src.orchestrator.project_identity import resolve_merge_survivors
+
+_log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 STATUS_RETIRED = 1 << 0
@@ -790,18 +797,25 @@ async def resolve_deltas_start_cursor(
     pool: asyncpg.Pool, *, since: int | None, last_event_id: str | None,
 ) -> int:
     """THE DELTA CURSOR FIX: where a fresh
-    `/graph/stream/deltas` connection starts, in order: `since` (a client passing
-    /graph/stream's own watermark), then the standard SSE `Last-Event-ID` reconnect
-    header, then, and only then, `outbox_watermark`, i.e. "now," never the backlog.
+    `/graph/stream/deltas` connection starts: the LATER of `since` (a client passing
+    /graph/stream's own watermark) and the standard SSE `Last-Event-ID` reconnect header,
+    and only when neither is given, `outbox_watermark`, i.e. "now," never the backlog.
+    The later of the two, because a browser's automatic reconnect re-requests the ORIGINAL
+    url (still carrying the snapshot's own `since`) with a newer `Last-Event-ID`: resuming
+    from the snapshot again would replay everything since it, while the header says exactly
+    where the stream had got to. A snapshot is served from a cache now, so `since` is what
+    keeps a client from missing the changes between the snapshot and the present.
     Pulled out of the route itself so this decision is directly unit-testable without
     standing up a real SSE connection."""
-    if since is not None:
-        return since
+    parsed_last: int | None = None
     if last_event_id is not None:
         try:
-            return int(last_event_id)
+            parsed_last = int(last_event_id)
         except ValueError:
-            pass
+            parsed_last = None
+    known = [c for c in (since, parsed_last) if c is not None]
+    if known:
+        return max(known)
     return await outbox_watermark(pool)
 
 
@@ -862,3 +876,103 @@ async def deltas_since(
             delta["y"] = float(r["y"])
         deltas.append(delta)
     return deltas, new_cursor
+
+
+# --- THE SNAPSHOT CACHE: opening Browse must not wait for a rebuild ---------------------------
+#
+# `fetch_snapshot` rebuilds the whole graph on every call (63,000 objects and 250,000 edges
+# measured live: first byte after 50 seconds, because the response is built whole before any
+# of it is sent, and its JSON header alone is 5.5 MB). The wire format is frozen and its
+# header needs every object, so the response cannot honestly start early. What can: serve a
+# snapshot that was already built. Safe because every snapshot carries the outbox WATERMARK
+# it was built at and the client catches up through `/graph/stream/deltas?since=<watermark>`,
+# so a snapshot a few minutes old is the same graph minus a short, replayable tail.
+#
+#   * a snapshot younger than `FRESH_SECONDS` is served as is;
+#   * an older one up to `MAX_STALE_SECONDS` is served immediately while ONE background
+#     rebuild runs (a failed rebuild keeps the old snapshot and tries again next request);
+#   * past that (or with nothing built yet) the request waits for the build, and
+#     concurrent requests share that one build instead of starting their own;
+#   * the console warms the cache at startup and refreshes it every `REFRESH_SECONDS`, so a
+#     person opening Browse almost never meets a cold cache.
+
+FRESH_SECONDS = 60.0
+MAX_STALE_SECONDS = 1800.0   # bounded: the deltas replayed after a snapshot grow with its age
+REFRESH_SECONDS = 300.0
+
+
+class SnapshotCache:
+    def __init__(
+        self, *, fresh_secs: float = FRESH_SECONDS, max_stale_secs: float = MAX_STALE_SECONDS,
+        refresh_secs: float = REFRESH_SECONDS,
+        build: Callable[[asyncpg.Pool], Awaitable[bytes]] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.fresh_secs = fresh_secs
+        self.max_stale_secs = max_stale_secs
+        self.refresh_secs = refresh_secs
+        self._build = build or fetch_snapshot
+        self._clock = clock
+        self._data: bytes | None = None
+        self._built_at = 0.0
+        self._inflight: asyncio.Task[bytes] | None = None
+        self._inflight_started = 0.0
+        self.builds = 0
+
+    def age(self) -> float | None:
+        return None if self._data is None else self._clock() - self._built_at
+
+    def _start_build(self, pool: asyncpg.Pool) -> asyncio.Task[bytes]:
+        if self._inflight is None or self._inflight.done():
+            self._inflight_started = self._clock()
+            self._inflight = asyncio.create_task(self._run_build(pool))
+        return self._inflight
+
+    async def _run_build(self, pool: asyncpg.Pool) -> bytes:
+        data = await self._build(pool)
+        self._data, self._built_at = data, self._clock()
+        self.builds += 1
+        return data
+
+    async def get(self, pool: asyncpg.Pool, *, fresh: bool = False) -> tuple[bytes, float]:
+        """`(snapshot bytes, age in seconds)`. Returns at once when a usable snapshot exists.
+        `fresh=True` (a client that just learned of a change the cached snapshot may not hold,
+        or found the graph empty) waits for a build that STARTED after this call, joining one
+        already running only if it began after it."""
+        if fresh:
+            requested = self._clock()
+            running = self._inflight
+            if running is not None and not running.done() and self._inflight_started < requested:
+                with contextlib.suppress(Exception):
+                    await asyncio.shield(running)  # too early to hold this change: let it end
+            running = self._inflight
+            if running is None or running.done() or self._inflight_started < requested:
+                running = self._start_build(pool)
+            return await asyncio.shield(running), 0.0
+        age = self.age()
+        if self._data is not None and age is not None and age <= self.max_stale_secs:
+            if age > self.fresh_secs:
+                task = self._start_build(pool)
+                task.add_done_callback(_log_failed_refresh)
+            return self._data, age
+        # nothing usable: wait for the (shared) build; shield so one caller giving up
+        # does not cancel the build the others are waiting on
+        data = await asyncio.shield(self._start_build(pool))
+        return data, 0.0
+
+    async def run_refresher(self, pool: asyncpg.Pool, stop: asyncio.Event) -> None:
+        """Warms the cache, then rebuilds it every `refresh_secs` until `stop` is set. A
+        failed build is logged and retried next round, never fatal to the console."""
+        while not stop.is_set():
+            try:
+                await self._start_build(pool)
+            except Exception:  # noqa: BLE001 - a failed warm-up must not take the console down
+                _log.warning("graph snapshot refresh failed", exc_info=True)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=self.refresh_secs)
+
+
+def _log_failed_refresh(task: asyncio.Task[bytes]) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        _log.warning("graph snapshot refresh failed; serving the previous one",
+                     exc_info=task.exception())

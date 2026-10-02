@@ -145,8 +145,13 @@ function decodeSnapshot(buf) {
   return out;
 }
 
-async function fetchStreamSnapshot() {
-  const buf = await fetch("/graph/stream").then((r) => r.arrayBuffer());
+// `fresh` asks the server for a snapshot built AFTER this request instead of its cached one
+// (served at once, up to a few minutes old): used when this tab has just learned of a change the
+// cached snapshot may not hold, or found the graph empty. The returned `watermark` is where the
+// delta stream resumes, so nothing between the snapshot and now is missed.
+async function fetchStreamSnapshot(fresh = false) {
+  const buf = await fetch("/graph/stream" + (fresh ? "?fresh=1" : "")).then(
+    (r) => r.arrayBuffer());
   const snap = decodeSnapshot(buf);
   const nodes = [];
   for (let i = 0; i < snap.count; i++) {
@@ -232,7 +237,8 @@ async function fetchStreamSnapshot() {
     code: c.community, projectName: Osiris.projectDisplayName(snap.projects[c.project]),
     count: c.count, cx: c.cx, cy: c.cy, radius: c.radius,
   }));
-  return { nodes, edges, edgeClassByType, projectAggregates, communityAggregates };
+  return { nodes, edges, edgeClassByType, projectAggregates, communityAggregates,
+           watermark: snap.watermark };
 }
 
 // resolves DOM refs from a passed-in container map, falling back to the same fixed ids
@@ -1514,7 +1520,7 @@ export async function initSpace(container) {
   // for the one label rule that replaces it (viewport top-N by degree, de-overlapped, at
   // every zoom, no separate project-label pass).
   setStatus("loading the whole graph…");
-  let { nodes, edges, edgeClassByType, projectAggregates, communityAggregates } =
+  let { nodes, edges, edgeClassByType, projectAggregates, communityAggregates, watermark } =
     await fetchStreamSnapshot();
   applyLensStateFromHash(); // before the first buildScene/fitToNodes so the initial render already reflects a shared link
   buildProjectFillModel(projectAggregates, edges);
@@ -1561,10 +1567,11 @@ export async function initSpace(container) {
     const pollTimer = setInterval(async () => {
       if (--triesLeft <= 0) { clearInterval(pollTimer); return; }
       let fresh;
-      try { fresh = await fetchStreamSnapshot(); } catch { return; }
+      try { fresh = await fetchStreamSnapshot(true); } catch { return; }
       if (!fresh.nodes.length) return;
       clearInterval(pollTimer);
-      ({ nodes, edges, edgeClassByType, projectAggregates, communityAggregates } = fresh);
+      ({ nodes, edges, edgeClassByType, projectAggregates, communityAggregates, watermark } =
+        fresh);
       nodesById = new Map(nodes.map((nd) => [nd.id, nd]));
       applyLensStateFromHash();
       buildProjectFillModel(projectAggregates, edges);
@@ -1604,7 +1611,7 @@ export async function initSpace(container) {
       if (needsFullResync) {
         needsFullResync = false;
         ({ nodes, edges, edgeClassByType, projectAggregates, communityAggregates } =
-          await fetchStreamSnapshot());
+          await fetchStreamSnapshot(true));
         nodesById = new Map(nodes.map((nd) => [nd.id, nd]));
         buildProjectFillModel(projectAggregates, edges);
         buildCommunityModel(communityAggregates);
@@ -1618,7 +1625,10 @@ export async function initSpace(container) {
     }, 250);
   }
   try {
-    const es = new EventSource("/graph/stream/deltas");
+    // resume from the snapshot's own watermark: the snapshot may come from the server's cache,
+    // so "now" would silently skip whatever changed between it and this connection
+    const es = new EventSource(
+      "/graph/stream/deltas" + (watermark != null ? `?since=${watermark}` : ""));
     es.onmessage = (ev) => {
       let delta;
       try { delta = JSON.parse(ev.data); } catch { return; }

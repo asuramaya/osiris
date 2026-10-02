@@ -5,6 +5,7 @@ import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -959,11 +960,19 @@ async def test_graph_stream_endpoint_returns_decodable_bytes(
 # A fresh connection never starts from cursor 0 any more.
 
 
-async def test_resolve_cursor_prefers_since_over_everything(actions: Actions) -> None:
+async def test_resolve_cursor_takes_the_later_of_since_and_last_event_id(
+    actions: Actions,
+) -> None:
+    """A browser's automatic reconnect re-requests the original url, which still carries the
+    snapshot's own `since`, with a NEWER Last-Event-ID: the stream resumes where it got to,
+    never from the snapshot again. A first connection has only `since`."""
     await actions.create_or_find_object("Thread", "thread:gs-cursor-since", "test")
-    cursor = await resolve_deltas_start_cursor(
-        actions.pool, since=42, last_event_id="999")
-    assert cursor == 42
+    assert await resolve_deltas_start_cursor(
+        actions.pool, since=42, last_event_id=None) == 42
+    assert await resolve_deltas_start_cursor(
+        actions.pool, since=42, last_event_id="999") == 999
+    assert await resolve_deltas_start_cursor(
+        actions.pool, since=1000, last_event_id="999") == 1000
 
 
 async def test_resolve_cursor_falls_back_to_last_event_id(actions: Actions) -> None:
@@ -991,3 +1000,292 @@ async def test_resolve_cursor_falls_back_to_watermark_on_a_malformed_last_event_
     cursor = await resolve_deltas_start_cursor(
         actions.pool, since=None, last_event_id="not-a-number")
     assert cursor == await outbox_watermark(actions.pool)
+
+
+# --- THE SNAPSHOT CACHE: opening Browse must not wait for a rebuild ---------------------------
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _cache(builder: Any, clock: _Clock, **kw: float) -> Any:
+    from src.orchestrator.graph_stream import SnapshotCache
+
+    return SnapshotCache(build=builder, clock=clock, **kw)
+
+
+async def test_the_first_request_builds_and_later_ones_are_served_at_once() -> None:
+    clock = _Clock()
+    built: list[int] = []
+
+    async def _build(pool: Any) -> bytes:
+        built.append(1)
+        return b"snapshot-1"
+
+    cache = _cache(_build, clock)
+    first, age1 = await cache.get(object())
+    clock.now += 5
+    second, age2 = await cache.get(object())
+
+    assert (first, second) == (b"snapshot-1", b"snapshot-1")
+    assert age1 == 0.0 and age2 == 5.0
+    assert built == [1]  # the second request never touched the builder
+
+
+async def test_concurrent_cold_requests_share_one_build() -> None:
+    import asyncio
+
+    clock = _Clock()
+    gate = asyncio.Event()
+    built: list[int] = []
+
+    async def _build(pool: Any) -> bytes:
+        built.append(1)
+        await gate.wait()
+        return b"shared"
+
+    cache = _cache(_build, clock)
+    waiting = [asyncio.create_task(cache.get(object())) for _ in range(5)]
+    await asyncio.sleep(0)
+    gate.set()
+    results = await asyncio.gather(*waiting)
+
+    assert [r[0] for r in results] == [b"shared"] * 5
+    assert built == [1]
+
+
+async def test_an_old_snapshot_is_served_at_once_while_one_rebuild_runs() -> None:
+    import asyncio
+
+    clock = _Clock()
+    gate = asyncio.Event()
+    versions = iter([b"v1", b"v2"])
+
+    async def _build(pool: Any) -> bytes:
+        data = next(versions)
+        if data == b"v2":
+            await gate.wait()  # the rebuild is slow, as on the live graph
+        return data
+
+    cache = _cache(_build, clock, fresh_secs=60.0)
+    await cache.get(object())
+    clock.now += 120  # stale, but inside the bound
+
+    data, age = await cache.get(object())  # must not wait for v2
+    again, _ = await cache.get(object())
+
+    assert data == b"v1" and age == 120.0 and again == b"v1"
+    gate.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    fresh, fresh_age = await cache.get(object())
+    assert fresh == b"v2" and fresh_age == 0.0
+    assert cache.builds == 2  # the two stale requests shared ONE rebuild
+
+
+async def test_a_failed_rebuild_keeps_serving_the_previous_snapshot() -> None:
+    clock = _Clock()
+    calls: list[int] = []
+
+    async def _build(pool: Any) -> bytes:
+        calls.append(1)
+        if len(calls) > 1:
+            raise RuntimeError("database went away")
+        return b"v1"
+
+    cache = _cache(_build, clock, fresh_secs=60.0)
+    await cache.get(object())
+    clock.now += 120
+
+    data, _ = await cache.get(object())  # triggers the failing background rebuild
+    import asyncio
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    data_after, _ = await cache.get(object())
+
+    assert data == b"v1" and data_after == b"v1"
+
+
+async def test_past_the_staleness_bound_the_request_waits_for_a_real_rebuild() -> None:
+    clock = _Clock()
+    versions = iter([b"v1", b"v2"])
+
+    async def _build(pool: Any) -> bytes:
+        return next(versions)
+
+    cache = _cache(_build, clock, max_stale_secs=600.0)
+    await cache.get(object())
+    clock.now += 601  # too old to hand to a client: its delta tail would be huge
+
+    data, age = await cache.get(object())
+
+    assert data == b"v2" and age == 0.0
+
+
+async def test_a_cold_failure_reaches_the_caller_and_the_next_request_retries() -> None:
+    clock = _Clock()
+    outcomes = iter([RuntimeError("down"), b"ok"])
+
+    async def _build(pool: Any) -> bytes:
+        out = next(outcomes)
+        if isinstance(out, Exception):
+            raise out
+        return out
+
+    cache = _cache(_build, clock)
+    with pytest.raises(RuntimeError, match="down"):
+        await cache.get(object())
+
+    data, _ = await cache.get(object())
+    assert data == b"ok"
+
+
+async def test_the_refresher_warms_the_cache_and_stops_when_told() -> None:
+    import asyncio
+
+    clock = _Clock()
+    built: list[int] = []
+
+    async def _build(pool: Any) -> bytes:
+        built.append(1)
+        return b"warm"
+
+    cache = _cache(_build, clock, refresh_secs=0.01)
+    stop = asyncio.Event()
+    task = asyncio.create_task(cache.run_refresher(object(), stop))
+    await asyncio.sleep(0.1)
+    stop.set()
+    await asyncio.wait_for(task, timeout=2)
+
+    assert len(built) >= 2  # warmed, then refreshed on its own
+    data, _ = await cache.get(object())
+    assert data == b"warm"
+
+
+async def test_a_failing_refresher_round_never_kills_the_loop() -> None:
+    import asyncio
+
+    clock = _Clock()
+    attempts: list[int] = []
+
+    async def _build(pool: Any) -> bytes:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("first round fails")
+        return b"recovered"
+
+    cache = _cache(_build, clock, refresh_secs=0.01)
+    stop = asyncio.Event()
+    task = asyncio.create_task(cache.run_refresher(object(), stop))
+    await asyncio.sleep(0.1)
+    stop.set()
+    await asyncio.wait_for(task, timeout=2)
+
+    assert len(attempts) >= 2
+    assert (await cache.get(object()))[0] == b"recovered"
+
+
+async def test_the_route_serves_the_cached_snapshot_and_reports_its_age(
+    client: httpx.AsyncClient, actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The route answers from the cache: a second request does not rebuild, the body keeps the
+    frozen wire format (it decodes), and the response says how old the snapshot is."""
+    from src.orchestrator import graph_stream
+
+    real = graph_stream.fetch_snapshot
+    built: list[int] = []
+
+    async def _counted(pool: Any) -> bytes:
+        built.append(1)
+        return await real(pool)
+
+    # the app makes its cache on first use, after this patch, so it builds through the counter
+    monkeypatch.setattr(graph_stream, "fetch_snapshot", _counted)
+
+    first = await client.get("/graph/stream")
+    second = await client.get("/graph/stream")
+
+    assert first.status_code == second.status_code == 200
+    assert len(built) == 1
+    assert float(second.headers["x-graph-snapshot-age"]) >= 0.0
+    assert decode_snapshot(second.content)["watermark"] is not None
+
+
+async def test_a_fresh_request_waits_for_a_build_that_started_after_it() -> None:
+    import asyncio
+
+    clock = _Clock()
+    gate = asyncio.Event()
+    built: list[bytes] = []
+
+    async def _build(pool: Any) -> bytes:
+        data = f"v{len(built) + 1}".encode()
+        built.append(data)
+        if data == b"v2":
+            await gate.wait()
+        return data
+
+    cache = _cache(_build, clock, fresh_secs=60.0)
+    await cache.get(object())          # v1 is cached
+    clock.now += 120
+    stale, _ = await cache.get(object())  # serves v1 and starts the v2 rebuild
+    assert stale == b"v1"
+    clock.now += 1                      # a change happens now: v2 began BEFORE it
+    waiting = asyncio.create_task(cache.get(object(), fresh=True))
+    await asyncio.sleep(0)
+    gate.set()
+    data, age = await waiting
+
+    assert data == b"v3" and age == 0.0  # not v2: that build started before the request
+    assert built == [b"v1", b"v2", b"v3"]
+
+
+async def test_a_fresh_request_with_nothing_running_just_builds_once() -> None:
+    clock = _Clock()
+    built: list[int] = []
+
+    async def _build(pool: Any) -> bytes:
+        built.append(1)
+        return b"v"
+
+    cache = _cache(_build, clock)
+    await cache.get(object())
+    clock.now += 1
+    data, _ = await cache.get(object(), fresh=True)
+
+    assert data == b"v" and len(built) == 2
+
+
+async def test_the_route_honours_fresh_by_rebuilding(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import graph_stream
+
+    real = graph_stream.fetch_snapshot
+    built: list[int] = []
+
+    async def _counted(pool: Any) -> bytes:
+        built.append(1)
+        return await real(pool)
+
+    monkeypatch.setattr(graph_stream, "fetch_snapshot", _counted)
+    await client.get("/graph/stream")
+    await client.get("/graph/stream")
+    assert len(built) == 1
+    await client.get("/graph/stream?fresh=1")
+    assert len(built) == 2
+
+
+def test_the_console_resumes_its_delta_stream_from_the_snapshots_own_watermark() -> None:
+    """The snapshot comes from a cache, so connecting to the delta stream at "now" would skip
+    whatever changed between the snapshot and the connection."""
+    js = (Path(__file__).parent.parent / "src" / "ui" / "static" / "space.js").read_text()
+    assert 'new EventSource(\n      "/graph/stream/deltas" + (watermark != null' in js
+    assert "watermark: snap.watermark" in js
+    # a resync and the empty-graph poll must not be answered from the cache
+    assert js.count("fetchStreamSnapshot(true)") == 2

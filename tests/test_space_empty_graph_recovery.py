@@ -80,7 +80,9 @@ def test_nodes_by_id_is_declared_before_the_empty_graph_poll_that_reassigns_it()
 def test_empty_graph_poll_is_scoped_to_a_genuinely_empty_snapshot() -> None:
     assert "if (nodes.length === 0) {" in _SPACE_JS
     poll_block = _poll_block()
-    assert "fetchStreamSnapshot()" in poll_block
+    # the poll asks for a snapshot built AFTER the request: a cached empty one would hide
+    # the objects the layout worker has just placed
+    assert "fetchStreamSnapshot(true)" in poll_block
     assert "setInterval" in poll_block
 
 

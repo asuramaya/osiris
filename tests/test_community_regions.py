@@ -35,8 +35,8 @@ def test_community_aggregates_resolve_the_project_name_off_the_same_table_projec
 
 
 def test_fetch_stream_snapshot_returns_community_aggregates_alongside_project_ones() -> None:
-    body = _SPACE_JS.split("async function fetchStreamSnapshot()", 1)[1][:6000]
-    assert "return { nodes, edges, edgeClassByType, projectAggregates, communityAggregates };" \
+    body = _SPACE_JS.split("async function fetchStreamSnapshot(", 1)[1][:6000]
+    assert "return { nodes, edges, edgeClassByType, projectAggregates, communityAggregates,"\
         in body
 
 
