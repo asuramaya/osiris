@@ -1,12 +1,11 @@
-"""THE KEY PANEL, piece 2: browser WebAuthn PRF recovery enrollment + recovery (Thoth
-mail 13002), over Seshat's own new routes (src/orchestrator/soul_key_recovery_material.py,
-API-half tip, branch seshat-recovery-material-api) rather than Khnum's CLI-only
-enroll-recovery/recover, which stay untouched.
+"""THE KEY PANEL, piece 2: browser WebAuthn PRF recovery enrollment + recovery
+over the new routes (src/orchestrator/soul_key_recovery_material.py)
+rather than the CLI-only enroll-recovery/recover, which stay untouched.
 
 The HKDF/Fernet-compatible wrap logic here was cross-verified byte-for-byte against
 Python's own cryptography.fernet.Fernet + HKDF via a throwaway Node+Python round-trip
 before landing (both directions: a JS-wrapped token decrypts correctly under Python's
-Fernet, and a Python-wrapped token decrypts correctly here) — not merely spec-followed.
+Fernet, and a Python-wrapped token decrypts correctly here), not merely spec-followed.
 What could not be verified without real hardware is the actual navigator.credentials
 create/get PRF ceremony itself; flagged in the code's own header comment, matching the
 same honesty soul_crypto.py's own FIDO2 section states about its CLI counterpart.
@@ -20,8 +19,8 @@ from pathlib import Path
 _CONSOLE_JS = (Path(__file__).parent.parent / "src" / "ui" / "static" / "console.js").read_text()
 
 
-# --- RP id: RULED live off /soul-key/status, never hard-coded (decision ff21aed514bc,
-# Thoth mail 13005) -- the console is plain-http localhost:8011, a WebAuthn secure
+# --- RP id: RULED live off /soul-key/status, never hard-coded
+# -- the console is plain-http localhost:8011, a WebAuthn secure
 # context only for the literal hostname "localhost"; "osiris.local" (soul_crypto.py's
 # own PRE-ruling constant) could never interoperate with a real browser. rp_id is a
 # settings-registry knob both the CLI and this page read; GET /soul-key/status returns
@@ -164,7 +163,7 @@ def test_enroll_button_only_offered_when_zero_recovery_paths_are_enrolled() -> N
 
 
 def test_cli_pointer_still_stands_alongside_the_new_browser_button() -> None:
-    # piece 2 is an ADDITIONAL path, never a replacement for Khnum's CLI-only door.
+    # piece 2 is an ADDITIONAL path, never a replacement for the CLI-only door.
     # THE FIRST-RUN STEPPER (operator ruling: no paragraphs in the console) moved this
     # pointer off its own inline sentence onto a tooltip on the browser button itself --
     # same fact, no longer prose.

@@ -1,5 +1,5 @@
-"""commands_status — the install-verification twin of gate_hook.hook_status/push_guard.
-hook_status (#204, Thoth ruling msg 6918, decision 012b36fb). CLAUDE_COMMANDS_DIR overrides
+"""commands_status: the install-verification twin of gate_hook.hook_status/push_guard.
+hook_status. CLAUDE_COMMANDS_DIR overrides
 the machine target so these never touch the real ~/.claude/commands."""
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ def test_commands_status_reports_installed_and_current(tmp_path: Path, monkeypat
 
 
 def test_commands_status_is_accurate_on_the_real_osiris_checkout() -> None:
-    """The real, live installed state — not a synthetic repo — proving the actual house
+    """The real, live installed state (not a synthetic repo), proving the actual house
     convention (tracked commands/*.md + scripts/install_commands.sh) round-trips, the same
     discipline test_gate_hook_install.py's own final test uses."""
     status = commands_status(REPO_ROOT)
@@ -71,7 +71,7 @@ def test_install_commands_script_is_idempotent_and_copies_real_changes(
     tmp_path: Path,
 ) -> None:
     """Real subprocess run of scripts/install_commands.sh, same discipline
-    test_gate_hook_install.py's own tests use for install_gate_hook.sh — a synthetic repo
+    test_gate_hook_install.py's own tests use for install_gate_hook.sh: a synthetic repo
     with its own commands/ so this never touches the real machine ~/.claude/commands."""
     repo = tmp_path / "repo"
     repo.mkdir()

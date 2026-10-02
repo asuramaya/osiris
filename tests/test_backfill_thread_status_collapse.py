@@ -1,4 +1,4 @@
-"""Lane 1 backfill (Thoth msg 6435): pure classification logic, no DB needed — the refusal
+"""Lane 1 backfill pure classification logic, no DB needed; the refusal
 and reopen-exclusion rules are the safety-critical part of
 scripts/backfill_thread_status_collapse.py."""
 from __future__ import annotations
@@ -29,8 +29,8 @@ def test_classify_excludes_a_genuine_reopen() -> None:
 
 
 def test_classify_collapses_open_retracted_resolved_when_resolved_is_newest() -> None:
-    """Wave 2 ruling (msg 6482 item 2): a mind's later resolve outranks the janitor's
-    earlier retraction of machine-authored mined noise — the exact shape read and ruled on
+    """A mind's later resolve outranks the janitor's
+    earlier retraction of machine-authored mined noise: the exact shape read and ruled on
     for all 4 live specimens (thread:28124c00 et al., each carrying real self_declared
     resolve prose)."""
     rows = [
@@ -42,7 +42,7 @@ def test_classify_collapses_open_retracted_resolved_when_resolved_is_newest() ->
 
 
 def test_classify_refuses_retracted_newest_alongside_resolved() -> None:
-    """Never ruled on — 'retracted' outranking a 'resolved' witness is a different shape
+    """Never ruled on: 'retracted' outranking a 'resolved' witness is a different shape
     than the one actually read; refuse rather than guess."""
     rows = [
         _row("open", datetime(2026, 1, 1, tzinfo=UTC)),

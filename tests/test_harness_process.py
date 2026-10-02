@@ -1,4 +1,4 @@
-"""The harness process adapter (thread e7f173a6): spawn/resume/reply/list_sessions/stop
+"""The harness process adapter spawn/resume/reply/list_sessions/stop
 across claude/dsh/crush/cursor, capability refusal by name, and selection by pin or auto.
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ from src.orchestrator.harness_process import (
 
 def _make_crush_db(path: Path, *, session_id: str, n: int) -> Path:
     """A minimal, real crush.db (the actual schema, verified live against a real
-    install) — `n` messages for one session, so ingest_crush_session has something
+    install): `n` messages for one session, so ingest_crush_session has something
     genuine to read."""
     conn = sqlite3.connect(str(path))
     try:
@@ -455,8 +455,8 @@ async def test_crush_list_sessions_tolerates_malformed_json(
     assert await CrushAdapter().list_sessions(cwd="/tmp/r") == []
 
 
-# ═══ CrushAdapter.materialize (wave 13 item 2): writes soul_lines back into a target
-# crush.db — a genuine restore (real sessions/messages schema), never a rewrite of the
+# ═══ CrushAdapter.materialize writes soul_lines back into a target
+# crush.db: a genuine restore (real sessions/messages schema), never a rewrite of the
 # session's original db. ═══════════════════════════════════════════════════════════════════
 
 async def test_crush_materialize_needs_a_dest(actions: Actions) -> None:

@@ -1,8 +1,8 @@
-"""THE AMBIENT SEAM WHISPER (decision d80621a7 piece 1) — the waist tells a mind how close
+"""THE AMBIENT SEAM WHISPER (piece 1): the waist tells a mind how close
 its next seam is, because the agent near the ceiling is exactly the agent not thinking to
 ask. Witnesses: the tail-read % with the mtime cache, the known-window-only law (no alarm
 on a guessed denominator), and the tier line (seam-soon vs WRITE BACK NOW at the house
-ALARM_PCT — one authority)."""
+ALARM_PCT: one authority)."""
 from __future__ import annotations
 
 import json
@@ -56,8 +56,8 @@ def test_seam_note_tiers_and_silences() -> None:
     assert alarm is not None and "WRITE BACK NOW" in alarm
 
 
-# --- ONCE PER CROSSING, NOT ONCE PER CALL (thread e2326ab7, Soundwave XIV's decepticons
-# report): `_seam_note` alone fires on EVERY call inside a band — `_seam_note_once` debounces
+# --- ONCE PER CROSSING, NOT ONCE PER CALL (a debounce
+# witness): `_seam_note` alone fires on EVERY call inside a band: `_seam_note_once` debounces
 # it to fire only when the band actually changes, the same once-per-crossing discipline the
 # offload ritual's own marker files already have. ------------------------------------------
 
@@ -73,7 +73,7 @@ def test_seam_note_once_fires_on_first_entry_then_falls_silent() -> None:
     srv._seam_last_band.clear()
     first = srv._seam_note_once("agent:wallpaper1", 50, 45)
     assert first is not None and "seam soon" in first
-    # ~40 consecutive calls at an unchanged pct: the exact wallpaper Thoth's dispatch named
+    # ~40 consecutive calls at an unchanged pct: the exact wallpaper the debounce exists to stop
     for _ in range(40):
         assert srv._seam_note_once("agent:wallpaper1", 50, 45) is None
     # a DIFFERENT pct still inside the SAME band is still wallpaper, not news
@@ -93,7 +93,7 @@ def test_seam_note_once_re_arms_after_dropping_below_the_floor() -> None:
     srv._seam_last_band.clear()
     srv._seam_note_once("agent:rearm1", 50, 45)
     assert srv._seam_note_once("agent:rearm1", 50, 45) is None
-    # a real write-back/compaction happened — pct falls back under the whisper floor
+    # a real write-back/compaction happened: pct falls back under the whisper floor
     assert srv._seam_note_once("agent:rearm1", 10, 45) is None
     # climbing back into the seam band is real news again, not a repeat
     again = srv._seam_note_once("agent:rearm1", 50, 45)

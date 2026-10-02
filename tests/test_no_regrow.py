@@ -1,4 +1,4 @@
-"""THE NO-REGROW RULE (operator's word via Thoth DM 8606/8618, 2026-09-09): an open
+"""THE NO-REGROW RULE (2026-09-09): an open
 obligation Thread with no annotate/owner-change/resolution for N_GRACE_DAYS past its own
 `stale_after` reclassifies to kind='task', status untouched, with a receipt attempted on
 the owner's mail. A SEPARATE clock from obligation_hygiene.py's own no-regrow leg (tested
@@ -31,7 +31,7 @@ async def _mk_obligation(
     (defaulting to NOW, i.e. "never touched since going stale" when `stale_after` is
     older) and whose `stale_after` is written separately so its own observed_at never
     counts as a touch on the thread's OTHER fields (matching how open_thread's real
-    stale_after write already works — a distinct assertion, not bundled with summary/
+    stale_after write already works, a distinct assertion, not bundled with summary/
     status)."""
     touched_at = touched_at or NOW
     t = await actions.create_or_find_object("Thread", canonical, _SRC)
@@ -92,7 +92,7 @@ async def test_past_stale_after_and_past_the_grace_window_with_no_touch_would_re
     assert _find(out["no_action"], t) is None
 
 
-# ═══ fix (d), Metron's mechanism report (mail 8890/8921/8922): a CONTESTED thread is
+# ═══ fix (d): a CONTESTED thread is
 # excluded from reclassify even past the grace window ════════════════════════════════
 
 async def test_a_contested_obligation_never_reclassifies_even_past_the_grace_window(
@@ -118,7 +118,7 @@ async def test_a_touch_after_stale_after_resets_the_window_even_when_old(
     actions: Actions,
 ) -> None:
     """The thread went stale long ago, but a mind annotated/reclassified/re-owned it
-    AFTER that — a real touch, not the sweep's own write. Never reclassified, no matter
+    AFTER that, a real touch, not the sweep's own write. Never reclassified, no matter
     how far stale_after itself now sits in the past."""
     stale_after = NOW - timedelta(days=N_GRACE_DAYS + 30)
     recent_touch = NOW - timedelta(days=1)
@@ -192,7 +192,7 @@ async def test_execute_never_reclassifies_a_row_still_inside_the_grace_window(
 # ═══ the scheduled leg's own kill switch ═════════════════════════════════════════════
 
 async def test_scheduled_tick_is_on_by_default_and_can_be_darkened(actions: Actions) -> None:
-    """Operator 2026-09-09: "make it 7 days, flip it on" — the default is ON; the kill
+    """The scheduled tick: the default is ON; the kill
     switch still darkens it."""
     stale_after = NOW - timedelta(days=N_GRACE_DAYS + 1)
     old_touch = stale_after - timedelta(days=1)

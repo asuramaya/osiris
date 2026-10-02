@@ -1,6 +1,6 @@
-"""TOOL-LIST REFRESH (thread 6a78e64b leg 1, operator-directed): osiris-mcp declares the
+"""TOOL-LIST REFRESH osiris-mcp declares the
 MCP protocol's own `tools.listChanged` capability and nudges each newly-connected client
-session with `notifications/tools/list_changed`, once, on its first tool call — so a
+session with `notifications/tools/list_changed`, once, on its first tool call, so a
 long-lived agent session that RESUMES its connection across an osiris-mcp restart learns
 new tools exist instead of staying silently stale until something else forces a refresh.
 """
@@ -15,7 +15,7 @@ from mcp.server.lowlevel.server import NotificationOptions
 def test_the_tools_capability_is_declared_by_default() -> None:
     """FastMCP's own create_initialization_options() call sites (stdio/sse/streamable-http,
     all inside the SDK) never pass a NotificationOptions, so tools_changed silently
-    defaulted to False — the capability was never advertised even though the SDK fully
+    defaulted to False, so the capability was never advertised even though the SDK fully
     supports sending the notification. The wrapped method must default it to True."""
     opts = srv.mcp._mcp_server.create_initialization_options()
     assert opts.capabilities.tools is not None
@@ -23,7 +23,7 @@ def test_the_tools_capability_is_declared_by_default() -> None:
 
 
 def test_an_explicit_notification_options_is_never_overridden() -> None:
-    """The wrapper only supplies a DEFAULT — a caller that passes its own
+    """The wrapper only supplies a DEFAULT; a caller that passes its own
     NotificationOptions (none do today, but the SDK contract must still hold) keeps
     exactly what it asked for, tools_changed included."""
     opts = srv.mcp._mcp_server.create_initialization_options(
@@ -53,8 +53,8 @@ class _FakeCtx:
 
 
 async def test_nudge_sends_the_notification_once_per_connection() -> None:
-    """The dedup key is `_conn_key` — the SAME per-client-session key the identity cache
-    uses — so one connection's many tool calls cost exactly one notification, not one per
+    """The dedup key is `_conn_key`, the SAME per-client-session key the identity cache
+    uses, so one connection's many tool calls cost exactly one notification, not one per
     call."""
     srv._notified_list_changed.clear()
     ctx = _FakeCtx()
@@ -68,7 +68,7 @@ async def test_nudge_sends_the_notification_once_per_connection() -> None:
 
 
 async def test_nudge_is_per_connection_not_global() -> None:
-    """A SECOND, distinct connection still gets its own nudge — the dedup must not starve
+    """A SECOND, distinct connection still gets its own nudge; the dedup must not starve
     every connection after the first one ever seen."""
     srv._notified_list_changed.clear()
     ctx_a, ctx_b = _FakeCtx(), _FakeCtx()
@@ -84,7 +84,7 @@ async def test_nudge_is_per_connection_not_global() -> None:
 
 async def test_nudge_is_ambient_never_load_bearing() -> None:
     """A session whose `send_tool_list_changed` itself raises must not propagate the
-    error — this rides every single tool call, and a transport hiccup here must never cost
+    error: this rides every single tool call, and a transport hiccup here must never cost
     the caller its actual tool result."""
 
     class _BoomSession:

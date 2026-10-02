@@ -1,7 +1,6 @@
-"""`/spawn` — the SubagentStart/SubagentStop server half (mcp_server.py's spawn_route), plus
-the fork orientation it now carries (obligation 706c27dc's second half, msg 6034, the
-operator's own correction: "the subagent forks need to know they are forks though"). Same
-exercise pattern as test_stop_route.py's own `_FakeRequest` — no ASGI stack needed.
+"""`/spawn`: the SubagentStart/SubagentStop server half (mcp_server.py's spawn_route), plus
+the fork orientation it now carries (subagent forks need to know they are forks). Same
+exercise pattern as test_stop_route.py's own `_FakeRequest`, no ASGI stack needed.
 """
 from __future__ import annotations
 
@@ -37,7 +36,7 @@ async def test_spawn_start_of_a_fork_returns_orientation_naming_its_own_patronym
     parent = "agent:sproutparent1"
     await _name_parent(actions, parent)
     sid = "sproutsess1-4000-8000-000000000001"
-    # spawn_route resolves the parent via find_mount keyed on session_id[:8]'s own job_dir —
+    # spawn_route resolves the parent via find_mount keyed on session_id[:8]'s own job_dir:
     # the SAME derivation osiris_hook.py's anchor filter uses (Key Technical Concepts: the
     # durable-job_dir door), so the mount must be registered under that exact path.
     await mounts.save_mount(actions.pool, job_dir=str(Path.home() / ".claude" / "jobs"
@@ -66,7 +65,7 @@ async def test_spawn_start_of_an_ordinary_subagent_carries_no_orientation(
     actions: Actions,
 ) -> None:
     """A fresh (non-fork) subagent has no inherited parent identity to confuse itself
-    with — the orientation is scoped to agent_type == 'fork' only."""
+    with; the orientation is scoped to agent_type == 'fork' only."""
     from src import mcp_server as srv
 
     saved_pool = srv._pool
@@ -84,7 +83,7 @@ async def test_spawn_start_of_an_ordinary_subagent_carries_no_orientation(
 
 
 async def test_spawn_stop_of_a_fork_carries_no_orientation(actions: Actions) -> None:
-    """Stop has nothing left to orient — even a fork's Stop announcement stays silent on
+    """Stop has nothing left to orient: even a fork's Stop announcement stays silent on
     this field, since printing it there would be a stray, unexplained line."""
     from src import mcp_server as srv
 

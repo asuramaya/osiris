@@ -1,5 +1,5 @@
 """Every session-lifecycle hook that posts to the MCP server over loopback must honor an
-env override (thread from Sekhmet's #40 finding, decision 66318e03): the hardcoded
+env override (an off-box session could not reach it): the hardcoded
 127.0.0.1:8790 default only ever reaches a worker on the SAME box, so an off-box Claude
 Code session (hyper-docker, the operator's laptop) rang a doorbell nobody heard,
 invisibly.
@@ -7,8 +7,8 @@ invisibly.
 RETARGETED at the #187 retirement (2026-08-25): these cases used to reload seven
 per-purpose scripts that no longer exist. osiris_hook.py now owns every lifecycle event
 and reads all of them ONCE into a module-level `_URLS` dict at import, so the property
-under test is unchanged — a one-time env read whose override must land and whose loopback
-default must survive when unset — but there is one module to reload instead of seven."""
+under test is unchanged, a one-time env read whose override must land and whose loopback
+default must survive when unset, but there is one module to reload instead of seven."""
 from __future__ import annotations
 
 import importlib
@@ -48,7 +48,7 @@ def test_hook_url_honors_its_env_override(
 
 def test_every_url_is_overridable_none_hardcoded() -> None:
     """The parametrize above can only prove the cases it lists. This proves the LIST is
-    complete — a new entry added to _URLS without an env override, or without a test case,
+    complete, a new entry added to _URLS without an env override, or without a test case,
     fails here rather than shipping as a silently unreachable off-box hook."""
     import scripts.osiris_hook as hook
 
@@ -57,7 +57,7 @@ def test_every_url_is_overridable_none_hardcoded() -> None:
         "precompact", "spawn", "succession",
     }
     assert set(hook._URLS) == covered, (
-        "scripts/osiris_hook.py's _URLS changed — add the new key to this test AND give it "
+        "scripts/osiris_hook.py's _URLS changed, add the new key to this test AND give it "
         "an os.environ.get() override, or an off-box session cannot reach it.")
 
 
@@ -70,7 +70,7 @@ def test_precompact_url_actually_used_not_just_the_constant(
     #93, THE MECHANICAL SETTLE: `precompact` now ALSO probes `_URLS["stop"]` (the same
     offload round trip the fallback's own "is a settle complete" check uses) AFTER the
     sweep POST, so this records every URL posted, in order, rather than a single
-    overwritten key — proving the sweep URL is AMONG them, not the only one, since
+    overwritten key, proving the sweep URL is AMONG them, not the only one, since
     "only one POST happens" was never this test's own claim (its docstring names the
     env-vs-import-time property, not the call count)."""
     import scripts.osiris_hook as hook
@@ -98,7 +98,7 @@ def test_precompact_url_actually_used_not_just_the_constant(
         hook.sys, "stdin",
         __import__("io").StringIO(
             '{"transcript_path": "/tmp/x.jsonl", "session_id": "s", "trigger": "manual"}'))
-    # main() dispatches on sys.argv[1], not a parameter — drive it the way the harness does.
+    # main() dispatches on sys.argv[1], not a parameter, drive it the way the harness does.
     monkeypatch.setattr(hook.sys, "argv", ["osiris_hook.py", "precompact"])
     hook.main()
     assert "http://worker.example:9000/sweep" in posted, (

@@ -1,4 +1,4 @@
-"""The watch — watermarks, source ticks, and the WATCH evaluator.
+"""The watch, watermarks, source ticks, and the WATCH evaluator.
 
 Proves the tripwire: a saved watch (a kind='watch' composition with a `select` spec)
 fires on a matching new graph mutation and stays QUIET on noise, the cursor primitives
@@ -133,7 +133,7 @@ async def test_tick_materializes_delta_and_advances_cursor(actions: Actions) -> 
 
 async def test_watch_is_a_runnable_lens(actions: Actions) -> None:
     """The P3 headline: a watch's select spec is ONE primitive. The same saved watch you
-    run() on demand (the lens — current members) is what the evaluator matches new objects
+    run() on demand (the lens, current members) is what the evaluator matches new objects
     against (the tripwire). Here we prove the lens half: run it and get the members."""
     from src.orchestrator.compositions import run_composition
     await save_watch(actions.pool, "sec orgs", "Organization", [], canonical_prefix="cik:")
@@ -148,7 +148,7 @@ async def test_watch_is_a_runnable_lens(actions: Actions) -> None:
 # --- the watch evaluator ----------------------------------------------------
 
 async def test_evaluator_fires_on_match_quiet_on_noise(actions: Actions) -> None:
-    # a watch = select(Organization, canonical scheme cik:) — "new SEC companies"
+    # a watch = select(Organization, canonical scheme cik:), "new SEC companies"
     wid = await save_watch(actions.pool, "new SEC companies", "Organization", [],
                            canonical_prefix="cik:")
 
@@ -253,7 +253,7 @@ async def test_evaluator_sink_failure_keeps_the_alert(actions: Actions) -> None:
 async def test_alert_delivery_is_rate_capped(
     actions: Actions, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """D1 — the 3am-false-alert guard: a burst writes every durable row, but DELIVERY is
+    """D1, the 3am-false-alert guard: a burst writes every durable row, but DELIVERY is
     capped per watch per window. The rows are never lost; only the side-channel is throttled."""
     monkeypatch.setenv("OSIRIS_ALERT_MAX_PER_WINDOW", "2")
     monkeypatch.setenv("OSIRIS_ALERT_COOLDOWN_SECS", "0")  # isolate the rate cap
@@ -270,7 +270,7 @@ async def test_alert_delivery_is_rate_capped(
 
     fired = await evaluate_watches(actions.pool, sink=sink)
     assert fired == 4                 # 4 durable rows written
-    assert len(delivered) == 2        # only 2 delivered (the cap) — no 3am flood
+    assert len(delivered) == 2        # only 2 delivered (the cap), no 3am flood
     n_rows = await actions.pool.fetchval("SELECT count(*) FROM alerts")
     n_delivered = await actions.pool.fetchval(
         "SELECT count(*) FROM alerts WHERE delivered_at IS NOT NULL")
@@ -278,13 +278,13 @@ async def test_alert_delivery_is_rate_capped(
 
 
 async def test_worker_heartbeat_liveness(actions: Actions) -> None:
-    """D3 — the dead-man's-switch. No beat → None (never); after write_heartbeat → ~0s
+    """D3, the dead-man's-switch. No beat → None (never); after write_heartbeat → ~0s
     fresh; an old beat reads stale-old, so /health/worker can flag a dead tripwire."""
     from src.orchestrator.monitor import heartbeat_age_secs, write_heartbeat
     assert await heartbeat_age_secs(actions.pool) is None  # never beaten
     await write_heartbeat(actions.pool)
     age = await heartbeat_age_secs(actions.pool)
-    assert age is not None and age < 5  # just beaten — fresh
+    assert age is not None and age < 5  # just beaten, fresh
     # simulate a dead worker: backdate the heartbeat 10 minutes
     await actions.pool.execute(
         "UPDATE watermarks SET updated_at = now() - interval '600 seconds' "
@@ -294,7 +294,7 @@ async def test_worker_heartbeat_liveness(actions: Actions) -> None:
 
 
 async def test_default_sink_routes_by_channel(monkeypatch: pytest.MonkeyPatch) -> None:
-    """D2 — the pluggable sink. No webhook + no email config → the log channel (delivers).
+    """D2, the pluggable sink. No webhook + no email config → the log channel (delivers).
     Email requested but SMTP unconfigured → recorded-only (returns False), never crashes."""
     from src.orchestrator.monitor import default_sink
 
@@ -306,7 +306,7 @@ async def test_default_sink_routes_by_channel(monkeypatch: pytest.MonkeyPatch) -
 
 
 async def test_evaluator_decoupled_from_cascade_published_at(actions: Actions) -> None:
-    """The evaluator claims via evaluated_at, never published_at — so draining the
+    """The evaluator claims via evaluated_at, never published_at, so draining the
     cascade and evaluating watches are independent passes over one outbox."""
     await save_watch(actions.pool, "any", "Organization", [])
     await actions.create_or_find_object("Organization", "cik:9", "edgar")

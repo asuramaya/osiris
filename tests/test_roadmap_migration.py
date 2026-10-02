@@ -1,5 +1,5 @@
-"""One-time harness-board -> graph migration (decision d83804c8, ruling 50c3ed90, msg 4408).
-plan_migration/aggregate_line are pure — no DB, no writes — tested directly. apply_migration
+"""One-time harness-board -> graph migration.
+plan_migration/aggregate_line are pure (no DB, no writes) and tested directly. apply_migration
 touches the graph and is exercised only by its own callers when actually authorized; not
 covered here (this module's whole point is that it is NOT called yet)."""
 from __future__ import annotations
@@ -116,13 +116,13 @@ def test_unsorted_count_matches_the_unmapped_threads() -> None:
 
 def test_completed_rows_never_consult_the_arc_map() -> None:
     # #30 is arc-mapped, but as a completed row it becomes a Decision, which has no arc
-    # field at all — ARCS is a Thread-only taxonomy (decision d83804c8).
+    # field at all, ARCS is a Thread-only taxonomy.
     plan = plan_migration([_task("30", status="completed")], store=STORE)
     assert plan["counts"]["threads"] == 0
     assert "arc" not in plan["decisions"][0]
 
 
-# ── aggregate_line: one line, never per-row noise (Khnum's batch rule) ─────────────────
+# ── aggregate_line: one line, never per-row noise ─────────────────
 
 def test_aggregate_line_reports_total_and_unsorted_percentage() -> None:
     tasks = [_task("1", status="completed"), _task("2", status="pending"),
@@ -141,7 +141,7 @@ def test_aggregate_line_handles_zero_threads_without_dividing_by_zero() -> None:
     assert "0 unsorted (0% of threads)" in line
 
 
-# ── run_aggregate_line: the real-run line, K = read-back repairs (msg 4429) ────────────
+# ── run_aggregate_line: the real-run line, K = read-back repairs ────────────
 
 def test_run_aggregate_line_appends_zero_repairs_when_none_fired() -> None:
     plan = plan_migration([_task("1", status="pending")], store=STORE)

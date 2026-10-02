@@ -1,6 +1,6 @@
-"""THE RESTIC REPOSITORY PASSWORD (src/orchestrator/restic_credential.py) — KEY
-CUSTODY REWRITTEN's own follow-on (ruling e0b98ff2, "same shape for the restic
-repository password"). Real systemd-creds round trips (this box genuinely has it,
+"""THE RESTIC REPOSITORY PASSWORD (src/orchestrator/restic_credential.py), KEY
+CUSTODY REWRITTEN's own follow-on (same shape for the restic
+repository password). Real systemd-creds round trips (this box genuinely has it,
 same discipline test_soul_crypto.py already holds), no fakes."""
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from src.orchestrator import restic_credential
 def _redirect_credstore_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Defense in depth, same reasoning as test_soul_crypto.py's own fixture of this
     name: every test below passes an explicit `path=`, so the DEFAULT credstore
-    location is never actually exercised here today — but a future test that omits
+    location is never actually exercised here today, but a future test that omits
     `path=` must never be able to silently read/write this developer's own real
     `~/.config/credstore.encrypted/`."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdgcfg"))
@@ -23,11 +23,11 @@ def _redirect_credstore_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 def test_restic_key_init_default_no_path_writes_into_the_credstore(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): with NO
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI: with NO
     explicit `--path`, the credential lands in the per-user encrypted credstore
     (redirected by the autouse fixture above to `tmp_path/xdgcfg/credstore.
-    encrypted/` — never the operator's real one), and a bare `get_restic_password()`
-    (also no path) reads it straight back — the SAME single-ladder agreement
+    encrypted/`, never the operator's real one), and a bare `get_restic_password()`
+    (also no path) reads it straight back, the SAME single-ladder agreement
     `test_soul_crypto.py`'s own equivalent fixed test proves for soul.key."""
     from src.ingest import systemd_credential
 
@@ -114,7 +114,7 @@ def test_get_restic_password_env_override_always_wins(
 def test_get_restic_password_reads_credentials_directory_first(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The DAEMON path (LoadCredentialEncrypted) — systemd has ALREADY decrypted the
+    """The DAEMON path (LoadCredentialEncrypted), systemd has ALREADY decrypted the
     credential into $CREDENTIALS_DIRECTORY before this process starts, so this is a
     plain file read, no systemd-creds subprocess involved at all."""
     monkeypatch.delenv("OSIRIS_RESTIC_PASSWORD", raising=False)
