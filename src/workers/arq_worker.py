@@ -1225,6 +1225,17 @@ async def tree_ingest_alarm_heartbeat(ctx: dict[str, Any]) -> int:
     return alarmed
 
 
+def _retention_receipt_line(table: str, deleted: int, cutoff: str, days: int = 90) -> str:
+    """One desk line per table, as a plain count of what was removed. It used to read
+    "audit_log: -14710 rows older than 90d", a leading minus that looks like a negative
+    count. A zero still gets a line, since a daily receipt that says nothing was due is
+    the confirmation the job ran."""
+    if deleted == 0:
+        return f"{table}: nothing older than {days} days to remove (cutoff {cutoff})"
+    noun = "row" if deleted == 1 else "rows"
+    return f"{table}: removed {deleted} {noun} older than {days} days (cutoff {cutoff})"
+
+
 async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     """THE RETENTION HEARTBEAT (wave 12 item 1, operator's word via Thoth DM 8378: "put
     outbox_retention and audit_log_retention ... on the heartbeat"): outbox/audit_log are
@@ -1264,8 +1275,7 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
         _log.warning("outbox retention heartbeat failed: %r", exc)
     else:
         deleted += outbox["deleted"]
-        lines.append(f"outbox: -{outbox['deleted']} rows older than 90d "
-                     f"(cutoff {outbox['cutoff']})")
+        lines.append(_retention_receipt_line("outbox", outbox["deleted"], outbox["cutoff"]))
 
     try:
         audit = await audit_log_retention(pool, days=90, execute=True)
@@ -1273,8 +1283,7 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
         _log.warning("audit_log retention heartbeat failed: %r", exc)
     else:
         deleted += audit["deleted"]
-        lines.append(f"audit_log: -{audit['deleted']} rows older than 90d "
-                     f"(cutoff {audit['cutoff']})")
+        lines.append(_retention_receipt_line("audit_log", audit["deleted"], audit["cutoff"]))
 
     if lines:
         with contextlib.suppress(Exception):  # the desk being unreachable must not sink the cron
