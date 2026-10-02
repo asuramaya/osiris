@@ -1655,7 +1655,8 @@ function deskCardHtml(c, band) {
   var foldedIdsAttr = c.thread_folded ? ' data-folded="' + esc(JSON.stringify(c.thread_folded.ids)) + '"' : '';
   return '<div style="border-bottom:1px solid var(--border);padding:8px 0">' +
     '<div><strong>' + esc(c.from || '') + '</strong> <span class="o-faint">' + esc(fmtWhen(c.when)) + '</span></div>' +
-    '<div>' + esc((c.body || '').slice(0, 400)) + '</div>' + foldNote + replyBox +
+    '<div class="desk-body" title="' + esc((c.body || '').slice(0, 400)) + '" onclick="this.classList.toggle(\'open\')">' +
+    esc((c.body || '').slice(0, 400)) + '</div>' + foldNote + replyBox +
     '<button class="iconbtn" style="margin-top:6px" data-id="' + c.id + '"' + foldedIdsAttr +
     ' onclick="ackDeskCard(this)">Ack</button></div>';
 }
@@ -1727,8 +1728,8 @@ function renderMergeCandidatesHtml(list) {
   }).join('');
   return '<h4 style="font-size:11px;text-transform:uppercase;color:var(--muted);margin:16px 0 4px">' +
     'Possible duplicates</h4>' +
-    '<div class="o-faint" style="margin-bottom:8px">These records may describe the same thing. ' +
-    'Merging is a deliberate step you run yourself; copy the command below into a terminal.</div>' + rows;
+    '<div class="o-faint" style="margin-bottom:8px" title="' + esc('Merging is a deliberate step you run yourself; ' +
+      'copy the command below into a terminal.') + '">Records that may be the same thing.</div>' + rows;
 }
 function copyMergeLine(btn) {
   var line = btn.getAttribute('data-line');
