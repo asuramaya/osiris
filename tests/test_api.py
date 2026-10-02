@@ -1427,6 +1427,47 @@ async def test_readiness_route_key_present_advances_past_the_first_step(
     assert steps["services_restarted"]["status"] == "needs_attention"
 
 
+async def test_the_status_routes_never_unseal_the_key(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The setup stepper sat on "Loading" for seconds because every status read unsealed the
+    host credential (about two seconds each) just to compare two fingerprints. None of the
+    routes the stepper calls may ever unseal the key now."""
+    import json
+
+    from src.ingest import soul_crypto
+
+    unsealed: list[int] = []
+
+    def _boom(blob: bytes) -> bytes:
+        unsealed.append(1)
+        raise AssertionError("a status route must never unseal the key")
+
+    monkeypatch.setattr(soul_crypto, "_decrypt_with_systemd_creds", _boom)
+    xdg = tmp_path / "xdg"
+    (xdg / "credstore.encrypted").mkdir(parents=True)
+    (xdg / "credstore.encrypted" / "soul.key").write_bytes(b"sealed-by-the-host")
+    key_file = tmp_path / "soul.key"
+    (tmp_path / "soul.key.recovery.json").write_text(json.dumps({
+        "credential_id": "c", "salt": "s", "wrapped_key": "w",
+        "key_fingerprint": "0123456789abcdef"}))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    monkeypatch.setenv("OSIRIS_RESTIC_PASSWORD_FILE", str(tmp_path / "no-such-restic"))
+    monkeypatch.setenv("OSIRIS_RESTORE_DRILL_RECEIPTS_FILE", str(tmp_path / "drill.json"))
+    monkeypatch.setenv("OSIRIS_OFFLOAD_RECEIPTS_FILE", str(tmp_path / "offload.json"))
+
+    for route in ("/soul-key/status", "/restic-key/status", "/readiness"):
+        r = await client.get(route)
+        assert r.status_code == 200, route
+
+    assert unsealed == []
+    status = (await client.get("/soul-key/status")).json()
+    assert status["present"] is True
+    assert status["recovery"]["enrolled"] is True
+    assert status["recovery"]["stale"] is None  # no cached fingerprint: unknown, not decrypted
+
+
 async def test_backfill_route_dry_run_reports_the_plan(
     client: httpx.AsyncClient,
 ) -> None:

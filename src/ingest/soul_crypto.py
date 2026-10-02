@@ -307,8 +307,80 @@ def read_key_bytes_at(resolved: Path, *, explicit: bool = False) -> bytes:
     `soul_key_status` first (checking `present`) never hit that."""
     cred_path = _credential_path(resolved, explicit=explicit)
     if cred_path.exists():
-        return _decrypt_with_systemd_creds(cred_path.read_bytes())
-    return resolved.read_bytes()
+        key = _decrypt_with_systemd_creds(cred_path.read_bytes())
+    else:
+        key = resolved.read_bytes()
+    _remember_fingerprint(resolved, key, explicit=explicit)
+    return key
+
+
+# --- THE KEY'S FINGERPRINT, CACHED: a status reader must never decrypt the key ---------------
+#
+# Unsealing a host credential costs about two seconds (systemd-creds talks to the host key or
+# the TPM), and the setup stepper and the status routes only want to know whether the recovery
+# enrollment still protects the LIVE key, which is a comparison of two short fingerprints. The
+# fingerprint (the same 16 hex characters the recovery file already records, never the key) is
+# therefore remembered in a small sidecar whenever the key is written or read, stamped with
+# the credential file's own mtime and size so a rotation or reseal invalidates it. A status
+# reader consults the sidecar only; a missing or stale one means "unknown", never a decrypt.
+
+def _fingerprint_cache_path(resolved: Path) -> Path:
+    return resolved.with_name(resolved.name + ".fingerprint.json")
+
+
+def _carrier_stamp(resolved: Path, *, explicit: bool) -> list[int] | None:
+    """[mtime_ns, size] of whichever file actually carries the key."""
+    cred_path = _credential_path(resolved, explicit=explicit)
+    for carrier in (cred_path, resolved):
+        try:
+            if carrier.exists():
+                st = carrier.stat()
+                return [st.st_mtime_ns, st.st_size]
+        except OSError:
+            return None
+    return None
+
+
+def _remember_fingerprint(resolved: Path, key: bytes, *, explicit: bool) -> None:
+    """Best effort: a status cache that cannot be written is a missing cache, never a failure."""
+    stamp = _carrier_stamp(resolved, explicit=explicit)
+    if stamp is None:
+        return
+    cache = _fingerprint_cache_path(resolved)
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({"fingerprint": key_fingerprint(key), "stamp": stamp}))
+        cache.chmod(0o600)
+    except OSError:
+        pass
+
+
+def cached_key_fingerprint(*, path: str | None = None) -> str | None:
+    """The live key's fingerprint from the sidecar, or None when there is none or the key
+    file changed since it was written. NEVER decrypts. `ensure_key_fingerprint_cached` (run by
+    deploy) is what fills it in for a key that predates the sidecar."""
+    resolved = _key_file_path(explicit=path)
+    try:
+        entry = json.loads(_fingerprint_cache_path(resolved).read_text())
+    except (OSError, ValueError):
+        return None
+    if entry.get("stamp") != _carrier_stamp(resolved, explicit=path is not None):
+        return None
+    fingerprint = entry.get("fingerprint")
+    return fingerprint if isinstance(fingerprint, str) else None
+
+
+def ensure_key_fingerprint_cached(*, path: str | None = None) -> bool:
+    """Fills the sidecar when it is missing or stale (one decrypt, off every request path:
+    deploy calls this). True when a valid fingerprint is cached afterwards."""
+    if cached_key_fingerprint(path=path) is not None:
+        return True
+    resolved = _key_file_path(explicit=path)
+    try:
+        read_key_bytes_at(resolved, explicit=path is not None)
+    except Exception:  # noqa: BLE001 - no readable key: nothing to cache
+        return False
+    return cached_key_fingerprint(path=path) is not None
 
 
 def read_legacy_key_bytes(resolved: Path) -> bytes:
@@ -476,6 +548,7 @@ def _write_key_for_backend(
     if backend == "file":
         resolved.write_bytes(key)
         resolved.chmod(0o600)
+        _remember_fingerprint(resolved, key, explicit=explicit_path)
         return resolved, "file"
     with_key = "host+tpm2" if backend == "host+tpm2" else "host"
     blob = _encrypt_with_systemd_creds(key, with_key=with_key)
@@ -486,6 +559,7 @@ def _write_key_for_backend(
     meta_path = _meta_path(resolved)
     meta_path.write_text(json.dumps({"backend": backend}))
     meta_path.chmod(0o600)
+    _remember_fingerprint(resolved, key, explicit=explicit_path)
     return cred_path, backend
 
 
@@ -543,6 +617,7 @@ def soul_key_reseal_tpm(*, path: str | None = None) -> dict[str, Any]:
     meta = _meta_path(resolved)
     meta.write_text(json.dumps({"backend": "host+tpm2"}))
     meta.chmod(0o600)
+    _remember_fingerprint(resolved, key, explicit=explicit)  # the file changed, the key did not
     return {"resealed": True, "backend": "host+tpm2"}
 
 
@@ -919,7 +994,9 @@ def soul_key_recovery_facts(*, path: str | None = None) -> dict[str, Any]:
     """Cheap, filesystem-only facts about the recovery enrollment, for status readers:
     `enrolled`, `restic_wrapped` (the backup password rides in the blob), and `stale`
     (the blob wraps a different key generation than the live key, so a recovery today
-    would return an out-of-date key; None when it cannot be told). No touch, no PIN."""
+    would return an out-of-date key; None when it cannot be told). No touch, no PIN, and it
+    NEVER decrypts the key (see `cached_key_fingerprint`): unsealing costs about two seconds
+    and this runs on every status request."""
     resolved = _key_file_path(explicit=path)
     recovery_path = _recovery_path(resolved)
     if not recovery_path.exists():
@@ -928,12 +1005,9 @@ def soul_key_recovery_facts(*, path: str | None = None) -> dict[str, Any]:
         blob = json.loads(recovery_path.read_text())
     except (OSError, ValueError):
         return {"enrolled": True, "restic_wrapped": False, "stale": None}
-    stale: bool | None
-    try:
-        live = read_key_bytes_at(resolved, explicit=path is not None)
-        stale = key_fingerprint(live) != blob.get("key_fingerprint")
-    except Exception:  # noqa: BLE001 - no readable live key: staleness is unknowable, never fatal
-        stale = None
+    live_fingerprint = cached_key_fingerprint(path=path)
+    stale: bool | None = (
+        None if live_fingerprint is None else live_fingerprint != blob.get("key_fingerprint"))
     return {"enrolled": True, "restic_wrapped": bool(blob.get("restic_password_wrapped")),
             "stale": stale}
 
