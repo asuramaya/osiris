@@ -783,13 +783,12 @@ function renderSettingsPanelHtml(items) {
         '<td style="vertical-align:top">' + settingsActionCell(it) + '</td></tr>';
     }).join('');
     return '<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin:20px 0 8px">' +
-      esc(g) + '</h3><table class="ee-table ee-form"><thead><tr><th>Setting</th><th>Value</th><th>Effect</th><th></th></tr></thead>' +
-      '<tbody>' + rows + '</tbody></table>';
+      esc(g) + '</h3><div class="ee-form-scroll"><table class="ee-table ee-form"><thead><tr><th>Setting</th><th>Value</th><th>Effect</th><th></th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table></div>';
   }).join('');
   return '<div style="padding:' + (panelEmbedded(SETTINGS_CONTAINER_ID) ? '0' : '16px 0') + '">' +
     panelTitleHtml(SETTINGS_CONTAINER_ID, 'Registry') +
-    '<div class="o-faint" style="margin-bottom:8px">Every configuration setting, in one place. Change a value and save it, ' +
-    'with a short reason where one is required.</div>' +
+    '<div class="o-faint" style="margin-bottom:8px" title="Change a value and save it, with a short reason where one is required.">Every configuration setting.</div>' +
     sections + '</div>';
 }
 function settingsFieldValue(item) {
@@ -906,7 +905,7 @@ function renderRepairsPanel() {
   }).join('');
   container.innerHTML = '<div style="padding:16px;max-width:900px;margin:0 auto">' +
     '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Repairs</h2>' +
-    '<div class="o-faint" style="margin-bottom:8px">The eight backfill repair verbs. Dry run always writes nothing.</div>' +
+    '<div class="o-faint" style="margin-bottom:8px" title="Dry run always writes nothing.">Backfill repairs.</div>' +
     '<table class="ee-table ee-form"><thead><tr><th>Target</th><th>What it does</th><th></th><th></th></tr></thead><tbody>' +
     rows + '</tbody></table></div>';
 }
@@ -1046,15 +1045,15 @@ function renderKeyPanelHtml(s) {
       '<button class="iconbtn" onclick="recoverKeyBrowser()">Recover using a security key</button>'
     : (s.rotation_in_flight ? '' :
        enrollBtn +
-       '<div style="margin-bottom:8px"><label><input type="checkbox" id="key-rotate-confirm" ' +
+       '<details class="adv-section"><summary>Advanced</summary>' +
+       '<div style="margin:8px 0"><label><input type="checkbox" id="key-rotate-confirm" ' +
        'onchange="$(\'key-rotate-btn\').disabled = !this.checked" /> ' +
        'I understand existing data will move to a new key</label></div>' +
        '<button class="iconbtn" id="key-rotate-btn" disabled onclick="rotateKey()">Replace the encryption key</button> ' +
-       '<button class="iconbtn" onclick="restoreDrillKey()">Test restore</button>');
+       '<button class="iconbtn" onclick="restoreDrillKey()">Test restore</button></details>');
   return '<div style="' + (panelEmbedded(KEY_CONTAINER_ID) ? '' : 'padding:16px;max-width:700px;margin:0 auto') + '">' +
     panelTitleHtml(KEY_CONTAINER_ID, 'Key') +
-    '<div class="o-faint" style="margin-bottom:8px">The encryption key that protects stored data. Set it up, replace it, ' +
-    'or add a way to recover it.</div>' +
+    '<div class="o-faint" style="margin-bottom:8px" title="Set it up, replace it, or add a way to recover it.">The key that protects stored data.</div>' +
     '<table class="ee-table ee-form"><tbody>' +
     '<tr><td>Set up</td><td>' + (s.present ? 'yes' : 'no') + '</td></tr>' +
     '<tr><td>Storage method</td><td>' + esc(keyBackendLabel(s.backend)) + '</td></tr>' +
@@ -1422,9 +1421,8 @@ function renderOffloadPanelHtml() {
   var rows = (OFFLOAD_ROWS || []).map(function(t, i) { return offloadRowHtml(t, i); }).join('');
   return '<div style="padding:' + (panelEmbedded(OFFLOAD_CONTAINER_ID) ? '0' : '16px 0') + '">' +
     panelTitleHtml(OFFLOAD_CONTAINER_ID, 'Offload targets') +
-    '<div class="o-faint" style="margin-bottom:4px">Extra backup copies that are only sometimes connected, such as an external drive or ' +
-    'a remote server. Storage location: <code>' + esc(OFFLOAD_VAULT || '(not set, see Registry)') + '</code></div>' +
-    '<div class="o-faint" style="margin-bottom:8px">These are copies only. The main working data is never stored here.</div>' +
+    '<div class="o-faint" style="margin-bottom:8px" title="' + esc('Copies only: the main working data is never stored here. Storage location: ' +
+      (OFFLOAD_VAULT || '(not set, see Registry)')) + '">Copies for a drive or server that is only sometimes connected.</div>' +
     '<div class="ee-form-scroll"><table class="ee-table ee-form"><thead><tr><th>Name</th><th>Type</th><th>Location</th>' +
     '<th>Expected folder</th><th>Schedule</th><th>Enabled</th><th>Status</th><th></th></tr></thead>' +
     '<tbody>' + rows + '</tbody></table></div>' +
@@ -1507,7 +1505,8 @@ async function renderSettingsSectionOffload() {
   container.innerHTML =
     '<div id="settings-restic-credential" class="o-faint">Loading remote backup password…</div>' +
     '<div id="settings-offload-targets" style="margin-top:12px"></div>' +
-    '<div style="margin-top:16px"><button class="iconbtn" onclick="runOffloadTick()">Run offload now</button></div>' +
+    '<details class="adv-section"><summary>Advanced</summary><div style="margin-top:8px">' +
+    '<button class="iconbtn" onclick="runOffloadTick()">Run offload now</button></div></details>' +
     '<div id="settings-backup-status" class="o-faint" style="margin-top:12px">Loading backup status…</div>';
   await Promise.all([
     renderResticCredentialWidget(), renderOffloadInto('settings-offload-targets'),
@@ -1761,8 +1760,8 @@ async function rejectMergeCandidate(btn) {
 var READINESS_STEP_ACTIONS = {
   enroll_recovery: { kind: 'jump', target: 'settings-sec-key', label: 'Enroll' },
   configure_offload: { kind: 'jump', target: 'settings-sec-offload', label: 'Set destination' },
-  // needs a physical touch, so it runs from a terminal: no button, the tooltip names it
-  verify_recovery: { kind: 'hint' },
+  // needs a physical touch, so it runs from a terminal: a button that copies the command
+  verify_recovery: { kind: 'copy', label: 'Copy command', command: 'osiris soul-key verify-recovery' },
   // needs sudo, so it can never be automatic: a button that copies the command
   tpm_setup: { kind: 'copy', label: 'Copy command' },
 };
@@ -1799,8 +1798,8 @@ function readinessStepRow(s) {
   var act = s.action ? READINESS_STEP_ACTIONS[s.action.kind] : null;
   var btn = act && act.kind === 'jump'
     ? '<button class="iconbtn" onclick="readinessJump(' + JSON.stringify(act.target) + ')">' + esc(act.label) + '</button>'
-    : (act && act.kind === 'copy' && s.action.commands
-      ? '<button class="iconbtn" data-cmd="' + esc(s.action.commands[0]) + '" onclick="readinessCopy(this)">' + esc(act.label) + '</button>'
+    : (act && act.kind === 'copy' && (act.command || (s.action.commands && s.action.commands[0]))
+      ? '<button class="iconbtn" data-cmd="' + esc(act.command || s.action.commands[0]) + '" onclick="readinessCopy(this)">' + esc(act.label) + '</button>'
       : '');
   var p = s.progress;
   var pct = p && p.total ? Math.max(0, Math.min(100, Math.round(100 * p.done / p.total))) : null;

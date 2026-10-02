@@ -189,8 +189,9 @@ def test_stepper_only_hands_steps_have_actions_and_all_of_them_jump() -> None:
     for kind in ("enroll_recovery", "configure_offload", "verify_recovery"):
         assert kind + ":" in body, f"{kind} missing from READINESS_STEP_ACTIONS"
     assert body.count("kind: 'jump'") == 2
-    assert "tpm_setup: { kind: 'copy'" in body  # sudo step: copy the command, never inline prose
-    assert "kind: 'hint'" in body  # verify-recovery needs a touch: a tooltip, no button
+    # the two steps that need a terminal (sudo, a physical touch) each get a Copy command button
+    assert "tpm_setup: { kind: 'copy'" in body
+    assert "verify_recovery: { kind: 'copy'" in body and "osiris soul-key verify-recovery" in body
     assert "perform" not in body
 
 
@@ -278,3 +279,54 @@ def test_timestamps_are_shown_to_a_person_not_as_raw_iso() -> None:
     assert "function fmtWhen(iso)" in _CONSOLE_JS
     assert "esc(fmtWhen(status.as_of))" in _CONSOLE_JS
     assert "esc(fmtWhen(c.when))" in _CONSOLE_JS
+
+
+# --- the advanced doors stay out of the setup path; no inline prose on the panels ----------
+
+def test_replace_key_and_test_restore_live_in_one_collapsed_advanced_section() -> None:
+    panel = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:3200]
+    adv = panel.split('<details class="adv-section">', 1)[1].split("</details>", 1)[0]
+    assert "rotateKey()" in adv and "restoreDrillKey()" in adv and "key-rotate-confirm" in adv
+    assert "<details class=\"adv-section\" open" not in _CONSOLE_JS  # closed by default
+    # the one setup action (a recovery method) stays outside it
+    assert "enrollRecoveryBrowser()" not in adv
+
+
+def test_run_offload_now_lives_in_an_advanced_section() -> None:
+    body = _CONSOLE_JS.split("async function renderSettingsSectionOffload() {", 1)[1][:1100]
+    adv = body.split('<details class="adv-section">', 1)[1].split("</details>", 1)[0]
+    assert "runOffloadTick()" in adv
+    assert body.count("runOffloadTick()") == 1
+
+
+def test_panel_descriptions_are_one_line_captions_with_the_detail_in_a_tooltip() -> None:
+    for caption in ("The key that protects stored data.", "Every configuration setting.",
+                    "Backfill repairs.",
+                    "Copies for a drive or server that is only sometimes connected."):
+        assert caption in _CONSOLE_JS, caption
+    # the paragraphs they replaced
+    for gone in ("Extra backup copies that are only sometimes connected",
+                 "These are copies only. The main working data is never stored here.",
+                 "Every configuration setting, in one place.",
+                 "The eight backfill repair verbs. Dry run always writes nothing."):
+        assert gone not in _CONSOLE_JS, gone
+
+
+def test_recovery_checked_gets_the_same_copy_button_as_the_tpm_row() -> None:
+    row = _CONSOLE_JS.split("function readinessStepRow(s) {", 1)[1][:1700]
+    assert "act.command ||" in row and "readinessCopy(this)" in row
+
+
+def test_phone_scrolls_wide_result_tables_and_clears_the_search_icon() -> None:
+    css = (Path(__file__).parent.parent / "src" / "ui" / "static" / "osiris.css").read_text()
+    phone = css.split("PHONE WIDTHS", 1)[1][:2200]
+    assert ".r-table { display: block; max-width: 100%; overflow-x: auto; }" in phone
+    assert ".search-compact-btn { margin-right: 8px; }" in phone
+    assert ("body .r-table td, body .r-table th "
+            "{ word-break: normal; overflow-wrap: break-word; }") in phone
+
+
+def test_registry_tables_scroll_inside_their_own_box_when_wider_than_the_pane() -> None:
+    body = _CONSOLE_JS.split("function renderSettingsPanelHtml(items) {", 1)[1][:2600]
+    assert ('<div class="ee-form-scroll"><table class="ee-table ee-form">'
+            '<thead><tr><th>Setting') in body

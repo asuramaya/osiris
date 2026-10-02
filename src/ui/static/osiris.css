@@ -769,6 +769,24 @@ select.field:focus, input.field:focus { border-color: var(--border-focus); }
   #main:not(.lefthidden) #left { left: 0; }
   #main:not(.righthidden) #right { right: 0; }
   .grip { display: none; }
+  /* wide lens-result tables scroll sideways inside their own box instead of being cut off */
+  .r-table { display: block; max-width: 100%; overflow-x: auto; }
+  /* break at spaces, never inside a number (body: outranks the later base rule): it let every column shrink to one
+     character wide ("4 / 0 / 6" down the screen) instead of scrolling */
+  body .r-table td, body .r-table th { word-break: normal; overflow-wrap: break-word; }
+  /* the search icon sat flush against the settings gear */
+  .search-compact-btn { margin-right: 8px; }
+  .bar-right { gap: 6px; }
+}
+/* the advanced doors (replace the key, run an offload, test a restore) stay out of the setup
+   path: one collapsed section per panel, closed until someone opens it. */
+.adv-section { margin-top: 14px; }
+.adv-section > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .grip { position: absolute; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 20; }
