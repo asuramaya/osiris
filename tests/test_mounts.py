@@ -263,13 +263,17 @@ async def test_lineage_transcript_mtime_caps_to_the_freshest_anchor_sids(
     assert ts is not None
 
 
+_LIVENESS_UNIT_MULTIPLE = 25
+
+
 async def test_agent_liveness_resolves_fast_against_thousands_of_anchor_sids(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The acceptance test for this fix: a lineage with 4,000 anchor_sid rows (a
-    real lineage carried 4,478) must resolve liveness in well under a
-    second against a fake tree, the exact shape that, pre-fix, held the worker's boot
-    lock for the better part of an hour and starved every sibling cron behind it."""
+    real lineage carried 4,478) must resolve liveness within a small multiple of one plain
+    read of those rows (measured about 1x here) against a fake tree, the exact shape
+    that, pre-fix, held the worker's boot lock for the better part of an hour and starved
+    every sibling cron behind it."""
     import time
 
     monkeypatch.setenv("OSIRIS_TRANSCRIPTS", str(tmp_path))
@@ -288,11 +292,22 @@ async def test_agent_liveness_resolves_fast_against_thousands_of_anchor_sids(
     freshest_sid = f"cccc3333-0000-0000-0000-{3999:012d}"
     (tmp_path / f"{freshest_sid}.jsonl").write_text("{}\n")
 
+    # THE YARDSTICK: one plain read of the same 4,000 rows on this box, this minute. The
+    # fixed bound this test once had measured the machine; the pre-fix code was a
+    # per-row round trip, which costs thousands of these reads, so a multiple of one read
+    # tells a slow box from a slow function.
+    async with actions.pool.acquire() as conn:
+        t0 = time.monotonic()
+        await conn.fetch(
+            "SELECT value FROM current_assertions WHERE object_id = $1 AND is_current", agent)
+        unit = time.monotonic() - t0
     t0 = time.monotonic()
     out = await mounts.agent_liveness(actions.pool, "agent:hugelineag")
     elapsed = time.monotonic() - t0
 
-    assert elapsed < 30.0, f"agent_liveness took {elapsed:.2f}s against 4,000 anchor sids"
+    assert elapsed < max(unit * _LIVENESS_UNIT_MULTIPLE, 0.05), (
+        f"agent_liveness took {elapsed:.3f}s; one read of the same rows took {unit:.4f}s, "
+        f"so the allowance was {_LIVENESS_UNIT_MULTIPLE}x that")
     assert out["live"] is True
 
 
