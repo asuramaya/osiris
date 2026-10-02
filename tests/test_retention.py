@@ -193,6 +193,24 @@ async def test_retention_heartbeat_deletes_from_both_tables_and_briefs_the_desk(
     assert captured["to_project"] == "operator"
     assert captured["desk_kind"] == "fyi"
     assert "outbox" in captured["body"] and "audit_log" in captured["body"]
+    assert "-1 row" not in captured["body"] and ": -" not in captured["body"]  # a plain count
+    assert "removed 1 row older than 90 days" in captured["body"]
+
+
+def test_the_retention_receipt_reads_as_a_plain_count() -> None:
+    """The desk used to show "audit_log: -14710 rows older than 90d", a leading minus that
+    reads as a negative count."""
+    from src.workers.arq_worker import _retention_receipt_line
+
+    cutoff = "2026-07-04"
+    many = _retention_receipt_line("audit_log", 14710, cutoff)
+    assert many == "audit_log: removed 14710 rows older than 90 days (cutoff 2026-07-04)"
+    assert "-14710" not in many
+    assert _retention_receipt_line("outbox", 1, cutoff) == (
+        "outbox: removed 1 row older than 90 days (cutoff 2026-07-04)")
+    zero = _retention_receipt_line("outbox", 0, cutoff)
+    assert zero == "outbox: nothing older than 90 days to remove (cutoff 2026-07-04)"
+    assert ": -" not in zero  # a zero still gets a line: the daily receipt proves the job ran
 
 
 async def test_retention_heartbeat_survives_the_desk_being_unreachable(

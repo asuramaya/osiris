@@ -460,6 +460,41 @@ async def cmd_smoke_chaos(*, pool: asyncpg.Pool | None = None) -> int:
             await pool.close()
 
 
+# --- context-pct-log ---------------------------------------------------------------------------
+
+def cmd_context_pct_log(*, limit: int = 20, as_json: bool = False) -> int:
+    """`osiris context-pct-log`: the recorded moments osiris's own context figure and the
+    harness's differed by more than one point, newest first (the status line hook appends
+    them; see src/orchestrator/context_disagreement.py). A local file read, no database."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator import context_disagreement as cd
+
+    entries = cd.read_recent(limit)
+    summary = cd.summarize(entries)
+    if as_json:
+        from src import cli_render as render
+        render.emit({"log": str(cd.log_path()), "summary": summary, "entries": entries},
+                    as_json=True)
+        return 0
+    if not entries:
+        print(f"context-pct-log: nothing recorded in {cd.log_path()}: the two figures "
+              "agreed within a point on every status line render since this began, or "
+              "nothing has rendered yet")
+        return 0
+    gap = summary["largest_gap"]
+    print(f"context-pct-log: {summary['entries']} recorded, largest gap {gap:+d} points "
+          f"(harness minus osiris); the harness read higher {summary['harness_higher']} "
+          f"time(s), osiris {summary['osiris_higher']}")
+    for e in entries:
+        stamp = datetime.fromtimestamp(float(e.get("ts") or 0), UTC)
+        when = stamp.strftime("%Y-%m-%d %H:%M:%S")
+        print(f"  {when}Z  harness {e.get('harness_pct')}%  osiris {e.get('derived_pct')}%  "
+              f"window {e.get('window')}  {e.get('model') or '?'}  "
+              f"session {str(e.get('session_id') or '?')[:8]}")
+    return 0
+
+
 # --- boot-status -------------------------------------------------------------------------------
 
 async def cmd_boot_status(
@@ -7796,7 +7831,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   start a mind          new, launch, resume, mint-seat, attach
   end one               stop
   see the fleet         fleet, roster, backlog, team, status, boot-status, smoke, lint,
-                        audit, graph-export, digest
+                        audit, graph-export, digest, context-pct-log
   read the record       desk, show, threads, inbox, search, dossier, object-events,
                         succession-chain, candidates, composition, citation, inspect,
                         practices, backup-status
@@ -7903,6 +7938,17 @@ def _build_parser() -> argparse.ArgumentParser:
                                     "against the repo's own source, plus list any unit "
                                     "that's enabled but failed. Needs no database "
                                     "connection; never combine with the seat report above")
+
+    p_ctx_log = sub.add_parser("context-pct-log", description=_d(
+        "Show the recorded moments the harness's own context figure and osiris's differed "
+        "by more than one point, newest first. Report-only; reads a local file the status "
+        "line writes, needs no database."),
+                   epilog="example: osiris context-pct-log\n"
+                          "example: osiris context-pct-log --limit 5 --json")
+    p_ctx_log.add_argument("--limit", type=int, default=20,
+                           help="how many of the most recent entries to show (default 20)")
+    p_ctx_log.add_argument("--json", action="store_true", dest="as_json",
+                           help="machine-readable: one compact JSON line")
 
     p_lint = sub.add_parser("lint", description=_d(
         "Audit the graph for integrity problems, headless. Runs the same 32 checks as "
@@ -9598,6 +9644,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "smoke":
         return asyncio.run(
             cmd_smoke(chaos=args.chaos, reboot=args.reboot, as_json=args.as_json))
+    if args.command == "context-pct-log":
+        return cmd_context_pct_log(limit=args.limit, as_json=args.as_json)
     if args.command == "boot-status":
         return asyncio.run(cmd_boot_status(
             as_json=args.as_json, fleet=args.fleet, units=args.units))
