@@ -1,5 +1,5 @@
-"""`/stop` — the Stop hook's server half (thread #180 piece 2 (b), 2026-08-18). Same
-exercise pattern as test_heartbeat_route.py's own `_FakeRequest` — no ASGI stack needed."""
+"""`/stop`, the Stop hook's server half. Same
+exercise pattern as test_heartbeat_route.py's own `_FakeRequest`; no ASGI stack needed."""
 from __future__ import annotations
 
 import json
@@ -102,7 +102,7 @@ async def test_stop_route_never_raises_on_a_malformed_body(actions: Actions) -> 
 async def test_stop_route_stage_a_phase_fires_the_ported_courtesy_logic(
     actions: Actions,
 ) -> None:
-    """dispatch 5441 LEG 1 parity fix: `stage_a` reaches `compute_stop_stage_a` — a seated
+    """Parity fix: `stage_a` reaches `compute_stop_stage_a`. A seated
     agent with nothing leased gets state='pending' from a single route call, same as the
     pre-port `_stage_a_async` proved in tests/test_stophook.py."""
     from src import mcp_server as srv
@@ -141,8 +141,8 @@ async def test_stop_route_alarms_on_its_own_internal_failure(
     actions: Actions, monkeypatch: object,
 ) -> None:
     """Unlike the whisper/session-end/precompact routes, /stop's except block used to
-    swallow its own failure silently before this fix — dispatch 5441's own "clean up as
-    you go" ask. Now it files the SAME hook-failure alarm its siblings already do."""
+    swallow its own failure silently before this fix. Now it
+    files the SAME hook-failure alarm its siblings already do."""
     from src import mcp_server as srv
     from src.orchestrator import stophook_logic
 

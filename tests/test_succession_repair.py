@@ -1,4 +1,4 @@
-"""unresumed_heads (thread ef88e2bb's aftermath) — the false-mint-over-a-resumable-head
+"""unresumed_heads: the false-mint-over-a-resumable-head
 census. Read-only: proves it finds the specimen shape and stays silent on ordinary
 successions (a genuine compaction resume, a lineage with nothing sitting unused)."""
 from __future__ import annotations
@@ -31,7 +31,7 @@ async def _agent(actions: Actions, canonical: str, *, generation: str, minted_be
                                       evidence_class=_SD)
     if wrote:
         # wrote_anything needs an assertion SOURCED BY this agent's own canonical, on some
-        # OTHER object — an act, not self-description (succession_chain's own docstring).
+        # OTHER object: an act, not self-description (succession_chain's own docstring).
         other = await actions.create_or_find_object(
             "Thread", f"thread:did-something-{canonical}", canonical)
         await actions.assert_property(other, "summary", "real work", canonical, NOW, 0.9,
@@ -129,7 +129,7 @@ async def test_silent_when_the_predecessor_transcript_is_past_the_resume_gate(
 ) -> None:
     """A predecessor session that genuinely closed at the compaction seam itself (the
     ordinary tiny-tail refusal every launch already applies) must not be reported as
-    'still resumable' — same gate, same numbers, reused unchanged."""
+    'still resumable': same gate, same numbers, reused unchanged."""
     sense = tmp_path / "projects"
     await _agent(actions, "agent:tiny", generation="1", minted_because="compaction",
                 wrote=True, session=_SID)

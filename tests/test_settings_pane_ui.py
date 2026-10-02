@@ -1,8 +1,8 @@
-"""THE SETTINGS PANE (Thoth mail 13350): ONE console pane replacing the three formerly-
+"""THE SETTINGS PANE: ONE console pane replacing the three formerly-
 separate palette panels (Key…, Offload Targets…, Settings…) with five embedded
 sections -- KEY, BACKUP & OFFLOAD, REGISTRY, OPERATOR DESK, THE BOX. Every section reads
 through an EXISTING REST door except four genuinely thin new ones (GET /restic-key/
-status, GET /deploy-status, GET /operator/desk, POST /operator/desk/reply — API tests in
+status, GET /deploy-status, GET /operator/desk, POST /operator/desk/reply; API tests in
 tests/test_settings_pane_api.py). Every section degrades independently.
 
 Mirrors the repo's existing static-source-guard convention: string/substring proofs
@@ -41,7 +41,7 @@ def test_old_panel_renderers_still_exist_nothing_deleted() -> None:
 # --- the shell: five sections, loaded in parallel, each degrading independently -------
 
 def test_pane_shell_builds_all_five_sections() -> None:
-    # PRODUCT VOICE (ruling 1e2ef5c3, thread ... layout item 3): Readiness ("The Box"
+    # Product voice, layout item 3: Readiness ("The Box"
     # renamed) moved up to right after Backup & Offload, before Registry.
     body = _CONSOLE_JS.split("async function renderSettingsPane() {", 1)[1][:950]
     assert "settingsSectionShell('key', 'Key')" in body
@@ -74,7 +74,7 @@ def test_section_key_embeds_the_shared_key_renderer() -> None:
 # --- section 2: BACKUP & OFFLOAD ------------------------------------------------------
 
 def test_section_offload_embeds_the_editable_panel_and_reads_backup_status() -> None:
-    # THE GUI PARITY tip (thread dd11ab34) split the backup-status fetch into its own
+    # GUI parity: split the backup-status fetch into its own
     # reusable renderBackupStatusSection() (the "Run offload now" button's own refresh
     # calls it too) -- the section's own body just kicks off both in parallel now.
     body = _CONSOLE_JS.split("async function renderSettingsSectionOffload() {", 1)[1][:900]

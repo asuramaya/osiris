@@ -1,8 +1,8 @@
-"""Concurrent-writer stress — prove the kernel's theory when the FLEET writes at once.
+"""Concurrent-writer stress, prove the kernel's theory when the FLEET writes at once.
 
 The multi-agent design rests on a claim: the event-sourced, ON-CONFLICT, multi-source
 kernel is safe under concurrent writers, so N agents sharing one graph never corrupt it.
-These tests hammer the real Postgres with racing writers and assert the invariants hold —
+These tests hammer the real Postgres with racing writers and assert the invariants hold:
 no duplicate objects, no lost writes, every agent's provenance preserved.
 """
 from __future__ import annotations
@@ -49,7 +49,7 @@ async def test_racing_multisource_assertions_none_lost(actions: Actions) -> None
 
 async def test_racing_same_source_supersedes_cleanly(actions: Actions) -> None:
     """The other side: ONE source asserting the same property many times concurrently must
-    not leave a tangled supersedes chain — the current set converges to a single live row."""
+    not leave a tangled supersedes chain, the current set converges to a single live row."""
     oid = await actions.create_or_find_object("Organization", "cik:one-source", "seed")
     await asyncio.gather(*[
         actions.assert_property(oid, "label", f"rev-{i}", "agent:solo",
@@ -64,7 +64,7 @@ async def test_racing_same_source_supersedes_cleanly(actions: Actions) -> None:
 
 async def test_fleet_consensus_dedups_but_keeps_every_provenance(actions: Actions) -> None:
     """The headline fleet case: 40 agents record the SAME ruling with DISTINCT identities,
-    concurrently. It dedups to ONE Decision (canonical), but keeps all 40 provenances —
+    concurrently. It dedups to ONE Decision (canonical), but keeps all 40 provenances:
     visible consensus, no corruption. This is why the shared graph is safe to open up."""
     summary = "the fleet shares one graph, and it holds under load"
     ids = await asyncio.gather(*[
@@ -74,4 +74,4 @@ async def test_fleet_consensus_dedups_but_keeps_every_provenance(actions: Action
     distinct = await actions.pool.fetchval(
         "SELECT count(DISTINCT source_id) FROM assertions WHERE object_id=$1 AND name='summary'",
         ids[0])
-    assert distinct == 40  # every agent that agreed is recorded — consensus is legible
+    assert distinct == 40  # every agent that agreed is recorded, consensus is legible

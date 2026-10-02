@@ -1,9 +1,9 @@
-"""THE STALL's own fix, item 1 (thread 0be2f790, Thoth mail 10626): the provenance
-backfill door no longer reads a transcript byte on osiris-mcp's own event loop thread —
+"""THE STALL's own fix, item 1: the provenance
+backfill door no longer reads a transcript byte on osiris-mcp's own event loop thread:
 `provenance_backfill_job` (src/workers/arq_worker.py) does the real work on
 osiris-worker and posts the receipt as a thread annotation when it finishes. Calls the
 job function directly, same pattern tests/test_sweep_ledger.py already uses for
-`sweep_session` — a bare `{"pool": ...}` ctx, no real arq/redis involved."""
+`sweep_session`: a bare `{"pool": ...}` ctx, no real arq/redis involved."""
 from __future__ import annotations
 
 import json

@@ -26,7 +26,7 @@ _CRT = Manifest.model_validate(
 
 
 async def _fake_crtsh(input_object: InputObject) -> dict:
-    """Each domain yields exactly one child a.<domain> — unbounded without a hop cap."""
+    """Each domain yields exactly one child a.<domain>, unbounded without a hop cap."""
     d = input_object.canonical
     return {"domain": d, "certs": [{"name_value": f"a.{d}"}]}
 
@@ -49,9 +49,8 @@ async def _make_case(actions: Actions, budgets: dict) -> uuid.UUID:
     # triggers must be projected for the relay to match helpers. ON CONFLICT DO NOTHING
     # (migration 0068's own unique constraint on helper_id): this test's own
     # cross-case test calls _make_case twice in the SAME transaction (case A, then
-    # case B) — a second bare INSERT of the same helper_id would violate the
-    # constraint that lets project_triggers upsert instead of TRUNCATE (Thoth mail
-    # 10214).
+    # case B), a second bare INSERT of the same helper_id would violate the
+    # constraint that lets project_triggers upsert instead of TRUNCATE.
     await actions.pool.execute(
         "INSERT INTO triggers (on_event, match, helper_id, enabled) "
         "VALUES ('object_created', $1, 'crtsh_subdomains', true) "
@@ -111,7 +110,7 @@ async def test_flaky_connector_fails_gracefully(
     actions: Actions, redis_client: aioredis.Redis
 ) -> None:
     """A connector that errors (timeout, 5xx) marks the run failed and lets the
-    cascade continue — it must not 500 the whole expansion."""
+    cascade continue, it must not 500 the whole expansion."""
     case_id = await _make_case(actions, {"rate_credits": 100, "max_hop_distance": 1})
     await actions.create_or_find_object("Domain", "flaky.kp", "analyst:test", case_id)
 
@@ -137,7 +136,7 @@ async def test_cross_case_cached_result_rematerializes_into_new_case(
 ) -> None:
     """A helper that ran in case A is router-CACHED when the same object appears in
     case B. Instead of silently skipping (leaving B empty), the cascade re-links the
-    cached result into B — without touching the network (cache hit)."""
+    cached result into B, without touching the network (cache hit)."""
     case_a = await _make_case(actions, {"max_hop_distance": 0, "rate_credits": 100})
     obj = await actions.create_or_find_object("Domain", "shared.kp", "analyst:test", case_a)
 

@@ -53,7 +53,7 @@ async def test_fanout_collapses_any_set_into_its_trees(actions: Actions) -> None
 
 
 async def test_a_tree_walks_back_into_exactly_its_fruit(actions: Actions) -> None:
-    """`neighborhood` is a DIMENSION of select (an in_repo EDGE, not an assertion) — which is
+    """`neighborhood` is a DIMENSION of select (an in_repo EDGE, not an assertion), which is
     what lets a bundled row drill back with the console's ORDINARY drill, no bespoke path:
     select Thread where neighborhood=osiris."""
     await _garden(actions)
@@ -70,8 +70,8 @@ async def test_a_tree_walks_back_into_exactly_its_fruit(actions: Actions) -> Non
 
 
 async def test_the_garden_is_type_blind(actions: Actions) -> None:
-    """Nothing in the primitive knows what a Thread is. Bundle commits — or the WHOLE graph,
-    every type at once — and the same trees come back. That is what makes it a primitive and
+    """Nothing in the primitive knows what a Thread is. Bundle commits, or the WHOLE graph,
+    every type at once, and the same trees come back. That is what makes it a primitive and
     not a fourth hand-rolled group-by."""
     await _garden(actions)
     commits = await run_spec(actions.pool, {
@@ -83,7 +83,7 @@ async def test_the_garden_is_type_blind(actions: Actions) -> None:
 
 
 async def test_neighborhoods_of_is_one_query_and_names_the_tree(actions: Actions) -> None:
-    """The shared primitive the whole stack now leans on — the desk roster, the wall's rollup
+    """The shared primitive the whole stack now leans on: the desk roster, the wall's rollup
     and the composer's fanout all ask this one question instead of each re-deriving it."""
     await _garden(actions)
     ids = [r["id"] for r in await actions.pool.fetch(

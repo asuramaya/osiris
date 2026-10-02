@@ -1,4 +1,4 @@
-"""The context lens — a mind's view of its own mortality (operator request, 2026-07-09).
+"""The context lens: a mind's view of its own mortality.
 Pure file-parsing over the harness's own transcript records: no graph, no containers."""
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def test_window_tier_reads_the_display_id() -> None:
     # self-correction: an occupancy past 200k on a live session proves the default wrong
     assert window_for("claude-fable-5", used=286_000) == (1_000_000, True)
     assert window_for("claude-fable-5", used=150_000) == (200_000, True)
-    # the operator's word beats every heuristic
+    # an explicit setting beats every heuristic
     import os
     os.environ["OSIRIS_CONTEXT_WINDOW"] = "500000"
     try:
@@ -67,7 +67,7 @@ def test_detail_counts_the_deaths_and_sounds_the_alarm(tmp_path: Path) -> None:
         _boundary("2026-07-09T10:00:00Z"),
         _entry(input_t=2000),
         _boundary("2026-07-09T11:00:00Z"),
-        _entry(input_t=4_000, cache_read=170_000),       # 174k of 200k = 87% — alarm range
+        _entry(input_t=4_000, cache_read=170_000),       # 174k of 200k = 87%, alarm range
     ]) + "\n")
     d = detail(t, "claude-opus-4-8")
     assert d["compactions_this_session"] == 2
@@ -75,7 +75,7 @@ def test_detail_counts_the_deaths_and_sounds_the_alarm(tmp_path: Path) -> None:
     assert d["used"] == 174_000 and d["pct"] == 87 and d["window_assumed"] is True
     assert d["remaining"] == 26_000
     assert d["assistant_turns"] == 3
-    # NO death talk on an ASSUMED window (Anubis VII's false eulogy, msg 127): the guess is
+    # NO death talk on an ASSUMED window (a false eulogy): the guess is
     # flagged as a guess instead
     assert "warning" not in d and "ASSUMED" in d["note"]
     # a KNOWN window (harness-stamped hint) that reads 87% DOES sound the alarm...

@@ -1,7 +1,7 @@
-"""inbox(as_seat=...) — the charter-gated, read-only cross-seat mail door (9dc3ce8b/
-c56f3d94, MAIL IS UNSURFACEABLE). A coordinator can read another seat's RECEIVED DMs,
+"""inbox(as_seat=...): the charter-gated, read-only cross-seat mail door.
+A coordinator can read another seat's RECEIVED DMs,
 including already-settled ones, but only when it governs a project that seat also
-charters — never a bare seat-to-seat peek, never a lease, never a settle.
+charters; never a bare seat-to-seat peek, never a lease, never a settle.
 """
 from __future__ import annotations
 
