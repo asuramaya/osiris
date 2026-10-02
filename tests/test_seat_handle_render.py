@@ -1,5 +1,5 @@
-"""THE CANONICAL-RESOLVE DOOR, client half (Thoth mail 12120/12231): the backlog view's
-OLDEST_OWNERS/SEAT cells showed raw seat canonicals (seat:478130b0) where every other
+"""THE CANONICAL-RESOLVE DOOR, client half: the backlog view's
+OLDEST_OWNERS/SEAT cells showed raw seat canonicals (seat:<hex>) where every other
 console table shows a reader-facing handle. compositions.py's own by_project.oldest_owners
 is deliberately byte-identical to digest._obligation_pressure's raw return -- textrender.py's
 render_desk_text still joins it as a flat string list -- so the fix lives entirely at the
@@ -12,7 +12,7 @@ text to the resolved handle once it lands -- the same "starts as a bare id, reso
 never blocks the rest of the panel" convention loadRels' own property-pair resolution
 already established. Mirrors the repo's existing static-source-guard convention: string/
 substring proofs against the served JS, no browser harness (live-verified separately via
-claude-in-chrome against a real backlog pull: seat:478130b0 -> "henry", title preserved).
+claude-in-chrome against a real backlog pull: a seat canonical -> its handle, title preserved).
 """
 from __future__ import annotations
 

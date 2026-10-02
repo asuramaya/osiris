@@ -1,4 +1,4 @@
-"""THE READ TRIANGLE, WAVE 2 (thread 68f1bafa/3703a3a9): the `backlog` MCP tool -- a
+"""THE READ TRIANGLE: the `backlog` MCP tool -- a
 standalone read verb over digest.py's own `_obligation_pressure`, scoped to the caller's
 project by default with an `all_projects` widen, ordered caller's-project-first / then
 past-window / then open-count, capped and folded in text mode.

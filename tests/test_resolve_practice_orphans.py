@@ -1,6 +1,6 @@
-"""The provenance sweep's Practice lane (wave 15, mail 8840): resolve in_repo for a
+"""The provenance sweep's Practice lane resolve in_repo for a
 Practice carrying no live in_repo edge of its own, from the DISTINCT projects its own
-live `witnesses` edges already name ("the decisions that confirm or refute it") —
+live `witnesses` edges already name ("the decisions that confirm or refute it"),
 cardinality-1-or-abstain via derive_or_abstain, never a guess.
 """
 from __future__ import annotations
@@ -82,7 +82,7 @@ async def test_witnesses_pointing_at_an_unlinked_target_contributes_nothing(
     actions: Actions,
 ) -> None:
     """A witnessed Thread/Decision/Practice that itself carries no in_repo yet is not an
-    error, and not a guess — it just names no candidate, same as any other empty vote."""
+    error, and not a guess; it just names no candidate, same as any other empty vote."""
     thread = await open_thread(actions, "a thread with no repo of its own",
                                source="agent:wp3")
     practice = await _practice_witnessing(actions, "practice:emptyvote", thread)

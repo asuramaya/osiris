@@ -1,4 +1,4 @@
-"""Thread mining — the project's open questions, derived from its own commit rationale."""
+"""Thread mining: the project's open questions, derived from its own commit rationale."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -87,7 +87,7 @@ async def test_resolve_threads_self_heals_addressed_threads(actions: Actions) ->
     # a PRIOR renderer commit must NOT resolve it (can't close a thread before it's raised)
     await _commit(actions, "commit:pre", "2026-06-10T00:00:00+00:00",
                   summary="early generic renderer spike")
-    # the real closer — strictly later, shares >=2 distinctive tokens (generic, renderer)
+    # the real closer, strictly later, shares >=2 distinctive tokens (generic, renderer)
     await _commit(actions, "commit:later", "2026-06-25T00:00:00+00:00",
                   summary="implement the generic renderer", scope="renderer")
 
@@ -109,7 +109,7 @@ async def test_resolve_threads_self_heals_addressed_threads(actions: Actions) ->
 
 async def test_resolve_threads_skips_a_thread_with_a_resolved_winner(actions: Actions) -> None:
     """The winning-status fix: a thread another source already RESOLVED at a higher grade,
-    still carrying the miner's stale DERIVED 'open', must NOT read as open — the self-heal
+    still carrying the miner's stale DERIVED 'open', must NOT read as open: the self-heal
     leaves it alone instead of re-attributing a spurious resolved_in. winning_props (grade
     DESC, then recency) is the single winner definition; a bare EXISTS(status='open') would
     re-process it off the buried assertion (the stuck-open-threads bug, from the other side)."""
@@ -122,7 +122,7 @@ async def test_resolve_threads_skips_a_thread_with_a_resolved_winner(actions: Ac
     await actions.assert_property(t, "status", "open", "git-memory", NOW,
                                   confidence_for(EvidenceClass.DERIVED),
                                   evidence_class=EvidenceClass.DERIVED.value)
-    # a session later RESOLVED it (SELF_DECLARED) — the grade-winning status is 'resolved',
+    # a session later RESOLVED it (SELF_DECLARED); the grade-winning status is 'resolved',
     # but the miner's own 'open' is still its latest assertion (different source, coexists)
     await actions.assert_property(t, "status", "resolved", "agent:someone",
                                   datetime(2026, 6, 29, tzinfo=UTC),

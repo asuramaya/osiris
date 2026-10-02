@@ -1,4 +1,4 @@
-"""THE READ TRIANGLE, WAVE 2 (thread 68f1bafa/3703a3a9): inbox(project='operator',
+"""THE READ TRIANGLE: inbox(project='operator',
 render='text') -- the backlog band first, briefs collapsed to one count line each,
 your_queue itemized."""
 from __future__ import annotations
