@@ -829,17 +829,24 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         with zero client code), else, and only then, `outbox_watermark(pool)`: "now",
         not the backlog. A client that genuinely wants the full backlog fetches
         /graph/stream first, exactly like before; this endpoint itself never replays it."""
-        from src.orchestrator.graph_stream import deltas_since, resolve_deltas_start_cursor
+        from src.orchestrator.graph_stream import (
+            GapWatch,
+            deltas_since,
+            resolve_deltas_start_cursor,
+        )
 
         cursor = await resolve_deltas_start_cursor(
             request.app.state.pool, since=since,
             last_event_id=request.headers.get("last-event-id"))
 
+        gap_watch = GapWatch()
+
         async def gen() -> AsyncIterator[str]:
             nonlocal cursor
             while (not request.app.state.shutting_down.is_set()
                   and not await request.is_disconnected()):
-                deltas, cursor = await deltas_since(request.app.state.pool, cursor)
+                deltas, cursor = await deltas_since(
+                    request.app.state.pool, cursor, gap_watch=gap_watch)
                 if deltas:
                     yield f"id: {cursor}\ndata: {_json.dumps(deltas)}\n\n"
                 else:
