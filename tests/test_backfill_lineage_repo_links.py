@@ -1,8 +1,8 @@
-"""WAVE 4 HISTORICAL BACKFILL (thread 72cd8e3c, decision c1073f00): resolve_repo_default's
-ladder is write-time-only by design (Lane 3, thread 79e785d1) — it never touches a Decision/
+"""HISTORICAL BACKFILL: resolve_repo_default's
+ladder is write-time-only by design (Lane 3), it never touches a Decision/
 Thread that already existed before it deployed. Link every zero-live-link one authored by a
 real Agent lineage to its project, via the SAME rung-3 lineage-wide works_in lookup a NEW
-write already gets, through derive_or_abstain — never a guess.
+write already gets, through derive_or_abstain, never a guess.
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ async def test_backfill_mints_in_repo_via_lineage_widening(actions: Actions) -> 
     await actions.create_link(gen1, proj, "works_in", "test", now, 0.9,
                               evidence_class="self_declared")
     # the WRITER is a later, orphaned generation of the same lineage with no works_in of
-    # its own — exactly the shape a historical object left behind before Lane 3 existed
+    # its own, exactly the shape a historical object left behind before Lane 3 existed
     thread = await open_thread(actions, "authored by an orphan generation",
                                source="agent:hist2-iv")
     out = await backfill_lineage_repo_links(
@@ -130,7 +130,7 @@ async def test_backfill_never_touches_an_already_linked_object(actions: Actions)
 
 async def test_backfill_ignores_bare_session_sourced_objects(actions: Actions) -> None:
     """A `session`-sourced object (the un-mounted back-compat writer) has no lineage to
-    walk at all — `resolve_repo_default`'s own precondition — so this population is
+    walk at all, `resolve_repo_default`'s own precondition, so this population is
     scoped to `agent:`-sourced summaries only, same as the live ladder."""
     await open_thread(actions, "written by the bare session source, never a real agent",
                       source="session")
@@ -155,9 +155,9 @@ async def test_backfill_requires_a_because_to_execute(actions: Actions) -> None:
 async def test_backfill_tolerates_a_concurrently_superseded_abstention(
     actions: Actions,
 ) -> None:
-    """LIVE-FOUND (2026-09-09, wave 15's real apply run): a SECOND lane (this lane's own
+    """LIVE-FOUND (2026-09-09, the real apply run): a SECOND lane (this lane's own
     at-write-time sibling) can retire the SAME stale abstention between this lane's own
-    read and write — `supersede_assertion` refuses a row no longer live, and until the
+    read and write, `supersede_assertion` refuses a row no longer live, and until the
     fix that crashed this whole backfill mid-run under real fleet load. Simulated here by
     superseding the abstention out from under the call BEFORE it runs; the mint must still
     land, never crash."""
@@ -172,7 +172,7 @@ async def test_backfill_tolerates_a_concurrently_superseded_abstention(
         thread, "derivation_abstained_in_repo",
         {"link_type": "in_repo", "candidate_count": 0, "reason": "raced"},
         "some-other-lane", now, 0.6, evidence_class="direct_observation")
-    # a concurrent writer retires it first — exactly what this test is reproducing
+    # a concurrent writer retires it first, exactly what this test is reproducing
     await actions.supersede_assertion(
         thread, "derivation_abstained_in_repo", stale_id,
         {"link_type": "in_repo", "resolved": True, "resolved_to": "concurrent-writer"},
@@ -191,9 +191,9 @@ async def test_backfill_tolerates_a_concurrently_superseded_abstention(
 async def test_backfill_mint_supersedes_a_live_abstention_from_another_lane(
     actions: Actions,
 ) -> None:
-    """Thoth's own question (msg 5978): if an object this backfill mints for ALREADY
+    """The open question: if an object this backfill mints for ALREADY
     carries a live abstention from a DIFFERENT source, does the mint clear it? Answer:
-    yes, but not for free — `derive_or_abstain`'s own supersede step only fires when it
+    yes, but not for free, `derive_or_abstain`'s own supersede step only fires when it
     performs the mint itself (this backfill's successful path mints via `link_repo`
     instead, matching the live write path), AND `assert_property`'s own supersession is
     same-source-only, so a naive re-assert under this call's own actor would leave the

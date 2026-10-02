@@ -1,7 +1,7 @@
-"""The response budget — the waist that no tool escapes.
+"""The response budget, the waist that no tool escapes.
 
-The bug class this closes (b228ab49): a tool answers correctly and enormously, and the answer
-kills the context it was meant to inform. The rule under test is not 'results are small' — it
+The bug class this closes: a tool answers correctly and enormously, and the answer
+kills the context it was meant to inform. The rule under test is not 'results are small', it
 is that a result which does NOT fit comes back TRUNCATED AND SAYING SO. A silent cap is the
 only outcome that would be worse than the crash, because the caller would believe it.
 """
@@ -41,7 +41,7 @@ def test_a_trim_is_never_silent() -> None:
 
 
 def test_counts_survive_the_trim() -> None:
-    """The lens under-SHOWS; it must never under-COUNT — a scalar is cheap and load-bearing."""
+    """The lens under-SHOWS; it must never under-COUNT, a scalar is cheap and load-bearing."""
     out = fit({"count": 5000, "live": 11, "rows": _big(5000)}, tool="fleet")
     assert out["count"] == 5000
     assert out["live"] == 11
@@ -50,7 +50,7 @@ def test_counts_survive_the_trim() -> None:
 def test_the_biggest_firehose_is_cut_first() -> None:
     """One runaway stream loses its tail; the small streams stay WHOLE.
 
-    The alternative — trimming everything by an equal fraction — would corrupt every stream in
+    The alternative, trimming everything by an equal fraction, would corrupt every stream in
     the result to save the one that misbehaved.
     """
     out = fit({"danger": _big(4), "roster": _big(5000)}, tool="fleet_digest")
@@ -66,13 +66,13 @@ def test_nested_lists_are_reachable() -> None:
 
 
 def test_a_trimmed_list_still_shows_its_shape() -> None:
-    """Cut to nothing, a list teaches nothing — the reader cannot even see what a row IS."""
+    """Cut to nothing, a list teaches nothing, the reader cannot even see what a row IS."""
     out = fit({"rows": [{"blob": "x" * 100_000} for _ in range(10)]}, tool="t")
     assert len(out["rows"]) >= MIN_KEEP
 
 
 def test_a_monstrous_string_is_bounded_too() -> None:
-    """Lists are the usual firehose, not the only one — a giant render is one as well."""
+    """Lists are the usual firehose, not the only one, a giant render is one as well."""
     out = fit({"tree": "line\n" * 200_000}, tool="fleet")
     assert len(json.dumps(out, default=str)) <= BUDGET_CHARS
     assert out["tree"].endswith("… [truncated]")
@@ -91,15 +91,15 @@ def test_non_dict_results_pass_through() -> None:
     assert fit(None, tool="t") is None
 
 
-# --- task #64's own live measurement (ruling ad19a779): MANY SMALL-BUT-VERBOSE rows defeat
-# both phases above — every list already ≤MIN_KEEP, every string already ≤MAX_STR, yet the
+# --- task #64's own live measurement: MANY SMALL-BUT-VERBOSE rows defeat
+# both phases above, every list already ≤MIN_KEEP, every string already ≤MAX_STR, yet the
 # SUM stays over budget. The old code returned silently over budget in this shape (empty
-# `dropped` never sets `_bounded` at all) — exactly the "hides what it dropped" lie the
+# `dropped` never sets `_bounded` at all), exactly the "hides what it dropped" lie the
 # module's own docstring forbids, just at one remove (it hid that it didn't cap). ------------
 
 def _many_small_verbose_groups(n: int, per_group: int = MIN_KEEP) -> dict[str, list[dict]]:
     """`n` groups, each already AT the keep-floor (never a list-halving candidate), each row
-    individually well under MAX_STR — only the SUM is a firehose."""
+    individually well under MAX_STR, only the SUM is a firehose."""
     return {f"group{g}": [{"summary": "x" * 2000} for _ in range(per_group)]
             for g in range(n)}
 
@@ -111,7 +111,7 @@ def test_many_small_verbose_lists_are_named_honestly_when_fit_cannot_reduce_furt
     assert len(json.dumps(out, default=str)) > BUDGET_CHARS  # genuinely could not be reduced
     assert out["_bounded"]["still_over_budget"] is True
     assert "cannot reduce further" in out["_bounded"]["note"]
-    # nothing was silently cut either — every group is still fully present, untouched
+    # nothing was silently cut either, every group is still fully present, untouched
     assert all(len(g) == MIN_KEEP for g in out["items"].values())
 
 

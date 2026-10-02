@@ -1,5 +1,5 @@
-"""THE LEGIBILITY PASS, TIP 1b (Thoth mail 10752/10755, ruling b96fc93e amending e1cb9e3b).
-Thoth's own adversarial review of w268 (deployed tip 1) found nine flaws, all folded into
+"""THE LEGIBILITY PASS, TIP 1b.
+The adversarial review of the deployed tip 1 found nine flaws, all folded into
 this tip alongside the click-focus/tree-to-source/local-relayout amendment (already landed
 in the prior commit, covered by test_legibility_pass_tip1.py's own amendment section):
 
@@ -10,7 +10,7 @@ small nodes missed; (4) the canvas controls were still bottom-anchored on a fres
 build (a stale-static-asset cache, the same class of bug this agent hit live-verifying an
 earlier tip); (5) labels ignored the type-filter's own hidden types; (6) Commit labels read
 "Commit: commit:<sha>" instead of the subject line; (7) the omnibox found nothing for a
-real agent handle ("Thoth") that plainly exists; (8) the hover card was empty on a real
+real agent handle that plainly exists; (8) the hover card was empty on a real
 hover (same root cause as #3); (9) focusObject(null) left a degenerate "focused: 1
 reachable" status. Mirrors the existing static-source-guard convention; the CSS-cache fix
 (#4) gets a real HTTP-level proof since it's server-side.
@@ -73,7 +73,7 @@ def test_gpu_pick_has_tolerance_not_exact_pixel_only() -> None:
 # --- flaw #5: labels respect the type filter -----------------------------------------------
 
 def test_labels_respect_the_type_filter() -> None:
-    # THE LAST RENDERER (Thoth mail 11066): pickLabels' own candidacy pool now reuses
+    # THE LAST RENDERER: pickLabels' own candidacy pool now reuses
     # nodeVisible -- the same viewport filter that already checks hiddenNodeTypes (and, for
     # free, hiddenProjects/focus-reachability too), rather than a separate type-only filter.
     body = _SPACE_JS.split("function pickLabels()", 1)[1][:600]
@@ -91,7 +91,7 @@ def test_labels_respect_the_type_filter() -> None:
 # --- flaw #7: the omnibox finds an agent by handle off the already-loaded graph -----------
 
 def test_omnibox_falls_back_to_a_client_side_agent_handle_scan() -> None:
-    # TIP 3 review carry-over (Thoth mail 10930): a plain n.label read silently missed every
+    # TIP 3 review carry-over: a plain n.label read silently missed every
     # node whose label wasn't already resolved on this snapshot -- fixed to read it the same
     # fallback-safe way space.js's own pickLabels/labelTextFor do (nd.label, else
     # `${type} ${id.slice(0,8)}`).
@@ -102,10 +102,10 @@ def test_omnibox_falls_back_to_a_client_side_agent_handle_scan() -> None:
 
 
 def test_omnibox_fallback_awaits_space_readiness_not_just_a_truthy_global() -> None:
-    # TIP 1c re-fix (Thoth mail 10891): "the fallback did not fire on the deployed page" --
+    # TIP 1c re-fix: "the fallback did not fire on the deployed page" --
     # it gated on window.OsirisSpace, which is undefined until initSpace's own promise
     # resolves; a search typed before that settles found nothing and stayed that way.
-    # TIP 3b (Thoth mail 10953) replaced the two-sequential-awaits shape this test used to
+    # TIP 3b replaced the two-sequential-awaits shape this test used to
     # assert (a `hits.length === 0` gate, then a second await/token-check pair) with one
     # Promise.all over both the server search and the readiness promise together -- see
     # test_legibility_pass_tip3b.py for the full rewrite; this still confirms the readiness

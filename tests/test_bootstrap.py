@@ -1,4 +1,4 @@
-"""Bootstrap — migrate a project's markdown memory into the shared graph.
+"""Bootstrap: migrate a project's markdown memory into the shared graph.
 
 The generalization of the osiris md-kill into a reusable onboarding: a project's CLAUDE.md
 log / DESIGN.md / memory essays become retrieval-sized Reference nodes, the project is
@@ -63,9 +63,9 @@ async def test_bootstrap_migrates_memory_and_registers_project(
 async def test_bootstrap_resolves_to_an_existing_project_by_name_not_canonical(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """PROJECT IDENTITY DRIFT (operator ruling b5663511, live specimen: repo:xxit
+    """PROJECT IDENTITY DRIFT (operator ruling, live specimen: repo:xxit
     renamed to 'handlingtheloop'): a project already carrying this basename as its
-    CURRENT `name` — under a DIFFERENT, older canonical — must be found and reused,
+    CURRENT `name`, under a DIFFERENT, older canonical, must be found and reused,
     never re-minted under a fresh `repo:<basename>` twin."""
     root = await _make_project(tmp_path)
     existing = await actions.create_or_find_object(
@@ -87,10 +87,10 @@ async def test_bootstrap_resolves_to_an_existing_project_by_name_not_canonical(
 async def test_bootstrap_links_every_ingested_reference_in_repo(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """Operator ruling, 2026-08-27, on decision 49231693's trace of Reference's 37%
+    """Operator ruling, 2026-08-27, on the trace of Reference's 37%
     orphan rate: bootstrap_project resolves/creates the SoftwareProject it's onboarding
     THEN threw that identity away calling ingest_log/ingest_reference_doc with no repo=
-    — a doc only gets migrated because someone was working a project, and that context
+    a doc only gets migrated because someone was working a project, and that context
     existed at write time. Every log-chunk Reference AND every essay Reference must now
     carry a live in_repo edge to the project bootstrap just registered."""
     root = await _make_project(tmp_path)
@@ -114,9 +114,9 @@ async def test_bootstrap_links_every_ingested_reference_in_repo(
 async def test_bootstrap_stamps_writes_with_the_given_source_not_a_hardcoded_literal(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """NEGATIVE CONTROL (2026-08-03, Thoth's Tier 1 dispatch off the silent-authority
-    census, decision 497a066a): every write bootstrap_project makes used to be hardcoded
-    "ref:osiris" regardless of who actually called it — worse than anonymous, a bad
+    """NEGATIVE CONTROL (2026-08-03, off the silent-authority
+    census): every write bootstrap_project makes used to be hardcoded
+    "ref:osiris" regardless of who actually called it, worse than anonymous, a bad
     injection read as deliberate system canon and could not be traced back to a caller
     even after the fact. Confirmed against pre-fix code (git stash): the SoftwareProject's
     own `name` assertion and a migrated log entry's `name` assertion both carried
@@ -143,7 +143,7 @@ async def test_bootstrap_defaults_source_to_ref_osiris_for_the_bare_cli_case(
     actions: Actions, tmp_path: Path
 ) -> None:
     """The bare-CLI entrypoint (bootstrap.main(), no MCP ctx exists at all) has no caller
-    identity to thread through — this proves the default is unchanged, not merely that
+    identity to thread through, this proves the default is unchanged, not merely that
     passing a source works."""
     root = await _make_project(tmp_path)
     await bootstrap_project(actions, str(root))
@@ -213,7 +213,7 @@ async def test_bootstrap_wrapper_stamps_writes_with_the_callers_own_mounted_iden
 async def test_bootstrap_wrapper_falls_back_to_session_when_unmounted(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """An unmounted caller still bootstraps (never gated) — its writes carry the same
+    """An unmounted caller still bootstraps (never gated), its writes carry the same
     coarse "session" bucket every other unmounted write already uses, never the old fixed
     literal "ref:osiris" that masqueraded as a deliberate system source."""
     from src import mcp_server as srv
@@ -235,7 +235,7 @@ async def test_bootstrap_wrapper_falls_back_to_session_when_unmounted(
 async def test_bootstrap_discovers_docs_layout_not_just_osiris_shape(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """A repo that keeps its memory under docs/ (not memory/) must be FULLY migrated — the
+    """A repo that keeps its memory under docs/ (not memory/) must be FULLY migrated, the
     dogfood gap sibling-one surfaced: bootstrap was osiris-shaped and would have silently dropped
     the whole docs/ pile, migrating only the root CLAUDE.md."""
     root = tmp_path / "sibling-one"

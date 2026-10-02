@@ -1,18 +1,18 @@
-"""ANSWERS EDGE MINTED BY REAL RESOLVE (thread 367cfafd, Imhotep's finding 18028547,
-operator's word 2026-09-14): the hygiene nudge's "already answered by N decision(s)"
-used to be tiered by pg_trgm text similarity — measured dishonest (93% of true answer
-edges score under 0.4). Fixed in two parts, each covered here:
+"""ANSWERS EDGE MINTED BY REAL RESOLVE (2026-09-14): the hygiene nudge's
+"already answered by N decision(s)" used to be tiered by pg_trgm text similarity,
+measured dishonest (93% of true answer edges score under 0.4).
+Fixed in two parts, each covered here:
 
-(1) `obligation_hygiene._quote_summary` reads the `answered_by` list alone — present or
+(1) `obligation_hygiene._quote_summary` reads the `answered_by` list alone, present or
     absent, never a text-scored maybe; the "possibly answered" tier is gone.
 (2) `capture.thread_answering_decisions` (hygiene's own read, and recall's
     `bears_on_from`) now UNIONs live `answers` edges with live `resolved_by` edges whose
-    target is a Decision — a thread closed via `resolve_thread(artifact=<decision>)` used
+    target is a Decision, a thread closed via `resolve_thread(artifact=<decision>)` used
     to be invisible here, only `resolve_thread(...)`-then-`record_decision(resolves=)`
     ever counted. Read-side widening, not a second minting path: `resolved_by` already
     exists for every such closure, live and historical, so no backfill is needed and
     `thread_closure_status`'s own separate mutual-exclusivity assumption between the two
-    edge types (0055, decision 36cbec2f) is untouched — verified below."""
+    edge types (0055) is untouched, verified below."""
 from __future__ import annotations
 
 from src.actions.core import Actions
@@ -60,7 +60,7 @@ async def test_thread_answering_decisions_sees_a_resolved_by_closure_too(
     d = await record_decision(actions, "the decision that closed it", kind="decision")
     closed = await resolve_thread(actions, str(t), because="built", artifact=str(d)[:8])
     assert closed == t
-    # resolve_thread mints ONLY resolved_by for this door — confirms the read, not the
+    # resolve_thread mints ONLY resolved_by for this door, confirms the read, not the
     # write, is what changed.
     assert await actions.pool.fetchval(
         "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='answers'", d, t) is None
@@ -96,7 +96,7 @@ async def test_thread_answering_decisions_a_non_decision_artifact_names_nothing(
 async def test_closure_status_still_treats_answers_and_resolved_by_as_distinct_witnesses(
     actions: Actions,
 ) -> None:
-    """Locks in that this fix touched ONLY the read side of `answers`/`resolved_by` — the
+    """Locks in that this fix touched ONLY the read side of `answers`/`resolved_by`, the
     closure view's own separate query (thread_closure.py) still sees two witnesses when
     two DIFFERENT decisions close a thread through the two different doors, unaffected."""
     from src.orchestrator.thread_closure import thread_closure_status

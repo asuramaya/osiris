@@ -1,4 +1,4 @@
-"""PEER_OF (ruling d74492ee, spec e6636c7e) — a symmetric Seat<->Seat bond. These witness
+"""PEER_OF, a symmetric Seat<->Seat bond. These witness
 the two verbs' full refusal shape and the SYMMETRIC read every legibility surface depends on:
 peer_of_seat must answer the same regardless of which side peer_seats happened to mint as
 `from_id`, and unpeer must heal the bond regardless of which order it's asked to release it in.
@@ -21,10 +21,10 @@ async def test_peer_seats_creates_a_symmetric_bond(actions: Actions) -> None:
     await _seat(actions, "seat:pr1bbbbb")
 
     out = await peer_seats(actions, "seat:pr1aaaaa", "seat:pr1bbbbb",
-                           because="the reconciliation, msg 1770", actor="test")
+                           because="the reconciliation", actor="test")
 
     assert out == {"peered": ["seat:pr1aaaaa", "seat:pr1bbbbb"],
-                   "because": "the reconciliation, msg 1770"}
+                   "because": "the reconciliation"}
     # symmetric: the read answers correctly from EITHER seat, regardless of which one
     # actually landed as the link's own from_id
     assert await peer_of_seat(actions.pool, "seat:pr1aaaaa") == "seat:pr1bbbbb"
@@ -113,7 +113,7 @@ async def test_unpeer_heals_the_bond_read_from_either_direction(actions: Actions
     await peer_seats(actions, "seat:pr8aaaaa", "seat:pr8bbbbb", because="paired",
                      actor="test")
 
-    # released in the REVERSE order from how it was minted — the bond is symmetric, so
+    # released in the REVERSE order from how it was minted, the bond is symmetric, so
     # this must still find and heal it
     out = await unpeer(actions, "seat:pr8bbbbb", "seat:pr8aaaaa", because="reconciled apart",
                        actor="test")
@@ -127,7 +127,7 @@ async def test_unpeer_heals_the_bond_read_from_either_direction(actions: Actions
             "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
             "ON a.object_id=o.id AND a.name='unpeer_because' WHERE o.canonical=$1", canon)
         assert val == "reconciled apart"
-    # healed, not merely one-sided — a fresh pairing is free to form again
+    # healed, not merely one-sided, a fresh pairing is free to form again
     again = await peer_seats(actions, "seat:pr8aaaaa", "seat:pr8bbbbb", because="re-paired",
                              actor="test")
     assert "peered" in again
@@ -166,10 +166,10 @@ async def test_peer_seats_serializes_two_concurrent_calls_sharing_a_seat(
     actions: Actions,
 ) -> None:
     """Task #76 item 1: peer_seats' own "already has a peer" check and its create_link were
-    two round-trips with no lock between them — two concurrent callers both trying to pair a
+    two round-trips with no lock between them, two concurrent callers both trying to pair a
     THIRD seat onto the same shared seat could each pass the check before either wrote,
     leaving that seat with two active peer_of edges. Fire both at once; exactly one must
-    land, the other must see the fresh bond and refuse — never both succeeding."""
+    land, the other must see the fresh bond and refuse, never both succeeding."""
     from src.orchestrator.seats import peer_of_seat, peer_seats
 
     await _seat(actions, "seat:prlockaa")
@@ -188,7 +188,7 @@ async def test_peer_seats_serializes_two_concurrent_calls_sharing_a_seat(
     assert len(successes) == 1, results
     assert len(failures) == 1, results
     assert "already has a peer" in failures[0]["error"]
-    # the graph agrees with whichever racer actually won — no double bond either way
+    # the graph agrees with whichever racer actually won, no double bond either way
     winner_peer = "seat:prlockaa" if successes[0]["peered"][0] == "seat:prlockaa" \
         else "seat:prlockcc"
     assert await peer_of_seat(actions.pool, "seat:prlockbb") == winner_peer
@@ -196,7 +196,7 @@ async def test_peer_seats_serializes_two_concurrent_calls_sharing_a_seat(
 
 async def test_hold_action_mints_an_owned_severity_hold_thread(actions: Actions) -> None:
     """Task #76 item 4a: the recorded half of a mutual HOLD reuses open_thread's ordinary
-    obligation shape — owner=held (whose move it is), severity='hold' (filterable, never
+    obligation shape, owner=held (whose move it is), severity='hold' (filterable, never
     a text match), the hold's own fields stamped on the same thread object."""
     from src.orchestrator.seats import hold_action, peer_seats
 
@@ -273,7 +273,7 @@ async def test_hold_action_refuses_an_unknown_seat(actions: Actions) -> None:
 
 
 async def test_hold_action_refuses_a_non_peer(actions: Actions) -> None:
-    """v1's hold is a peer's own power — a seat with no active peer_of bond to the other
+    """v1's hold is a peer's own power, a seat with no active peer_of bond to the other
     side cannot hold its act, even if both seats otherwise exist and are active."""
     from src.orchestrator.seats import hold_action
 
@@ -288,7 +288,7 @@ async def test_hold_action_refuses_a_non_peer(actions: Actions) -> None:
 async def test_hold_action_is_resolved_by_the_ordinary_resolve_thread_verb(
     actions: Actions,
 ) -> None:
-    """No new resolve path — the hold IS a Thread, so resolve_thread heals it exactly like
+    """No new resolve path, the hold IS a Thread, so resolve_thread heals it exactly like
     any other obligation."""
     from src.orchestrator.seats import hold_action, peer_seats
 
@@ -311,7 +311,7 @@ async def test_hold_action_is_resolved_by_the_ordinary_resolve_thread_verb(
 
 
 async def test_peer_reachable_includes_the_active_peer(actions: Actions) -> None:
-    """Task #76 item 5b: a search for one seat's own queue should also cover its peer's —
+    """Task #76 item 5b: a search for one seat's own queue should also cover its peer's:
     discoverability only, no change to mail delivery."""
     from src.orchestrator.seats import peer_reachable, peer_seats
 
@@ -338,7 +338,7 @@ async def test_peer_reachable_is_just_the_seat_itself_when_unpeered(
 
 
 async def test_peer_reachable_never_refuses_an_unknown_seat(actions: Actions) -> None:
-    """A pure-read helper with nothing to refuse — an unknown seat's own queue is still
+    """A pure-read helper with nothing to refuse, an unknown seat's own queue is still
     exactly one name, its own, never an error."""
     from src.orchestrator.seats import peer_reachable
 
@@ -348,7 +348,7 @@ async def test_peer_reachable_never_refuses_an_unknown_seat(actions: Actions) ->
 async def test_peer_ledger_unions_open_threads_owned_by_either_seat(
     actions: Actions,
 ) -> None:
-    """Task #76 item 3: the reciprocity ledger is zero new storage — every open thread
+    """Task #76 item 3: the reciprocity ledger is zero new storage, every open thread
     owned by EITHER seat, oldest first, as one list. Age is the ordering (hxaro's own
     framing), not any notion of amount owed."""
     from src.orchestrator.capture import open_thread
@@ -371,7 +371,7 @@ async def test_peer_ledger_unions_open_threads_owned_by_either_seat(
 
 
 async def test_peer_ledger_excludes_a_resolved_item(actions: Actions) -> None:
-    """Resolved is not ledger — the whole point is what STAYS open."""
+    """Resolved is not ledger, the whole point is what STAYS open."""
     from src.orchestrator.capture import open_thread, resolve_thread
     from src.orchestrator.seats import peer_ledger
 
@@ -400,7 +400,7 @@ async def test_peer_ledger_is_empty_for_a_pair_with_no_open_items(
 
 
 async def test_peer_ledger_does_not_require_an_active_peer_bond(actions: Actions) -> None:
-    """A healed (unpeered) pair's own shared history stays readable — the ledger is a pure
+    """A healed (unpeered) pair's own shared history stays readable, the ledger is a pure
     read over `owner`, never gated on peer_of's own live status."""
     from src.orchestrator.capture import open_thread
     from src.orchestrator.seats import peer_ledger, peer_seats, unpeer

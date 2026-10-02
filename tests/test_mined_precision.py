@@ -1,8 +1,8 @@
-"""Miner precision + re-mine reconciliation — regression from the 2026-07 live audit.
+"""Miner precision + re-mine reconciliation: regression from the 2026-07 live audit.
 
 The receipts below are ACTUAL rows that landed on the operator's briefing (garbage) or
 must keep landing there (legit). Each garbage case must NOT be mined; each legit case
-MUST be; ruling restatements collapse to ONE Decision; and a re-mine HEALS the graph —
+MUST be; ruling restatements collapse to ONE Decision; and a re-mine HEALS the graph:
 stale mined objects are archived via the event-sourced set_status (reversible), while a
 human's deliberate archive is never overridden by the cron.
 """
@@ -25,11 +25,11 @@ NOW = datetime(2026, 7, 1, tzinfo=UTC)
 # --- the receipts -----------------------------------------------------------
 
 GARBAGE_THREADS = (
-    # mid-sentence fragment, dangling closer — a split artifact, not a thread
+    # mid-sentence fragment, dangling closer: a split artifact, not a thread
     "anchor), app start gated on the migrate one-shot, satellite behind a profile",
     # the miner ate the commit message DOCUMENTING its own marker list
     "author-intended markers (NEXT: / THE WALL / gated on / needs-a-key / not-yet-live);",
-    # marker-enumeration WITHOUT the word "markers" — the enumeration guard alone must catch it
+    # marker-enumeration WITHOUT the word "markers": the enumeration guard alone must catch it
     "Tuned the flags (NEXT: / THE WALL / gated on) shown in the tray",
     # a commit describing the miner; the marker appears only inside quotes + trailing cut-off
     'only the exact phrase "THE WALL" (a real',
@@ -37,7 +37,7 @@ GARBAGE_THREADS = (
     "INSPECTOR WALL: a long property value (commit rationale, doc body) now CLAMPS to",
 )
 LEGIT_THREADS = (
-    "live compose needs a key",  # lowercase start is a REAL thread shape — no case guard
+    "live compose needs a key",  # lowercase start is a REAL thread shape, no case guard
     "THE WALL: running this live needs a satellite on a box with Harris-portal access",
     "marked built (cron ladder), not yet live",
 )
@@ -146,7 +146,7 @@ async def test_remine_archives_stale_thread_and_resurrects(actions: Actions) -> 
     assert res["threads"] == 1 and res["archived"] == 0
     tid = await p.fetchval("SELECT id FROM objects WHERE type='Thread'")
 
-    # the rationale is superseded — the old miner would have left the stale thread forever
+    # the rationale is superseded: the old miner would have left the stale thread forever
     await actions.assert_property(cm, "rationale", "Refactor only, nothing blocked.",
                                   "git", NOW, 0.85)
     healed = await mine_threads(actions)
@@ -250,7 +250,7 @@ async def test_end_to_end_receipts_through_git(actions: Actions, tmp_path: Path)
 # --- the miner must NOT eat a session's write-back (prosthesis boundary) -------
 
 async def _thread_state(pool: Any, tid: Any) -> tuple[str, str | None]:
-    """(object status, current 'status' assertion) for a thread — the two ways it can die."""
+    """(object status, current 'status' assertion) for a thread: the two ways it can die."""
     obj = await pool.fetchval("SELECT status FROM objects WHERE id=$1", tid)
     assertion = await pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions "
@@ -262,9 +262,9 @@ async def test_a_session_thread_survives_a_full_remine(actions: Actions) -> None
     """A session-captured thread must outlive the pulse re-mine. The live bug: resolve_threads
     grabbed EVERY open thread (source-blind), false-resolved a `session` thread off two generic
     shared tokens (`claude`, `local`), and the resulting `git-memory` assertion then made
-    reconcile_mined archive it as 'stale'. Both halves must now leave session captures alone —
+    reconcile_mined archive it as 'stale'. Both halves must now leave session captures alone:
     while the miner still self-heals its OWN mined threads (the positive control below)."""
-    # a session write-back — the operator/Claude opened it, source='session'
+    # a session write-back: the operator/Claude opened it, source='session'
     sess = await open_thread(
         actions, "neuralink sanctions screening still needs a manual review pass")
 
@@ -292,12 +292,12 @@ async def test_a_session_thread_survives_a_full_remine(actions: Actions) -> None
     obj_status, sess_status = await _thread_state(actions.pool, sess)
     assert obj_status == "active", "reconcile_mined archived a session write-back"
     assert sess_status == "open", "resolve_threads false-resolved a session thread"
-    # and it carries NO git-memory assertion — the miner never reached across the boundary
+    # and it carries NO git-memory assertion: the miner never reached across the boundary
     crossed = await actions.pool.fetchval(
         "SELECT count(*) FROM assertions WHERE object_id=$1 AND source_id='git-memory'", sess)
     assert crossed == 0
 
-    # positive control: the fix is surgical — the miner STILL self-heals a thread it authored
+    # positive control: the fix is surgical: the miner STILL self-heals a thread it authored
     mined = await actions.pool.fetchval(
         "SELECT o.id FROM objects o WHERE o.type='Thread' AND EXISTS ("
         "  SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "

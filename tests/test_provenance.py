@@ -1,5 +1,5 @@
-"""PROVENANCE PIECE 1, READ-SET STAMPING AT THE DOOR (thread da545039f2ba, ruling
-bb3e4422 "provenance by channel, not by text") — the durable read-set log, the
+"""PROVENANCE PIECE 1, READ-SET STAMPING AT THE DOOR ("provenance by channel, not by
+text"): the durable read-set log, the
 possible_upstream edges minted from it at write time, and credence.py's second,
 orthogonal independence leg (distinct_upstreams) that reads them.
 """
@@ -40,14 +40,14 @@ async def test_stamp_read_none_object_id_is_a_noop(actions: Actions) -> None:
 
 
 async def test_message_object_id_resolves_the_existing_message_object(actions: Actions) -> None:
-    # the SAME mint mailbox.py's own send() path already does — this door only RESOLVES.
+    # the SAME mint mailbox.py's own send() path already does; this door only RESOLVES.
     msg_oid = await actions.create_or_find_object("Message", "message:4242", "agent:sender")
     resolved = await message_object_id(actions.pool, 4242, "agent:sender")
     assert resolved == msg_oid
 
 
 async def test_message_object_id_returns_none_for_operator_sender(actions: Actions) -> None:
-    # NEVER an edge to the operator's own words — refused at the door, even when a
+    # NEVER an edge to the operator's own words: refused at the door, even when a
     # Message object genuinely exists for this id.
     await actions.create_or_find_object("Message", "message:99", "operator")
     assert await message_object_id(actions.pool, 99, "operator") is None
@@ -65,9 +65,9 @@ async def test_message_object_id_returns_none_when_no_message_object_exists(
 async def test_unread_message_ids_flags_an_id_never_read_through_inbox(
     actions: Actions,
 ) -> None:
-    """THE FIRST-BREATH READ LAW (thread afd27e1a, Thoth mail 13003): a message this
+    """THE FIRST-BREATH READ LAW : a message this
     agent has never returned through a real inbox() call (inbox-lease or inbox-peek)
-    comes back as unread — the exact check `inbox(ack=...)` gates on."""
+    comes back as unread: the exact check `inbox(ack=...)` gates on."""
     from src.orchestrator.mailbox import send_message
 
     out = await send_message(actions.pool, from_agent="agent:sender", from_project="osiris",
@@ -81,7 +81,7 @@ async def test_unread_message_ids_clears_once_a_real_inbox_read_is_stamped(
     actions: Actions,
 ) -> None:
     """A door OTHER than inbox-lease/inbox-peek (e.g. a search hit surfacing the same
-    Message object) does NOT satisfy the law — only a genuine inbox() call, peek or
+    Message object) does NOT satisfy the law; only a genuine inbox() call, peek or
     lease, does."""
     from src.orchestrator.mailbox import send_message
 
@@ -102,7 +102,7 @@ async def test_unread_message_ids_clears_once_a_real_inbox_read_is_stamped(
 
 async def test_unread_message_ids_fails_open_with_no_message_object(actions: Actions) -> None:
     # an id fleet_messages has never heard of (or whose Message object never landed)
-    # cannot be checked against session_reads at all — this law gates what it can
+    # cannot be checked against session_reads at all; this law gates what it can
     # actually observe, it never invents evidence it doesn't have.
     assert await unread_message_ids(actions.pool, [999999], agent_id="agent:reader5") == []
 
@@ -184,8 +184,8 @@ def test_distinct_upstream_count_never_collapses_a_source_with_no_recorded_upstr
 
 
 def test_distinct_upstream_count_a_looker_is_never_collapsed() -> None:
-    # THE REBUTTAL SIGNAL CARRIES OVER (Thoth's own acceptance spec): a source that
-    # performed its own observation act is not deflated by sharing an upstream read —
+    # THE REBUTTAL SIGNAL CARRIES OVER (the acceptance spec): a source that
+    # performed its own observation act is not deflated by sharing an upstream read:
     # it may have verified independently, same law resolve_credence's own rebuttal
     # rule already applies to the spawned_by clamp.
     ups = {"agent:a": frozenset({"msg:1"}), "agent:b": frozenset({"msg:1"})}
@@ -202,13 +202,13 @@ async def test_upstream_sets_over_the_graph(actions: Actions) -> None:
     assert got["agent:b"] == frozenset()
 
 
-# --- the star acceptance test (Thoth's own spec) ------------------------------------
+# --- the star acceptance test (the acceptance spec) ------------------------------------
 
 async def test_two_seats_reading_the_same_message_then_asserting_resolve_to_one_witness(
     actions: Actions,
 ) -> None:
     """Two agent sources with NO spawned_by relation (so the OLD independence oracle
-    would call them fully independent) both read message X, then assert the SAME fact —
+    would call them fully independent) both read message X, then assert the SAME fact:
     the dossier's distinct_upstreams collapses them to one witness even though
     `agreement` (the raw value-count) already read 'agreeing' on its own."""
     o = await actions.create_or_find_object("SoftwareProject", "repo:pv-demo-7", "test")
@@ -250,9 +250,9 @@ async def test_a_seat_that_read_x_and_observed_is_not_deflated(actions: Actions)
 async def test_a_mined_fact_and_an_agents_restatement_collapse_to_one_witness(
     actions: Actions,
 ) -> None:
-    """FACT-SCOPED FOLLOW-UP (Thoth's own mail 10405): piece 2's mined facts are
+    """FACT-SCOPED FOLLOW-UP : piece 2's mined facts are
     sourced to the literal "session-miner" constant, never agent:-prefixed
-    (ingest/sessions.py emit_yield, ruling ceae1604) — the ORIGINAL cut of this
+    (ingest/sessions.py emit_yield): the ORIGINAL cut of this
     metric filtered to agent:-prefixed sources only, so a mined fact could never
     collapse with an agent's own restatement of the same upstream read even when
     their possible_upstream edges genuinely agreed. That gap is closed: distinct_

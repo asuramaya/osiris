@@ -1,4 +1,4 @@
-"""The vault-stays-tame-without-a-hand obligation, part 1 (thread 9fac4e0d): the ladder's
+"""The vault-stays-tame-without-a-hand obligation, part 1: the ladder's
 own weekly manifest-then-apply-if-clear gate. build_manifest_body is pure and tested
 directly; mail_manifest/find_clear_manifest are proven against a real per-worker database
 (the `actions` fixture's own catalog-seeded pg_dsn, matching thread 8542ee89's own lesson
@@ -42,7 +42,7 @@ def test_build_manifest_body_is_empty_safe() -> None:
 
 
 def test_build_manifest_body_names_legacy_tarballs_and_session_files() -> None:
-    """Thoth mail 8441 items 1 and 2 — both new populations get their own named
+    """Both new populations get their own named
     section and their own count in the manifest's own header, same as every
     population before them."""
     empty_plan: dict[str, list[DumpFile]] = {"keep": [], "remove": []}
@@ -61,7 +61,7 @@ def test_build_manifest_body_names_legacy_tarballs_and_session_files() -> None:
 
 
 def test_build_manifest_body_names_dormant_seat_transcripts_when_given() -> None:
-    """Thoth mail 13353 item 2 — a rollup OF session_plan, its own section, omitted
+    """A rollup OF session_plan, its own section, omitted
     entirely (not just empty) when the caller never computed it (a manifest built before
     this feature existed, or a test that predates it)."""
     empty_plan: dict[str, list[DumpFile]] = {"keep": [], "remove": []}
@@ -115,7 +115,7 @@ async def test_find_clear_manifest_is_clear_once_old_enough_and_undimmed(
     chain_plan: dict[str, list[TranscriptChain]] = {"keep": [], "remove": []}
 
     sent_id = await ladder.mail_manifest(plans, chain_plan)
-    # backdate it past the min-age gate — a real weekly run would just wait a day
+    # backdate it past the min-age gate, a real weekly run would just wait a day
     await actions.pool.execute(
         "UPDATE fleet_messages SET created_at = now() - interval '25 hours' WHERE id=$1",
         sent_id)
@@ -146,9 +146,9 @@ async def test_find_clear_manifest_refuses_a_dimmed_manifest(
 async def test_collect_session_prune_plan_delegates_to_the_cache_prune_script(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`_collect_session_prune_plan` (Thoth mail 8441 item 1) must reuse
+    """`_collect_session_prune_plan` must reuse
     osiris_transcript_cache_prune's own `_collect_sessions`/`find_prunable_sessions`
-    unchanged, never a re-derived query — patching `_collect_sessions` alone (no real
+    unchanged, never a re-derived query, patching `_collect_sessions` alone (no real
     DB) proves the wiring, since `find_prunable_sessions` itself is already covered
     directly in test_transcript_cache_prune.py."""
     import scripts.osiris_transcript_cache_prune as cache_prune
@@ -169,7 +169,7 @@ async def test_collect_session_prune_plan_delegates_to_the_cache_prune_script(
 async def test_find_clear_manifest_only_looks_at_the_newest_manifest(
     actions: Actions,
 ) -> None:
-    """An OLD dimmed manifest must never block a fresh, clear one sent later — the
+    """An OLD dimmed manifest must never block a fresh, clear one sent later, the
     query is scoped to the newest message this script ever sent, not "any"."""
     empty_plan: dict[str, list[DumpFile]] = {"keep": [], "remove": []}
     plans = {"backups/": empty_plan, "vault": empty_plan, "vault/basebackups": empty_plan}
