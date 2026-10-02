@@ -774,10 +774,21 @@ select.field:focus, input.field:focus { border-color: var(--border-focus); }
   /* break at spaces, never inside a number (body: outranks the later base rule): it let every column shrink to one
      character wide ("4 / 0 / 6" down the screen) instead of scrolling */
   body .r-table td, body .r-table th { word-break: normal; overflow-wrap: break-word; }
-  /* the search icon sat flush against the settings gear */
-  .search-compact-btn { margin-right: 8px; }
-  .bar-right { gap: 6px; }
+  /* THE PHONE HEADER: the old three-column grid kept a 140px floor under the search, so the
+     search icon landed on top of the gear. Here the title cluster takes what is left, the
+     search and the right-hand buttons take only their own width, the brand word and the
+     divider go, and a long repo name is cut with an ellipsis. */
+  #bar { grid-template-columns: minmax(0, 1fr) auto auto; padding: 0 10px; gap: 6px; }
+  .bar-center { min-width: 0; width: auto; margin: 0; }
+  .app-brand, .bar-divider { display: none; }
+  .bar-left { gap: 6px; }
+  #repo-pill-label { max-width: 6.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-right { gap: 4px; }
 }
+/* A desk card shows its message as one line; clicking the line opens the rest, and the full
+   text is also the tooltip. */
+.desk-body { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.desk-body.open { white-space: pre-wrap; overflow: visible; }
 /* the advanced doors (replace the key, run an offload, test a restore) stay out of the setup
    path: one collapsed section per panel, closed until someone opens it. */
 .adv-section { margin-top: 14px; }

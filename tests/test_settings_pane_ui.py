@@ -319,9 +319,12 @@ def test_recovery_checked_gets_the_same_copy_button_as_the_tpm_row() -> None:
 
 def test_phone_scrolls_wide_result_tables_and_clears_the_search_icon() -> None:
     css = (Path(__file__).parent.parent / "src" / "ui" / "static" / "osiris.css").read_text()
-    phone = css.split("PHONE WIDTHS", 1)[1][:2200]
+    phone = css.split("PHONE WIDTHS", 1)[1][:4200]
     assert ".r-table { display: block; max-width: 100%; overflow-x: auto; }" in phone
-    assert ".search-compact-btn { margin-right: 8px; }" in phone
+    # the search icon no longer sits on the gear: its own column, no 140px floor
+    assert "#bar { grid-template-columns: minmax(0, 1fr) auto auto;" in phone
+    assert ".bar-center { min-width: 0; width: auto; margin: 0; }" in phone
+    assert ".app-brand, .bar-divider { display: none; }" in phone
     assert ("body .r-table td, body .r-table th "
             "{ word-break: normal; overflow-wrap: break-word; }") in phone
 
@@ -330,3 +333,15 @@ def test_registry_tables_scroll_inside_their_own_box_when_wider_than_the_pane() 
     body = _CONSOLE_JS.split("function renderSettingsPanelHtml(items) {", 1)[1][:2600]
     assert ('<div class="ee-form-scroll"><table class="ee-table ee-form">'
             '<thead><tr><th>Setting') in body
+
+
+def test_merge_candidates_and_desk_prose_are_captions_and_one_line_cards() -> None:
+    merge = _CONSOLE_JS.split("function renderMergeCandidatesHtml(list) {", 1)[1][:2200]
+    assert "Records that may be the same thing." in merge
+    assert "Merging is a deliberate step you run yourself" in merge  # kept, as the tooltip
+    assert "These records may describe the same thing." not in _CONSOLE_JS
+    card = _CONSOLE_JS.split("function deskCardHtml(c, band) {", 1)[1][:1500]
+    assert 'class="desk-body" title="' in card and "classList.toggle(" in card
+    css = (Path(__file__).parent.parent / "src" / "ui" / "static" / "osiris.css").read_text()
+    assert ".desk-body { white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" in css
+    assert ".desk-body.open { white-space: pre-wrap; overflow: visible; }" in css
