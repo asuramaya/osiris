@@ -1,7 +1,7 @@
-"""GUI PARITY FOR THE KEY AND OFFLOAD LANES (thread dd11ab34, Thoth mail 13472) — API
+"""GUI PARITY FOR THE KEY AND OFFLOAD LANES: API
 tests for the two genuinely new routes: POST /restic-key/init (mirrors `osiris
 restic-key init`) and POST /offload-runner/tick (mirrors `osiris offload-runner tick`,
-the same tick osiris-offload.timer runs). Neither carries actor/because — the CLI
+the same tick osiris-offload.timer runs). Neither carries actor/because, the CLI
 doors they mirror don't either (verified: cmd_restic_key/cmd_offload_runner take
 neither); the write door that DOES require `because` is POST /backup-settings itself,
 already covered by tests/test_settings_pane_api.py's own predecessor coverage and the
@@ -9,12 +9,12 @@ frontend's own saveOffloadTargets() prompt.
 
 TWO REAL BUGS FOUND AND FIXED WHILE BUILDING THE OFFLOAD-RUNNER TICK TEST (needed a
 real, saved target to exercise "skip a disabled one" against): (1) BackupSettingsBody
-(src/api/app.py) never had an `offload_targets` field — every POST /backup-settings
+(src/api/app.py) never had an `offload_targets` field, every POST /backup-settings
 the Offload Targets panel's own Save button has ever made silently wrote nothing for
 that field and reported success anyway (Pydantic drops an unrecognized body key by
 default). (2) settings_service._validate_value's generic per-field "records" check
 rejected `None` unconditionally for every "str"-typed field, running BEFORE the
-spec's own custom `validate` callback — so `_validate_offload_targets`'s own correct
+spec's own custom `validate` callback, so `_validate_offload_targets`'s own correct
 per-kind rule (`expected_mountpoint` null for kind='restic') never got a chance to
 run; every restic-kind offload_targets write has been refused since the field
 existed. Both fixed in this tip; test_offload_targets_round_trips_a_restic_target

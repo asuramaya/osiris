@@ -1,6 +1,6 @@
 """The gate's pytest subprocess must not inherit git's per-hook GIT_* variables.
 
-THE INCIDENT (2026-08-27, obligations 3da2dca9 / fdb04d23 / a35c042f): three workers
+THE INCIDENT (2026-08-27): three workers
 independently found the fleet's SHARED repository corrupted -- user.name/user.email
 overwritten to test/test@test, worktree HEADs repointed to a fabricated orphan branch
 `stray-history`, a fixture's own worktree registered in the real worktree list, and
@@ -80,13 +80,13 @@ def test_scrubbed_env_cannot_write_through_to_the_real_repo(tmp_path: Path) -> N
     assert _local_email(iso) == "scrubbed@scrubbed", "the isolated repo missed its own write"
 
 
-# --- obligation 13d3ddbf: the gate must never measure the box it runs on ------------------
+# --- the gate must never measure the box it runs on ---------------------------------------
 
 def test_pytest_env_relocates_a_tmpdir_nested_under_a_jobs_tree() -> None:
     """THE INCIDENT: a gate run whose TMPDIR sits under a live jobs/sessions tree makes
     job-anchor tests read the RUNNER's own job id instead of a synthetic test one
     (measured live, test_spawned_wake_carries_a_durable_job_dir_anchor). Relocates rather
-    than refuses, and says so via the returned note — never silent, never a hard failure
+    than refuses, and says so via the returned note: never silent, never a hard failure
     over an environment variable the gate can fix itself."""
     scrubbed, note = gate_hook._pytest_env(
         {"PATH": "/usr/bin"},

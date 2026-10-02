@@ -1,5 +1,5 @@
-"""WAVE 5, THE OTHER HALF OF THE RETRY DOOR (thread 6001): `retryable_abstentions` is
-deliberately scoped to candidate_count=0 only — a 2+-candidate abstention needs a
+"""The other half of the retry door: `retryable_abstentions` is
+deliberately scoped to candidate_count=0 only, a 2+-candidate abstention needs a
 DIFFERENT, safer re-scan: not a fresh re-derivation, but a check of whether the ORIGINAL
 recorded candidates have since been eliminated (merged, retired, invalidated) down to
 exactly one live survivor. Lane-agnostic, since it never re-derives anything.
@@ -51,7 +51,7 @@ async def test_retryable_ambiguous_never_returns_a_row_with_two_live_survivors(
     actions: Actions,
 ) -> None:
     """Structural guarantee: even pooling every link_type (link_type=None), a case with
-    2+ STILL-ACTIVE candidates never appears — the SQL's own WHERE clause, not
+    2+ STILL-ACTIVE candidates never appears, the SQL's own WHERE clause, not
     application logic a later edit could widen."""
     orphan = await _mint_bare(actions, "GateWidget")
     t1 = await _mint_bare(actions, "GateWidget")
@@ -111,7 +111,7 @@ async def test_retry_ambiguous_mints_the_surviving_candidate(actions: Actions) -
     assert row["properties"]["retried"] is True
     assert row["source_id"] == "retrier"
     # the stale abstention (recorded under "original") must be RETIRED, not left
-    # coexisting beside the resolved marker (Wave 5's own cross-source finding)
+    # coexisting beside the resolved marker (a cross-source finding)
     resolved = await actions.pool.fetchval(
         "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='derivation_abstained_implements'", orphan)
@@ -155,7 +155,7 @@ async def test_retry_ambiguous_requires_a_because_to_execute(actions: Actions) -
 async def test_retry_ambiguous_is_lane_agnostic_across_link_types_at_once(
     actions: Actions,
 ) -> None:
-    """No lane-specific lookup is ever re-run — only the stored candidate ids' status —
+    """No lane-specific lookup is ever re-run, only the stored candidate ids' status -
     so one call with link_type=None serves every lane's ambiguous abstentions together."""
     await ensure_type(actions, name="gate_rel_b", kind="link", actor="test")
     o1 = await _mint_bare(actions, "GateWidget")

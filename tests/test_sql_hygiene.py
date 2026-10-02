@@ -1,14 +1,14 @@
-"""SQL hygiene tripwire — the onboarding-day outage class, made unrepresentable.
+"""SQL hygiene tripwire: the onboarding-day outage class, made unrepresentable.
 
 Every scalar subquery on current_assertions carries a ≤1-row assumption that holds
 under ONE writer and breaks the day a second source describes the object: asyncpg
 raises CardinalityViolation and whatever read it dies (the miner died for a DAY this
-way, decision 3191e0df; the read surfaces rotted quietly, obligation 7667d3df).
+way; the read surfaces rotted quietly).
 
 The law (winning_props's exact ordering): every scalar subquery per (object, name)
 takes ORDER BY confidence DESC, observed_at DESC LIMIT 1. This test walks every SQL
 string literal in src/ and fails on any `(SELECT … FROM current_assertions …)` value
-subquery missing it. Existence probes (SELECT 1) and aggregates are exempt — they are
+subquery missing it. Existence probes (SELECT 1) and aggregates are exempt: they are
 cardinality-safe by construction.
 """
 from __future__ import annotations
@@ -24,14 +24,14 @@ _AGGREGATE = re.compile(
     re.IGNORECASE,
 )
 _EXISTENCE = re.compile(r"^\(\s*SELECT\s+1\b", re.IGNORECASE)
-# the outage shape: a subquery whose select-list is a bare property `value` read —
+# the outage shape: a subquery whose select-list is a bare property `value` read:
 # that and only that is the scalar ≤1-row assumption. Set-subqueries (IN (SELECT
 # object_id, …)), derived tables, and window scans are cardinality-safe.
 _VALUE_READ = re.compile(r"^\(\s*SELECT\s+(?:\w+\.)?value\b", re.IGNORECASE)
 
 
 def _sql_literals(path: Path) -> list[str]:
-    """Every string literal in the file that mentions current_assertions — implicit
+    """Every string literal in the file that mentions current_assertions; implicit
     concatenation is already folded by the parser; f-string literal fragments are
     joined with a placeholder so a spliced-in identifier doesn't split the query."""
     tree = ast.parse(path.read_text(), filename=str(path))
@@ -94,7 +94,7 @@ def test_no_bare_scalar_subqueries_on_current_assertions() -> None:
                     violations.append(f"{path.relative_to(SRC.parent)}: {snippet}")
     assert not violations, (
         "bare scalar subqueries on current_assertions (add ORDER BY confidence DESC, "
-        "observed_at DESC LIMIT 1 — winning_props's ordering):\n" + "\n".join(violations))
+        "observed_at DESC LIMIT 1, winning_props's ordering):\n" + "\n".join(violations))
 
 
 def test_the_tripwire_itself_bites() -> None:

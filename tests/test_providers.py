@@ -1,4 +1,4 @@
-"""Inference providers — the GPU-as-an-API-key abstraction.
+"""Inference providers: the GPU-as-an-API-key abstraction.
 
 The engine runs no GPU: the text LLM and the vision/OCR model sit behind seams whose
 backend is chosen by config (a hosted key, or a local model). Tests cover the factory
@@ -53,7 +53,7 @@ def test_auto_prefers_local_cli_then_the_key(monkeypatch: pytest.MonkeyPatch) ->
 
 async def test_claude_cli_client_spawns_and_parses(tmp_path: Path) -> None:
     """The CLI backend shells out to `claude -p … --output-format json` and pulls `.result`
-    out of the envelope — proven against a fake binary so CI needs no real claude install."""
+    out of the envelope, proven against a fake binary so CI needs no real claude install."""
     fake = tmp_path / "claude"
     fake.write_text('#!/bin/sh\necho \'{"result":"Acme Corp","is_error":false}\'\n')
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
@@ -71,7 +71,7 @@ async def test_claude_cli_client_raises_on_error(tmp_path: Path) -> None:
 
 
 def _hangs(tmp_path: Path) -> Path:
-    """A `claude` that never returns — the shape of a wedged CLI call."""
+    """A `claude` that never returns, the shape of a wedged CLI call."""
     fake = tmp_path / "claude"
     fake.write_text("#!/bin/sh\nsleep 30\n")
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
@@ -81,7 +81,7 @@ def _hangs(tmp_path: Path) -> Path:
 def _spy(monkeypatch: pytest.MonkeyPatch) -> tuple[list[Any], asyncio.Event]:
     """Capture the Process objects the client spawns, so a test can ask: did it DIE?
 
-    The Event fires the moment a child is out the door — a test waits on THAT, never on a
+    The Event fires the moment a child is out the door, a test waits on THAT, never on a
     sleep, so it cancels at the exact instant the hand is extended."""
     import src.ingest.providers as prov
     spawned: list[Any] = []
@@ -102,7 +102,7 @@ async def test_a_timed_out_extractor_is_KILLED_not_abandoned(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """THE LEAK THAT WEDGED THE WORKER. `await proc.communicate()` had no timeout: a hung CLI
-    call held an arq slot AND 290MB forever. Now the call dies — and takes its child with it."""
+    call held an arq slot AND 290MB forever. Now the call dies, and takes its child with it."""
     spawned, _ = _spy(monkeypatch)
     client = ClaudeCliClient(binary=str(_hangs(tmp_path)), timeout=0.3)
     with pytest.raises(TimeoutError):
@@ -115,8 +115,8 @@ async def test_a_CANCELLED_extractor_is_KILLED_not_abandoned(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The one that actually happened: arq's timeout CANCELS the tick, and CancelledError is not
-    an Exception. The old code caught nothing, so the `claude -p` kept running — and kept
-    BILLING — long after the job that owned it was dead. Osiris must be able to close its hand."""
+    an Exception. The old code caught nothing, so the `claude -p` kept running, and kept
+    BILLING, long after the job that owned it was dead. Osiris must be able to close its hand."""
     spawned, out_the_door = _spy(monkeypatch)
     client = ClaudeCliClient(binary=str(_hangs(tmp_path)), timeout=30)
     task = asyncio.create_task(client.complete(system="s", prompt="p", model="m"))

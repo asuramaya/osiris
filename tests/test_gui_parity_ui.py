@@ -1,4 +1,4 @@
-"""GUI PARITY FOR THE KEY AND OFFLOAD LANES (thread dd11ab34, Thoth mail 13472) —
+"""GUI PARITY FOR THE KEY AND OFFLOAD LANES:
 source-pin tests for the three frontend pieces: (1) a restic-credential status+Init
 widget in the Backup & Offload section (over the new POST /restic-key/init), (2) a
 "Run offload now" button over the new POST /offload-runner/tick, refreshing the
@@ -30,7 +30,7 @@ def test_restic_credential_widget_offers_init_only_when_absent() -> None:
 
 
 def test_init_restic_key_reads_the_inline_backend_select_no_prompt() -> None:
-    # PRODUCT VOICE (ruling 1e2ef5c3): an inline <select> next to the button, never a
+    # An inline <select> next to the button, never a
     # browser prompt() dialog.
     body = _CONSOLE_JS.split("async function initResticKey() {", 1)[1][:600]
     assert "$('restic-init-backend')" in body
@@ -77,7 +77,7 @@ def test_backup_status_fetch_is_its_own_reusable_function() -> None:
 # --- item 3: soul-key init restarts the daemons ----------------------------------------
 
 def test_init_key_sends_the_inline_restart_checkbox_state() -> None:
-    # PRODUCT VOICE (ruling 1e2ef5c3): an inline checkbox (default checked, rendered
+    # An inline checkbox (default checked, rendered
     # in renderKeyPanelHtml's own "not present" actions block) replaces the old
     # confirm() dialog -- initKey reads its state directly, never a browser prompt.
     body = _CONSOLE_JS.split("async function initKey() {", 1)[1][:1100]

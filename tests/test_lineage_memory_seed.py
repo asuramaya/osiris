@@ -1,4 +1,4 @@
-"""ONE-TIME FLEET SEED (thread 4dcc1849, decision f9e47d3c, Thoth DM 7763 item (a)):
+"""ONE-TIME FLEET SEED:
 attribute every currently-active seat's memory dir to its true current holder before
 the archive rule ships, so the first mount() after deploy doesn't flood every live
 session with memory_migration_needed."""
@@ -58,7 +58,7 @@ async def test_plan_skips_a_directory_that_already_has_a_sentinel(
 
 
 async def test_plan_skips_vacant_and_cold_seats(actions: Actions, tmp_path: Path) -> None:
-    """No live holder to attribute a fresh sentinel to — a cold/vacant seat's memory
+    """No live holder to attribute a fresh sentinel to, a cold/vacant seat's memory
     (if any) is left for whoever mounts there next to see honestly as migration_needed,
     same as any other unattributed content."""
     cwd = str(tmp_path / "o")
@@ -70,7 +70,7 @@ async def test_plan_skips_vacant_and_cold_seats(actions: Actions, tmp_path: Path
                              anchor_cwd=cwd)
     await actions.create_or_find_object("Agent", "agent:coldholder", "test")
     await bind_holder(actions, seat_id=cold["seat_id"], agent_id="agent:coldholder")
-    # no save_mount for either — vacant has no holder at all, cold has one but no live mount
+    # no save_mount for either, vacant has no holder at all, cold has one but no live mount
 
     plan = await plan_lineage_memory_seed(actions.pool, home=tmp_path)
     assert plan == []
@@ -80,7 +80,7 @@ async def test_plan_skips_vacant_and_cold_seats(actions: Actions, tmp_path: Path
 async def test_plan_dedupes_a_seat_whose_anchor_and_tree_cwd_are_the_same(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """anchor_cwd/tree_cwd/live_cwd frequently coincide (no worktree in use) — the same
+    """anchor_cwd/tree_cwd/live_cwd frequently coincide (no worktree in use), the same
     physical directory must appear once in the plan, not once per field it happens to
     also be named in."""
     cwd = str(tmp_path / "o")

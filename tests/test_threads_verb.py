@@ -1,4 +1,4 @@
-"""THE READ TRIANGLE, WAVE 2 (thread 68f1bafa/3703a3a9): the `threads` MCP tool -- MINE,
+"""THE READ TRIANGLE: the `threads` MCP tool -- MINE,
 one line per OPEN thread you own (any owner_refs spelling), single-project, capped in
 text mode."""
 from __future__ import annotations
@@ -53,9 +53,9 @@ async def test_threads_returns_only_the_callers_own_open_threads_in_project(
 
 
 async def test_threads_names_project_owned_obligations_not_shown(actions: Actions) -> None:
-    """thread 3a9d9a5d89fa, Ra XL's measured report: an obligation owned by the bare
+    """An obligation owned by the bare
     project name, or unowned with an `in_repo` link, is invisible to the caller's own
-    owner-spelling match above — named on its own trailing line/field instead of
+    owner-spelling match above, named on its own trailing line/field instead of
     silently absent, so "nothing under my name" is never read as "nothing open here."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -123,7 +123,7 @@ async def test_threads_matches_a_handle_owner_not_just_the_literal_agent_id(
 async def test_threads_marks_a_contested_thread_in_both_json_and_text(
     actions: Actions,
 ) -> None:
-    """Fix (b), Metron's mechanism report (mail 8890/8921/8922): a thread whose newest
+    """A thread whose newest
     note disputes its own summary carries contested=True in the JSON row and a leading
     `!` in the text render."""
     from src import mcp_server as srv

@@ -57,7 +57,7 @@ def test_backup_then_restore_drill_round_trips_real_content(
 
 
 def test_backup_is_idempotent_on_a_second_run(tmp_path: Path) -> None:
-    """`restic init` must never be re-attempted against an already-initialized repo —
+    """`restic init` must never be re-attempted against an already-initialized repo -
     a second backup run against the same repository must still succeed."""
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -81,7 +81,7 @@ def test_restore_drill_fails_loudly_against_an_empty_repository(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A `restic check`-clean but never-backed-up-to repository must NOT be reported
-    as a pass — check-clean is not restorable-proof."""
+    as a pass, check-clean is not restorable-proof."""
     from scripts.osiris_offbox_restore_drill import run_drill
 
     repo = tmp_path / "empty-repo"
@@ -137,7 +137,7 @@ def test_restore_drill_resolves_the_password_the_same_way_the_offload_runner_doe
 def test_restore_drill_refuses_with_a_clear_message_when_no_password_resolves(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The exact resolution-order proof Thoth's own dispatch asked for: no
+    """The exact resolution-order proof asked for: no
     OSIRIS_RESTIC_PASSWORD override, no systemd CREDENTIALS_DIRECTORY, no on-disk
     credential -- run_drill refuses by name (never a raw traceback, never a restic
     subprocess call) instead of running restic with an empty/missing password."""

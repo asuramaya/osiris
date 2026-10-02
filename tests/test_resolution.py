@@ -135,11 +135,11 @@ async def test_name_variant_same_org_queues_review_candidate(actions: Actions) -
     assert cand["score"] == pytest.approx(0.55)
 
 
-# ═══ consolidate MCP tool wrapper — the whole-graph sweep's own gate (2026-08-03) ═══
+# ═══ consolidate MCP tool wrapper, the whole-graph sweep's own gate (2026-08-03) ═══
 
 class _Ctx:
     """A single live identity per instance is all these tests need (sequential calls,
-    never two contexts alive at once in the same test) — the simpler shared-session shape
+    never two contexts alive at once in the same test), the simpler shared-session shape
     test_charter.py already uses, not test_resource_lease.py's two-live-at-once variant."""
 
     class request_context:  # noqa: N801
@@ -149,10 +149,10 @@ class _Ctx:
 
 async def test_consolidate_refuses_a_non_operator_actor(actions: Actions) -> None:
     """NEGATIVE CONTROL (2026-08-03): before this gate existed, consolidate() took NO
-    parameters at all — not even `ctx` — and ran unconditionally for any mounted caller, a
+    parameters at all, not even `ctx`, and ran unconditionally for any mounted caller, a
     whole-graph automatic merge sweep with zero refusal and no identity concept to check.
     Confirmed against pre-fix code: git-stashing the gate and re-running this exact call
-    raised `TypeError: consolidate() got an unexpected keyword argument 'ctx'` — sharper
+    raised `TypeError: consolidate() got an unexpected keyword argument 'ctx'`, sharper
     evidence than a silent success, since it shows the old tool had no hook for an actor to
     even attach to. Now refused by name."""
     from src import mcp_server as srv
