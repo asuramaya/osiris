@@ -52,6 +52,7 @@ import argparse
 import contextlib
 import re
 import sys
+import tarfile
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -206,23 +207,67 @@ class WalSegment:
     size_bytes: int = 0
 
 
-def plan_prune_wal(
-    segments: list[WalSegment], *, oldest_kept_backup_when: datetime | None,
-) -> dict[str, list[WalSegment]]:
-    """WAL retention: keep archived segments only back to the oldest still-kept base
-    backup. A segment archived before that backup was even taken can never be replayed
-    into any base backup this ladder still keeps (PITR always starts from a base and
-    replays forward), so it is dead weight the instant the backup it could have served
-    is itself pruned.
+_START_FILE_RE = re.compile(r"START WAL LOCATION: \S+ \(file ([0-9A-F]{24})\)")
+_WAL_SEGMENT_RE = re.compile(r"^[0-9A-F]{24}$")
 
-    `oldest_kept_backup_when=None` (no base backup survives the ladder at all, for
-    example a fresh install with none taken yet) means keep everything. Refusing to
-    guess at a retention point with nothing to anchor it to is safer than deleting WAL
-    that might still be needed for the very next backup taken."""
-    if oldest_kept_backup_when is None:
+
+def _segment_key(name: str) -> tuple[int, int, int]:
+    """(timeline, log, segment) of a 24-hex WAL segment name, so segments order by their
+    real position, never by file time."""
+    return int(name[:8], 16), int(name[8:16], 16), int(name[16:], 16)
+
+
+def _backup_start_segment(path: str) -> str | None:
+    """The WAL segment a base backup's recovery must start from, read from the
+    `backup_label` inside the tarball (its `START WAL LOCATION` line names the segment file
+    in parentheses). pg_basebackup writes backup_label as the first member, so
+    this streams a few headers and never decompresses the data. None when it cannot be read
+    for any reason, which callers treat as "keep every WAL segment"."""
+    try:
+        with tarfile.open(path, "r|gz") as tf:
+            for i, member in enumerate(tf):
+                if member.name.lstrip("./") == "backup_label":
+                    fh = tf.extractfile(member)
+                    m = _START_FILE_RE.search(fh.read().decode(errors="replace")) if fh else None
+                    return m.group(1) if m else None
+                if i >= 20:
+                    return None
+    except (OSError, tarfile.TarError, EOFError):
+        return None
+    return None
+
+
+def plan_prune_wal(
+    segments: list[WalSegment], *, kept_start_segments: list[str] | None,
+) -> dict[str, list[WalSegment]]:
+    """WAL retention: remove only archived segments that NO base backup this ladder still
+    keeps can replay. Point-in-time recovery restores a base backup and replays forward from
+    its start segment, so a segment is dead weight only when, for every kept backup, it
+    sits on an earlier timeline than that backup or earlier on the same timeline than the
+    backup's start segment. It is decided by segment POSITION, never by file time: a
+    backup's file name carries its local wall-clock time (parsed as UTC it is hours off in
+    either direction depending on the box's zone) and a segment's file time is when it was
+    pulled into the vault, so neither says which segments a restore needs.
+
+    Anything this cannot place is kept: `kept_start_segments` None (a kept backup whose
+    label could not be read) or empty (no base backup survives, for example a fresh install
+    with none taken yet) keeps everything, and only plain 24-hex segment files are ever
+    removed (backup-history, timeline-history and partial files stay). Refusing to guess is
+    safer than deleting WAL a restore still needs."""
+    if not kept_start_segments:
         return {"keep": list(segments), "remove": []}
-    keep = [s for s in segments if s.when >= oldest_kept_backup_when]
-    remove = [s for s in segments if s.when < oldest_kept_backup_when]
+    anchors = [_segment_key(a) for a in kept_start_segments]
+    keep: list[WalSegment] = []
+    remove: list[WalSegment] = []
+    for seg in segments:
+        name = Path(seg.path).name
+        if not _WAL_SEGMENT_RE.match(name):
+            keep.append(seg)
+            continue
+        tl, log, no = _segment_key(name)
+        needed = any(tl > a_tl or (tl == a_tl and (log, no) >= (a_log, a_no))
+                     for a_tl, a_log, a_no in anchors)
+        (keep if needed else remove).append(seg)
     return {"keep": keep, "remove": remove}
 
 
@@ -484,14 +529,19 @@ def build_manifest_body(
     return "\n".join(parts)
 
 
-def _oldest_kept_backup_when(
+def _kept_backup_start_segments(
     basebackup_plan: dict[str, list[DumpFile]],
-) -> datetime | None:
-    """The anchor WAL retention prunes against: the oldest base backup this ladder run
-    still keeps (not the oldest one that exists on disk, which may itself be about to
-    be pruned). None when no base backup survives at all."""
-    kept = basebackup_plan["keep"]
-    return min((f.when for f in kept), default=None)
+) -> list[str] | None:
+    """The start segment of every base backup this ladder run still keeps (not every one
+    that exists on disk, some of which are about to be pruned). None as soon as any kept
+    backup's start cannot be read, so WAL retention keeps everything rather than guess."""
+    starts: list[str] = []
+    for f in basebackup_plan["keep"]:
+        seg = _backup_start_segment(f.path)
+        if seg is None:
+            return None
+        starts.append(seg)
+    return starts
 
 
 def _compute_plans(
@@ -514,7 +564,7 @@ def _compute_plans(
     chain_plan = plan_prune_transcript_chains(_scan_transcript_chains(vault))
     wal_plan = plan_prune_wal(
         _scan_wal(vault / "wal_archive"),
-        oldest_kept_backup_when=_oldest_kept_backup_when(plans["vault/basebackups"]))
+        kept_start_segments=_kept_backup_start_segments(plans["vault/basebackups"]))
     legacy_plan = plan_prune_legacy_tarballs(_scan_legacy_tarballs(vault))
     return plans, chain_plan, wal_plan, legacy_plan
 

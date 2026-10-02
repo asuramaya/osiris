@@ -115,13 +115,13 @@ Around those backups, every tick also does two things by itself:
   repository would need the very password it protects. Other restic backends (`rest:`,
   `s3:`, ...) cannot hold a plain file and are reported as such. A copy that already matches
   is left alone. Enrolling recovery and deploying copy it immediately, without waiting for
-  a tick. The setup stepper shows "Recovery copy off-box" until a target holds the current
+  a tick. The sftp copy uses the real `sftp` client in batch mode (the same subsystem restic
+  uses, so it works for a NAS account with no shell), never prompts, and needs the host to be
+  trusted and a key to be present already, exactly as for restic. `OSIRIS_SSH_CONFIG` names a
+  dedicated ssh config file for it when you do not want to use `~/.ssh/config`. The setup stepper shows "Recovery copy off-box" until a target holds the current
   file. To use a copy on a new machine: `osiris soul-key recover --recovery-file PATH`.
-- **Runs the restore test.** For a target that is present and already has a successful
-  offload, a restore drill runs straight after the first one, then again every 7 days
-  (retrying no sooner than 6 hours after a failure). It restores the latest snapshot into a
-  scratch directory, so on a large vault it is real work; the tick result lists it under
-  `drills` and the result feeds the setup stepper.
+- **Does NOT run the restore test.** That has its own timer (see "The scheduled restore
+  test" below), so a drill can never delay a backup.
 
 Every attempt, success or failure, writes a small result record keyed by target name to
 `~/.local/state/osiris/offload_receipts.json`:
@@ -212,6 +212,24 @@ current timer configuration, touching only the named unit. The raw
 `--timer-schedules`/`--offbox-repositories` flags remain for a full-replace scripted write,
 and `--offbox-repositories` is deprecated in favor of the `--offload-*` flags above.
 
+## The scheduled restore test
+
+`osiris-restore-drill.timer` runs `osiris offload-runner drill` once an hour; a pass finds
+nothing due almost always and costs a few file reads. For each present target that has a
+successful offload, a restore test runs straight after the first one, then every 7 days
+(retrying no sooner than 6 hours after a failure). The test is BOUNDED, so it can run on a
+laptop without moving gigabytes: a `restic check` with a read-data subset (2% of the stored
+data re-hashed), the header of the newest database dump streamed out and checked, and a
+restore of the recovery file plus a few small files (preferring transcripts, a different
+random few each time) with `--verify`, which re-hashes every restored file against the
+repository, and a size check. The whole test has a 10-minute budget and the pass a hard stop,
+and the unit runs at low priority. A repository with no snapshots, a damaged one, or a dump
+that does not look like a dump all fail. Results feed the setup stepper.
+
+The full restore stays as a manual door: `osiris soul-key restore-drill --full` restores the
+whole latest snapshot into a scratch directory (it can move gigabytes). Without `--full` the
+same command runs the bounded test.
+
 ## The restic password
 
 See [`KEYS.md`](KEYS.md#the-restic-password) for the full custody mechanism behind `osiris
@@ -222,9 +240,9 @@ key. It protects the restic repository's own encryption, nothing about the vault
 
 Two checks exist, and they check different things:
 
-- **Off-box restore drill**: runs by itself from the offload runner (after the first
+- **Off-box restore drill**: runs by itself on its own timer (after the first
   successful offload, then weekly, see above); it can also be run by hand:
-  `osiris soul-key restore-drill [--repo-url URL]` (yes, this
+  `osiris soul-key restore-drill [--repo-url URL] [--full]` (yes, this
   lives under the `soul-key` command; see [`KEYS.md`](KEYS.md)) actually proves a restic
   repository restores. It runs a full integrity check, then a real restore into a scratch
   directory, then confirms real files landed. A clean integrity check alone is not treated

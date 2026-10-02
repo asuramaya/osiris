@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+from src.actions.core import Actions
 from src.orchestrator import scheduled_drill as sd
 from src.orchestrator import soul_key as soul_key_orch
 
@@ -88,3 +90,50 @@ async def test_the_default_drill_is_the_one_tests_replace() -> None:
         [{"name": "nas", "path_or_url": "sftp:nas:/r"}], {"nas": OFFLOADED})
     assert out[0]["ok"] is False
     assert "do not run inside tests" in out[0]["error"]
+
+
+async def test_the_pass_budget_stops_new_drills_and_the_next_pass_picks_them_up() -> None:
+    drilled: list[str] = []
+    ticks = iter([0.0, 0.0, 5000.0, 5000.0])  # started, a's check, then the budget is spent
+
+    def _drill(url: str) -> str | None:
+        drilled.append(url)
+        return None
+
+    targets = [{"name": "a", "path_or_url": "sftp:a:/r"}, {"name": "b", "path_or_url": "sftp:b:/r"}]
+    offloads = {"a": OFFLOADED, "b": OFFLOADED}
+
+    out = await sd.run_due_drills(
+        targets, offloads, run_drill=_drill, budget_secs=1500.0, clock=lambda: next(ticks))
+
+    assert [r["name"] for r in out] == ["a"]  # b was due but the budget was spent
+    assert drilled == ["sftp:a:/r"]
+
+
+async def test_a_drill_pass_drills_present_due_targets_through_the_offload_receipts(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import offload_runner, recovery_copies
+
+    async def _present(pool: object) -> list[dict[str, object]]:
+        return [{"name": "nas", "path_or_url": "sftp:nas:/r"}]
+
+    drilled: list[str] = []
+    monkeypatch.setattr(recovery_copies, "present_targets", _present)
+    monkeypatch.setattr(sd, "_real_run_drill", lambda url: drilled.append(url))
+    offload_runner._write_receipt("nas", {"last_successful_offload": NOW.isoformat()})
+
+    out = await sd.run_drill_pass(actions.pool)
+
+    assert out == {"drills": [{"name": "nas", "ok": True}]}
+    assert drilled == ["sftp:nas:/r"]
+    assert (await sd.run_drill_pass(actions.pool))["drills"] == []
+
+
+def test_the_real_drill_is_the_bounded_one() -> None:
+    """Every test runs with `_real_run_drill` stubbed, so read the module's own source."""
+    from pathlib import Path
+
+    source = Path(sd.__file__).read_text()
+    body = source[source.index("def _real_run_drill"):]
+    assert "return run_bounded_drill(repo_url)" in body.split("\n\n\n")[0]

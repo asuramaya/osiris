@@ -139,7 +139,7 @@ async def test_soul_key_restore_drill_calls_run_drill_for_an_explicit_url(
         return None
 
     import scripts.osiris_offbox_restore_drill as drill_module
-    monkeypatch.setattr(drill_module, "run_drill", _fake_run_drill)
+    monkeypatch.setattr(drill_module, "run_bounded_drill", _fake_run_drill)
 
     out = await soul_key.soul_key_restore_drill(actions.pool, repo_url="repo-good")
     assert "error" not in out
@@ -152,12 +152,30 @@ async def test_soul_key_restore_drill_calls_run_drill_for_an_explicit_url(
 # never seen again before this -----------------------------------------------------
 
 
+async def test_restore_drill_is_bounded_by_default_and_full_only_on_request(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The manual door runs the same bounded test the schedule does; the whole-snapshot
+    restore is the explicit `full=True` door, and the receipt says which one ran."""
+    import scripts.osiris_offbox_restore_drill as drill_module
+
+    ran: list[str] = []
+    monkeypatch.setattr(drill_module, "run_bounded_drill", lambda url, **kw: ran.append("b"))
+    monkeypatch.setattr(drill_module, "run_drill", lambda url, **kw: ran.append("f"))
+
+    default = await soul_key.soul_key_restore_drill(actions.pool, repo_url="repo-a")
+    full = await soul_key.soul_key_restore_drill(actions.pool, repo_url="repo-a", full=True)
+
+    assert ran == ["b", "f"]
+    assert default["mode"] == "bounded" and full["mode"] == "full"
+
+
 async def test_restore_drill_writes_a_passing_receipt(
     actions: Actions, tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(soul_key._RESTORE_DRILL_RECEIPTS_ENV, str(tmp_path / "r.json"))
     import scripts.osiris_offbox_restore_drill as drill_module
-    monkeypatch.setattr(drill_module, "run_drill", lambda repo_url, **kw: None)
+    monkeypatch.setattr(drill_module, "run_bounded_drill", lambda repo_url, **kw: None)
 
     await soul_key.soul_key_restore_drill(actions.pool, repo_url="repo-a")
 
@@ -172,11 +190,11 @@ async def test_restore_drill_writes_a_failing_receipt_never_clobbers_a_prior_pas
 ) -> None:
     monkeypatch.setenv(soul_key._RESTORE_DRILL_RECEIPTS_ENV, str(tmp_path / "r.json"))
     import scripts.osiris_offbox_restore_drill as drill_module
-    monkeypatch.setattr(drill_module, "run_drill", lambda repo_url, **kw: None)
+    monkeypatch.setattr(drill_module, "run_bounded_drill", lambda repo_url, **kw: None)
     await soul_key.soul_key_restore_drill(actions.pool, repo_url="repo-b")
     first_pass = soul_key.restore_drill_receipts()["repo-b"]["last_passed_at"]
 
-    monkeypatch.setattr(drill_module, "run_drill", lambda repo_url, **kw: "unreachable")
+    monkeypatch.setattr(drill_module, "run_bounded_drill", lambda repo_url, **kw: "unreachable")
     await soul_key.soul_key_restore_drill(actions.pool, repo_url="repo-b")
 
     receipt = soul_key.restore_drill_receipts()["repo-b"]

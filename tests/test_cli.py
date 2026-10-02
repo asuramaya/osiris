@@ -630,7 +630,7 @@ async def test_cmd_soul_key_restore_drill_calls_run_drill_per_url(
         return None if repo_url == "repo-good" else "boom"
 
     import scripts.osiris_offbox_restore_drill as drill_module
-    monkeypatch.setattr(drill_module, "run_drill", _fake_run_drill)
+    monkeypatch.setattr(drill_module, "run_bounded_drill", _fake_run_drill)
 
     out = await cmd_soul_key(
         "restore-drill", repo_url="repo-good", as_json=True, pool=actions.pool)
@@ -640,6 +640,48 @@ async def test_cmd_soul_key_restore_drill_calls_run_drill_per_url(
     out2 = await cmd_soul_key(
         "restore-drill", repo_url="repo-bad", as_json=True, pool=actions.pool)
     assert out2 == 1
+
+
+async def test_cmd_soul_key_restore_drill_full_flag_restores_the_whole_snapshot(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import scripts.osiris_offbox_restore_drill as drill_module
+
+    ran: list[str] = []
+    monkeypatch.setattr(drill_module, "run_bounded_drill", lambda url, **kw: ran.append("b"))
+    monkeypatch.setattr(drill_module, "run_drill", lambda url, **kw: ran.append("f"))
+
+    assert await cmd_soul_key("restore-drill", repo_url="r", pool=actions.pool) == 0
+    assert await cmd_soul_key("restore-drill", repo_url="r", full=True, pool=actions.pool) == 0
+    assert ran == ["b", "f"]
+
+
+async def test_cmd_offload_runner_drill_runs_a_drill_pass_and_never_a_tick(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from src.cli import cmd_offload_runner
+    from src.orchestrator import offload_runner, scheduled_drill
+
+    async def _pass(pool: Any) -> dict[str, Any]:
+        return {"drills": [{"name": "nas", "ok": True}]}
+
+    async def _no_tick(*a: Any, **k: Any) -> dict[str, Any]:
+        raise AssertionError("a drill pass must never run an offload tick")
+
+    monkeypatch.setattr(scheduled_drill, "run_drill_pass", _pass)
+    monkeypatch.setattr(offload_runner, "run_offload_tick", _no_tick)
+
+    assert await cmd_offload_runner("drill", pool=actions.pool, as_json=True) == 0
+    assert "nas" in capsys.readouterr().out
+
+
+async def test_cmd_offload_runner_refuses_an_unknown_action(
+    actions: Actions, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from src.cli import cmd_offload_runner
+
+    assert await cmd_offload_runner("nonsense", pool=actions.pool) == 1
+    assert "'tick' or 'drill'" in capsys.readouterr().err
 
 
 # --- cmd_launch: a real pool for seat facts, a fake manager so nothing is ever really spawned ---
@@ -4781,14 +4823,15 @@ async def test_cmd_deploy_skips_the_snapshot_when_head_is_unknown(
     assert calls == []
 
 
-def test_install_prune_timers_sh_now_covers_all_seven_timer_lane_units(
+def test_install_prune_timers_sh_now_covers_all_eight_timer_lane_units(
     tmp_path: Path,
 ) -> None:
     """ (thread f04cce36 piece 3) widened this from three to five; 
     (ruling 7be61879, thread 40d6eef3) widened it once more to six, osiris-pg-autotune
     was the last hand-installed timer the census named (osiris-preflight was already
     covered by piece 3); THE OPPORTUNISTIC OFFLOAD RUNNER widens it
-    again to seven, osiris-offload. A config panel/registered schedule that silently
+    again to seven, osiris-offload; THE SCHEDULED RESTORE TEST makes it eight. A config
+    panel/registered schedule that silently
     does nothing until a human hand-installs the unit is worse than no field. No
     `.venv` in this synthetic repo, so render_units.py's own subprocess call fails and
     the script's fallback (a verbatim copy) takes over, proving the UNIT LIST widened,
@@ -4807,7 +4850,7 @@ def test_install_prune_timers_sh_now_covers_all_seven_timer_lane_units(
     (repo / install_script).chmod(0o755)
     for name in ("osiris-prune-manifest", "osiris-prune-apply", "osiris-base-backup",
                 "osiris-backup", "osiris-preflight", "osiris-pg-autotune",
-                "osiris-offload"):
+                "osiris-offload", "osiris-restore-drill"):
         (repo / "deploy" / f"{name}.service").write_text(f"# {name} service\n")
         (repo / "deploy" / f"{name}.timer").write_text(f"# {name} timer\n")
     target = tmp_path / "target"
@@ -4824,10 +4867,12 @@ def test_install_prune_timers_sh_now_covers_all_seven_timer_lane_units(
             os.environ["OSIRIS_SYSTEMD_USER_DIR"] = old_env
 
     assert result.returncode == 0, result.stderr
-    assert "14 installed/updated, 0 already current" in result.stdout
+    assert "16 installed/updated, 0 already current" in result.stdout
     assert (target / "osiris-backup.timer").read_text() == "# osiris-backup timer\n"
     assert (target / "osiris-pg-autotune.service").read_text() == "# osiris-pg-autotune service\n"
     assert (target / "osiris-offload.timer").read_text() == "# osiris-offload timer\n"
+    assert (target / "osiris-restore-drill.timer").read_text() == (
+        "# osiris-restore-drill timer\n")
 
 
 # --- boot-status -------------------------------------------------------------------------------

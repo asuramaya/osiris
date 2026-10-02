@@ -20,6 +20,8 @@ _KEY_DOOR_UNITS = (
     _DEPLOY_DIR / "user" / "osiris-worker.service",
     _DEPLOY_DIR / "osiris-offload.service",
     _DEPLOY_DIR / "osiris-offload.timer",
+    _DEPLOY_DIR / "osiris-restore-drill.service",
+    _DEPLOY_DIR / "osiris-restore-drill.timer",
 )
 
 
@@ -41,7 +43,9 @@ def test_unit_file_verifies_clean(unit_path: Path) -> None:
     (_DEPLOY_DIR / "user" / "osiris-mcp.service", "soul.key"),
     (_DEPLOY_DIR / "user" / "osiris-worker.service", "soul.key"),
     (_DEPLOY_DIR / "osiris-offload.service", "restic.password"),
-], ids=["osiris-mcp.service", "osiris-worker.service", "osiris-offload.service"])
+    (_DEPLOY_DIR / "osiris-restore-drill.service", "restic.password"),
+], ids=["osiris-mcp.service", "osiris-worker.service", "osiris-offload.service",
+        "osiris-restore-drill.service"])
 def test_unit_uses_import_credential_never_the_old_hard_path_shape(
     unit_path: Path, cred_name: str,
 ) -> None:

@@ -233,22 +233,25 @@ async def soul_key_rotate(
 
 
 async def soul_key_restore_drill(
-    pool: asyncpg.Pool, *, repo_url: str | None = None,
+    pool: asyncpg.Pool, *, repo_url: str | None = None, full: bool = False,
 ) -> dict[str, Any]:
-    """Wraps `scripts.osiris_offbox_restore_drill.run_drill` directly (the same
-    function that script's own `main()` calls, never a duplicated subprocess
-    shell-out). `repo_url` explicit, or every URL in `backup.offbox_repositories`
-    (`src.orchestrator.backup_settings.get_backup_settings`) when omitted, one
-    drill per configured repository, never guessing which one the operator meant.
-    A top-level `error` key is set whenever any drill fails (never only per-drill),
-    so a generic caller's own error-key check reports the right exit code / HTTP
+    """Runs the restore drill for `repo_url`, or for every URL in
+    `backup.offbox_repositories` (`src.orchestrator.backup_settings.get_backup_settings`)
+    when omitted, one drill per configured repository, never guessing which one the operator
+    meant. By default the BOUNDED drill (`scripts.osiris_offbox_restore_drill.
+    run_bounded_drill`: a repository check with a read-data subset, the newest dump's header,
+    a verified restore of a few small files), the same one the scheduled test runs;
+    `full=True` is the explicit manual door that restores the WHOLE latest snapshot and can
+    move gigabytes. A top-level `error` key is set whenever any drill fails (never only
+    per-drill), so a generic caller's own error-key check reports the right exit code / HTTP
     status without re-deriving `all_ok` itself."""
     import asyncio
 
-    from scripts.osiris_offbox_restore_drill import run_drill
+    from scripts.osiris_offbox_restore_drill import run_bounded_drill, run_drill
 
     from src.orchestrator.backup_settings import get_backup_settings
 
+    drill = run_drill if full else run_bounded_drill
     urls = [repo_url] if repo_url else None
     if urls is None:
         settings = await get_backup_settings(pool)
@@ -258,12 +261,13 @@ async def soul_key_restore_drill(
                          "is empty) and no --repo-url given"}
     results = []
     for url in urls:
-        fail = await asyncio.to_thread(run_drill, url)
+        fail = await asyncio.to_thread(drill, url)
         ok = fail is None
         results.append({"repo_url": url, "ok": ok, "error": fail})
         _write_restore_drill_receipt(url, ok=ok, error=fail)
     all_ok = all(r["ok"] for r in results)
-    out: dict[str, Any] = {"drills": results, "all_ok": all_ok}
+    out: dict[str, Any] = {
+        "drills": results, "all_ok": all_ok, "mode": "full" if full else "bounded"}
     if not all_ok:
         failing = [r["repo_url"] for r in results if not r["ok"]]
         out["error"] = f"{len(failing)} of {len(results)} drill(s) failed: {failing}"
