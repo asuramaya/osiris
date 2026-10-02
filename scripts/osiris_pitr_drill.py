@@ -37,6 +37,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 CONTAINER = "osiris-pg"
 DRILL_NAME = "osiris-pitr-drill"
+VAULT_WAL_DIR = Path.home() / "osiris-vault" / "wal_archive"
+
+# The longest the drill waits for archive recovery to finish replaying. Replay time grows
+# with the age of the base backup (every archived segment since it is replayed), so this is
+# generous but still a bound: a recovery that has not finished by then is a finding.
+RECOVERY_WAIT_SECS = 4 * 3600
+RECOVERY_POLL_SECS = 10
+
+# The scratch postgres must never inherit production tuning: the base backup carries the
+# live postgresql.auto.conf (autotune sets shared_buffers near a third of the box's RAM),
+# and a recovery server started with that on top of a multi-gigabyte replay is what pushed
+# a drill's file-backed memory past 30G. Command-line settings outrank the config file.
+# max_connections is NOT shrunk: archive recovery refuses to start when it is lower than the
+# primary's (72 here), and the other settings recovery pins to the primary's values
+# (workers, WAL senders, locks, prepared transactions) already match the defaults.
+SCRATCH_POSTGRES_ARGS = (
+    "-c", "shared_buffers=512MB", "-c", "maintenance_work_mem=256MB",
+    "-c", "max_connections=72", "-c", "max_wal_size=4GB", "-c", "autovacuum=off",
+)
+SCRATCH_MEMORY = "6g"
 
 
 def postgresql_auto_conf_pitr(
@@ -63,27 +83,81 @@ def postgresql_auto_conf_pitr(
 
 
 def _gather_wal_segments(container: str, vault_wal_dir: Path, scratch_wal_dir: Path) -> int:
-    """Copy every currently-available archived WAL segment, already-pulled ones in the
-    vault, plus anything still staged inside the live container, into `scratch_wal_dir`.
-    Read-only against both sources. Returns how many segments landed there."""
+    """Stage the WAL the drill container's `restore_command` can read. Segments already
+    pulled into the vault are NOT copied: the vault directory is mounted read-only into
+    the drill container and read in place, because copying a multi-week archive (tens of
+    gigabytes) wrote it all a second time and charged the whole read and write to the
+    caller's memory as file cache. Only what is still staged inside the live container,
+    waiting for the backup timer's next pull, is copied here (a handful of segments).
+    Read-only against both sources. Returns how many segments the drill can see in total,
+    vault plus staged."""
     scratch_wal_dir.mkdir(parents=True, exist_ok=True)
-    if vault_wal_dir.is_dir():
-        for f in vault_wal_dir.iterdir():
-            if f.is_file():
-                shutil.copy2(f, scratch_wal_dir / f.name)
     listing = subprocess.run(
         ["docker", "exec", container, "ls", "-1", "/var/lib/postgresql/data/wal_archive"],
         capture_output=True, text=True, timeout=30)
     for seg in listing.stdout.split():
         dest = scratch_wal_dir / seg
-        if dest.exists():
+        if dest.exists() or (vault_wal_dir / seg).is_file():
             continue
         with open(dest, "wb") as fh:
             subprocess.run(
                 ["docker", "exec", container, "cat",
                  f"/var/lib/postgresql/data/wal_archive/{seg}"],
                 stdout=fh, timeout=60, check=True)
-    return len(list(scratch_wal_dir.iterdir()))
+    in_vault = sum(1 for f in vault_wal_dir.iterdir() if f.is_file()) \
+        if vault_wal_dir.is_dir() else 0
+    return in_vault + len(list(scratch_wal_dir.iterdir()))
+
+
+def _wait_for_recovery_end(drill_name: str) -> str | None:
+    """Block until the drill server has finished archive recovery and promoted, or return
+    a failure string. `pg_isready` is NOT that signal: a server in archive recovery
+    accepts read-only connections as soon as it reaches a consistent state, long before
+    the rest of the archive is replayed, so a check made the moment it answers reads a
+    half-replayed copy and reports a marker written after the base backup as missing (the
+    shape that failed two weekly runs in a row). Only `pg_is_in_recovery() = false` means
+    every available segment has been replayed."""
+    deadline = time.monotonic() + RECOVERY_WAIT_SECS
+    last = ""
+    while time.monotonic() < deadline:
+        r = subprocess.run(
+            ["docker", "exec", drill_name, "psql", "-U", "osiris", "-d", "postgres", "-tAc",
+             "SELECT pg_is_in_recovery(), COALESCE(pg_last_wal_replay_lsn()::text, '')"],
+            capture_output=True, text=True, timeout=30)
+        out = r.stdout.strip()
+        if r.returncode == 0 and out.startswith("f"):
+            return None
+        if out:
+            last = out
+        status = subprocess.run(["docker", "inspect", "-f", "{{.State.Status}}", drill_name],
+                                capture_output=True, text=True, timeout=10).stdout.strip()
+        if status and status != "running":
+            logs = subprocess.run(["docker", "logs", "--tail", "40", drill_name],
+                                  capture_output=True, text=True, timeout=10)
+            return (f"drill container stopped during recovery ({status}):\n"
+                    f"{logs.stdout}\n{logs.stderr}")
+        time.sleep(RECOVERY_POLL_SECS)
+    return (f"archive recovery had not finished after {RECOVERY_WAIT_SECS}s "
+            f"(last status: {last or 'server not yet accepting connections'}): replay is "
+            "stalled or the archive is too long to replay in the allowed time")
+
+
+def _wait_for_archive(container: str, walfile: str, timeout: float = 180.0) -> bool:
+    """True once the live archiver has archived `walfile` (segment names are fixed-width
+    hex, so a plain string comparison orders them). `pg_switch_wal()` only asks for the
+    segment to be closed; the archiver copies it on its own schedule, so a drill that
+    gathers the archive right after switching can miss the very segment holding its
+    marker."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        out = subprocess.run(
+            ["docker", "exec", container, "psql", "-U", "osiris", "-d", "osiris", "-tAc",
+             f"SELECT COALESCE(last_archived_wal >= '{walfile}', false) FROM pg_stat_archiver"],
+            capture_output=True, text=True, timeout=30).stdout.strip()
+        if out == "t":
+            return True
+        time.sleep(2)
+    return False
 
 
 def _soul_round_trip_check(container: str) -> str | None:
@@ -158,13 +232,13 @@ def run_drill(
         with tarfile.open(base_backup, "r:gz") as tf:
             tf.extractall(pgdata, filter="data")  # noqa: S202, our own trusted backup
 
-        n_wal = _gather_wal_segments(
-            container, Path.home() / "osiris-vault" / "wal_archive", wal_dir)
+        n_wal = _gather_wal_segments(container, VAULT_WAL_DIR, wal_dir)
         if n_wal == 0:
             return "no WAL segments available anywhere: cannot replay past the base backup"
 
         (pgdata / "recovery.signal").touch()
-        conf = postgresql_auto_conf_pitr(f"cp {wal_dir}/%f %p", target_time)
+        conf = postgresql_auto_conf_pitr(
+            f"cp {VAULT_WAL_DIR}/%f %p 2>/dev/null || cp {wal_dir}/%f %p", target_time)
         with open(pgdata / "postgresql.auto.conf", "a") as fh:
             fh.write("\n" + conf)
 
@@ -172,22 +246,16 @@ def run_drill(
                        capture_output=True, timeout=30)
         subprocess.run(
             ["docker", "run", "-d", "--name", drill_name,
+             "--memory", SCRATCH_MEMORY, "--memory-swap", SCRATCH_MEMORY,
              "-v", f"{pgdata}:/var/lib/postgresql/data",
+             "-v", f"{VAULT_WAL_DIR}:{VAULT_WAL_DIR}:ro",
              "-v", f"{wal_dir}:{wal_dir}:ro",
-             "-e", "POSTGRES_PASSWORD=osiris", "postgres:16"],
+             "-e", "POSTGRES_PASSWORD=osiris", "postgres:16", *SCRATCH_POSTGRES_ARGS],
             capture_output=True, timeout=60, check=True)
 
-        for _ in range(60):
-            r = subprocess.run(["docker", "exec", drill_name, "pg_isready", "-U", "osiris"],
-                               capture_output=True, timeout=10)
-            if r.returncode == 0:
-                break
-            time.sleep(2)
-        else:
-            logs = subprocess.run(["docker", "logs", "--tail", "40", drill_name],
-                                  capture_output=True, text=True, timeout=10)
-            return (f"drill container never became ready, recovery may have stalled:\n"
-                    f"{logs.stdout}\n{logs.stderr}")
+        waited = _wait_for_recovery_end(drill_name)
+        if waited is not None:
+            return waited
 
         out = subprocess.run(
             ["docker", "exec", drill_name, "psql", "-U", "osiris", "-d", "osiris", "-tc",
@@ -196,7 +264,8 @@ def run_drill(
         n = int((out.stdout or "0").strip() or 0)
         if n < 1:
             return (f"restored copy is missing the post-base-backup marker "
-                    f"({marker_canonical!r}): WAL replay did not reach it")
+                    f"({marker_canonical!r}) even after archive recovery finished "
+                    f"replaying {n_wal} segment(s): the archive does not reach it")
         return _soul_round_trip_check(drill_name)
     except Exception as e:  # noqa: BLE001
         return f"PITR drill failed: {type(e).__name__}: {e}"
@@ -231,10 +300,15 @@ def pick_and_ensure_marker(container: str = CONTAINER) -> str | None:
     canonical = out.stdout.strip()
     if not canonical:
         return None
-    subprocess.run(
-        ["docker", "exec", container, "psql", "-U", "osiris", "-d", "osiris",
-         "-c", "SELECT pg_switch_wal();"],
-        capture_output=True, timeout=30)
+    switched = subprocess.run(
+        ["docker", "exec", container, "psql", "-U", "osiris", "-d", "osiris", "-tAc",
+         "SELECT pg_walfile_name(pg_switch_wal() - 1)"],
+        capture_output=True, text=True, timeout=30).stdout.strip()
+    # the switch only CLOSES the segment holding the marker; wait for the archiver to copy
+    # it, or the gather that follows can miss exactly that segment
+    if switched and not _wait_for_archive(container, switched):
+        print(f"osiris_pitr_drill: the live archiver had not archived {switched} within "
+              "the wait, the drill may not see its own marker", file=sys.stderr)
     return canonical
 
 

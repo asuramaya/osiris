@@ -3,8 +3,20 @@
 # vault age. Silent when green; a regression lands on the operator's desk via the mailbox.
 [Unit]
 Description=Osiris preflight — the audit that can't be forgotten
+# Ordered after the daemons it audits, so a catch-up run at boot (the timer is Persistent)
+# does not report services that are merely still starting. After= only orders: it never
+# starts a unit that was left stopped on purpose.
+After=osiris-mcp.service osiris-worker.service osiris-pulse.service osiris-console.service
 
 [Service]
 Type=oneshot
+# The restore drill reads and writes many gigabytes of archive and backup files, and that
+# file cache is charged to this unit. MemoryHigh throttles it (cache is reclaimable);
+# MemoryMax is only the backstop. Low CPU and idle IO priority keep the weekly audit from
+# competing with the daemons it is auditing.
+MemoryHigh=8G
+MemoryMax=16G
+Nice=10
+IOSchedulingClass=idle
 WorkingDirectory=%h/code/osiris
 ExecStart=%h/code/osiris/.venv/bin/python scripts/osiris_preflight.py --drill
