@@ -5921,7 +5921,7 @@ async def test_seat_lock_releases_even_when_the_holder_is_cancelled(
         await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", key)
 
     # a fresh holder proceeds without waiting on a ghost
-    async with asyncio.timeout(2):
+    async with asyncio.timeout(30):
         async with _seat_lock(actions.pool, "osiris", "wedge-cancel"):
             pass
 
@@ -5949,7 +5949,7 @@ async def test_peer_lock_releases_even_when_the_holder_is_cancelled(
         for key in ("peer:seat:pw1", "peer:seat:pw2"):
             await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", key)
 
-    async with asyncio.timeout(2):
+    async with asyncio.timeout(30):
         async with _peer_lock(actions.pool, "seat:pw1", "seat:pw2"):
             pass
 
@@ -5976,7 +5976,7 @@ async def test_mint_lock_releases_even_when_the_holder_is_cancelled(
         assert got_it is True
         await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", key)
 
-    async with asyncio.timeout(2):
+    async with asyncio.timeout(30):
         async with mint_lock(actions.pool, "agent:wedge-cancel"):
             pass
 

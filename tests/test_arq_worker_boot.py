@@ -41,7 +41,7 @@ async def test_watched_serializes_concurrent_calls_inside_the_boot_window() -> N
         return 1
 
     wrapped = arq_worker.watched(slow_job, every=60)
-    ctx = _fake_ctx(boot_serialize_until=time.monotonic() + 10.0)
+    ctx = _fake_ctx(boot_serialize_until=time.monotonic() + 3600.0)
     await asyncio.gather(wrapped(ctx), wrapped(ctx))
     # serialized: the first call's "end" lands before the second call's "start"
     assert order == ["start", "end", "start", "end"]

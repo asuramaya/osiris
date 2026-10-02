@@ -538,7 +538,7 @@ async def test_real_body_natural_exit_still_meters_cpu(tmp_path: Path) -> None:
     snapshot can carry the numbers out. A receipt asserting shape but not substance would have
     passed with core_seconds == 0; this one cannot."""
     provider = LocalProvider(receipts_dir=tmp_path / "receipts")
-    burn = "import time\nt = time.time()\nwhile time.time() - t < 0.3:\n    pass"
+    burn = "import time\nt = time.process_time()\nwhile time.process_time() - t < 0.3:\n    pass"
     handle = await provider.summon(
         "claude", None, 128 * 2**20, str(tmp_path), str(tmp_path), None,
         command=["python3", "-c", burn])

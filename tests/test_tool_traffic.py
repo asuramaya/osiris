@@ -11,6 +11,8 @@ import pytest
 import src.mcp_server as srv
 from src.actions.core import Actions
 
+from tests.waiting import wait_until
+
 
 @pytest.fixture(autouse=True)
 def _clean_tool_stats(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -332,7 +334,11 @@ async def test_watchdog_logs_once_when_a_call_crosses_the_threshold(
     task = asyncio.create_task(srv._watchdog_loop())
     try:
         with caplog.at_level(logging.WARNING, logger="osiris.mcp.watchdog"):
-            await asyncio.sleep(0.08)  # several poll intervals, proves ONCE here
+            # wait for the first record (a fixed 80 ms window saw none when the loop was
+            # starved), then let several more poll intervals pass to prove it stays ONCE
+            assert await wait_until(
+                lambda: any("SLOW TOOL CALL" in r.message for r in caplog.records))
+            await asyncio.sleep(0.08)
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -369,7 +375,10 @@ async def test_watchdog_logs_again_every_repeat_interval_while_the_call_stays_in
     task = asyncio.create_task(srv._watchdog_loop())
     try:
         with caplog.at_level(logging.WARNING, logger="osiris.mcp.watchdog"):
-            await asyncio.sleep(0.15)  # several repeat intervals, call never removed
+            # the call is never removed: wait for the first hit plus a repeat, however long a
+            # starved loop takes (a fixed 150 ms window saw one record at load average 30)
+            await wait_until(
+                lambda: sum("SLOW TOOL CALL" in r.message for r in caplog.records) >= 2)
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -445,7 +454,7 @@ async def test_tool_traffic_carries_the_in_flight_list(
     by_id = {r["call_id"]: r for r in out["in_flight"]}
     assert by_id[fresh_id]["tool"] == "mount"
     assert by_id[fresh_id]["caller"] == "agent:workerb"
-    assert by_id[fresh_id]["elapsed_secs"] < 1.0
+    assert by_id[fresh_id]["elapsed_secs"] < 30.0  # fresh, nowhere near the 42 s stale one
     assert by_id[stale_id]["elapsed_secs"] >= 42.0
     # sorted longest-in-flight first: the row an operator actually needs to see
     assert out["in_flight"][0]["call_id"] == stale_id
@@ -505,7 +514,11 @@ async def test_watchdog_proves_itself_against_a_synthetic_blocking_tool(
             "next_log_at": t0 + srv._WATCHDOG_STALL_THRESHOLD_S,
         }
         try:
-            await asyncio.sleep(0.15)  # scaled-down stand-in for the dispatched "12s"
+            # a slow call that stays in flight until the watchdog has reported it (the
+            # scaled-down stand-in for the dispatched "12s"); a fixed 150 ms sleep finished
+            # before a starved watchdog ever ran
+            await wait_until(
+                lambda: any("SLOW TOOL CALL" in r.message for r in caplog.records))
             return {"ok": True}
         finally:
             srv._in_flight_calls.pop(call_id, None)

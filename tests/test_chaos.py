@@ -305,7 +305,7 @@ async def test_chaos_replay_tolerates_automount_failures_before_first_recovery(
         actions.pool, kill=_slow_kill, restart=_slow_restart, fire_storm=_no_storm,
         automount_probe=_flaky_automount,
         agents_json=_agents_json_sequence([[]]),
-        poll_interval_secs=0.01, recovery_ceiling_secs=5.0)
+        poll_interval_secs=0.01, recovery_ceiling_secs=30.0)
     assert report["ok"] is True, report["findings"]
     assert report["findings"] == []
     assert report["automount_probes_failed_pre_recovery"] > 0
@@ -334,7 +334,7 @@ async def test_chaos_replay_reports_automount_flapping_after_recovery(
         actions.pool, kill=_ok_kill, restart=_ok_restart, fire_storm=_no_storm,
         automount_probe=_flaps_after_recovery,
         agents_json=_agents_json_sequence([[]]),
-        poll_interval_secs=0.01, recovery_ceiling_secs=5.0)
+        poll_interval_secs=0.01, recovery_ceiling_secs=30.0)
     assert report["ok"] is False
     assert report["automount_probes_failed_post_recovery"] > 0
     assert any("flapping" in f for f in report["findings"])

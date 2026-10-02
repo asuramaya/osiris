@@ -67,15 +67,15 @@ def _dated_commit(repo: Path, *, date: str, message: str, content: str) -> None:
            "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
     (repo / "f").write_text(content)
     subprocess.run(["git", "-C", str(repo), "add", "."], check=True, capture_output=True,
-                   timeout=10)
+                   timeout=30)
     subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", message], check=True,
-                   capture_output=True, env=env, timeout=10)
+                   capture_output=True, env=env, timeout=30)
 
 
 def _toplevel(repo: Path) -> str:
     return subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "--show-toplevel"],
-        check=True, capture_output=True, text=True, timeout=10).stdout.strip()
+        check=True, capture_output=True, text=True, timeout=30).stdout.strip()
 
 
 async def test_committed_by_resolves_the_seat_holder_at_the_authors_own_time(
