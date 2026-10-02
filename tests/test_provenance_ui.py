@@ -1,8 +1,8 @@
-"""PROVENANCE PIECE 3(b) UI (thread b4477e9e, ruling bb3e4422): the browse object
+"""PROVENANCE PIECE 3(b) UI: the browse object
 inspector (osiris.js's own objectDetail/propRow) shows agreement/distinct_upstreams/
 disputed beside each property's provenance line, and a "who else read this upstream"
 click-through (console.js's bindUpstreamExpansions) that runs the upstream_readers
-Function via the existing generic composition door — no bespoke route, static-source
+Function via the existing generic composition door, no bespoke route, static-source
 guards matching this codebase's own convention for frontend logic (test_console_js_routes.py).
 """
 from __future__ import annotations

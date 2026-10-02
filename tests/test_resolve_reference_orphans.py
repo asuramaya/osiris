@@ -1,7 +1,7 @@
-"""The provenance sweep's Reference lane (wave 15, mail 8840): resolve in_repo for a
+"""The provenance sweep's Reference lane (provenance sweep): resolve in_repo for a
 zero-live-link Reference from its own `topic` property, matched against a real
 SoftwareProject's NAME as a mechanical prefix (`bootstrap_project` always writes
-`topic=f"{project}-{topic}"`) — never content inference, cardinality-1-or-abstain via
+`topic=f"{project}-{topic}"`): never content inference, cardinality-1-or-abstain via
 derive_or_abstain.
 """
 from __future__ import annotations
@@ -39,7 +39,7 @@ async def test_a_bare_topic_with_no_project_prefix_abstains_never_guessing(
     actions: Actions,
 ) -> None:
     """The real, live shape: 56 of 56 measured orphans (2026-09-09) carry a bare topic
-    like 'history'/'design' — no project name prefixes it, so nothing is minted, even
+    like 'history'/'design'; no project name prefixes it, so nothing is minted, even
     though every one of them is plausibly this repo's own doc. Content is not evidence."""
     await actions.create_or_find_object("SoftwareProject", "repo:heinrich", "test")
     await _orphan_ref(actions, "ref:history-genesis", "history")

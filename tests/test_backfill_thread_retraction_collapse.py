@@ -1,4 +1,4 @@
-"""Wave 3 Lane A (Thoth msg 6503): pure classification logic, no DB needed."""
+"""Thread retraction collapse: pure classification logic, no DB needed."""
 from __future__ import annotations
 
 from datetime import UTC, datetime

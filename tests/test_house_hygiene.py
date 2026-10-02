@@ -1,5 +1,5 @@
-"""Ghost house-stamp retirement (thread a732e331 clause 3, wave 7 dispatch msg 8079): the
-write-time sibling of derive_house's own read-time ghost clause (Khnum's bb1cdc2) -- see
+"""Ghost house-stamp retirement: the
+write-time sibling of derive_house's own read-time ghost clause; see
 src/orchestrator/house_hygiene.py's own docstring.
 """
 from __future__ import annotations
@@ -42,7 +42,7 @@ async def test_a_managed_ghost_stamp_is_retired(actions: Actions) -> None:
 
 async def test_a_heads_own_matching_stamp_survives(actions: Actions) -> None:
     """DELIBERATELY BLIND ON A HEAD -- a head's house equal to its own flagship project
-    (Thoth's own 'osiris' governing 'osiris') is the ordinary, legitimate case."""
+    (a seat's own 'osiris' governing 'osiris') is the ordinary, legitimate case."""
     head = await actions.create_or_find_object("Seat", "seat:hh2head0", "test")
     project = await actions.create_or_find_object("SoftwareProject", "repo:hh2head0", "test")
     await actions.create_link(head, project, "governs", "test", NOW, 0.9)

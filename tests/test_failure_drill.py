@@ -1,4 +1,4 @@
-"""The failure drill — the deployment foundation.
+"""The failure drill: the deployment foundation.
 
 Phase 2's claim is structural: the worker is fate-isolated from the API, and a
 crashed worker recovers without double-emitting. We prove the mechanism, not a
@@ -7,9 +7,9 @@ process kill:
   * the API request path ENQUEUES heavy work, it does not run it inline (so a
     runaway expansion can never block or crash the console);
   * the active-claim partial unique index admits exactly one worker per
-    (helper, object, case) — no double dispatch;
+    (helper, object, case), no double dispatch;
   * a run orphaned by a crash is recovered by the reaper, then re-claimed;
-  * re-emitting the same facts is idempotent — no duplicate objects.
+  * re-emitting the same facts is idempotent, no duplicate objects.
 """
 from __future__ import annotations
 
@@ -112,7 +112,7 @@ async def test_reaper_spares_recent_and_human_wait_runs(
 ) -> None:
     cid = uuid.UUID(case_id)
     oid = await actions.create_or_find_object("Organization", "cik:3", "edgar", cid)
-    await claim_run(actions, "h1", oid, cid, "open")  # fresh 'running' — too new to reap
+    await claim_run(actions, "h1", oid, cid, "open")  # fresh 'running', too new to reap
     # a human-wait run, backdated: must NOT be reaped (24h handoffs are legitimate)
     hw = await claim_run(actions, "h2", oid, cid, "gated", status="awaiting_human")
     await actions.pool.execute(
@@ -131,7 +131,7 @@ async def test_reemit_is_idempotent_no_duplicate_objects(
 ) -> None:
     """A reaped run re-executes; emitting the same facts twice must not duplicate.
     create_or_find_object is idempotent on canonical, and within-source supersession
-    keeps one current value — so a crash-then-retry can't fork the graph."""
+    keeps one current value, so a crash-then-retry can't fork the graph."""
     cid = uuid.UUID(case_id)
     for _ in range(2):  # the original (crashed) emit + the retry's re-emit
         oid = await actions.create_or_find_object("Organization", "cik:9", "edgar", cid)

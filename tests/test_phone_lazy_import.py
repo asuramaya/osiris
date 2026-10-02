@@ -1,5 +1,5 @@
-"""Thread e6fd3772 piece 2 (measured, live): `phonenumbers.geocoder`/`carrier` each bundle
-their own multi-megabyte geodata tables — importing them at src/connectors/phone.py's own
+"""Lazy import (measured, live): `phonenumbers.geocoder`/`carrier` each bundle
+their own multi-megabyte geodata tables. Importing them at src/connectors/phone.py's own
 module top-level meant every process that ever imports src.connectors.registry (which
 imports phone.py eagerly to populate its CONNECTORS dict) paid that cost just to REGISTER
 the connector, never mind call it. Traced live: osiris-mcp's `orient()` -> organ_health ->
@@ -8,7 +8,7 @@ in the whole connector registry, so a fresh mcp-server process's first orient() 
 15s+ and grew RSS by several hundred MB entirely inside this one import chain.
 
 Needs a SUBPROCESS: this test suite's own earlier tests may have already imported
-phonenumbers.geocoder for unrelated reasons, and sys.modules is process-global — only a
+phonenumbers.geocoder for unrelated reasons, and sys.modules is process-global, so only a
 fresh interpreter can prove phone.py's own import doesn't drag the heavy submodules in.
 """
 from __future__ import annotations
@@ -37,7 +37,7 @@ def test_importing_the_connector_registry_does_not_load_phonenumbers_geodata() -
 
 
 def test_calling_fetch_phone_meta_still_loads_and_works(tmp_path) -> None:
-    """The lazy import must still fire, correctly, on an actual call — this is a
+    """The lazy import must still fire, correctly, on an actual call; this is a
     reversibility check, not just an absence check."""
     out = subprocess.run(
         [sys.executable, "-c",

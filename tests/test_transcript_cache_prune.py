@@ -1,4 +1,4 @@
-"""The cache prune (soul-store lane item 4, thread 78efd46d) — pure logic only; the CLI's
+"""The cache prune: pure logic only; the CLI's
 DB collection and file deletion are a thin, dry-run-first shell exercised separately."""
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def test_just_under_the_boundary_is_not_prunable() -> None:
 
 def test_a_file_the_store_has_not_fully_seen_is_never_pruned() -> None:
     """The load-bearing safety check: file mtime NEWER than last_ingested_at means the
-    store hasn't captured this file's latest bytes — deleting it would lose real
+    store hasn't captured this file's latest bytes, deleting it would lose real
     content, even if the file looks old by the calendar (a stale ingest cursor, not a
     dead session)."""
     s = _s("stale_ingest1", mtime_days_ago=60, ingested_days_ago=90)

@@ -1,4 +1,4 @@
-"""THE BACKLOG BAND, piece 1 (thread 8608, operator nudge via Thoth): the
+"""THE BACKLOG BAND, piece 1: the
 `obligation_backlog` composition -- the per-seat axis over the same open-obligation
 population digest.py's own `_obligation_pressure` already scores per project, resolving
 each row's free-text `owner` against the live roster's own seat ids/handles."""
@@ -88,7 +88,7 @@ async def test_obligation_backlog_past_window_and_oldest_ride_along_per_seat(
 
 
 async def test_obligation_backlog_marks_a_contested_oldest_item(actions: Actions) -> None:
-    """Fix (b), Metron's mechanism report (mail 8890/8921/8922): the backlog band's own
+    """Fix (b): the backlog band's own
     per-seat oldest-three list marks a thread whose newest note disputes its summary."""
     from src.orchestrator.capture import annotate_thread
 

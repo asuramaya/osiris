@@ -48,7 +48,7 @@ async def test_create_case_and_paste_anything(
     assert r.status_code == 200
     cid = r.json()["id"]
 
-    # operator pastes a raw email — classified + created, no type given
+    # operator pastes a raw email: classified + created, no type given
     r = await client.post(f"/cases/{cid}/intake", json={"raw": "John.Doe@Gmail.com"})
     body = r.json()
     assert body["type"] == "Email"

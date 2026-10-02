@@ -1,6 +1,6 @@
-"""gate_hook.hook_status — the install-verification twin of push_guard.hook_status (#133,
-ruling 754482bf). Needs real git (git_common_dir shells out), unlike test_gate_hook.py's own
-pure/no-git/no-subprocess scope — kept in its own file for that reason."""
+"""gate_hook.hook_status: the install-verification twin of push_guard.hook_status.
+Needs real git (git_common_dir shells out), unlike test_gate_hook.py's own
+pure/no-git/no-subprocess scope, kept in its own file for that reason."""
 from __future__ import annotations
 
 import subprocess
@@ -63,7 +63,7 @@ def test_hook_status_reports_stale_when_installed_differs(small_repo: Path) -> N
 
 
 def test_hook_status_is_accurate_on_the_real_osiris_checkout() -> None:
-    """The real, live installed state — not a synthetic repo — proving the actual house
+    """The real, live installed state, not a synthetic repo, proving the actual house
     convention (tracked .githooks/pre-commit + install_gate_hook.sh) round-trips."""
     status = hook_status(REPO_ROOT)
     assert status.startswith("gate_hook hook:")

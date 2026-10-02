@@ -1,5 +1,5 @@
-"""THE RESERVED UNAVAILABLE MARKER (wave 16 item 2, thread 04c651ce, Thoth dispatch msg
-9123): the generic table renderer (osiris.js's table()) recognizes a reserved
+"""THE RESERVED UNAVAILABLE MARKER (partial-failure cells): the generic table renderer
+(osiris.js's table()) recognizes a reserved
 {"_unavailable": reason} shape on a cell -- a PARTIAL failure, real data sitting right
 beside it in the same row/result -- and strips it to a distinct marker rather than
 flattening it as if it were real nested JSON. No browser test harness exists in this

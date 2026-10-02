@@ -1,6 +1,6 @@
-"""The provenance sweep's Superstition lane (wave 15, mail 8840): resolve in_repo for a
+"""The provenance sweep's Superstition lane: resolve in_repo for a
 Superstition with no live in_repo edge of its own, from ITS OWN `killed_by` property (the
-decision/commit that killed it) — one hop, cardinality-1-or-abstain via derive_or_abstain.
+decision/commit that killed it): one hop, cardinality-1-or-abstain via derive_or_abstain.
 """
 from __future__ import annotations
 

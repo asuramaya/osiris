@@ -1,4 +1,4 @@
-"""MIGRATION 0062 (thread 922d920c): the worktree fold -- a pre-fix phantom SoftwareProject
+"""MIGRATION 0062: the worktree fold -- a pre-fix phantom SoftwareProject
 that was really a git worktree (`.git` a FILE, not a directory) merges into a new Worktree
 object linked `worktree_of` its real parent, live-checked against disk rather than a
 hardcoded list of names.
@@ -99,7 +99,7 @@ async def test_migration_0062_is_idempotent_on_a_second_run(
 async def test_migration_0062_leaves_a_real_repo_root_untouched(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A genuine repo (not a worktree of anything) must never be folded — `--git-common-
+    """A genuine repo (not a worktree of anything) must never be folded: `--git-common-
     dir`/`--git-dir` agree, so `worktree_parent_path` returns None and the plan skips it."""
     repo = tmp_path / "m62realrepo"
     _real_git_repo(repo)
@@ -114,7 +114,7 @@ async def test_migration_0062_leaves_a_project_whose_path_is_gone_untouched(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """on_disk_path pointing at nothing on disk anymore (staleness the census already
-    tolerates) — `git -C <gone>` fails, `worktree_parent_path` returns None, never a fold."""
+    tolerates): `git -C <gone>` fails, `worktree_parent_path` returns None, never a fold."""
     await _phantom_project(actions, "m62gonepath", str(tmp_path / "does-not-exist"))
 
     plan = await plan_migration_0062(actions.pool)

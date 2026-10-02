@@ -17,7 +17,7 @@ from src.parsers.evidence import confidence_for
 
 
 async def _register(actions: Actions, sid: str, model: str | None) -> None:
-    """Register a fleet agent as the real path does — Agent object carrying source_model."""
+    """Register a fleet agent as the real path does, Agent object carrying source_model."""
     ident = AgentIdentity(
         agent_id=f"agent:{sid}", session=sid, project="osiris", model=model,
         cwd="/home/x/code/osiris", model_method="job_dir" if model else None,
@@ -40,7 +40,7 @@ async def _source_model(actions: Actions, oid: object, source: str | None = None
 async def test_backfill_stamps_missing_source_model_as_derived(actions: Actions) -> None:
     """The target case: an agent captured a Decision + a Thread before model stamping existed,
     so neither carries source_model. The backfill reads the agent's registered model and stamps
-    each — DERIVED, attributed to its own source, never UPDATEing a row."""
+    each, DERIVED, attributed to its own source, never UPDATEing a row."""
     await _register(actions, "sess1", "claude-fable-5")
     d = await record_decision(actions, "the composer is a page of compositions, never a coded "
                               "page", kind="ruling", source="agent:sess1")
@@ -55,7 +55,7 @@ async def test_backfill_stamps_missing_source_model_as_derived(actions: Actions)
         assert row["model"] == "claude-fable-5"                 # the agent's registered model
         assert row["source_id"] == "source-model-backfill"      # attributed to the backfill
         assert row["evidence_class"] == "derived"               # an inference, never the harness
-        # PG stores confidence as float4 (real) — approximate, so compare with tolerance
+        # PG stores confidence as float4 (real), approximate, so compare with tolerance
         assert float(row["confidence"]) == pytest.approx(confidence_for(EvidenceClass.DERIVED))
 
     # idempotent: a re-run finds no candidates and stamps nothing (the dimension is now present)
@@ -65,7 +65,7 @@ async def test_backfill_stamps_missing_source_model_as_derived(actions: Actions)
 
 async def test_backfill_skips_records_that_already_carry_source_model(actions: Actions) -> None:
     """A record whose source_model was stamped at write time (a real, higher-grade observation)
-    is not a candidate — the dimension is present, and a DERIVED backfill must not pile on."""
+    is not a candidate, the dimension is present, and a DERIVED backfill must not pile on."""
     await _register(actions, "sess2", "claude-fable-5")
     d = await record_decision(actions, "an already-stamped decision", source="agent:sess2")
     # the agent stamped its own model at write time (DIRECT_OBSERVATION, higher grade)
@@ -84,7 +84,7 @@ async def test_backfill_skips_records_that_already_carry_source_model(actions: A
 
 async def test_backfill_only_touches_agent_authored_records(actions: Actions) -> None:
     """The scope guard: a lone-operator `session` decision is not agent-authored (no agent to
-    infer from), and an agent whose registration carries no model can't be inferred — both are
+    infer from), and an agent whose registration carries no model can't be inferred, both are
     left unstamped, the latter counted as skipped_no_model."""
     # a lone-operator decision (source='session', not an agent)
     lone = await record_decision(actions, "a lone-operator ruling", source="session")

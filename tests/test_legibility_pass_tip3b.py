@@ -1,9 +1,9 @@
-"""THE LEGIBILITY PASS, TIP 3b (Thoth mail 10953): four flaws from her own live-Chrome
-review of TIP 3 (w282, deployed as e81af83).
+"""THE LEGIBILITY PASS, TIP 3b: four flaws from a live-Chrome
+review of TIP 3.
 
 Three of the four flaws (glyph label de-overlap, no per-object edges at mid, unfiled
-rendering) concerned the LOD glyph-disc mechanism itself -- TIP 4 (operator ruling
-"DENSITY NOT DISCS," Thoth mail 11011) retires that mechanism wholesale, so those three
+rendering) concerned the LOD glyph-disc mechanism itself -- TIP 4 (the
+"DENSITY NOT DISCS" rule) retires that mechanism wholesale, so those three
 fixes are retired along with it; test_legibility_pass_tip3.py (their own home) is deleted
 outright and test_legibility_pass_tip4.py re-proves the surviving underlying concerns
 (label de-overlap, unfiled exclusion, no-per-object-edges-outside-near) against TIP 4's

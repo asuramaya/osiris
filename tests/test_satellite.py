@@ -1,7 +1,7 @@
-"""Phase 6 — the placeful satellite (minimal working proof).
+"""Phase 6: the placeful satellite (minimal working proof).
 
 The placeless core dispatches a vantage-bound collection job; a satellite agent at
-that vantage claims it (atomically — one satellite per job), collects locally via an
+that vantage claims it (atomically, one satellite per job), collects locally via an
 injected collector, and the results land in the central graph through the Actions
 waist. Coordination is only Postgres.
 """
@@ -102,7 +102,7 @@ async def test_collector_error_fails_just_that_job(actions: Actions) -> None:
 # --- D5: the Harris county collector (the real beat's vantage-bound last mile) ---
 
 async def test_harris_collector_emits_property_watchitems() -> None:
-    """The demo fetch drives the SAME collector the live scrape will — proving the seam:
+    """The demo fetch drives the SAME collector the live scrape will, proving the seam:
     notices → graded Property WatchItems. The live fetch is the WALL (needs portal access)."""
     from src.ingest.harris_foreclosure import demo_fetch, harris_collector, make_harris_collector
 

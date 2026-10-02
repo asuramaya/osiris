@@ -1,4 +1,4 @@
-"""Harris County foreclosure vertical — watcher, object-level beat matching, and the
+"""Harris County foreclosure vertical: watcher, object-level beat matching, and the
 leads feed read-model. The broker beat (old-venture, done right): a notice → a graded
 Property node → a sourced lead, with a beat that fires only on what it cares about.
 """
@@ -87,7 +87,7 @@ def _prop(card: dict, name: str) -> object:
 
 async def test_demo_loads_the_generic_watch_feed(client: httpx.AsyncClient) -> None:
     """The demo loader ingests notices + ensures one watch; the GENERIC /matches feed
-    renders them as type-driven sourced cards — the surface names no vertical."""
+    renders them as type-driven sourced cards; the surface names no vertical."""
     seed = (await client.post("/demo/foreclosure-seed")).json()
     assert seed["ingested"] == 8
     cards = (await client.get("/matches", params={"subscription_id": seed["watch_id"]})).json()
@@ -97,7 +97,7 @@ async def test_demo_loads_the_generic_watch_feed(client: httpx.AsyncClient) -> N
     assert olive["type"] == "Property"            # rendered by type, not as "a lead"
     assert "18330 Olive Leaf" in olive["title"]   # title = the address (the object's name)
     assert _prop(olive, "owner").startswith("DEMO")
-    # the provenance block is the whole point — generic, true to the source
+    # the provenance block is the whole point: generic, true to the source
     assert olive["provenance"]["source_label"] == "Harris County Clerk"
     assert olive["provenance"]["how"] == "authoritative record"
     assert olive["provenance"]["demo"] is True
@@ -116,7 +116,7 @@ async def test_a_narrower_watch_matches_fewer(client: httpx.AsyncClient) -> None
 
 async def test_object_view_carries_per_property_provenance(client: httpx.AsyncClient) -> None:
     """The shared Object view (object.html) renders /objects/{id}; each fact must carry
-    how it was obtained + a source label — the unifying atom both surfaces open into."""
+    how it was obtained + a source label, the unifying atom both surfaces open into."""
     seed = (await client.post("/demo/foreclosure-seed")).json()
     cards = (await client.get("/matches", params={"subscription_id": seed["watch_id"]})).json()
     oid = cards[0]["object_id"]

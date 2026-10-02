@@ -1,4 +1,4 @@
-"""The declarative action-binding write leg (ruling c5b184cd, thread d56e7073/#44) — a
+"""The declarative action-binding write leg : a
 composition row carries `{"_action": {...}}`, the generic renderer turns it into a button,
 one click POSTs to /act, which dispatches through the closed ACTION_VERBS registry. Grounded
 in the same write-safety /threads/triage and /desk/settle already established: authority
@@ -62,7 +62,7 @@ async def test_resolve_thread_action_hardcodes_the_operator_attribution(
 
 async def test_settle_action_acks_a_real_message(actions: Actions) -> None:
     """Settled through the SAME desk_decisions Function that surfaced it in the first place
-    — the honest end-to-end check, not a guess at ack_messages' own storage column."""
+    (the honest end-to-end check, not a guess at ack_messages' own storage column)."""
     from src.orchestrator.compositions import _fn_desk_decisions
     from src.orchestrator.mailbox import send_message
 
@@ -105,7 +105,7 @@ async def test_act_route_refuses_an_unknown_action(
     assert r.status_code == 200  # refuses honestly in the body, never a 500
     assert "error" in r.json() and "unknown action" in r.json()["error"]
 
-# "live-desk": composition -> generic renderer -> a real button — its own proof of a
+# "live-desk": composition -> generic renderer -> a real button: its own proof of a
 # composition's `_action` row surviving as real button markup RETIRED with chrome.py's
 # render_composition (task #96, second cut, 2026-07-30). The generic renderer now lives
 # solely client-side in osiris.js's table(); /act's dispatch is still covered above by

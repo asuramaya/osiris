@@ -1,4 +1,4 @@
-"""src.config.dev_env — the canonical dev-box fallback (task #69, ruling 45b074bf): the ONE
+"""src.config.dev_env: the canonical dev-box fallback, the ONE
 place the fallback values every dev-facing systemd user unit already inlines by hand live,
 so a bare `osiris` invocation targets the same instance those units do instead of silently
 falling to Settings' prod-shaped 5432/6379 default.
@@ -44,7 +44,7 @@ def test_never_overrides_an_explicit_redis_url(monkeypatch: pytest.MonkeyPatch) 
     assert os.environ["REDIS_URL"] == "redis://real-prod:6379/0"
 
 
-# ═══ refuse_silent_live_db — thread 86d562e0, the CLASS fix cmd_bootstrap's own guard
+# ═══ refuse_silent_live_db: the CLASS fix cmd_bootstrap's own guard
 # (commit 0f99d49) was scoped away from: the shared check every one-off script now reuses.
 
 
@@ -79,7 +79,7 @@ def test_refuse_silent_live_db_never_prints_or_exits_itself(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The caller decides its own exit convention (a CLI return code vs. a bare script's
-    SystemExit) — this function only ever returns a message or None."""
+    SystemExit): this function only ever returns a message or None."""
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("OSIRIS_ALLOW_LIVE", raising=False)
     msg = refuse_silent_live_db("some_script")

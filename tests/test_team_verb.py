@@ -1,4 +1,4 @@
-"""THE READ TRIANGLE, WAVE 2 (thread 68f1bafa/3703a3a9): the `team` MCP tool -- a
+"""THE READ TRIANGLE: the `team` MCP tool -- a
 manager's own seats (live, owe, envelope)."""
 from __future__ import annotations
 

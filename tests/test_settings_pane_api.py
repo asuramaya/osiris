@@ -1,4 +1,4 @@
-"""THE SETTINGS PANE's own new REST routes (Thoth mail 13350) — API tests for the four
+"""THE SETTINGS PANE's own new REST routes: API tests for the four
 genuinely thin doors added because no read door existed before them: GET /restic-key/
 status, GET /deploy-status, GET /operator/desk, POST /operator/desk/reply. Every other
 section of the pane reads through an EXISTING door (see the frontend's own

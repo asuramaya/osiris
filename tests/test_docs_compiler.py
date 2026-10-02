@@ -1,6 +1,6 @@
-"""THE DOCS COMPILER (task #111, thread 26694d10) — `compile_markdown_section` is generic
+"""THE DOCS COMPILER: `compile_markdown_section` is generic
 and pool-free: pure marker-splice tests, no Actions/DB needed. `compile_reference_doc` is
-tested against a monkeypatched target path, never the real docs/REFERENCE.md — a test run
+tested against a monkeypatched target path, never the real docs/REFERENCE.md: a test run
 must never mutate the repo's own doc as a side effect.
 """
 from __future__ import annotations
@@ -48,7 +48,7 @@ def test_compile_markdown_section_refuses_on_mangled_marker_and_touches_nothing(
     p.write_text(mangled)
     out = compile_markdown_section(p, "new content", version="v2", because="test")
     assert "error" in out
-    assert p.read_text() == mangled  # untouched — never guess which span was meant
+    assert p.read_text() == mangled  # untouched: never guess which span was meant
 
 
 def test_compile_markdown_section_refuses_missing_file(tmp_path: Path) -> None:
@@ -67,7 +67,7 @@ def test_compile_reference_doc_regenerates_from_schema_pool_free(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The doc-specific wiring: body comes from schema.render_reference() verbatim, hand
     prose survives, and none of this touches a database (compile_reference_doc takes no
-    pool/Actions argument at all — regenerable from an empty checkout)."""
+    pool/Actions argument at all, regenerable from an empty checkout)."""
     p = tmp_path / "REFERENCE.md"
     p.write_text(_doc("stale data-model content", "schema-v0"))
     monkeypatch.setattr(docs_compiler, "REFERENCE_MD", p)

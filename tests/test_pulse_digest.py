@@ -1,10 +1,10 @@
-"""The heartbeat DIGEST — the dead-man's-switch computed on READ.
+"""The heartbeat DIGEST: the dead-man's-switch computed on READ.
 
 `_fn_pulse` (the `pulse-digest` lens) used to `LIMIT 1`: it read only the single most recent
 pulse, so a quiet last tick reported "no pulse yet" even with a full log, and a heartbeat that
 DIED with its daemon looked identical to one that never ran. These tests pin the fixed
 semantics: findings aggregated across a real window, and a liveness verdict re-derived on every
-look (so the lens outlives the loop — that is the dead-man's-switch)."""
+look (so the lens outlives the loop: that is the dead-man's-switch)."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
@@ -20,7 +20,7 @@ NOW = datetime(2026, 7, 2, 12, 0, tzinfo=UTC)
 
 @pytest_asyncio.fixture(autouse=True)
 async def _clean_pulses(actions: Actions) -> AsyncIterator[None]:
-    # dev_pulses is operational telemetry, not in conftest's per-test TRUNCATE set — clear it
+    # dev_pulses is operational telemetry, not in conftest's per-test TRUNCATE set, so clear it
     # both before AND after each digest test, so this module starts empty and never leaks pulse
     # rows into a sibling module (e.g. test_pulse.py, which relies on an empty log for baseline).
     await actions.pool.execute("TRUNCATE dev_pulses RESTART IDENTITY")
@@ -71,8 +71,8 @@ async def test_pulsed_but_quiet_is_not_no_pulse_yet(actions: Actions) -> None:
 
 
 async def test_stale_heartbeat_leads_with_the_dead_since_row(actions: Actions) -> None:
-    """The dead-man's-switch: the newest pulse is 2h old (> ~45 min), so the lens — computed on
-    READ — leads with a DEAD-since-<t> row even though the daemon is gone. The findings from
+    """The dead-man's-switch: the newest pulse is 2h old (> ~45 min), so the lens (computed on
+    READ) leads with a DEAD-since-<t> row even though the daemon is gone. The findings from
     before it died still show (the window is anchored at the last pulse)."""
     last = NOW - timedelta(hours=2)
     await _pulse(actions, last - timedelta(hours=1), ["1 new decision recorded"])

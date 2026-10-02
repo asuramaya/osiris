@@ -1,14 +1,14 @@
-"""THE BROWSER RECOVERY MATERIAL DOOR (Thoth mail 13002, THE KEY PANEL piece 2) — API
+"""THE BROWSER RECOVERY MATERIAL DOOR (the key panel, piece 2): API
 tests for the four new REST routes (src/orchestrator/soul_key_recovery_material.py):
 POST /soul-key/recovery-material (issue), POST /soul-key/recovery-material/complete
 (persist the browser-wrapped blob), GET /soul-key/recovery-blob (read for the reverse
 direction), POST /soul-key/recover-from-browser (reseal a recovered key). A NEW file,
-not an edit to Khnum's own tests/test_api.py — same "new code paths only" law the
+not an edit to tests/test_api.py, same "new code paths only" rule the
 routes themselves hold.
 
 Own file rather than mirroring the FIDO2/PRF ceremony itself: that half is genuinely
 untestable without real hardware (soul_crypto.py's own tests fake the `fido2` device
-object; this module never calls into `fido2` at all — the browser does that part, this
+object; this module never calls into `fido2` at all (the browser does that part), this
 module only ever sees base64 strings). What's tested here is everything on THIS side
 of that boundary: token issue/consume/expiry, fingerprint verification, refuse-on-
 existing-blob/key, and the exact shape handed to and read from the browser."""

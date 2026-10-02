@@ -47,11 +47,11 @@ async def test_project_triggers_preserves_enabled_flag(actions: Actions) -> None
 
 
 async def test_project_triggers_no_longer_needs_access_exclusive(actions: Actions) -> None:
-    """A live incident (Thoth mail 10214): the old TRUNCATE-based rebuild needed ACCESS
+    """A live incident (a console-startup hang): the old TRUNCATE-based rebuild needed ACCESS
     EXCLUSIVE, which a concurrent pg_dump's own ACCESS SHARE lock on this table (pg_dump
     explicitly locks every table it dumps in ACCESS SHARE MODE, to hold DDL off during
     the dump) was enough to block, hanging console startup. DELETE + upsert-by-helper_id
-    needs only ROW EXCLUSIVE — proved directly here by holding ACCESS SHARE open in a
+    needs only ROW EXCLUSIVE, proved directly here by holding ACCESS SHARE open in a
     second connection while project_triggers runs concurrently; ROW EXCLUSIVE and ACCESS
     SHARE do not conflict, so this must complete without blocking."""
     manifests = load_manifests(HELPERS_DIR)
@@ -72,7 +72,7 @@ async def test_project_triggers_raises_promptly_under_a_genuinely_conflicting_lo
 ) -> None:
     """Its own `SET LOCAL lock_timeout = '2s'` is the last line of defense for a lock
     class DELETE/upsert genuinely DOES conflict with (ACCESS EXCLUSIVE, held by some
-    OTHER exclusive-lock holder this fix doesn't anticipate) — this must raise
+    OTHER exclusive-lock holder this fix doesn't anticipate). This must raise
     LockNotAvailableError within a few seconds, never hang. The caller (the lifespan
     startup path) is the one that turns this into "leave the previous projection in
     place" rather than crashing; this proves the primitive itself is bounded."""
