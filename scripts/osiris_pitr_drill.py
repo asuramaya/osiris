@@ -25,7 +25,6 @@ tested directly.
 from __future__ import annotations
 
 import argparse
-import base64
 import shutil
 import subprocess
 import sys
@@ -57,6 +56,7 @@ SCRATCH_POSTGRES_ARGS = (
     "-c", "max_connections=72", "-c", "max_wal_size=4GB", "-c", "autovacuum=off",
 )
 SCRATCH_MEMORY = "6g"
+SOUL_SAMPLE_TIMEOUT_SECS = 120
 
 
 def postgresql_auto_conf_pitr(
@@ -185,11 +185,27 @@ def _soul_round_trip_check(container: str) -> str | None:
     # whether the currently-configured key actually opens real ciphertext, a false
     # "round-trip FAILED" this check exists to never report. Widens the sample instead
     # of narrowing the proof: the first ENCRYPTED row found is the one this checks.
-    out = subprocess.run(
-        ["docker", "exec", container, "psql", "-U", "osiris", "-d", "osiris", "-tAc",
-         "SELECT encode(raw_line, 'base64') FROM soul_lines ORDER BY random() LIMIT 50"],
-        capture_output=True, text=True, timeout=30)
-    raws = [base64.b64decode(line) for line in out.stdout.splitlines() if line.strip()]
+    # PAGE SAMPLING, NOT `ORDER BY random()`: sorting by random() reads every row's
+    # `raw_line` (the table is millions of rows and ~10 GB), which blew a 30 s limit on a
+    # freshly restored, cold-cache scratch server the first time a drill ever got this far.
+    # TABLESAMPLE SYSTEM reads a few hundred random pages and stays spread across the whole
+    # table (a plain LIMIT would only ever see the oldest rows, which are the legacy
+    # plaintext ones). A table too small to yield any sampled page falls back to a plain
+    # LIMIT, which on a small table reads all of it anyway.
+    def _sample(sql: str) -> list[bytes]:
+        out = subprocess.run(
+            ["docker", "exec", container, "psql", "-U", "osiris", "-d", "osiris", "-tAc", sql],
+            capture_output=True, text=True, timeout=SOUL_SAMPLE_TIMEOUT_SECS)
+        return [bytes.fromhex(line) for line in out.stdout.splitlines() if line.strip()]
+
+    # HEX, NOT BASE64: Postgres' encode(..., 'base64') breaks its output into 76-character
+    # lines, so a row longer than 57 bytes spans several lines and decoding each line on its
+    # own hands the decryptor a fragment, which can never decrypt: every real row read as a
+    # "round-trip FAILED" even though the live data decrypts fine (600 of 600 sampled live
+    # rows did). Hex is one line per row.
+    raws = _sample("SELECT encode(raw_line, 'hex') FROM soul_lines "
+                   "TABLESAMPLE SYSTEM (0.02) LIMIT 50") \
+        or _sample("SELECT encode(raw_line, 'hex') FROM soul_lines LIMIT 50")
     encrypted = next((r for r in raws if is_encrypted(r)), None)
     if encrypted is None:
         return None  # empty restore, or every sampled row still legacy plaintext: not

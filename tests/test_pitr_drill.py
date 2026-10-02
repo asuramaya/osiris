@@ -168,3 +168,50 @@ def test_scratch_postgres_never_inherits_production_sizing() -> None:
     # recovery aborts if max_connections is below the primary's (72 at last measure)
     assert "max_connections=72" in args
     assert drill.SCRATCH_MEMORY == "6g"
+
+
+def test_soul_round_trip_samples_pages_never_sorts_the_whole_table(monkeypatch) -> None:
+    """Sorting by random() reads every raw_line in a multi-gigabyte table and timed out on a
+    cold restored copy; the check samples a few hundred random pages instead, and only a
+    table too small to yield a sampled page falls back to a plain LIMIT."""
+    import subprocess
+
+    from scripts import osiris_pitr_drill as drill
+
+    seen: list[str] = []
+
+    def fake_run(cmd, **kw):  # noqa: ANN001, ANN202
+        seen.append(cmd[-1])
+        out = "" if "TABLESAMPLE" in cmd[-1] else b"legacy plain".hex()
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(drill.subprocess, "run", fake_run)
+    assert drill._soul_round_trip_check("scratch") is None   # only plaintext rows: not a failure
+    assert "TABLESAMPLE SYSTEM" in seen[0] and "random()" not in " ".join(seen)
+    assert "TABLESAMPLE" not in seen[1] and seen[1].endswith("LIMIT 50")
+
+
+def test_soul_round_trip_decrypts_a_long_row_it_reads_back_as_hex(monkeypatch) -> None:
+    """A row longer than 57 bytes used to come back from Postgres' base64 encoder split over
+    several 76-character lines, each decoded on its own into an undecryptable fragment, so
+    every real row failed the round trip. Hex is one line per row: a row encrypted under the
+    configured key now passes, and a row encrypted under a different key still fails."""
+    import subprocess
+
+    from cryptography.fernet import Fernet, MultiFernet
+    from scripts import osiris_pitr_drill as drill
+
+    mine, other = Fernet(Fernet.generate_key()), Fernet(Fernet.generate_key())
+    monkeypatch.setattr(
+        "src.ingest.soul_crypto.get_soul_fernet", lambda *a, **k: MultiFernet([mine]))
+    long_line = b'{"type":"assistant","message":"' + b"x" * 400 + b'"}'
+
+    def reply(token: bytes):  # noqa: ANN202
+        def fake_run(cmd, **kw):  # noqa: ANN001, ANN202
+            return subprocess.CompletedProcess(cmd, 0, stdout=token.hex() + "\n", stderr="")
+        return fake_run
+
+    monkeypatch.setattr(drill.subprocess, "run", reply(mine.encrypt(long_line)))
+    assert drill._soul_round_trip_check("scratch") is None
+    monkeypatch.setattr(drill.subprocess, "run", reply(other.encrypt(long_line)))
+    assert "round-trip FAILED" in (drill._soul_round_trip_check("scratch") or "")

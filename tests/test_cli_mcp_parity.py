@@ -48,6 +48,8 @@ NO_MCP_EQUIVALENT = {
     "attach": "a human's own terminal act (attach to a live PTY session), no agent "
              "equivalent",
     "boot-status": "operator devops read across the fleet's own compiled bodies",
+    "context-pct-log": "operator diagnostic read of a local file the status line hook "
+        "writes, no agent equivalent and no database behind it",
     "lint": "NOT actually MCP-less, wraps the graph_lint MCP tool's own orchestrator "
         "function (comp.run_spec over the 'lint' Function), same call graph_lint itself "
         "makes; named 'lint' on the CLI (this wave item 2) rather than "
