@@ -1,5 +1,5 @@
-"""THE NAME, NEVER THE SLUG (operator ruling a1cde8a3, Thoth mail 12807): a rename
-migrates the canonical too (repo:<new_name>), so the operator's own target -- "no old
+"""THE NAME, NEVER THE SLUG: a rename
+migrates the canonical too (repo:<new_name>), so the target -- "no old
 name anywhere a human sees it" -- extends to the raw `repo:` scheme itself: a human says
 "lotstretcher", never "repo:lotstretcher". Audited every place the console/space frontend
 prints a project's canonical where a human expects a name (labels, pseudo-node ids,

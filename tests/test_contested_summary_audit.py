@@ -1,6 +1,5 @@
-"""Fix (e), Metron's mechanism report (mail 8890/8921/8922): the fleet-wide audit the
-report itself asked for — every active Thread whose newest note post-dates its own last
-summary correction, sized in one query, and surfaced as graph_lint's own
+"""Fleet-wide audit of contested summaries: every active Thread whose newest note
+post-dates its own last summary correction, sized in one query, and surfaced as graph_lint's own
 'contested-summary' check.
 """
 from __future__ import annotations

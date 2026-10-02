@@ -1,5 +1,5 @@
-"""The owner-law residue re-runner (operator's word via Thoth msg 8606/8618, 2026-09-09)
--- a thin script wiring plan_owner_normalization/apply_owner_normalization (migration
+"""The owner-law residue re-runner:
+a thin script wiring plan_owner_normalization/apply_owner_normalization (migration
 0059's own tested resolver, fully covered by tests/test_owner_normalization.py) behind
 the same dry-run-hard-default/--apply convention as
 scripts/close_zero_recipient_dm_backlog.py. Only the genuinely new wiring -- the

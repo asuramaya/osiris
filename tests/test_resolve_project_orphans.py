@@ -1,8 +1,7 @@
-"""The provenance sweep's SoftwareProject lane (Thoth mail 9054, from Sekhmet's
-multi-phase pass 9047): SoftwareProject has no single mint door (five separate
-auto-vivifying create_or_find_object sites) and had no sweep lane at all. Unlike this
+"""The provenance sweep's SoftwareProject lane: SoftwareProject has no single mint door (five
+separate auto-vivifying create_or_find_object sites) and had no sweep lane at all. Unlike this
 module's other orphan lanes, this is NOT a derive_or_abstain candidate lookup -- same
-shape as Sekhmet's own resolve_seat_orphans (her branch, not yet merged): a friendless
+shape as resolve_seat_orphans: a friendless
 SoftwareProject has no ambiguous candidate set, it is either genuinely connected or it
 is not, so to_mint is always 0 and to_abstain counts real hatch confessions."""
 from __future__ import annotations

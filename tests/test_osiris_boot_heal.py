@@ -1,7 +1,7 @@
-"""osiris_boot_heal.py — REBOOT SURVIVAL, the units half (thread 194eac83, operator ruling
-aaa8e841). Never a second installer: proves this script calls the SAME two sanctioned,
-already-tested install paths (_real_install_user_units, _run_install_script) rather than
-reimplementing their diff-and-copy logic, and that a failure here never raises past main()."""
+"""osiris_boot_heal.py: reboot survival, the units half. Never a second installer:
+proves this script calls the SAME two sanctioned, already-tested install paths
+(_real_install_user_units, _run_install_script) rather than reimplementing
+their diff-and-copy logic, and that a failure here never raises past main()."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -55,7 +55,7 @@ def test_main_never_raises_past_itself_on_a_heal_failure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """This script's own module docstring: 'a bug in this SCRIPT can never be the reason
-    the fleet fails to boot' — a raised exception must degrade to exit 1, never propagate."""
+    the fleet fails to boot': a raised exception must degrade to exit 1, never propagate."""
     async def _boom(repo_root: Path) -> list[str]:
         raise RuntimeError("systemctl not found")
 

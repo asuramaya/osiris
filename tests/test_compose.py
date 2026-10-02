@@ -1,9 +1,9 @@
-"""Phase 5 — compose: document → sourced lead, done right.
+"""Compose: document -> sourced lead, done right.
 
 The whole persistence ladder in one pipeline: a watcher pulls new documents past a
 cursor, the universal extractor turns each into graded entities, resolution links
 them to what the graph already knows, and the subscription evaluator fires a sourced
-lead. All halves injected (delta, fetch, LLM) — hermetic, source-agnostic.
+lead. All halves injected (delta, fetch, LLM): hermetic, source-agnostic.
 """
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ async def test_document_to_sourced_lead_end_to_end(actions: Actions, case_id: st
 async def test_compose_ocrs_a_scanned_document(
     actions: Actions, case_id: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A scanned source (image bytes) is OCR'd via the vision seam before extraction —
+    """A scanned source (image bytes) is OCR'd via the vision seam before extraction,
     the county-notice case. The GPU is an API key; here a fake stands in for it."""
     cid = uuid.UUID(case_id)
     ocred = {"called": False}

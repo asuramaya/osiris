@@ -1,4 +1,4 @@
-"""THE READ TRIANGLE, WAVE 2 (thread 68f1bafa/3703a3a9): inbox(render='text') -- one line
+"""THE READ TRIANGLE: inbox(render='text') -- one line
 per ASK message, FYI folded into a single trailing count line."""
 from __future__ import annotations
 

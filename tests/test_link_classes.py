@@ -1,4 +1,4 @@
-"""NAVIGABLE SPACE, THE READING LAYER (ruling c5953bb1): every link type this
+"""NAVIGABLE SPACE, THE READING LAYER: every link type this
 codebase's own write paths can actually mint must be deliberately classified
 structural or semantic -- "no unclassified" is the ruling's own acceptance line, held
 here to a stricter bar than `link_class()`'s own safe default by scanning src/ for the
@@ -68,7 +68,7 @@ def test_structural_and_semantic_sets_never_overlap() -> None:
 
 
 def test_container_types_are_a_subset_of_structural() -> None:
-    """THE PHYSICS LAYOUT (Thoth mail 11047): container is a flag NESTED inside the
+    """THE PHYSICS LAYOUT: container is a flag NESTED inside the
     structural class, never an independent third bucket -- every existing caller
     checking membership in STRUCTURAL_LINK_TYPES directly (graph_layout.py's own
     relax-exclusion) still catches every container type without any change."""

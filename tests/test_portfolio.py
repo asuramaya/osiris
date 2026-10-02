@@ -1,7 +1,7 @@
-"""The portfolio lens — the developer's projects, DERIVED.
+"""The portfolio lens: the developer's projects, DERIVED.
 
 For each ingested repo it surfaces the terms DISTINCTIVE to it (what it's about) and its
-stack — the substrate half of cross-repo cognition. The test that matters: a word every repo
+stack, the substrate half of cross-repo cognition. The test that matters: a word every repo
 shares is NOT distinctive (it's noise and must fall out with no stoplist), while a word unique
 to one repo names it. That's the whole 'never the flat corpus, only the distinctive set' trick.
 """
@@ -54,10 +54,10 @@ async def test_portfolio_surfaces_distinctive_terms_not_shared_noise(
     assert "frobnicator" in rows["throttle"]["about"]
     assert "sprocket" in rows["caster"]["about"]
     assert "widgetron" in rows["pointer"]["about"]
-    # … and NONE is characterised by 'refactor' — it's in all 3 repos, so it's noise that the
+    # … and NONE is characterised by 'refactor': it's in all 3 repos, so it's noise that the
     # low-document-frequency filter drops for free (no stoplist did this)
     assert not any("refactor" in r["about"] for r in rows.values())
-    # the stack is read from file extensions — throttle is the Rust one
+    # the stack is read from file extensions; throttle is the Rust one
     assert "rs" in rows["throttle"]["stack"]
     assert rows["throttle"]["commits"] == 2
 

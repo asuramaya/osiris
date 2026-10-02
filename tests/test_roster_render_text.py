@@ -1,4 +1,4 @@
-"""THE READ TRIANGLE, WAVE 2 (thread 68f1bafa/3703a3a9): roster(render='text') -- one
+"""THE READ TRIANGLE: roster(render='text') -- one
 line per seat, grouped by house, with an occupancy glyph."""
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ async def test_roster_render_text_with_repo_uses_the_generic_fallback(
 async def test_roster_render_text_shows_manager_suffix_when_managed(
     actions: Actions,
 ) -> None:
-    """Operator ruling, thread d575e68c: a managed seat's line carries a `-> <manager>`
+    """A managed seat's line carries a `-> <manager>`
     suffix; an unmanaged seat's line carries none."""
     from datetime import UTC, datetime
 
