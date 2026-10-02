@@ -151,6 +151,14 @@ VENV_BIN = Path(sys.executable).parent
 # seeding a row for some OTHER module's test get skipped. SKIPPED is reported distinctly from
 # PASSED, never treated as a failure.
 _PYTEST_FANOUT_CAP = 12
+# When the fixture-only tier is over the cap, running none of it left a hub-module touch
+# with no coverage from the very files that exercise it indirectly. The first
+# _PYTEST_FANOUT_CAP of them (sorted, so the choice is deterministic) now run in a second,
+# separate pytest invocation under this budget. A failure there refuses the commit like any
+# other; a run that does not finish inside the budget is not a failure, it is named as not
+# run, exactly like the files past the cap. Never the full suite, and never part of the
+# main run's own timeout, so it cannot turn a slow box into a refused commit.
+_FIXTURE_ONLY_BUDGET_SECS = 90
 _PYTEST_TIMEOUT_SECS = 180
 
 # THE gate_hook CORRELATION GAP: a
@@ -627,6 +635,24 @@ def shadow_before_use_violations(repo_root: Path, changed_files: list[str]) -> d
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+def _run_fixture_only_batch(files: list[str], repo_root: Path) -> tuple[str, str]:
+    """The budgeted second run: `files` in one pytest invocation capped at
+    `_FIXTURE_ONLY_BUDGET_SECS`. Returns ("passed" | "failed" | "timeout", output); a run
+    that collected nothing counts as passed (a file with no tests is not a failure)."""
+    pytest_env, _ = _pytest_env(os.environ, {"TMPDIR": _SAFE_TMPDIR})
+    try:
+        proc = subprocess.run(
+            [str(VENV_BIN / "pytest"), *files, "-q", "-p", "no:cacheprovider",
+             "-n", str(_PYTEST_XDIST_CAP)], cwd=repo_root, capture_output=True, text=True,
+            check=False, env=pytest_env, timeout=_FIXTURE_ONLY_BUDGET_SECS)
+    except subprocess.TimeoutExpired:
+        return "timeout", ""
+    out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if proc.returncode in (0, _PYTEST_EXIT_NO_TESTS_COLLECTED):
+        return "passed", out
+    return "failed", out
+
+
 _PYTEST_SUMMARY_RE = re.compile(
     r"\b(?:\d+ (?:passed|failed|errors?|skipped|xfailed|xpassed|deselected|rerun)"
     r"|no tests ran)\b")
@@ -691,15 +717,28 @@ def run_gates(
     direct, fixture_only = classify_test_files(changed_files, repo_root)
     selected = set(direct)
     omitted = ""
+    batch_files: list[str] = []
+    batch_status: str | None = None
+    batch_out = ""
     if len(fixture_only) > _PYTEST_FANOUT_CAP:
-        omitted = (f"{len(fixture_only)} fixture-only files (hub-module fan-out, over cap "
-                   f"{_PYTEST_FANOUT_CAP}): [{' '.join(sorted(fixture_only))}]")
-        info["omitted_files"] = sorted(fixture_only)
+        ordered = sorted(fixture_only)
+        batch_files = ordered[:_PYTEST_FANOUT_CAP]
+        batch_status, batch_out = _run_fixture_only_batch(batch_files, repo_root)
+        ran = batch_files if batch_status in ("passed", "failed") else []
+        unrun = [f for f in ordered if f not in ran]
+        omitted = (f"{len(unrun)} fixture-only files (hub-module fan-out, over cap "
+                   f"{_PYTEST_FANOUT_CAP}): [{' '.join(unrun)}]")
+        info["omitted_files"] = unrun
+        outcome = (
+            f"the first {_PYTEST_FANOUT_CAP} were tried inside a {_FIXTURE_ONLY_BUDGET_SECS}s "
+            f"budget and did not finish, so none of them ran" if batch_status == "timeout"
+            else f"the first {_PYTEST_FANOUT_CAP} ran inside a {_FIXTURE_ONLY_BUDGET_SECS}s "
+                 f"budget, so these {len(unrun)} are the rest")
         info["omitted_reason"] = (
             f"each of these files imports a touched module only to seed data for some "
             f"other module's test (it does not exercise the touched module's own logic), "
             f"and there are {len(fixture_only)} of them, over the fan-out cap of "
-            f"{_PYTEST_FANOUT_CAP}, so none of them ran")
+            f"{_PYTEST_FANOUT_CAP}; {outcome}")
     else:
         selected |= fixture_only
     # THE gate_hook CORRELATION GAP:
@@ -726,8 +765,10 @@ def run_gates(
         # Unreachable while _ALWAYS_INCLUDED_STATIC_SCANNERS stays non-empty (every commit
         # now resolves at least those); kept as the honest fallback message for the one
         # way it could still fire: that constant emptied out from under this function.
+        ran_note = (f" in the main run (the first {len(batch_files)} fixture-only files ran "
+                    f"in the budgeted batch)" if batch_status in ("passed", "failed") else "")
         results["pytest"] = (
-            True, f"SKIPPED: nothing ran; omitted {omitted}" if omitted
+            True, f"SKIPPED: nothing ran{ran_note}; omitted {omitted}" if omitted
             else "no resolvable test files touched")
     else:
         import os
@@ -900,6 +941,20 @@ def run_gates(
     # branch's own message individually -- a reader must always be able to tell "ran
     # because it was touched" from "ran because it always does," on a pass, a skip, a
     # timeout, or a refusal alike.
+    if batch_status in ("passed", "failed"):
+        info["files_run"] = sorted(set(info["files_run"]) | set(batch_files))
+        batch_summary = pytest_summary_line(batch_out)
+        if batch_summary:
+            main = info.get("summary")
+            info["summary"] = (f"{main}; fixture-only batch: {batch_summary}" if main
+                               else f"fixture-only batch: {batch_summary}")
+    if batch_status == "failed":
+        main_ok, main_msg = results.get("pytest", (True, ""))
+        results["pytest"] = (
+            False,
+            f"[fixture-only files run inside the {_FIXTURE_ONLY_BUDGET_SECS}s budget: "
+            f"{' '.join(batch_files)}]\n{batch_out}"
+            + ("" if main_ok else f"\n--- main run ---\n{main_msg}"))
     if always_included and "pytest" in results:
         ok_prev, msg_prev = results["pytest"]
         results["pytest"] = (
