@@ -71,6 +71,8 @@ JSON_COMMANDS = frozenset({
     "desk", "show", "unmerge", "retention", "boot-status", "smoke", "send", "decide", "thread",
     "proposal", "soul-key", "settings", "lint", "audit", "backfill", "graph-migrate",
     "graph-export",
+    # the context figure disagreement log, a local-file read with --json
+    "context-pct-log",
     # CLI PARITY, THE NEXT CENSUS GAPS
     "dossier", "object-events", "succession-chain", "candidates", "composition",
     "retire-assertion", "retire-link", "cite", "citation",

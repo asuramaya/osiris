@@ -56,6 +56,11 @@ try:
     from src.orchestrator.context_lens import window_for as _cl_window_for
 except Exception:  # noqa: BLE001, fail-open: a hook must never crash the harness
     ALARM_PCT, HARD_ALARM_PCT = 60, 85
+_cd_record: Any = None
+try:
+    from src.orchestrator.context_disagreement import record_if_different as _cd_record
+except Exception:  # noqa: BLE001, fail-open: a diagnostic never crashes the hook
+    pass
 
 _URLS = {
     "statusline": os.environ.get("OSIRIS_HEARTBEAT_URL", "http://127.0.0.1:8790/heartbeat"),
@@ -410,6 +415,11 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
     print(f" {_DIM}\u2502{_RESET} ".join(parts))
     if vitals:
         print(f" {_DIM}\u2502{_RESET} ".join(vitals))
+    # AFTER the line is out: the comparison below is a diagnostic and must not delay it.
+    sys.stdout.flush()
+    if ctx_pct is not None:
+        _note_context_disagreement(hook, ctx_pct, window_size, model_raw, session_id,
+                                   transcript)
     return 0
 
 
@@ -743,6 +753,27 @@ def _context_pct(transcript_path: str, window_hint: int | None) -> int | None:
         window = window_hint or (1000000 if "[1m]" in str(d.get("model","")) else 200000)
         return round(100 * total / window)
     return None
+
+
+def _note_context_disagreement(
+    hook: dict[str, Any], harness_pct: int, window_size: int | None, model_raw: str,
+    session_id: str, transcript: str,
+) -> None:
+    """When the status line holds the harness's own context figure, derive osiris's from the
+    transcript with the offload gate's own primitives and, if the two differ by more than a
+    point, log the pair (src/orchestrator/context_disagreement.py). Nothing is written when
+    they agree, nothing when the window is only a guess, and every failure is swallowed: this
+    is a diagnostic and runs after the line is printed."""
+    if _cd_record is None:
+        return
+    try:
+        derived, assumed = _offload_pct({**hook, "transcript_path": transcript}, window_size)
+        if derived is None or assumed:
+            return
+        _cd_record(harness_pct=harness_pct, derived_pct=derived, window=window_size,
+                   model=model_raw or None, session_id=session_id)
+    except Exception:  # noqa: BLE001, a diagnostic never breaks the hook
+        return
 
 
 def _offload_pct(hook: dict[str, Any], window_hint: int | None) -> tuple[int | None, bool]:

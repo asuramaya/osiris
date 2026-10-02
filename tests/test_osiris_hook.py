@@ -463,12 +463,31 @@ def test_statusline_route_failure_reports_the_probe_not_a_diagnosis(
     monkeypatch.setattr(osiris_hook, "_statusline_cache_path",
                         lambda project: tmp_path / "empty" / f"{project}.json")
     monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: None)
+    # the render makes real TCP connects to the local pg/mcp/console ports when the route
+    # gives no answer; without this the test fails whenever one of them is down (every deploy
+    # restarts the mcp server), so it depended on the machine and not on the code
+    monkeypatch.setattr(osiris_hook, "_first_dead_unit", lambda **kwargs: None)
     out = []
     monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
     rc = osiris_hook._cmd_statusline({"workspace": {"current_dir": "/repo"}})
     assert rc == 0
     assert "no answer" in out[0]
     assert "unreachable" not in out[0]
+
+
+def test_statusline_names_a_dead_unit_when_the_probe_finds_one(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """The other half of the contract, with no real sockets: when the connect probe does
+    find a dead port the render names it."""
+    monkeypatch.setattr(osiris_hook, "_statusline_cache_path",
+                        lambda project: tmp_path / "empty" / f"{project}.json")
+    monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: None)
+    monkeypatch.setattr(osiris_hook, "_first_dead_unit", lambda **kwargs: "mcp:8790")
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    assert osiris_hook._cmd_statusline({"workspace": {"current_dir": "/repo"}}) == 0
+    assert "mcp:8790 unreachable" in out[0]
 
 
 def test_statusline_marks_owed_here_red_when_nonzero(monkeypatch: Any) -> None:

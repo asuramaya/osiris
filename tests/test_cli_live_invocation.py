@@ -63,6 +63,7 @@ from src.cli import (
     cmd_citation,
     cmd_cite,
     cmd_composition,
+    cmd_context_pct_log,
     cmd_correct_agent_house,
     cmd_correct_agent_project,
     cmd_correct_pin_value,
@@ -184,6 +185,17 @@ async def _fake_chaos_gate(pool: Any) -> dict[str, Any]:
             "automount_probes_total": 0}
 
 
+async def _context_pct_log_in_a_scratch_home() -> int:
+    """A local-file read with no pool: HOME points at a scratch dir so the test never reads
+    the real state directory."""
+    import os
+    import tempfile
+    from unittest import mock
+
+    with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"HOME": home}):
+        return cmd_context_pct_log(as_json=True)
+
+
 # name -> async thunk(actions) -> int exit code. Every call here is EITHER an existing
 # proven-safe refusal (copied verbatim from test_cli.py/test_cli_json_promise.py) or
 # safe by an explicit dry-run/apply/execute=False default: see the module docstring.
@@ -199,6 +211,7 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
     "desk": lambda a: cmd_desk(),
     "show": lambda a: cmd_show("no-such-ref-anywhere"),
     "boot-status": lambda a: cmd_boot_status(pool=a.pool),
+    "context-pct-log": lambda a: _context_pct_log_in_a_scratch_home(),
     "lint": lambda a: cmd_lint(pool=a.pool),
     "graph-export": lambda a: cmd_graph_export(as_json=True, pool=a.pool),
     "audit": lambda a: cmd_audit("the-wall", pool=a.pool),
