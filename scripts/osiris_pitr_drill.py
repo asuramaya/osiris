@@ -160,6 +160,20 @@ def _wait_for_archive(container: str, walfile: str, timeout: float = 180.0) -> b
     return False
 
 
+def _soul_encryption_state() -> str:
+    """This box's own record of soul-store encryption: `no_key` (no key was ever set up
+    here), `pending`, `running`, `complete`, or `unknown` when the record cannot be read.
+    Only `complete` makes "no sampled row is encrypted" a hard failure."""
+    try:
+        from src.ingest.soul_crypto import soul_key_status
+        from src.orchestrator.soul_encrypt_progress import read_progress, shape_encryption
+
+        return str(shape_encryption(
+            read_progress(), key_present=bool(soul_key_status()["present"]))["state"])
+    except Exception:  # noqa: BLE001, an unreadable record is unproven, never a crash
+        return "unknown"
+
+
 def _soul_round_trip_check(container: str) -> str | None:
     """PROVE DECRYPTION, NOT PRESENCE: the marker-object check above only proves the
     restored copy has ROWS. It says nothing about whether the CURRENT key on this box can
@@ -208,8 +222,21 @@ def _soul_round_trip_check(container: str) -> str | None:
         or _sample("SELECT encode(raw_line, 'hex') FROM soul_lines LIMIT 50")
     encrypted = next((r for r in raws if is_encrypted(r)), None)
     if encrypted is None:
-        return None  # empty restore, or every sampled row still legacy plaintext: not
-                     # this check's own failure to report (encrypt_existing_soul_lines's)
+        if not raws:
+            return None  # an empty table: nothing was ever stored, so nothing to prove
+        # A sample with rows but none encrypted proved nothing, and a check that passes
+        # having checked nothing hides the day the data stops being readable. Whether that
+        # is a failure depends on whether encryption is supposed to be finished here.
+        state = _soul_encryption_state()
+        if state == "complete":
+            return (f"soul-store round-trip proved NOTHING: sampled {len(raws)} row(s) from "
+                    "the restored copy and none is encrypted, though this box's encryption "
+                    "progress record says every row is encrypted. Either the restored copy "
+                    "lost its encryption or the sample missed it; the key was not exercised")
+        print(f"soul-store round-trip: UNPROVEN (encryption state: {state}): sampled "
+              f"{len(raws)} row(s), none encrypted, so the key was not exercised. Not a "
+              "failure on a box that has not finished encrypting or never set a key up")
+        return None
     try:
         get_soul_fernet().decrypt(encrypted)
     except InvalidToken:
