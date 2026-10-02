@@ -118,3 +118,13 @@ def test_pick_labels_own_body_is_unchanged_by_the_labeled_nodes_hoist() -> None:
     body = _SPACE_JS.split("function pickLabels() {", 1)[1][:2500]
     assert "labeledNodes = pool.concat(projectPool, communityPool)" in body
     assert ".slice(0, N_LABELS);" in body
+
+
+def test_unstyled_text_fields_get_the_console_background_not_the_browser_white() -> None:
+    # the global rule set `color` only: a textarea (the Author Composition spec box) rendered
+    # white with near-white text. One rule gives every unclassed field the dark field look.
+    head = _OSIRIS_CSS.split("button, select, input, textarea {", 1)[1][:900]
+    # zero specificity (:where), so a class that styles its own field (the header search box)
+    # always wins instead of picking up a second border
+    assert ":where(textarea, select, input:not" in head
+    assert "background: var(--panel2)" in head

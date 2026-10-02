@@ -43,7 +43,7 @@ def test_old_panel_renderers_still_exist_nothing_deleted() -> None:
 def test_pane_shell_builds_all_five_sections() -> None:
     # PRODUCT VOICE (ruling 1e2ef5c3, thread ... layout item 3): Readiness ("The Box"
     # renamed) moved up to right after Backup & Offload, before Registry.
-    body = _CONSOLE_JS.split("async function renderSettingsPane() {", 1)[1][:600]
+    body = _CONSOLE_JS.split("async function renderSettingsPane() {", 1)[1][:950]
     assert "settingsSectionShell('key', 'Key')" in body
     assert "settingsSectionShell('offload', 'Backup &amp; Offload')" in body
     assert "settingsSectionShell('box', 'Readiness')" in body
@@ -56,7 +56,7 @@ def test_pane_shell_builds_all_five_sections() -> None:
 
 
 def test_pane_shell_loads_sections_independently_via_promise_all() -> None:
-    body = _CONSOLE_JS.split("async function renderSettingsPane() {", 1)[1][:800]
+    body = _CONSOLE_JS.split("async function renderSettingsPane() {", 1)[1][:1150]
     assert "Promise.all([" in body
     for fn in ("renderSettingsSectionKey()", "renderSettingsSectionOffload()",
                "renderSettingsSectionRegistry()", "renderSettingsSectionDesk()",
@@ -239,3 +239,42 @@ def test_tpm_step_copies_its_command_and_carries_the_full_sequence_in_a_tooltip(
     assert "readinessCopy(this)" in row
     tip = _CONSOLE_JS.split("var READINESS_STEP_TIPS = {", 1)[1].split("};", 1)[0]
     assert "sudo usermod -aG tss $USER" in tip and "osiris soul-key reseal" in tip
+
+
+def test_settings_pane_titles_itself_and_clears_the_browse_highlight() -> None:
+    body = _CONSOLE_JS.split("async function renderSettingsPane() {", 1)[1][:600]
+    assert "$('page-title').textContent = 'Settings'" in body
+    assert "classList.remove('sel')" in body
+
+
+def test_embedded_panels_drop_their_own_title_and_centring_wrapper() -> None:
+    # the Settings pane's own section heading already names each panel: no second "REGISTRY"
+    assert "function panelEmbedded(containerId)" in _CONSOLE_JS
+    for panel, container in (("Registry", "SETTINGS_CONTAINER_ID"), ("Key", "KEY_CONTAINER_ID"),
+                             ("Offload targets", "OFFLOAD_CONTAINER_ID")):
+        assert f"panelTitleHtml({container}, '{panel}')" in _CONSOLE_JS, panel
+
+
+def test_panel_tables_wrap_instead_of_clipping_and_browse_keeps_its_one_line_rows() -> None:
+    # .ee-table clips every cell to one line (right for Browse's object list); the panels that
+    # show prose and form fields carry .ee-form so a setting name or a reason is never cut off.
+    assert _CONSOLE_JS.count('class="ee-table ee-form"') == 7
+    assert '<table class="ee-table"><thead><tr><th style="width:105px' in _CONSOLE_JS
+    css = (Path(__file__).parent.parent / "src" / "ui" / "static" / "osiris.css").read_text()
+    form = css.split(".ee-table.ee-form td {", 1)[1][:200]
+    assert "white-space: normal" in form and "overflow: visible" in form
+
+
+def test_phone_widths_close_both_rails_and_float_them_over_the_stage() -> None:
+    css = (Path(__file__).parent.parent / "src" / "ui" / "static" / "osiris.css").read_text()
+    phone = css.split("PHONE WIDTHS", 1)[1][:1200]
+    assert "grid-template-columns: 0 minmax(0, 1fr) 0" in phone
+    assert "position: absolute" in phone
+    setup = _CONSOLE_JS.split("function closeRailsOnPhone()", 1)[1][:300]
+    assert "matchMedia('(max-width: 720px)')" in setup and "'lefthidden', 'righthidden'" in setup
+
+
+def test_timestamps_are_shown_to_a_person_not_as_raw_iso() -> None:
+    assert "function fmtWhen(iso)" in _CONSOLE_JS
+    assert "esc(fmtWhen(status.as_of))" in _CONSOLE_JS
+    assert "esc(fmtWhen(c.when))" in _CONSOLE_JS
