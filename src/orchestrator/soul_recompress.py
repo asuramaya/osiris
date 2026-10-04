@@ -41,13 +41,19 @@ from typing import Any
 import asyncpg
 from cryptography.fernet import InvalidToken, MultiFernet
 
+from src.ingest import soul_dicts
 from src.ingest.soul_crypto import (
+    CODEC_PLAIN,
     CODEC_UNSET,
     CODEC_ZS1,
+    CODEC_ZS2,
     FERNET_TOKEN_PREFIX,
-    LINE_ENVELOPE_PREFIX,
+    LINE_ENVELOPE_ZS1,
+    LINE_ENVELOPE_ZS2,
     UnknownLineCodec,
+    active_dictionary_id,
     pack_line,
+    unpack_line,
 )
 
 _PROGRESS_ENV = "OSIRIS_SOUL_RECOMPRESS_PROGRESS_FILE"
@@ -61,7 +67,17 @@ EXACT_COUNT_BELOW = 100_000
 SAMPLE_PERCENT = 0.5
 
 _SEALED = "substring(raw_line from 1 for 5) = $1"
-_PENDING = f"codec = {CODEC_UNSET} AND {_SEALED}"
+DICT_RETRY_SECS = 3600.0     # how long to wait before trying to train a dictionary again
+
+
+def _pending() -> str:
+    """The work queue. Rows not yet considered (codec 0) always; once a trained dictionary is
+    active, rows already compressed the plain way (codec 1) too, because the dictionary form is
+    about half the size again."""
+    codecs = f"codec = {CODEC_UNSET}"
+    if active_dictionary_id() is not None:
+        codecs = f"(codec = {CODEC_UNSET} OR codec = {CODEC_ZS1})"
+    return f"{codecs} AND {_SEALED}"
 
 
 def disabled() -> bool:
@@ -123,10 +139,10 @@ async def _initial_count(pool: asyncpg.Pool) -> tuple[int, bool]:
         "SELECT reltuples::bigint FROM pg_class WHERE oid = 'soul_lines'::regclass")
     if reltuples is None or reltuples < EXACT_COUNT_BELOW:
         n = await pool.fetchval(
-            f"SELECT count(*) FROM soul_lines WHERE {_PENDING}", FERNET_TOKEN_PREFIX)
+            f"SELECT count(*) FROM soul_lines WHERE {_pending()}", FERNET_TOKEN_PREFIX)
         return int(n or 0), False
     sample = await pool.fetchrow(
-        f"SELECT count(*) AS seen, count(*) FILTER (WHERE {_PENDING}) AS pending "
+        f"SELECT count(*) AS seen, count(*) FILTER (WHERE {_pending()}) AS pending "
         f"FROM soul_lines TABLESAMPLE SYSTEM ({SAMPLE_PERCENT})", FERNET_TOKEN_PREFIX)
     seen, pending = int(sample["seen"]), int(sample["pending"])
     share = pending / seen if seen else 1.0
@@ -135,7 +151,16 @@ async def _initial_count(pool: asyncpg.Pool) -> tuple[int, bool]:
 
 async def _any_pending(pool: asyncpg.Pool) -> bool:
     return bool(await pool.fetchval(
-        f"SELECT 1 FROM soul_lines WHERE {_PENDING} LIMIT 1", FERNET_TOKEN_PREFIX))
+        f"SELECT 1 FROM soul_lines WHERE {_pending()} LIMIT 1", FERNET_TOKEN_PREFIX))
+
+
+def _envelope_codec(plain: bytes) -> int:
+    """The codec a decrypted payload already is, from its own bytes."""
+    if plain.startswith(LINE_ENVELOPE_ZS2):
+        return CODEC_ZS2
+    if plain.startswith(LINE_ENVELOPE_ZS1):
+        return CODEC_ZS1
+    return CODEC_PLAIN
 
 
 async def _batch(
@@ -143,41 +168,41 @@ async def _batch(
 ) -> dict[str, Any]:
     """One keyset page after `cursor`. Returns rows rewritten, rows skipped (not openable
     with the current key), bytes before and after for the rewritten rows, the new cursor and
-    whether the table is exhausted."""
+    whether the table is exhausted. A row is only ever rewritten into a form that is strictly
+    smaller than the one it holds; otherwise just its marker is brought up to date."""
+    await soul_dicts.ensure_dictionaries(pool)
+    cols = "SELECT harness, anchor_sid, line_idx, raw_line, codec FROM soul_lines "
     if cursor is None:
         rows = await pool.fetch(
-            "SELECT harness, anchor_sid, line_idx, raw_line FROM soul_lines "
-            f"WHERE {_PENDING} ORDER BY harness, anchor_sid, line_idx LIMIT $2",
+            cols + f"WHERE {_pending()} ORDER BY harness, anchor_sid, line_idx LIMIT $2",
             FERNET_TOKEN_PREFIX, batch_size)
     else:
         rows = await pool.fetch(
-            "SELECT harness, anchor_sid, line_idx, raw_line FROM soul_lines "
-            f"WHERE {_PENDING} AND (harness, anchor_sid, line_idx) > ($2, $3, $4) "
+            cols + f"WHERE {_pending()} AND (harness, anchor_sid, line_idx) > ($2, $3, $4) "
             "ORDER BY harness, anchor_sid, line_idx LIMIT $5",
             FERNET_TOKEN_PREFIX, cursor[0], cursor[1], cursor[2], batch_size)
     if not rows:
         return {"rewritten": 0, "skipped": 0, "before": 0, "after": 0,
                 "cursor": cursor, "exhausted": True}
-    updates: list[tuple[bytes, int, str, str, int, bytes]] = []
+    updates: list[tuple[bytes, int, str, str, int, bytes, int]] = []
     skipped = before = after = 0
     for r in rows:
         old = bytes(r["raw_line"])
         try:
             plain = fernet.decrypt(old)
-        except InvalidToken:
-            skipped += 1
+            line = unpack_line(plain)
+            payload, codec = pack_line(line)
+        except (InvalidToken, UnknownLineCodec, LookupError):
+            skipped += 1  # a key that does not open it, a newer format, or a missing dictionary
             continue
-        if plain.startswith(LINE_ENVELOPE_PREFIX):
-            # already wrapped (the column was stale): record that, change nothing else
-            updates.append((old, CODEC_ZS1, r["harness"], r["anchor_sid"], r["line_idx"], old))
+        if codec == CODEC_PLAIN or len(payload) >= len(plain):
+            # nothing smaller is available: keep what the row holds, fix only its marker
+            updates.append((old, _envelope_codec(plain), r["harness"], r["anchor_sid"],
+                            r["line_idx"], old, r["codec"]))
             continue
-        try:
-            payload, codec = pack_line(plain)
-        except UnknownLineCodec:
-            skipped += 1
-            continue
-        new = fernet.encrypt(payload) if codec == CODEC_ZS1 else old
-        updates.append((new, codec, r["harness"], r["anchor_sid"], r["line_idx"], old))
+        new = fernet.encrypt(payload)
+        updates.append((new, codec, r["harness"], r["anchor_sid"], r["line_idx"], old,
+                        r["codec"]))
         before += len(old)
         after += len(new)
     if updates:
@@ -185,11 +210,33 @@ async def _batch(
             await conn.executemany(
                 "UPDATE soul_lines SET raw_line = $1, codec = $2 "
                 "WHERE harness = $3 AND anchor_sid = $4 AND line_idx = $5 "
-                "AND raw_line = $6 AND codec = 0", updates)
+                "AND raw_line = $6 AND codec = $7", updates)
     last = rows[-1]
     return {"rewritten": len(updates), "skipped": skipped, "before": before, "after": after,
             "cursor": [last["harness"], last["anchor_sid"], last["line_idx"]],
             "exhausted": len(rows) < batch_size}
+
+
+async def maybe_train_dictionary(pool: asyncpg.Pool, fernet: MultiFernet) -> dict[str, Any]:
+    """Train the compression dictionary once, before the re-encode starts, so the existing rows
+    go straight to the dictionary form instead of being rewritten twice. Does nothing when one
+    exists, when switched off (OSIRIS_SOUL_DICT_DISABLED), or when the last try was less than
+    `DICT_RETRY_SECS` ago (a young install has too few lines yet and simply keeps ZS1). Returns
+    the training result or {"trained": False, "reason": ...}."""
+    if soul_dicts.disabled():
+        return {"trained": False, "reason": "switched off"}
+    await soul_dicts.ensure_dictionaries(pool)
+    if active_dictionary_id() is not None or await soul_dicts.active_dictionary_row(pool):
+        return {"trained": False, "reason": "a dictionary is already active"}
+    record = read_progress()
+    now = time.time()
+    if now - float(record.get("dict_attempt_epoch") or 0.0) < DICT_RETRY_SECS:
+        return {"trained": False, "reason": "tried recently"}
+    record["dict_attempt_epoch"] = now
+    result = await soul_dicts.train_dictionary(pool, fernet)
+    record["dict_result"] = result
+    _write_progress(record)
+    return result
 
 
 async def recompress_tick(

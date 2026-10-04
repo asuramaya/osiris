@@ -48,6 +48,7 @@ from src.ingest.soul_crypto import (
     open_line,
     seal_line,
 )
+from src.ingest.soul_dicts import ensure_dictionaries
 
 _log = logging.getLogger("osiris.soul_store")
 
@@ -698,6 +699,7 @@ class SoulStore:
         `harness` names the harness that owns this transcript (e.g. 'claude-code', 'dsh',
         'crush'). When None, it's auto-detected from `self._adapters` by matching
         `source_path` to an adapter's discovery."""
+        await ensure_dictionaries(self.pool)
         harness = harness or self._detect_harness(source_path)
         since, prev_hash = await self._progress(anchor_sid, harness=harness)
         seen = 0
@@ -836,6 +838,7 @@ class SoulStore:
         `db_path`/`session_id` resolve to nothing (a vanished or malformed db is a
         skip, never a raised exception, matching `backfill`'s own per-session
         tolerance)."""
+        await ensure_dictionaries(self.pool)
         import asyncio
         import sqlite3
 
@@ -1039,6 +1042,7 @@ class SoulStore:
         this check by hand, but the next pair may not, and a blind append would chain
         them anyway. Pass `verify=False` only for sources already known clean by another
         route (e.g. a caller that ran the check itself moments earlier)."""
+        await ensure_dictionaries(self.pool)
         if not source_paths:
             return 0
         if verify:
@@ -1148,6 +1152,7 @@ class SoulStore:
         # `_iter_verified_lines` folds (this one measures, never verifies a chain or
         # returns content to a caller); encryption still has to reach it, the same
         # way it reaches every other raw_line/content_gzip read in this file.
+        await ensure_dictionaries(self.pool)
         fernet = _LazyFernet()
         cold = await self._cold_row(harness, anchor_sid)
         if cold is not None:
@@ -1237,6 +1242,7 @@ class SoulStore:
         `cryptography.fernet.InvalidToken` on decrypt, caught here and reported as a
         NAMED `_ChainBroken` receipt, the same honest shape a hash mismatch already
         gets, never a raw traceback surfacing three call sites deep."""
+        await ensure_dictionaries(self.pool)
         fernet = _LazyFernet()
         cold = await self._cold_row(harness, anchor_sid)
         if cold is not None:
@@ -1433,6 +1439,7 @@ class SoulStore:
         reported as `False`: this function's own honest-boolean contract has no room
         for a third, separate "can't tell" outcome; `_iter_verified_lines`'s own
         `_ChainBroken` receipt is where that distinction actually lives."""
+        await ensure_dictionaries(self.pool)
         fernet = _LazyFernet()
         cold = await self._cold_row(harness, anchor_sid)
         if cold is not None:
@@ -1779,6 +1786,7 @@ class SoulStore:
         A session already cold, or never ingested at all, is a named no-op, never an
         error: `fold_cold_tier_batch`'s own per-session loop treats both the same as a
         clean fold, nothing left to do here."""
+        await ensure_dictionaries(self.pool)
         already = await self._cold_row(harness, anchor_sid)
         if already is not None:
             return {"anchor_sid": anchor_sid, "folded": False, "note": "already cold"}
@@ -2338,6 +2346,30 @@ async def rewrap_soul_lines_key(
                 "UPDATE soul_lines_cold SET content_gzip=$1 "
                 "WHERE harness=$2 AND anchor_sid=$3",
                 new_fernet.encrypt(plaintext), row["harness"], row["anchor_sid"])
+    # THE TRAINED COMPRESSION DICTIONARIES (soul_dicts) are sealed with the soul key like the
+    # lines, so a rotation re-seals them too; counted separately, and folded into the
+    # clean-to-finish gate below so a dictionary left on the old key blocks `--finish`.
+    dict_rewrapped = 0
+    dict_already = 0
+    dict_broken_count = 0
+    for row in await pool.fetch("SELECT id, sealed_dict FROM soul_dicts"):
+        blob = bytes(row["sealed_dict"])
+        try:
+            new_fernet.decrypt(blob)
+            dict_already += 1
+            continue
+        except InvalidToken:
+            pass
+        try:
+            plaintext = old_fernet.decrypt(blob)
+        except InvalidToken:
+            dict_broken_count += 1
+            continue
+        dict_rewrapped += 1
+        if not dry_run:
+            await pool.execute(
+                "UPDATE soul_dicts SET sealed_dict=$1 WHERE id=$2",
+                new_fernet.encrypt(plaintext), row["id"])
     # "clean to finish" (osiris soul-key rotate --finish's own gate) means a FRESH
     # dry_run=True call finds nothing left on the old key and nothing broken.
     # `cmd_soul_key` computes that directly off this receipt's own counts rather
@@ -2348,6 +2380,8 @@ async def rewrap_soul_lines_key(
         "hot_broken_count": hot_broken_count, "hot_broken_sample": hot_broken_sample,
         "cold_rewrapped": cold_rewrapped, "cold_already_on_new_key": cold_already,
         "cold_broken_count": cold_broken_count, "cold_broken_sample": cold_broken_sample,
+        "dict_rewrapped": dict_rewrapped, "dict_already_on_new_key": dict_already,
+        "dict_broken_count": dict_broken_count,
     }
 
 

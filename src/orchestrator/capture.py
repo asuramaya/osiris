@@ -4941,7 +4941,10 @@ async def _verify_transcript_line(
     from cryptography.fernet import InvalidToken
 
     from src.ingest.soul_crypto import SoulKeyMissing, get_soul_fernet, is_encrypted, open_line
+    from src.ingest.soul_dicts import ensure_dictionaries
     from src.ingest.soul_store import _chain_hash
+
+    await ensure_dictionaries(pool)
     row = await pool.fetchrow(
         "SELECT raw_line, line_hash, prev_hash, ingested_at FROM soul_lines "
         "WHERE harness=$1 AND anchor_sid=$2 AND line_idx=$3", harness, anchor_sid,

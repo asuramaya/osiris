@@ -162,54 +162,117 @@ def is_encrypted(raw: bytes) -> bool:
 # row (plain line) and a new row (envelope) are told apart from the decrypted bytes alone,
 # never from a column, and one reader handles both for as long as both exist.
 #
-#   `\x00ZS1` + a zstd frame   version 1: plain zstd, no dictionary
+#   `\x00ZS1` + a zstd frame                       version 1: plain zstd, no dictionary
+#   `\x00ZS2` + dictionary id (4 bytes) + a frame  version 2: zstd with a trained dictionary
 #
 # The NUL first byte cannot start a transcript line (every line is JSON text, which opens
-# with `{` or whitespace), so a plain line is never mistaken for an envelope. A later codec
-# (a trained dictionary, say) gets its own `ZS2`; unknown versions refuse loudly rather than
+# with `{` or whitespace), so a plain line is never mistaken for an envelope. A transcript
+# line is small and its keys repeat on every line, so a dictionary trained on a sample of the
+# real lines roughly halves what plain zstd stores (measured: about 26% of the old size against
+# 44%). The dictionary is derived from private text, so it is stored sealed in `soul_dicts` and
+# lives decrypted only in this process's memory. Unknown versions refuse loudly rather than
 # returning garbage. FORWARD-ONLY: once a row holds an envelope, a build without this reader
 # cannot read it, so a rollback below this change needs the reader kept.
 LINE_ENVELOPE_PREFIX = b"\x00ZS"
 LINE_ENVELOPE_ZS1 = b"\x00ZS1"
+LINE_ENVELOPE_ZS2 = b"\x00ZS2"   # + 4-byte big-endian dictionary id + a zstd frame
 CODEC_UNSET = 0   # written before compression existed, or while no key did: re-encode work
 CODEC_ZS1 = 1     # wrapped in the ZS1 envelope
 CODEC_PLAIN = 2   # considered and kept as written: too small, or it did not shrink
+CODEC_ZS2 = 3     # wrapped in the ZS2 envelope: zstd with a trained dictionary
 _COMPRESS_MIN_BYTES = 256   # a frame header costs more than a tiny line saves
 _ZSTD_LEVEL = 3             # measured: level 3 is within 1.5% of level 15 at 10x the speed
 _MAX_LINE_BYTES = 512 * 1024 * 1024  # decompression bound: a corrupt frame cannot balloon
+_ZS2_HEADER = len(LINE_ENVELOPE_ZS2) + 4
 
 
 class UnknownLineCodec(ValueError):
     """A sealed line carries an envelope version this build does not know."""
 
 
+class DictionaryMissing(LookupError):
+    """A ZS2 line names a compression dictionary this process has not loaded. Readers load
+    them with `soul_dicts.ensure_dictionaries` before opening lines; hitting this means a
+    reader skipped that step or the dictionary row is gone, never a corrupt line."""
+
+
+# The trained dictionaries this process knows, by id, and the one new lines are written with.
+# A dictionary is derived from private transcripts, so it lives encrypted in `soul_dicts` and
+# only ever exists decrypted here, in memory (soul_dicts.py loads and registers it).
+_DICTS: dict[int, Any] = {}
+_ACTIVE_DICT_ID: int | None = None
+
+
+def register_dictionary(dict_id: int, raw: bytes, *, active: bool = False) -> None:
+    import zstandard
+
+    global _ACTIVE_DICT_ID
+    _DICTS[dict_id] = zstandard.ZstdCompressionDict(raw)
+    if active:
+        _ACTIVE_DICT_ID = dict_id
+
+
+def known_dictionary_ids() -> set[int]:
+    return set(_DICTS)
+
+
+def active_dictionary_id() -> int | None:
+    return _ACTIVE_DICT_ID
+
+
+def clear_dictionaries() -> None:
+    """Test and key-rotation hook: forget every loaded dictionary."""
+    global _ACTIVE_DICT_ID
+    _DICTS.clear()
+    _ACTIVE_DICT_ID = None
+
+
 def pack_line(raw: bytes) -> tuple[bytes, int]:
-    """`(payload, codec)`: the line wrapped in the ZS1 envelope when that is smaller, else
-    the line as it is (codec `CODEC_PLAIN`, a decision, so the re-encode never revisits it).
-    Never inflates a row: a line that does not shrink stays plain."""
+    """`(payload, codec)`: the line in the smallest form this process can write. With an active
+    trained dictionary that is the ZS2 envelope, otherwise ZS1; a line that does not shrink, or
+    is too short to matter, stays as written (codec `CODEC_PLAIN`, a decision, so the re-encode
+    never revisits it). Never inflates a row."""
     if len(raw) < _COMPRESS_MIN_BYTES:
         return raw, CODEC_PLAIN
     import zstandard
 
-    packed = LINE_ENVELOPE_ZS1 + zstandard.ZstdCompressor(level=_ZSTD_LEVEL).compress(raw)
+    if _ACTIVE_DICT_ID is not None:
+        d = _DICTS[_ACTIVE_DICT_ID]
+        packed = (LINE_ENVELOPE_ZS2 + _ACTIVE_DICT_ID.to_bytes(4, "big")
+                  + zstandard.ZstdCompressor(level=_ZSTD_LEVEL, dict_data=d).compress(raw))
+        codec = CODEC_ZS2
+    else:
+        packed = LINE_ENVELOPE_ZS1 + zstandard.ZstdCompressor(level=_ZSTD_LEVEL).compress(raw)
+        codec = CODEC_ZS1
     if len(packed) >= len(raw):
         return raw, CODEC_PLAIN
-    return packed, CODEC_ZS1
+    return packed, codec
 
 
 def unpack_line(plain: bytes) -> bytes:
-    """The line a decrypted payload holds, whichever form it was written in."""
+    """The line a decrypted payload holds, whichever of the three forms it was written in
+    (plain, ZS1, ZS2)."""
     if not plain.startswith(LINE_ENVELOPE_PREFIX):
         return plain
-    if not plain.startswith(LINE_ENVELOPE_ZS1):
-        raise UnknownLineCodec(
-            f"this sealed line uses a format this build does not know ({plain[:4]!r}); "
-            "update osiris before reading it")
     import zstandard
 
-    line: bytes = zstandard.ZstdDecompressor().decompress(
-        plain[len(LINE_ENVELOPE_ZS1):], max_output_size=_MAX_LINE_BYTES)
-    return line
+    if plain.startswith(LINE_ENVELOPE_ZS1):
+        line: bytes = zstandard.ZstdDecompressor().decompress(
+            plain[len(LINE_ENVELOPE_ZS1):], max_output_size=_MAX_LINE_BYTES)
+        return line
+    if plain.startswith(LINE_ENVELOPE_ZS2):
+        dict_id = int.from_bytes(plain[len(LINE_ENVELOPE_ZS2):_ZS2_HEADER], "big")
+        d = _DICTS.get(dict_id)
+        if d is None:
+            raise DictionaryMissing(
+                f"this sealed line was compressed with dictionary {dict_id}, which is not "
+                "loaded")
+        line = zstandard.ZstdDecompressor(dict_data=d).decompress(
+            plain[_ZS2_HEADER:], max_output_size=_MAX_LINE_BYTES)
+        return line
+    raise UnknownLineCodec(
+        f"this sealed line uses a format this build does not know ({plain[:4]!r}); "
+        "update osiris before reading it")
 
 
 def seal_line(fernet: Any, raw: bytes) -> tuple[bytes, int]:

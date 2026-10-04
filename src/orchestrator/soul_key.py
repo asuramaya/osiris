@@ -213,8 +213,10 @@ async def soul_key_rotate(
         old_fernet = Fernet(soul_crypto.read_legacy_key_bytes(resolved))  # noqa: ASYNC240
         census = await rewrap_soul_lines_key(
             pool, new_fernet=new_fernet, old_fernet=old_fernet, dry_run=True)
-        remaining = census["hot_rewrapped"] + census["cold_rewrapped"]
-        broken = census["hot_broken_count"] + census["cold_broken_count"]
+        remaining = (census["hot_rewrapped"] + census["cold_rewrapped"]
+                     + census.get("dict_rewrapped", 0))
+        broken = (census["hot_broken_count"] + census["cold_broken_count"]
+                  + census.get("dict_broken_count", 0))
         if remaining or broken:
             return {"error": f"{remaining} row(s) still under the old key and "
                              f"{broken} broken row(s) found, re-run `osiris "
