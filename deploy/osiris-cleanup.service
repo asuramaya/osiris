@@ -1,0 +1,16 @@
+# CLEAN-UP BY DEFAULT: test and gate scratch older than two days, merged and idle worker
+# worktrees with their branches, dangling Docker images, old build cache and anonymous unused
+# volumes. scripts/osiris_cleanup.py holds every rule and its guards (a scratch entry with a
+# process working inside it stays; a worktree with real uncommitted work stays; a named Docker
+# volume, the database's included, is never touched). DEPLOY-MANAGED like the prune and offload
+# timers (scripts/install_prune_timers.sh). Run it by hand without --apply to see the plan.
+[Unit]
+Description=Osiris daily clean-up of leftovers
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/osiris
+TimeoutStartSec=3600
+Nice=19
+IOSchedulingClass=idle
+ExecStart=%h/code/osiris/.venv/bin/python scripts/osiris_cleanup.py --apply

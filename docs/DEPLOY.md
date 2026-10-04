@@ -263,6 +263,18 @@ A watch that pages a real operator needs guards a demo doesn't:
   pytest's own basetemp. `osiris_preflight`'s inode-use alarm (`_tmp_inode_pct`, 80%
   threshold) is the early warning if this class of leak ever recurs some other way; it
   is not itself the fix.
+- **Clean-up by default.** Leftovers used to pile up until the disk was full, because nothing
+  ever removed them. `osiris-cleanup.timer` (daily, installed by `osiris deploy` with the other
+  timers) runs `scripts/osiris_cleanup.py --apply`, which removes: entries under
+  `/var/tmp/osiris-scratch` and `pt-<pid>` test directories in `/var/tmp` and `/tmp` whose newest
+  file is older than two days and that no running process is working inside; merged, clean
+  worker worktrees under `.claude/worktrees/` that have been idle three days, with their merged
+  branches (a generated `.venv` or tool cache is not work; any other uncommitted or untracked
+  file keeps the worktree); and Docker's dangling images, build cache older than a week, and
+  anonymous volumes that no container references. It never runs `docker system prune` or
+  `docker volume prune` and never touches a named volume, so the database's own volume is
+  outside every rule. Run it by hand without `--apply` to see exactly what it would do and how
+  much it would free; `--json` prints the plan as data.
 - **Obligation hygiene (a deliberate exception to the "off by default" rule below).**
   `osiris_obligation_hygiene_enabled` is true by default, unlike every sibling scheduled
   writer described above, by explicit operator decision to ship it already turned on.
