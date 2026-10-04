@@ -29,7 +29,7 @@ echo "[up] infra (Postgres + Redis) as containers"
 # it's always the checked-in version, never a stale manually-`docker cp`'d copy) is
 # what archive_command actually invokes.
 #
-# wal_compression=on and archive_timeout=300 are part of the same structural set: the first
+# wal_compression=lz4 and archive_timeout=300 are part of the same structural set: the first
 # compresses the full-page images that make up nearly all of the WAL volume, the second
 # closes and archives the current WAL segment at least every five minutes, so a restore
 # can reach to within five minutes of "now" even when the database is quiet (with the
@@ -53,7 +53,7 @@ docker run -d --name osiris-pg --restart unless-stopped \
   postgres:16 \
   -c wal_level=replica -c archive_mode=on \
   -c archive_command='bash /var/lib/postgresql/data/osiris_archive_wal.sh %p %f' \
-  -c wal_compression=on -c archive_timeout=300 >/dev/null
+  -c wal_compression=lz4 -c archive_timeout=300 >/dev/null
 docker run -d --name osiris-redis --restart unless-stopped \
   -p "127.0.0.1:${REDIS_PORT}:6379" -v osiris-redis-data:/data redis:7 >/dev/null
 

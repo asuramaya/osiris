@@ -34,7 +34,7 @@ services:
       - "-c"
       - "archive_command=bash /var/lib/postgresql/data/osiris_archive_wal.sh %p %f"
       - "-c"
-      - "wal_compression=on"
+      - "wal_compression=lz4"
       - "-c"
       - "archive_timeout=300"
     healthcheck:

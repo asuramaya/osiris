@@ -76,7 +76,7 @@ def test_postgres_compresses_wal_and_archives_at_least_every_five_minutes(
     compressed full-page images, and a segment switch every 300 seconds so the archive
     never trails a quiet database by an unbounded amount."""
     cmd = _pg_command_text(compose)
-    assert "wal_compression=on" in cmd
+    assert "wal_compression=lz4" in cmd
     assert "archive_timeout=300" in cmd
 
 
@@ -131,7 +131,7 @@ def test_up_sh_archives_wal() -> None:
 
 
 def test_up_sh_compresses_wal_and_archives_at_least_every_five_minutes() -> None:
-    assert "wal_compression=on" in UP_SH_CODE
+    assert "wal_compression=lz4" in UP_SH_CODE
     assert "archive_timeout=300" in UP_SH_CODE
 
 
