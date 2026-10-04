@@ -70,6 +70,7 @@ never move this number and can never trigger a spurious raise.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -166,11 +167,14 @@ async def apply_migration_0064(
     *,
     batch_size: int = DEFAULT_BATCH_SIZE,
     cutoff: datetime | None = None,
+    max_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Moves every is_current=false row older than `cutoff` from assertions_hot into
     assertions_cold, in bounded batches (see module docstring for the copy-verify-delete
     shape), and returns a count-preserving receipt. Raises ReconciliationError -- loudly,
-    never silently -- if the total row count across both tables changed.
+    never silently -- if the total row count across both tables changed. `max_seconds`
+    stops between batches once spent (a scheduled caller's time budget); the rows left are
+    simply moved by the next run, and the reconciliation still holds for what was moved.
 
     RECONCILIATION IS RUN-START-SCOPED, deliberately, so a concurrent live fleet writing
     brand-new rows into assertions_hot during this run can never trip a false positive:
@@ -203,8 +207,11 @@ async def apply_migration_0064(
     examined = 0
     moved = 0
     batches = 0
+    started = time.monotonic()
 
     while True:
+        if max_seconds is not None and batches and time.monotonic() - started >= max_seconds:
+            break
         async with pool.acquire() as conn, conn.transaction():
             id_rows = await conn.fetch(
                 "SELECT id FROM assertions_hot WHERE is_current=false AND created_at < $1 "

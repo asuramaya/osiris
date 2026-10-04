@@ -15,6 +15,7 @@ import functools
 import logging
 import time
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -1294,16 +1295,28 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
 # cron timeout; each step stops between batches once its own budget is spent and the next
 # day's run continues, so a large backlog is worked down over days rather than in one sitting.
 _AUDIT_DUPLICATE_RETIREMENT_SECS = 300.0
+_ASSERTION_FOLD_SECS = 600.0
+_ASSERTION_ARCHIVE_SECS = 300.0
+_ASSERTION_HOT_WINDOW_DAYS = 7
 
 
 async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
-    """ONE WRITE PER FACT (storage redesign): retire the audit_log rows that only restate an
-    assertions row (retention.assert_property_audit_retirement), bounded and resumable.
+    """ONE WRITE PER FACT, TIERED FACT HISTORY (storage redesign): three bounded, resumable
+    steps that stop the graph's own tables storing the same fact several times.
+      1. retire the audit_log rows that only restate an assertions row
+         (retention.assert_property_audit_retirement),
+      2. fold the superseded assertion rows that restate the row they replaced
+         (assertion_fold.apply_fold),
+      3. move superseded history older than a week from the hot table to the cold one
+         (migration_0064.apply_migration_0064).
     Once a day, NOT at startup: the first runs work through millions of rows, and a startup
-    job would hold the boot lock that serializes every other cron's own startup run. A later
-    run picks up where this one stopped; a failure logs and waits for the next. Gated on the
-    retention flag (true by default). A desk receipt only when something was removed."""
+    job would hold the boot lock that serializes every other cron's own startup run. Each
+    step has its own time budget and a later run picks up where it stopped; a step that
+    fails logs and never sinks the others. Gated on the retention flag (true by default).
+    A desk receipt only when something was removed or moved."""
+    from src.orchestrator.assertion_fold import apply_fold
     from src.orchestrator.mailbox import send_message
+    from src.orchestrator.migration_0064 import apply_migration_0064
     from src.orchestrator.retention import assert_property_audit_retirement
     from src.orchestrator.settings_service import settings_with_overlay
 
@@ -1325,6 +1338,27 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
             more = "" if dup["finished"] else ", more remain for the next run"
             lines.append(f"audit_log: removed {dup['deleted']} rows that only repeated an "
                          f"assertion{more}")
+    try:
+        fold = await apply_fold(pool, max_seconds=_ASSERTION_FOLD_SECS)
+    except Exception as exc:
+        _log.warning("assertion fold failed: %r", exc)
+    else:
+        changed += fold["folded"]
+        if fold["folded"]:
+            more = "" if fold["finished"] else ", more remain for the next run"
+            lines.append(f"assertions: folded {fold['folded']} rows that repeated the row "
+                         f"they replaced{more}")
+    try:
+        moved = await apply_migration_0064(
+            pool, cutoff=datetime.now(UTC) - timedelta(days=_ASSERTION_HOT_WINDOW_DAYS),
+            max_seconds=_ASSERTION_ARCHIVE_SECS)
+    except Exception as exc:
+        _log.warning("assertion history archive failed: %r", exc)
+    else:
+        changed += moved["rows_moved"]
+        if moved["rows_moved"]:
+            lines.append(f"assertions: moved {moved['rows_moved']} rows of old history to the "
+                         "cold table")
     if lines:
         with contextlib.suppress(Exception):  # the desk being unreachable must not sink the cron
             await send_message(
@@ -1332,7 +1366,7 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
                 to_project="operator", body="storage: " + "; ".join(lines),
                 desk_kind="fyi", dedup_window_secs=3600)
     if changed:
-        _log.info("storage housekeeping: %d row(s) removed", changed)
+        _log.info("storage housekeeping: %d row(s) removed or moved", changed)
     return changed
 
 
@@ -1432,8 +1466,6 @@ async def harness_backfill_heartbeat(ctx: dict[str, Any]) -> int:
     off an anchor's own shape, the same class of mechanical, always-on sweep
     classification_laws_heartbeat already is, never a write an operator would want to
     veto."""
-    from datetime import UTC, datetime
-
     from src.mcp_server import _infer_harness
 
     actions: Actions = ctx["cascade"].actions
@@ -1758,8 +1790,8 @@ class WorkerSettings:
         # so this wave's own deploy gets its first fold pass immediately.
         cron(watched(soul_cold_tier_heartbeat, every=86400), hour={3}, minute={45},
              second={0}, timeout=600, run_at_startup=True),
-        # ONE WRITE PER FACT: a bounded step over millions of rows, so it is NOT
-        # run_at_startup (that would hold the boot lock for minutes).
+        # ONE WRITE PER FACT / TIERED FACT HISTORY: three bounded steps over millions of
+        # rows, so it is NOT run_at_startup (that would hold the boot lock for minutes).
         cron(watched(storage_housekeeping_heartbeat, every=86400), hour={4}, minute={15},
              second={0}, timeout=1500),
         # wave 13 item 3: the harness signal's own catch-up sweep — same 15-min cadence
