@@ -4850,7 +4850,7 @@ def test_install_prune_timers_sh_now_covers_all_eight_timer_lane_units(
     (repo / install_script).chmod(0o755)
     for name in ("osiris-prune-manifest", "osiris-prune-apply", "osiris-base-backup",
                 "osiris-backup", "osiris-preflight", "osiris-pg-autotune",
-                "osiris-offload", "osiris-restore-drill"):
+                "osiris-offload", "osiris-restore-drill", "osiris-cleanup"):
         (repo / "deploy" / f"{name}.service").write_text(f"# {name} service\n")
         (repo / "deploy" / f"{name}.timer").write_text(f"# {name} timer\n")
     target = tmp_path / "target"
@@ -4867,12 +4867,13 @@ def test_install_prune_timers_sh_now_covers_all_eight_timer_lane_units(
             os.environ["OSIRIS_SYSTEMD_USER_DIR"] = old_env
 
     assert result.returncode == 0, result.stderr
-    assert "16 installed/updated, 0 already current" in result.stdout
+    assert "18 installed/updated, 0 already current" in result.stdout
     assert (target / "osiris-backup.timer").read_text() == "# osiris-backup timer\n"
     assert (target / "osiris-pg-autotune.service").read_text() == "# osiris-pg-autotune service\n"
     assert (target / "osiris-offload.timer").read_text() == "# osiris-offload timer\n"
     assert (target / "osiris-restore-drill.timer").read_text() == (
         "# osiris-restore-drill timer\n")
+    assert (target / "osiris-cleanup.timer").read_text() == "# osiris-cleanup timer\n"
 
 
 # --- boot-status -------------------------------------------------------------------------------
