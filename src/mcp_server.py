@@ -6366,9 +6366,9 @@ async def inbox(project: str | None = None, peek: bool = False,
     direct messages are the only genuinely unsurfaceable kind. Every other parameter
     above is ignored in this mode.
 
-    `render='text'`: returns only {"text": <str>}. Your own mailbox renders one line
-    per ask message, fyi folded to a single trailing count line
-    (`textrender.render_mail_text`). The operator desk renders the backlog band first
+    `render='text'`: a glance that never leases; returns only {"text": <str>}. Your own mailbox
+    renders one line per ask message, fyi folded to a trailing count
+    line. The operator desk renders the backlog band first
     (all-projects obligation pressure), then owed/letters, then
     needs_decision/needs_hands/fyi/dimmed/miner_guesses each as one count line (never
     itemized, since settling by id needs the ids this collapsed glance deliberately
@@ -6434,6 +6434,12 @@ async def inbox(project: str | None = None, peek: bool = False,
     spawn_reader = normalize_spawn_id(subagent_id) is not None
     if spawn_reader:
         peek, ack = True, None
+    # A text render is a one-line GLANCE: an ask is cut to 100 characters and fyi mail is only
+    # counted. Leasing what it merely glanced at held the whole message back for the lease
+    # window while the reader had seen one line of it, so two workers had to ask for a resend
+    # of mail they had "read" this way. A glance never leases; inbox() reads it whole.
+    if render == "text" and not ack:
+        peek = True
     # the reader is you (your DMs + your project's broadcasts, your own lease/settle), except
     # the operator desk, whose reader is the human ('operator'): an agent only peeks it, never
     # settles it as itself.
