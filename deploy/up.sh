@@ -29,6 +29,14 @@ echo "[up] infra (Postgres + Redis) as containers"
 # it's always the checked-in version, never a stale manually-`docker cp`'d copy) is
 # what archive_command actually invokes.
 #
+# wal_compression=on and archive_timeout=300 are part of the same structural set: the first
+# compresses the full-page images that make up nearly all of the WAL volume, the second
+# closes and archives the current WAL segment at least every five minutes, so a restore
+# can reach to within five minutes of "now" even when the database is quiet (with the
+# default of 0 the newest partial segment is never archived until it fills). Both are
+# reloadable settings, and on a running box they are also persisted in the data volume's
+# postgresql.auto.conf, so a recreate that keeps the volume keeps them too.
+#
 # TUNING FLAGS (shared_buffers/effective_cache_size/work_mem/maintenance_work_mem/
 # random_page_cost) ARE DELIBERATELY NOT SET HERE ANYMORE: scripts/osiris_pg_autotune.py
 # (deploy/osiris-pg-autotune.timer, daily) derives these from the box's own RAM/CPU and
@@ -44,7 +52,8 @@ docker run -d --name osiris-pg --restart unless-stopped \
   -v "$(pwd)/scripts/osiris_archive_wal.sh:/var/lib/postgresql/data/osiris_archive_wal.sh:ro" \
   postgres:16 \
   -c wal_level=replica -c archive_mode=on \
-  -c archive_command='bash /var/lib/postgresql/data/osiris_archive_wal.sh %p %f' >/dev/null
+  -c archive_command='bash /var/lib/postgresql/data/osiris_archive_wal.sh %p %f' \
+  -c wal_compression=on -c archive_timeout=300 >/dev/null
 docker run -d --name osiris-redis --restart unless-stopped \
   -p "127.0.0.1:${REDIS_PORT}:6379" -v osiris-redis-data:/data redis:7 >/dev/null
 

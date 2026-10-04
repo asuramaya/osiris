@@ -69,6 +69,18 @@ def test_postgres_archives_wal(compose: dict) -> None:
 
 
 @pytest.mark.parametrize("compose", [COMPOSE_YML, COMPOSE_FULL_YML], ids=["yml", "full_yml"])
+def test_postgres_compresses_wal_and_archives_at_least_every_five_minutes(
+    compose: dict,
+) -> None:
+    """A recreated database must come back with the same WAL settings the live one runs:
+    compressed full-page images, and a segment switch every 300 seconds so the archive
+    never trails a quiet database by an unbounded amount."""
+    cmd = _pg_command_text(compose)
+    assert "wal_compression=on" in cmd
+    assert "archive_timeout=300" in cmd
+
+
+@pytest.mark.parametrize("compose", [COMPOSE_YML, COMPOSE_FULL_YML], ids=["yml", "full_yml"])
 def test_the_archive_script_is_bind_mounted_from_the_repo_not_baked_in(compose: dict) -> None:
     volumes = _pg_service(compose)["volumes"]
     mounts = [v if isinstance(v, str) else f"{v}" for v in volumes]
@@ -116,6 +128,11 @@ def test_up_sh_archives_wal() -> None:
     assert "archive_command=" in UP_SH_CODE
     assert "osiris_archive_wal.sh" in UP_SH_CODE
     assert "wal_level=replica" in UP_SH_CODE
+
+
+def test_up_sh_compresses_wal_and_archives_at_least_every_five_minutes() -> None:
+    assert "wal_compression=on" in UP_SH_CODE
+    assert "archive_timeout=300" in UP_SH_CODE
 
 
 def test_up_sh_bind_mounts_the_archive_script_read_only() -> None:
