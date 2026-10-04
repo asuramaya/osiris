@@ -1238,11 +1238,12 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     docstring — measured live 2026-09-08: outbox 803 MB, audit_log 1.2 GB, neither ever
     pruned), so this DELETEs (execute=True, batched — the acting logic lives entirely in
     retention.py, never duplicated here) published outbox rows and audit_log rows older
-    than 90 days, once a day (not every-15-min like this file's other siblings — a
-    multi-million-row table does not need that granularity, and the operator's own
-    acceptance test is "flat over a week", not "flat over 15 minutes"). A no-op unless
-    osiris_retention_heartbeat_enabled (TRUE BY DEFAULT, a named exception to this file's
-    dark-by-default convention — the operator asked for this to RUN, not merely exist).
+    than their windows (outbox 30 days, audit_log 90), once a day (not every-15-min like this
+    file's other siblings — a multi-million-row table does not need that granularity, and
+    the operator's own acceptance test is "flat over a week", not "flat over 15 minutes").
+    A no-op unless osiris_retention_heartbeat_enabled (TRUE BY DEFAULT, a named exception
+    to this file's dark-by-default convention — the operator asked for this to RUN, not
+    merely exist).
 
     A DESK RECEIPT EVERY RUN (the operator's own explicit acceptance: "the first run's
     counts on the desk"), unlike every sibling above's "log only when something happened"
@@ -1254,7 +1255,11 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     line — the other table's run is independent, same "one hiccup never sinks a sibling"
     discipline as classification_laws_heartbeat's four sub-sweeps."""
     from src.orchestrator.mailbox import send_message
-    from src.orchestrator.retention import audit_log_retention, outbox_retention
+    from src.orchestrator.retention import (
+        OUTBOX_RETENTION_DAYS,
+        audit_log_retention,
+        outbox_retention,
+    )
     from src.orchestrator.settings_service import settings_with_overlay
 
     actions: Actions = ctx["cascade"].actions
@@ -1265,7 +1270,7 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     lines: list[str] = []
     deleted = 0
     try:
-        outbox = await outbox_retention(pool, days=90, execute=True)
+        outbox = await outbox_retention(pool, days=OUTBOX_RETENTION_DAYS, execute=True)
     except Exception as exc:  # a DB hiccup must not kill the cron
         _log.warning("outbox retention heartbeat failed: %r", exc)
     else:

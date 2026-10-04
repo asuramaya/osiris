@@ -24,6 +24,11 @@ from typing import Any
 
 import asyncpg
 
+# The outbox window, in days (the operator's storage ruling): ONE value for the CLI's
+# default and the daily heartbeat. The heartbeat used to pass 90 while this module's
+# default said 30, so the table kept three times what was meant and nothing looked wrong.
+OUTBOX_RETENTION_DAYS = 30
+
 # outbox: only PUBLISHED rows are eligible, an unpublished row (published_at IS NULL) is
 # still awaiting the worker's own drain and must never be touched, no matter its age (a
 # stuck/lagging worker is a SEPARATE alarm, reap_stale_runs's own class of problem, not
@@ -78,7 +83,8 @@ async def _apply(
 
 
 async def outbox_retention(
-    pool: asyncpg.Pool, *, days: int = 30, execute: bool = False, batch_size: int = 5000,
+    pool: asyncpg.Pool, *, days: int = OUTBOX_RETENTION_DAYS, execute: bool = False,
+    batch_size: int = 5000,
 ) -> dict[str, Any]:
     """PUBLISHED outbox rows older than `days`, 30 is a generous replay/debug window for
     events the worker has already durably delivered; an unpublished row is NEVER eligible
