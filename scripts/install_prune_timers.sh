@@ -1,9 +1,10 @@
 #!/bin/sh
-# Installs + enables the timer lane's NINE timer pairs: osiris-prune-manifest,
+# Installs + enables the timer lane's TEN timer pairs: osiris-prune-manifest,
 # osiris-prune-apply, osiris-base-backup, osiris-backup, osiris-preflight,
 # osiris-pg-autotune, osiris-offload (the opportunistic offload runner), and
 # osiris-restore-drill (the scheduled, bounded restore test) and osiris-cleanup (the daily
-# clean-up of scratch, merged worktrees and dangling Docker leftovers). This is
+# clean-up of scratch, merged worktrees and dangling Docker leftovers), and osiris-pitr-drill
+# (the weekly point-in-time restore drill that marks a base backup verified). This is
 # the SAME idempotent copy-and-compare mechanism install_commands.sh already uses for
 # the slash-command surface, on the principle that deploy is the one sanctioned agent
 # that writes machine files, so a fresh box gets these units without a human hand.
@@ -35,7 +36,7 @@ TOPLEVEL="$(git rev-parse --show-toplevel)"
 REAL_TARGET_DIR="$HOME/.config/systemd/user"
 TARGET_DIR="${OSIRIS_SYSTEMD_USER_DIR:-$REAL_TARGET_DIR}"
 
-UNITS="osiris-prune-manifest osiris-prune-apply osiris-base-backup osiris-backup osiris-preflight osiris-pg-autotune osiris-offload osiris-restore-drill osiris-cleanup"
+UNITS="osiris-prune-manifest osiris-prune-apply osiris-base-backup osiris-backup osiris-preflight osiris-pg-autotune osiris-offload osiris-restore-drill osiris-cleanup osiris-pitr-drill"
 
 mkdir -p "$TARGET_DIR"
 
@@ -69,7 +70,8 @@ if [ "$TARGET_DIR" = "$REAL_TARGET_DIR" ]; then
     systemctl --user enable --now \
         osiris-prune-manifest.timer osiris-prune-apply.timer osiris-base-backup.timer \
         osiris-backup.timer osiris-preflight.timer osiris-pg-autotune.timer \
-        osiris-offload.timer osiris-restore-drill.timer osiris-cleanup.timer
+        osiris-offload.timer osiris-restore-drill.timer osiris-cleanup.timer \
+        osiris-pitr-drill.timer
 fi
 
 echo "install_prune_timers: $installed installed/updated, $current already current — $TARGET_DIR"

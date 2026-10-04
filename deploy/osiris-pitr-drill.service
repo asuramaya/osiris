@@ -1,0 +1,26 @@
+# THE WEEKLY POINT-IN-TIME RESTORE DRILL: proves the newest base backup plus the archived WAL
+# really restore, by restoring them into a scratch server and finding a row written after the
+# base backup. A pass writes the .verified marker beside the base backup, which is what lets
+# the retention plan remove anything older (scripts/osiris_prune_ladder.py): nothing is
+# pruned on the strength of a backup nobody has restored. DEPLOY-MANAGED
+# (scripts/install_prune_timers.sh); it runs after the Sunday base backup and the prune pass,
+# and ends well before Monday's preflight.
+[Unit]
+Description=Osiris weekly point-in-time restore drill (marks the base backup verified)
+# Ordering only: a catch-up run after downtime starts behind these, never alongside them.
+After=osiris-base-backup.service osiris-prune-apply.service osiris-preflight.service
+
+[Service]
+Type=oneshot
+# The drill extracts a base backup and replays WAL: a lot of file cache is charged to this
+# unit. MemoryHigh throttles it (cache is reclaimable), MemoryMax is the backstop; the scratch
+# server it starts carries its own 6G cap. Low CPU and idle IO keep it from competing with
+# the daemons.
+MemoryHigh=8G
+MemoryMax=10G
+Nice=15
+IOSchedulingClass=idle
+# The drill waits up to 4 hours for replay to finish; this is the hard stop above that.
+TimeoutStartSec=6h
+WorkingDirectory=%h/code/osiris
+ExecStart=%h/code/osiris/.venv/bin/python scripts/osiris_pitr_drill.py
