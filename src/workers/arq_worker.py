@@ -1302,17 +1302,20 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
 _AUDIT_DUPLICATE_RETIREMENT_SECS = 300.0
 _ASSERTION_FOLD_SECS = 600.0
 _ASSERTION_ARCHIVE_SECS = 300.0
+_LAYOUT_HISTORY_SECS = 300.0
 _ASSERTION_HOT_WINDOW_DAYS = 7
 
 
 async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
-    """ONE WRITE PER FACT, TIERED FACT HISTORY (storage redesign): three bounded, resumable
+    """ONE WRITE PER FACT, TIERED FACT HISTORY (storage redesign): four bounded, resumable
     steps that stop the graph's own tables storing the same fact several times.
       1. retire the audit_log rows that only restate an assertions row
          (retention.assert_property_audit_retirement),
-      2. fold the superseded assertion rows that restate the row they replaced
+      2. remove the layout heartbeat's old position assertions, now in graph_layout
+         (retention.retire_layout_history),
+      3. fold the superseded assertion rows that restate the row they replaced
          (assertion_fold.apply_fold),
-      3. move superseded history older than a week from the hot table to the cold one
+      4. move superseded history older than a week from the hot table to the cold one
          (migration_0064.apply_migration_0064).
     Once a day, NOT at startup: the first runs work through millions of rows, and a startup
     job would hold the boot lock that serializes every other cron's own startup run. Each
@@ -1322,7 +1325,10 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
     from src.orchestrator.assertion_fold import apply_fold
     from src.orchestrator.mailbox import send_message
     from src.orchestrator.migration_0064 import apply_migration_0064
-    from src.orchestrator.retention import assert_property_audit_retirement
+    from src.orchestrator.retention import (
+        assert_property_audit_retirement,
+        retire_layout_history,
+    )
     from src.orchestrator.settings_service import settings_with_overlay
 
     actions: Actions = ctx["cascade"].actions
@@ -1343,6 +1349,17 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
             more = "" if dup["finished"] else ", more remain for the next run"
             lines.append(f"audit_log: removed {dup['deleted']} rows that only repeated an "
                          f"assertion{more}")
+    try:
+        layout = await retire_layout_history(
+            pool, execute=True, max_seconds=_LAYOUT_HISTORY_SECS)
+    except Exception as exc:
+        _log.warning("layout history retirement failed: %r", exc)
+    else:
+        changed += layout["deleted"]
+        if layout["deleted"]:
+            more = "" if layout["finished"] else ", more remain for the next run"
+            lines.append(f"assertions: removed {layout['deleted']} graph layout rows that "
+                         f"now live in the layout table{more}")
     try:
         fold = await apply_fold(pool, max_seconds=_ASSERTION_FOLD_SECS)
     except Exception as exc:
@@ -1814,7 +1831,7 @@ class WorkerSettings:
         # so this wave's own deploy gets its first fold pass immediately.
         cron(watched(soul_cold_tier_heartbeat, every=86400), hour={3}, minute={45},
              second={0}, timeout=600, run_at_startup=True),
-        # ONE WRITE PER FACT / TIERED FACT HISTORY: three bounded steps over millions of
+        # ONE WRITE PER FACT / TIERED FACT HISTORY: four bounded steps over millions of
         # rows, so it is NOT run_at_startup (that would hold the boot lock for minutes).
         cron(watched(storage_housekeeping_heartbeat, every=86400), hour={4}, minute={15},
              second={0}, timeout=1500),

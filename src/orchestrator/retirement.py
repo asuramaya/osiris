@@ -237,8 +237,10 @@ async def retire_bare_object(
     looks for, generalized here to any link/any direction since a truly bare object has
     none at all); or it carries a current assertion from any source other than the
     layout heartbeat's own GRAPH_LAYOUT_SOURCE. That one exemption is deliberate,
-    not an oversight: graph_x/graph_y/graph_layout_v are bookkeeping the heartbeat
-    stamps on every active object regardless of meaning; this path's own founding
+    not an oversight: graph_x/graph_y/graph_layout_v were bookkeeping the heartbeat
+    stamped on every active object regardless of meaning (positions now live in the
+    graph_layout table, but rows written before that remain until they are retired);
+    this path's own founding
     cases carry nothing else, so refusing on them would make this path unable to ever
     retire the exact objects it exists for. Any other source (a name, a summary, a real
     property) is genuine evidence of content and refuses, the same rule retire_project

@@ -106,7 +106,8 @@ _RESET_TABLES = (
     "harness_messages",
     "harness_telemetry", "harness_telemetry_files", "harness_turns", "helper_cache",
     "links", "llm_usage", "mcp_tool_stats", "merge_candidates", "message_recipients",
-    "object_aliases", "object_events", "outbox", "pit_watch_alarms", "resource_leases",
+    "graph_layout", "object_aliases", "object_events", "outbox", "pit_watch_alarms",
+    "resource_leases",
     "search_log", "search_vectors",
     # session_reads joined here the same day it shipped, ahead of the
     # harness_messages/soul_lines gap this comment block already names twice: FK-only

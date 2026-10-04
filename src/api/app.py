@@ -585,10 +585,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             f"WITH lc AS {_LIVE_LINK_COUNTS} "
             "SELECT o.id, o.type, o.canonical, gx.v AS x, gy.v AS y, COALESCE(lc.n, 0) AS degree "
             "FROM objects o "
-            "JOIN (SELECT object_id, (value #>> '{}')::float8 AS v FROM current_assertions "
-            "      WHERE name='graph_x') gx ON gx.object_id = o.id "
-            "JOIN (SELECT object_id, (value #>> '{}')::float8 AS v FROM current_assertions "
-            "      WHERE name='graph_y') gy ON gy.object_id = o.id "
+            "JOIN (SELECT object_id, x AS v FROM graph_layout) gx ON gx.object_id = o.id "
+            "JOIN (SELECT object_id, y AS v FROM graph_layout) gy ON gy.object_id = o.id "
             "LEFT JOIN lc ON lc.node = o.id "
             "WHERE o.status NOT IN ('archived','merged','retired') "
             "  AND gx.v BETWEEN $1 AND $2 AND gy.v BETWEEN $3 AND $4 "
@@ -634,10 +632,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         ") x GROUP BY node)"
     )
     _GRAPH_POS_JOIN = (
-        "LEFT JOIN (SELECT object_id, (value #>> '{}')::float8 AS v FROM current_assertions "
-        "  WHERE name='graph_x') gx ON gx.object_id = o.id "
-        "LEFT JOIN (SELECT object_id, (value #>> '{}')::float8 AS v FROM current_assertions "
-        "  WHERE name='graph_y') gy ON gy.object_id = o.id "
+        "LEFT JOIN (SELECT object_id, x AS v FROM graph_layout) gx ON gx.object_id = o.id "
+        "LEFT JOIN (SELECT object_id, y AS v FROM graph_layout) gy ON gy.object_id = o.id "
     )
 
     @app.get("/graph/supernodes")
@@ -667,10 +663,10 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             "  avg(gx.v) AS x, avg(gy.v) AS y "
             "FROM proj_members pm "
             "LEFT JOIN lc ON lc.node = pm.object_id "
-            "LEFT JOIN (SELECT object_id, (value #>> '{}')::float8 AS v "
-            "  FROM current_assertions WHERE name='graph_x') gx ON gx.object_id = pm.object_id "
-            "LEFT JOIN (SELECT object_id, (value #>> '{}')::float8 AS v "
-            "  FROM current_assertions WHERE name='graph_y') gy ON gy.object_id = pm.object_id "
+            "LEFT JOIN (SELECT object_id, x AS v FROM graph_layout) gx "
+            "  ON gx.object_id = pm.object_id "
+            "LEFT JOIN (SELECT object_id, y AS v FROM graph_layout) gy "
+            "  ON gy.object_id = pm.object_id "
             "GROUP BY pm.project_id, pm.project_canonical"
         )
         # NAME, NEVER THE RAW repo: CANONICAL: the retired project map view showed
@@ -878,10 +874,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         # reads off the same graph_x/graph_y heartbeat every other graph endpoint
         # already reads), never a new route.
         pos = await p.fetchrow(
-            "SELECT (SELECT (value #>> '{}')::float8 FROM current_assertions "
-            "  WHERE object_id=$1 AND name='graph_x') AS x, "
-            "(SELECT (value #>> '{}')::float8 FROM current_assertions "
-            "  WHERE object_id=$1 AND name='graph_y') AS y",
+            "SELECT (SELECT x FROM graph_layout WHERE object_id=$1) AS x, "
+            "(SELECT y FROM graph_layout WHERE object_id=$1) AS y",
             object_id,
         )
         # the browse object view is a DIFFERENT route than /dossier and bypassed

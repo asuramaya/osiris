@@ -1002,7 +1002,7 @@ async def test_physics_positions_multi_project_end_to_end_acceptance(
 async def test_run_physics_migrate_writes_every_active_object_at_the_current_version(
     actions: Actions,
 ) -> None:
-    from src.orchestrator.graph_layout import _LAYOUT_VERSION_PROP, positions_for
+    from src.orchestrator.graph_layout import positions_for
 
     now = datetime.now(UTC)
     a = await actions.create_or_find_object("Thread", "thread:gp-migrate-a", "test")
@@ -1022,9 +1022,7 @@ async def test_run_physics_migrate_writes_every_active_object_at_the_current_ver
     assert a in placed and b in placed
 
     rows = await actions.pool.fetch(
-        "SELECT (value #>> '{}')::int AS v FROM current_assertions "
-        "WHERE object_id = ANY($1::uuid[]) AND name=$2",
-        [a, b], _LAYOUT_VERSION_PROP)
+        "SELECT layout_v AS v FROM graph_layout WHERE object_id = ANY($1::uuid[])", [a, b])
     assert all(r["v"] == _PHYSICS_LAYOUT_VERSION for r in rows)
 
 
