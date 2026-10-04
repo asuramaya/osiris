@@ -1230,10 +1230,6 @@ def _retention_receipt_line(table: str, deleted: int, cutoff: str, days: int = 9
     return f"{table}: removed {deleted} {noun} older than {days} days (cutoff {cutoff})"
 
 
-# How long one retention run may spend retiring the audit rows that duplicate assertions.
-_AUDIT_DUPLICATE_RETIREMENT_SECS = 240.0
-
-
 async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     """THE RETENTION HEARTBEAT (wave 12 item 1, operator's word via Thoth DM 8378: "put
     outbox_retention and audit_log_retention ... on the heartbeat"): outbox/audit_log are
@@ -1257,11 +1253,7 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     line — the other table's run is independent, same "one hiccup never sinks a sibling"
     discipline as classification_laws_heartbeat's four sub-sweeps."""
     from src.orchestrator.mailbox import send_message
-    from src.orchestrator.retention import (
-        assert_property_audit_retirement,
-        audit_log_retention,
-        outbox_retention,
-    )
+    from src.orchestrator.retention import audit_log_retention, outbox_retention
     from src.orchestrator.settings_service import settings_with_overlay
 
     actions: Actions = ctx["cascade"].actions
@@ -1287,22 +1279,6 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
         deleted += audit["deleted"]
         lines.append(_retention_receipt_line("audit_log", audit["deleted"], audit["cutoff"]))
 
-    # One write per fact: retire the audit rows that only restate an assertions row. Bounded
-    # per run (the backlog was millions of rows), so a later run continues where this stopped;
-    # a run with nothing left to remove says nothing.
-    try:
-        dup = await assert_property_audit_retirement(
-            pool, execute=True, max_seconds=_AUDIT_DUPLICATE_RETIREMENT_SECS)
-    except Exception as exc:  # a DB hiccup must not kill the cron
-        _log.warning("audit_log duplicate retirement failed: %r", exc)
-    else:
-        deleted += dup["deleted"]
-        if dup["deleted"] or not dup["finished"]:
-            noun = "row" if dup["deleted"] == 1 else "rows"
-            more = "" if dup["finished"] else ", more remain for the next run"
-            lines.append(f"audit_log: removed {dup['deleted']} {noun} that only repeated an "
-                         f"assertion{more}")
-
     if lines:
         with contextlib.suppress(Exception):  # the desk being unreachable must not sink the cron
             await send_message(
@@ -1312,6 +1288,52 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     if deleted:
         _log.info("retention heartbeat: deleted %d row(s)", deleted)
     return deleted
+
+
+# Time budgets for one storage-housekeeping run, per step. The whole job is capped by its
+# cron timeout; each step stops between batches once its own budget is spent and the next
+# day's run continues, so a large backlog is worked down over days rather than in one sitting.
+_AUDIT_DUPLICATE_RETIREMENT_SECS = 300.0
+
+
+async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
+    """ONE WRITE PER FACT (storage redesign): retire the audit_log rows that only restate an
+    assertions row (retention.assert_property_audit_retirement), bounded and resumable.
+    Once a day, NOT at startup: the first runs work through millions of rows, and a startup
+    job would hold the boot lock that serializes every other cron's own startup run. A later
+    run picks up where this one stopped; a failure logs and waits for the next. Gated on the
+    retention flag (true by default). A desk receipt only when something was removed."""
+    from src.orchestrator.mailbox import send_message
+    from src.orchestrator.retention import assert_property_audit_retirement
+    from src.orchestrator.settings_service import settings_with_overlay
+
+    actions: Actions = ctx["cascade"].actions
+    pool = actions.pool
+    if not (await settings_with_overlay(pool)).osiris_retention_heartbeat_enabled:
+        return 0
+
+    lines: list[str] = []
+    changed = 0
+    try:
+        dup = await assert_property_audit_retirement(
+            pool, execute=True, max_seconds=_AUDIT_DUPLICATE_RETIREMENT_SECS)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("audit_log duplicate retirement failed: %r", exc)
+    else:
+        changed += dup["deleted"]
+        if dup["deleted"]:
+            more = "" if dup["finished"] else ", more remain for the next run"
+            lines.append(f"audit_log: removed {dup['deleted']} rows that only repeated an "
+                         f"assertion{more}")
+    if lines:
+        with contextlib.suppress(Exception):  # the desk being unreachable must not sink the cron
+            await send_message(
+                pool, from_agent="cron:storage_housekeeping_heartbeat", from_project="osiris",
+                to_project="operator", body="storage: " + "; ".join(lines),
+                desk_kind="fyi", dedup_window_secs=3600)
+    if changed:
+        _log.info("storage housekeeping: %d row(s) removed", changed)
+    return changed
 
 
 async def soul_cold_tier_heartbeat(ctx: dict[str, Any]) -> int:
@@ -1736,6 +1758,10 @@ class WorkerSettings:
         # so this wave's own deploy gets its first fold pass immediately.
         cron(watched(soul_cold_tier_heartbeat, every=86400), hour={3}, minute={45},
              second={0}, timeout=600, run_at_startup=True),
+        # ONE WRITE PER FACT: a bounded step over millions of rows, so it is NOT
+        # run_at_startup (that would hold the boot lock for minutes).
+        cron(watched(storage_housekeeping_heartbeat, every=86400), hour={4}, minute={15},
+             second={0}, timeout=1500),
         # wave 13 item 3: the harness signal's own catch-up sweep — same 15-min cadence
         # class as classification_laws_heartbeat/obligation_hygiene_heartbeat, offset
         # from all nine so none contend for CPU at the same wall-clock second.

@@ -191,7 +191,7 @@ async def test_the_heartbeat_retires_duplicates_and_says_so(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import src.orchestrator.mailbox as mailbox
-    from src.workers.arq_worker import retention_heartbeat
+    from src.workers.arq_worker import storage_housekeeping_heartbeat
 
     seeded = await _seed_old_duplicates(actions)
     captured: dict[str, Any] = {}
@@ -201,7 +201,18 @@ async def test_the_heartbeat_retires_duplicates_and_says_so(
         return {"sent": 1}
 
     monkeypatch.setattr(mailbox, "send_message", _fake_send)
-    await retention_heartbeat({"cascade": SimpleNamespace(actions=actions)})
+    await storage_housekeeping_heartbeat({"cascade": SimpleNamespace(actions=actions)})
 
     assert await _present(actions, seeded["dups"]) == set()
     assert "only repeated an assertion" in captured["body"]
+
+
+async def test_the_housekeeping_job_is_scheduled_daily_and_not_at_startup() -> None:
+    """A startup run would hold the boot lock that serializes every other cron's own startup
+    run while it works through millions of rows."""
+    from src.workers.arq_worker import WorkerSettings
+
+    jobs = [c for c in WorkerSettings.cron_jobs
+            if getattr(c, "name", "").endswith("storage_housekeeping_heartbeat")]
+    assert len(jobs) == 1
+    assert jobs[0].run_at_startup is False
