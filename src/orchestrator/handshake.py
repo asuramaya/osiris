@@ -29,7 +29,7 @@ from cryptography.fernet import InvalidToken
 
 from src.actions.core import Actions
 from src.ingest.sessions import locate_current_transcript
-from src.ingest.soul_crypto import get_soul_fernet, is_encrypted
+from src.ingest.soul_crypto import get_soul_fernet, is_encrypted, open_line
 from src.ingest.transcript_store import identity_reading
 from src.orchestrator import forks, mounts
 from src.orchestrator.agents import register_agent, resolve_identity
@@ -155,7 +155,7 @@ async def _find_anchor_sid_containing(
             raw = bytes(row["raw_line"])
             if is_encrypted(raw):
                 try:
-                    plaintext = fernet.decrypt(raw)
+                    plaintext = open_line(fernet, raw)
                 except InvalidToken:
                     continue
             else:
@@ -252,7 +252,7 @@ async def compact_seat(
         raw = bytes(r["raw_line"])
         if is_encrypted(raw):
             try:
-                plaintext = fernet.decrypt(raw)
+                plaintext = open_line(fernet, raw)
             except InvalidToken:
                 continue
         else:

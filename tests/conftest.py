@@ -637,6 +637,8 @@ def _no_real_key_setup(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest
     monkeypatch.setattr("src.cli._real_ensure_key_setup", _already_set_up)
     state = tmp_path_factory.mktemp("key_state")
     monkeypatch.setenv("OSIRIS_SOUL_ENCRYPT_PROGRESS_FILE", str(state / "encrypt_progress.json"))
+    monkeypatch.setenv(
+        "OSIRIS_SOUL_RECOMPRESS_PROGRESS_FILE", str(state / "recompress_progress.json"))
     monkeypatch.setenv("OSIRIS_RECOVERY_VERIFY_RECEIPT_FILE", str(state / "verify_receipt.json"))
     # the off-box recovery copies and the scheduled restore drill (run from the offload tick)
     # write receipts and would run a real restic restore: redirected and stubbed the same way

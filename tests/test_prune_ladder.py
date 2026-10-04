@@ -121,22 +121,18 @@ def test_cli_without_apply_never_deletes_anything(tmp_path, capsys) -> None:
     vault = tmp_path / "vault"
     backups.mkdir()
     vault.mkdir()
-    # TWO dumps in the same ancient calendar month: a lone old dump is legitimately kept
-    # forever (one-per-month survivor); pruning only happens when a bucket has a
-    # DUPLICATE to thin, so the elder of this pair is what the plan would remove.
-    elder = backups / "osiris-20200101-000000.dump"
-    elder.write_bytes(b"x" * 100)
-    younger = backups / "osiris-20200115-000000.dump"
-    younger.write_bytes(b"x" * 100)
+    # backups/ is a one day cache: a copy older than that is listed once the vault holds it
+    cached = backups / "osiris-20200101-000000.dump"
+    cached.write_bytes(b"x" * 100)
+    (vault / cached.name).write_bytes(b"x" * 100)
 
     rc = main(["--backups", str(backups), "--vault", str(vault)])
 
     assert rc == 0
-    assert elder.exists() and younger.exists(), "no --apply flag given, nothing may be deleted"
+    assert cached.exists(), "no --apply flag given, nothing may be deleted"
     out = capsys.readouterr().out
     assert "DRY RUN ONLY" in out
-    assert "REMOVE  " + str(elder) in out
-    assert "REMOVE  " + str(younger) not in out
+    assert "REMOVE  " + str(cached) in out
 
 
 def test_cli_with_apply_deletes_exactly_the_planned_removals(tmp_path, capsys) -> None:
@@ -146,12 +142,13 @@ def test_cli_with_apply_deletes_exactly_the_planned_removals(tmp_path, capsys) -
     vault = tmp_path / "vault"
     backups.mkdir()
     vault.mkdir()
-    elder = backups / "osiris-20200101-000000.dump"
-    elder.write_bytes(b"x" * 100)
-    younger = backups / "osiris-20200115-000000.dump"
-    younger.write_bytes(b"x" * 100)
+    cached = backups / "osiris-20200101-000000.dump"
+    cached.write_bytes(b"x" * 100)
+    (vault / cached.name).write_bytes(b"x" * 100)
+    only_here = backups / "osiris-20200115-000000.dump"  # the vault has no copy of this one
+    only_here.write_bytes(b"x" * 100)
     # the CLI's own `main()` uses the REAL wall clock (never the test module's fixed
-    # NOW), so name this one after it directly to land it in the hot (< 48h) window
+    # NOW), so name this one after it directly to land it inside the one day window
     real_now = datetime.now(UTC)
     fresh = backups / f"osiris-{real_now.strftime('%Y%m%d-%H%M%S')}.dump"
     fresh.write_bytes(b"y" * 100)
@@ -159,9 +156,10 @@ def test_cli_with_apply_deletes_exactly_the_planned_removals(tmp_path, capsys) -
     rc = main(["--backups", str(backups), "--vault", str(vault), "--apply"])
 
     assert rc == 0
-    assert not elder.exists(), "the planned removal must actually be gone under --apply"
-    assert younger.exists(), "the surviving bucket member must never be touched"
-    assert fresh.exists(), "a hot-window survivor must never be touched"
+    assert not cached.exists(), "the planned removal must actually be gone under --apply"
+    assert (vault / cached.name).exists(), "the vault copy is never part of the cache's plan"
+    assert only_here.exists(), "a dump that exists nowhere else is never removed from backups/"
+    assert fresh.exists(), "a file inside the one day window must never be touched"
 
 
 # ── transcript CHAIN pruning: whole weekly chains, never a tarball out
@@ -386,17 +384,18 @@ def test_backup_start_segment_is_read_from_the_tarballs_own_label(tmp_path: Path
     assert _backup_start_segment(str(tmp_path / "missing.tar.gz")) is None
 
 
-def test_an_unreadable_kept_backup_keeps_all_wal(tmp_path: Path) -> None:
-    from scripts.osiris_prune_ladder import _kept_backup_start_segments
+def test_wal_is_anchored_at_the_verified_backup_and_kept_whole_when_it_cannot_be_read(
+    tmp_path: Path,
+) -> None:
+    from scripts.osiris_prune_ladder import _verified_start_segments
 
     good = tmp_path / "a.tar.gz"
     _write_base_backup(good, A)
     junk = tmp_path / "b.tar.gz"
     junk.write_bytes(b"x")
-    assert _kept_backup_start_segments(
-        {"keep": [DumpFile(str(good), NOW)], "remove": []}) == [A]
-    assert _kept_backup_start_segments(
-        {"keep": [DumpFile(str(good), NOW), DumpFile(str(junk), NOW)], "remove": []}) is None
+    assert _verified_start_segments(DumpFile(str(good), NOW)) == [A]
+    assert _verified_start_segments(DumpFile(str(junk), NOW)) is None
+    assert _verified_start_segments(None) is None  # nothing verified: keep every segment
 
 
 def test_wal_retention_end_to_end_via_the_cli(tmp_path, capsys) -> None:  # noqa: ANN001
@@ -411,8 +410,11 @@ def test_wal_retention_end_to_end_via_the_cli(tmp_path, capsys) -> None:  # noqa
     basebackups.mkdir()
     wal_dir.mkdir()
     # one recent base backup; its label's start segment is the retention anchor
-    _write_base_backup(basebackups / "osiris-basebackup-20260908-000000.tar.gz",
-                       "000000010000000000000002")
+    base = basebackups / "osiris-basebackup-20260908-000000.tar.gz"
+    _write_base_backup(base, "000000010000000000000002")
+    from scripts.osiris_prune_ladder import mark_base_backup_verified
+
+    mark_base_backup_verified(base)  # proven restorable: only then is WAL before it removable
     (wal_dir / "000000010000000000000001").write_bytes(b"x" * 10)   # before the start: removable
     (wal_dir / "000000010000000000000002").write_bytes(b"x" * 10)   # the start segment: kept
     (wal_dir / "000000010000000000000003").write_bytes(b"x" * 10)   # after it: kept
@@ -564,3 +566,121 @@ def test_cli_manifest_names_dormant_seat_transcripts_with_sizes(
     body = _fake_mail_manifest.body  # type: ignore[attr-defined]
     assert "dormant seat transcripts" in body
     assert "acorn: 1 file(s), 2.0 MB" in body
+
+
+# --- THE CHAIN: verified base backup + WAL, short dump tail, one day cache -----------------
+
+def _day(days_ago: float) -> datetime:
+    return NOW - timedelta(days=days_ago)
+
+
+def _dump(days_ago: float) -> DumpFile:
+    when = _day(days_ago)
+    return DumpFile(f"/vault/osiris-{when:%Y%m%d-%H%M%S}.dump", when)
+
+
+def test_no_verified_base_backup_means_the_old_ladder_and_every_wal_segment(
+    tmp_path: Path,
+) -> None:
+    from scripts.osiris_prune_ladder import plan_prune_dumps
+
+    dumps = [_dump(d) for d in (0.1, 5, 10, 40)]
+    assert plan_prune_dumps(dumps, now=NOW, verified=None) == plan_prune(dumps, now=NOW)
+    segs = [_seg("000000010000000000000001"), _seg("000000010000000000000002")]
+    assert plan_prune_wal(segs, kept_start_segments=None)["remove"] == []
+
+
+def test_a_marker_is_written_by_the_drill_and_voided_by_a_changed_file(tmp_path: Path) -> None:
+    from scripts.osiris_prune_ladder import is_base_backup_verified, mark_base_backup_verified
+
+    base = tmp_path / "osiris-basebackup-20260908-000000.tar.gz"
+    _write_base_backup(base, A)
+    assert is_base_backup_verified(base) is False
+    mark_base_backup_verified(base)
+    assert is_base_backup_verified(base) is True
+    base.write_bytes(base.read_bytes() + b"more")  # the backup changed after it was verified
+    assert is_base_backup_verified(base) is False
+    (tmp_path / "other.tar.gz").write_bytes(b"x")  # a marker copied under another name is no proof
+    base2 = tmp_path / "other.tar.gz"
+    base2_marker = tmp_path / "other.tar.gz.verified"
+    base2_marker.write_text(base.with_name(base.name + ".verified").read_text())
+    assert is_base_backup_verified(base2) is False
+
+
+def test_the_vault_keeps_a_day_whole_then_one_dump_a_day_for_three_days_and_no_more() -> None:
+    from scripts.osiris_prune_ladder import plan_prune_dumps
+
+    base = DumpFile("/vault/basebackups/b.tar.gz", _day(1.5))
+    dumps = [_dump(d) for d in (0.1, 0.4, 0.9, 1.2, 1.4, 2.2, 2.4, 3.5, 20)]
+    plan = plan_prune_dumps(dumps, now=NOW, verified=base)
+    kept_ages = {round((NOW - f.when).total_seconds() / 86400, 1) for f in plan["keep"]}
+    assert {0.1, 0.4, 0.9} <= kept_ages                 # the last day: all of it
+    assert 3.5 not in kept_ages and 20 not in kept_ages  # beyond three days: gone
+    assert len([f for f in plan["keep"] if 1 < (NOW - f.when).days + 1 <= 3]) <= 3
+
+
+def test_a_dump_newer_than_the_verified_base_backup_is_never_removed() -> None:
+    from scripts.osiris_prune_ladder import plan_prune_dumps
+
+    base = DumpFile("/vault/basebackups/b.tar.gz", _day(10))
+    young_but_old_enough_to_thin = _dump(5)  # older than three days, newer than the base
+    plan = plan_prune_dumps([young_but_old_enough_to_thin], now=NOW, verified=base)
+    assert plan["remove"] == []
+
+
+def test_base_backups_older_than_the_newest_verified_one_are_removed_with_their_wal_anchor(
+    tmp_path: Path,
+) -> None:
+    from scripts.osiris_prune_ladder import plan_prune_basebackups
+
+    old, verified, newer = (DumpFile(f"/v/b{i}.tar.gz", _day(d)) for i, d in
+                            enumerate((20, 7, 1)))
+    plan = plan_prune_basebackups([old, verified, newer], now=NOW, verified=verified)
+    assert plan["remove"] == [old]
+    assert plan["keep"] == [verified, newer]  # newer one may still be verified later
+
+
+def test_the_cache_keeps_one_day_and_only_drops_what_the_vault_also_holds() -> None:
+    from scripts.osiris_prune_ladder import plan_prune_cache
+
+    fresh, in_vault, only_here = _dump(0.5), _dump(2), _dump(3)
+    names = {Path(in_vault.path).name}
+    plan = plan_prune_cache([fresh, in_vault, only_here], now=NOW, vault_names=names)
+    assert plan["remove"] == [in_vault]
+    assert fresh in plan["keep"] and only_here in plan["keep"]
+
+
+def test_wal_end_to_end_keeps_everything_until_a_base_backup_is_verified(
+    tmp_path, capsys,  # noqa: ANN001
+) -> None:
+    from scripts.osiris_prune_ladder import main
+
+    vault = tmp_path / "vault"
+    (vault / "basebackups").mkdir(parents=True)
+    (vault / "wal_archive").mkdir()
+    (tmp_path / "backups").mkdir()
+    _write_base_backup(vault / "basebackups" / "osiris-basebackup-20260908-000000.tar.gz",
+                       "000000010000000000000002")
+    (vault / "wal_archive" / "000000010000000000000001").write_bytes(b"x")
+
+    assert main(["--backups", str(tmp_path / "backups"), "--vault", str(vault)]) == 0
+    assert "000000010000000000000001" not in capsys.readouterr().out
+
+
+def test_apply_removes_a_pruned_base_backups_marker_with_it(tmp_path, capsys) -> None:  # noqa: ANN001
+    from scripts.osiris_prune_ladder import main, mark_base_backup_verified, verified_marker_path
+
+    vault = tmp_path / "vault"
+    bases = vault / "basebackups"
+    bases.mkdir(parents=True)
+    (tmp_path / "backups").mkdir()
+    old = bases / "osiris-basebackup-20260101-000000.tar.gz"
+    new = bases / "osiris-basebackup-20260908-000000.tar.gz"
+    for f in (old, new):
+        _write_base_backup(f, "000000010000000000000002")
+        mark_base_backup_verified(f)
+
+    assert main(["--backups", str(tmp_path / "backups"), "--vault", str(vault), "--apply"]) == 0
+
+    assert not old.exists() and not verified_marker_path(old).exists()
+    assert new.exists() and verified_marker_path(new).exists()

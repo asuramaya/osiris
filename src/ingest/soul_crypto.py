@@ -155,6 +155,76 @@ def is_encrypted(raw: bytes) -> bool:
     return raw.startswith(FERNET_TOKEN_PREFIX)
 
 
+# --- compress before encrypt (storage redesign) ----------------------------------------
+#
+# A Fernet token is incompressible, so a line is compressed BEFORE it is sealed. The
+# compressed form is wrapped in a small versioned envelope inside the ciphertext, so an old
+# row (plain line) and a new row (envelope) are told apart from the decrypted bytes alone,
+# never from a column, and one reader handles both for as long as both exist.
+#
+#   `\x00ZS1` + a zstd frame   version 1: plain zstd, no dictionary
+#
+# The NUL first byte cannot start a transcript line (every line is JSON text, which opens
+# with `{` or whitespace), so a plain line is never mistaken for an envelope. A later codec
+# (a trained dictionary, say) gets its own `ZS2`; unknown versions refuse loudly rather than
+# returning garbage. FORWARD-ONLY: once a row holds an envelope, a build without this reader
+# cannot read it, so a rollback below this change needs the reader kept.
+LINE_ENVELOPE_PREFIX = b"\x00ZS"
+LINE_ENVELOPE_ZS1 = b"\x00ZS1"
+CODEC_UNSET = 0   # written before compression existed, or while no key did: re-encode work
+CODEC_ZS1 = 1     # wrapped in the ZS1 envelope
+CODEC_PLAIN = 2   # considered and kept as written: too small, or it did not shrink
+_COMPRESS_MIN_BYTES = 256   # a frame header costs more than a tiny line saves
+_ZSTD_LEVEL = 3             # measured: level 3 is within 1.5% of level 15 at 10x the speed
+_MAX_LINE_BYTES = 512 * 1024 * 1024  # decompression bound: a corrupt frame cannot balloon
+
+
+class UnknownLineCodec(ValueError):
+    """A sealed line carries an envelope version this build does not know."""
+
+
+def pack_line(raw: bytes) -> tuple[bytes, int]:
+    """`(payload, codec)`: the line wrapped in the ZS1 envelope when that is smaller, else
+    the line as it is (codec `CODEC_PLAIN`, a decision, so the re-encode never revisits it).
+    Never inflates a row: a line that does not shrink stays plain."""
+    if len(raw) < _COMPRESS_MIN_BYTES:
+        return raw, CODEC_PLAIN
+    import zstandard
+
+    packed = LINE_ENVELOPE_ZS1 + zstandard.ZstdCompressor(level=_ZSTD_LEVEL).compress(raw)
+    if len(packed) >= len(raw):
+        return raw, CODEC_PLAIN
+    return packed, CODEC_ZS1
+
+
+def unpack_line(plain: bytes) -> bytes:
+    """The line a decrypted payload holds, whichever form it was written in."""
+    if not plain.startswith(LINE_ENVELOPE_PREFIX):
+        return plain
+    if not plain.startswith(LINE_ENVELOPE_ZS1):
+        raise UnknownLineCodec(
+            f"this sealed line uses a format this build does not know ({plain[:4]!r}); "
+            "update osiris before reading it")
+    import zstandard
+
+    line: bytes = zstandard.ZstdDecompressor().decompress(
+        plain[len(LINE_ENVELOPE_ZS1):], max_output_size=_MAX_LINE_BYTES)
+    return line
+
+
+def seal_line(fernet: Any, raw: bytes) -> tuple[bytes, int]:
+    """`(sealed token, codec)`: compress, then encrypt."""
+    payload, codec = pack_line(raw)
+    token: bytes = fernet.encrypt(payload)
+    return token, codec
+
+
+def open_line(fernet: Any, token: bytes) -> bytes:
+    """Decrypt a sealed line and unwrap it. Raises `InvalidToken` exactly as a plain
+    `fernet.decrypt` does, so every caller's existing handling stands."""
+    return unpack_line(fernet.decrypt(token))
+
+
 def _installed_user_unit_env_value(env_name: str) -> str | None:
     """Resolves an installed --user unit's env value: a plain synchronous read of an
     installed --user unit's own `Environment=` line for `env_name`, with systemd's

@@ -391,8 +391,11 @@ def main(argv: list[str] | None = None) -> int:
     if fail:
         print(f"PITR DRILL FAILED: {fail}", file=sys.stderr)
         return 1
+    from scripts.osiris_prune_ladder import mark_base_backup_verified
+
+    mark_base_backup_verified(Path(newest.path))
     print("PITR drill: PASS, the marker written after the base backup is present in "
-          "the restored copy")
+          "the restored copy; the base backup is now recorded as verified")
     return 0
 
 

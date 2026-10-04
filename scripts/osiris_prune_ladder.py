@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""The retention ladder for the DB dump population in both `backups/` and the vault, and
+"""THE CHAIN: the newest verified weekly base backup plus the WAL from its start, a short tail
+of daily dumps, and a one day cache in `backups/` (see "THE CHAIN" below); until a base backup
+has been verified by the PITR drill, the old ladder described next applies unchanged and no
+WAL is removed.
+
+The retention ladder for the DB dump population in both `backups/` and the vault, and
 for `<vault>/basebackups/` (the weekly pg_basebackup taken by osiris_base_backup.sh). A
 base backup is, like a DB dump, complete and independently restorable on its own, so the
 same ladder applies unmodified. It is a classic GFS (grandfather-father-son) thinning
@@ -50,6 +55,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import re
 import sys
 import tarfile
@@ -120,6 +126,100 @@ def plan_prune(
         "keep": [f for f in files_sorted if f.path in keep],
         "remove": [f for f in files_sorted if f.path not in keep],
     }
+
+
+
+# THE CHAIN, NOT A PILE OF FULL COPIES: what is kept is the newest VERIFIED weekly base backup
+# plus the WAL from its start segment onward, with a short tail of daily dumps. A base backup is
+# taken `-Xnone`, so on its own it cannot even start: it needs the WAL archived after it, which
+# is why an older base is dead weight once WAL before the newest verified one is gone, and why
+# nothing in this section removes anything until a base backup has been PROVEN restorable
+# (`.verified` marker, written only by the PITR drill after its restore passed). With none
+# verified, every function below falls back to the old behaviour (the full ladder; all WAL).
+_VERIFIED_SUFFIX = ".verified"
+DUMP_HOT_WINDOW = timedelta(hours=24)      # every dump of the last day stays (4 a day)
+DUMP_DAILY_WINDOW = timedelta(days=3)      # then one per calendar day, then none
+CACHE_WINDOW = timedelta(hours=24)         # backups/ is a one day cache of the vault
+
+
+def verified_marker_path(base_backup: str | Path) -> Path:
+    path = Path(base_backup)
+    return path.with_name(path.name + _VERIFIED_SUFFIX)
+
+
+def mark_base_backup_verified(base_backup: str | Path, *, now: datetime | None = None) -> Path:
+    """Record that this base backup was restored and replayed successfully. Called by the PITR
+    drill after it passed, and nothing else. Atomic. The marker carries the file's size, so a
+    backup that changed afterwards no longer counts as verified."""
+    path = Path(base_backup)
+    marker = verified_marker_path(path)
+    body = {"backup": path.name, "size_bytes": path.stat().st_size,
+            "verified_at": (now or datetime.now(UTC)).isoformat()}
+    tmp = marker.with_name(marker.name + ".tmp")
+    tmp.write_text(json.dumps(body, sort_keys=True) + "\n")
+    tmp.replace(marker)
+    return marker
+
+
+def is_base_backup_verified(base_backup: str | Path) -> bool:
+    path = Path(base_backup)
+    try:
+        body = json.loads(verified_marker_path(path).read_text())
+        return bool(body.get("verified_at")) and body.get("backup") == path.name \
+            and body.get("size_bytes") == path.stat().st_size
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def newest_verified_base(bases: list[DumpFile]) -> DumpFile | None:
+    verified = [f for f in bases if is_base_backup_verified(f.path)]
+    return max(verified, key=lambda f: f.when) if verified else None
+
+
+def plan_prune_basebackups(
+    files: list[DumpFile], *, now: datetime, verified: DumpFile | None,
+) -> dict[str, list[DumpFile]]:
+    """Keep the newest verified base backup and every newer one (they may still be verified);
+    remove older ones, whose WAL is pruned. No verified base: the old ladder, unchanged."""
+    if verified is None:
+        return plan_prune(files, now=now)
+    ordered = sorted(files, key=lambda f: f.when)
+    return {"keep": [f for f in ordered if f.when >= verified.when],
+            "remove": [f for f in ordered if f.when < verified.when]}
+
+
+def plan_prune_dumps(
+    files: list[DumpFile], *, now: datetime, verified: DumpFile | None,
+) -> dict[str, list[DumpFile]]:
+    """The vault's dumps: the last day whole, one per day up to three days, none beyond that.
+    Never removes a dump newer than the newest verified base backup (it is a restore point the
+    chain does not cover), and with no verified base falls back to the old ladder."""
+    if verified is None:
+        return plan_prune(files, now=now)
+    ordered = sorted(files, key=lambda f: f.when)
+    keep: set[str] = set()
+    per_day: dict[str, DumpFile] = {}
+    for f in ordered:
+        age = now - f.when
+        if age <= DUMP_HOT_WINDOW or f.when > verified.when:
+            keep.add(f.path)
+        elif age <= DUMP_DAILY_WINDOW:
+            per_day[_bucket_key(f.when, "daily")] = f  # ordered, so the newest of the day wins
+    keep.update(f.path for f in per_day.values())
+    return {"keep": [f for f in ordered if f.path in keep],
+            "remove": [f for f in ordered if f.path not in keep]}
+
+
+def plan_prune_cache(
+    files: list[DumpFile], *, now: datetime, vault_names: set[str],
+) -> dict[str, list[DumpFile]]:
+    """`backups/`, the local cache: one day. A file older than that goes only when the vault
+    holds a file of the same name, so a dump that exists nowhere else is never lost here."""
+    ordered = sorted(files, key=lambda f: f.when)
+    remove = [f for f in ordered if now - f.when > CACHE_WINDOW
+              and Path(f.path).name in vault_names]
+    gone = {f.path for f in remove}
+    return {"keep": [f for f in ordered if f.path not in gone], "remove": remove}
 
 
 _DUMP_LIKE_SUFFIXES = (".dump", ".sql", ".tar.gz")
@@ -529,19 +629,14 @@ def build_manifest_body(
     return "\n".join(parts)
 
 
-def _kept_backup_start_segments(
-    basebackup_plan: dict[str, list[DumpFile]],
-) -> list[str] | None:
-    """The start segment of every base backup this ladder run still keeps (not every one
-    that exists on disk, some of which are about to be pruned). None as soon as any kept
-    backup's start cannot be read, so WAL retention keeps everything rather than guess."""
-    starts: list[str] = []
-    for f in basebackup_plan["keep"]:
-        seg = _backup_start_segment(f.path)
-        if seg is None:
-            return None
-        starts.append(seg)
-    return starts
+def _verified_start_segments(verified: DumpFile | None) -> list[str] | None:
+    """WAL is kept from the start of the newest VERIFIED base backup. None (keep every
+    segment) when none is verified yet or its label cannot be read: WAL is never pruned on a
+    guess, and never before a base backup has been proven restorable."""
+    if verified is None:
+        return None
+    seg = _backup_start_segment(verified.path)
+    return None if seg is None else [seg]
 
 
 def _compute_plans(
@@ -556,15 +651,19 @@ def _compute_plans(
     dry-run/--apply CLI stays usable with no DB at all, exactly as every existing test
     here already assumes."""
     now = datetime.now(UTC)
+    bases = _scan(vault / "basebackups")
+    verified = newest_verified_base(bases)
+    vault_dumps = _scan(vault)
     plans = {
-        "backups/": plan_prune(_scan(backups), now=now),
-        "vault": plan_prune(_scan(vault), now=now),
-        "vault/basebackups": plan_prune(_scan(vault / "basebackups"), now=now),
+        "backups/": plan_prune_cache(
+            _scan(backups), now=now, vault_names={Path(f.path).name for f in vault_dumps}),
+        "vault": plan_prune_dumps(vault_dumps, now=now, verified=verified),
+        "vault/basebackups": plan_prune_basebackups(bases, now=now, verified=verified),
     }
     chain_plan = plan_prune_transcript_chains(_scan_transcript_chains(vault))
     wal_plan = plan_prune_wal(
         _scan_wal(vault / "wal_archive"),
-        kept_start_segments=_kept_backup_start_segments(plans["vault/basebackups"]))
+        kept_start_segments=_verified_start_segments(verified))
     legacy_plan = plan_prune_legacy_tarballs(_scan_legacy_tarballs(vault))
     return plans, chain_plan, wal_plan, legacy_plan
 
@@ -659,6 +758,7 @@ def _apply(
     for plan in plans.values():
         for f in plan["remove"]:
             Path(f.path).unlink(missing_ok=True)
+            verified_marker_path(f.path).unlink(missing_ok=True)
     for c in chain_plan["remove"]:
         for path in c.files:
             Path(path).unlink(missing_ok=True)

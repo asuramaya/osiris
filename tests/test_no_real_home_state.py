@@ -18,6 +18,7 @@ from src.orchestrator import (
     restic_credential,
     soul_encrypt_progress,
     soul_key,
+    soul_recompress,
 )
 
 
@@ -38,6 +39,7 @@ def _resolved_paths() -> dict[str, Path]:
         "offload receipts": offload_runner._receipts_path(),
         "recovery copies receipts": recovery_copies._receipts_path(),
         "encryption progress": soul_encrypt_progress._progress_path(),
+        "recompress progress": soul_recompress._progress_path(),
         "restore drill receipts": soul_key._restore_drill_receipts_path(),
         "recovery verify receipt": soul_key._verify_receipt_path(),
         "graph snapshot": graph_stream.snapshot_file_path(),
@@ -47,7 +49,7 @@ def _resolved_paths() -> dict[str, Path]:
 _NAMES = [
     "credential store", "soul key (logical)", "soul key (credential)",
     "soul key recovery file", "backup password (logical)", "backup password (credential)",
-    "offload receipts", "recovery copies receipts", "encryption progress",
+    "offload receipts", "recovery copies receipts", "encryption progress", "recompress progress",
     "restore drill receipts", "recovery verify receipt", "graph snapshot",
 ]
 

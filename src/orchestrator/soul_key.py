@@ -133,12 +133,14 @@ async def soul_key_status(
     `rp_id`: the live `soul_key.rp_id` setting, surfaced here so the console reads it off
     this SAME route instead of hard-coding a second copy."""
     from src.ingest import soul_crypto
-    from src.orchestrator import soul_encrypt_progress
+    from src.orchestrator import soul_encrypt_progress, soul_recompress
     from src.orchestrator.settings_service import get_setting
 
     out = soul_crypto.soul_key_status(path=path)
     out["rp_id"] = (await get_setting(pool, "soul_key.rp_id"))["value"]
     out["tpm"] = soul_crypto.tpm_facts()
+    out["compression"] = soul_recompress.shape_compression(
+        soul_recompress.read_progress(), key_present=bool(out["present"]))
     record = soul_encrypt_progress.read_progress()
     total = None
     if out["present"] and not record.get("rows_total"):
