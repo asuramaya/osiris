@@ -41,7 +41,13 @@ from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
 from src.ingest.harness import HarnessAdapter
 from src.ingest.sessions import _COMPACT_BOUNDARY_MARKERS
-from src.ingest.soul_crypto import SoulKeyMissing, get_soul_fernet, is_encrypted
+from src.ingest.soul_crypto import (
+    SoulKeyMissing,
+    get_soul_fernet,
+    is_encrypted,
+    open_line,
+    seal_line,
+)
 
 _log = logging.getLogger("osiris.soul_store")
 
@@ -327,7 +333,7 @@ def _hash_rows(
 
 def _encrypt_rows(
     rows: list[tuple[str, str, int, bytes, str, str | None]],
-) -> list[tuple[str, str, int, bytes, str, str | None]]:
+) -> list[tuple[str, str, int, bytes, str, str | None, int]]:
     """ENCRYPTION AT REST: applied to `_hash_rows`'s own OUTPUT, never inside it.
     `_hash_rows` is dual-purpose (row construction for a write, AND
     `_iter_verified_lines`'s cold-tier re-verification, which recomputes the chain over
@@ -345,14 +351,22 @@ def _encrypt_rows(
     since an ingest loop can hit this thousands of times a minute on a busy box), and
     every row in THIS batch writes as plain `raw_line` (`is_encrypted()`'s own prefix
     check already tells every reader apart from real ciphertext, the same fallback
-    legacy pre-encryption rows have always used)."""
+    legacy pre-encryption rows have always used).
+
+    COMPRESS BEFORE ENCRYPT (storage redesign): each line is compressed, then sealed, and
+    the row carries a seventh field, the codec, which the INSERT stores in `soul_lines.codec`
+    (0 = no key, so plain; the background re-encode treats that as work to do once a key
+    exists). `line_hash` is untouched: it stays over the plaintext line."""
     try:
         fernet = get_soul_fernet()
     except SoulKeyMissing as exc:
         _warn_soul_key_missing_once(exc)
-        return rows
-    return [(harness, anchor_sid, idx, fernet.encrypt(raw_line), line_hash, prev_hash)
-           for harness, anchor_sid, idx, raw_line, line_hash, prev_hash in rows]
+        return [(*row, 0) for row in rows]
+    sealed: list[tuple[str, str, int, bytes, str, str | None, int]] = []
+    for harness, anchor_sid, idx, raw_line, line_hash, prev_hash in rows:
+        token, codec = seal_line(fernet, raw_line)
+        sealed.append((harness, anchor_sid, idx, token, line_hash, prev_hash, codec))
+    return sealed
 
 
 def _cold_content_bytes(harness: str, anchor_sid: str, lines: list[bytes]) -> bytes:
@@ -702,16 +716,16 @@ class SoulStore:
                 rows.append((harness, anchor_sid, idx, raw_line, line_hash, prev_hash))
                 prev_hash = line_hash
                 idx += 1
-            rows = _encrypt_rows(rows)
+            sealed = _encrypt_rows(rows)
             async with self.pool.acquire() as conn:
                 async with conn.transaction():
                     await conn.executemany(
                         "INSERT INTO soul_lines "
                         "   (harness, anchor_sid, line_idx, raw_line, line_hash, "
-                        "    prev_hash) "
-                        "VALUES ($1, $2, $3, $4, $5, $6) "
+                        "    prev_hash, codec) "
+                        "VALUES ($1, $2, $3, $4, $5, $6, $7) "
                         "ON CONFLICT (harness, anchor_sid, line_idx) DO NOTHING",
-                        rows,
+                        sealed,
                     )
                     # THE CHECKPOINT RACE: same connection, still inside the SAME
                     # transaction as the soul_lines insert above. A process death
@@ -851,16 +865,16 @@ class SoulStore:
         lines = [_crush_line_bytes(_crush_row_dict(r)) for r in new_rows]
         hashed, next_idx, next_prev = _hash_rows(
             _CRUSH_HARNESS, anchor_sid, lines, idx, prev_hash)
-        hashed = _encrypt_rows(hashed)
+        sealed_hashed = _encrypt_rows(hashed)
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.executemany(
                     "INSERT INTO soul_lines "
                     "   (harness, anchor_sid, line_idx, raw_line, line_hash, "
-                    "    prev_hash) "
-                    "VALUES ($1, $2, $3, $4, $5, $6) "
+                    "    prev_hash, codec) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, $7) "
                     "ON CONFLICT (harness, anchor_sid, line_idx) DO NOTHING",
-                    hashed,
+                    sealed_hashed,
                 )
                 await self._checkpoint(
                     _CRUSH_HARNESS, anchor_sid, db_path, next_idx, next_prev, conn=conn)
@@ -1041,15 +1055,16 @@ class SoulStore:
             all_rows.extend(rows)
         if not all_rows:
             return 0
-        all_rows = _encrypt_rows(all_rows)
+        sealed_all = _encrypt_rows(all_rows)
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.executemany(
                     "INSERT INTO soul_lines "
-                    "   (harness, anchor_sid, line_idx, raw_line, line_hash, prev_hash) "
-                    "VALUES ($1, $2, $3, $4, $5, $6) "
+                    "   (harness, anchor_sid, line_idx, raw_line, line_hash, prev_hash, "
+                    "    codec) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, $7) "
                     "ON CONFLICT (harness, anchor_sid, line_idx) DO NOTHING",
-                    all_rows,
+                    sealed_all,
                 )
                 await conn.execute(
                     "INSERT INTO soul_sessions "
@@ -1161,7 +1176,7 @@ class SoulStore:
             if not rows:
                 break
             seen_any = True
-            raws = [(fernet.decrypt(rl) if is_encrypted(rl) else rl)
+            raws = [(open_line(fernet, rl) if is_encrypted(rl) else rl)
                     for rl in (bytes(row["raw_line"]) for row in rows)]
             total, count, lines_total, last_boundary_bytes, last_boundary_lines = (
                 _accumulate_resume_diagnostics(
@@ -1283,7 +1298,7 @@ class SoulStore:
                 raw = bytes(row["raw_line"])
                 if is_encrypted(raw):
                     try:
-                        plaintext = fernet.decrypt(raw)
+                        plaintext = open_line(fernet, raw)
                     except InvalidToken:
                         raise _ChainBroken({
                             "error": f"decryption failed at line {i}: no configured key "
@@ -1455,7 +1470,7 @@ class SoulStore:
                 raw = bytes(row["raw_line"])
                 if is_encrypted(raw):
                     try:
-                        plaintext = fernet.decrypt(raw)
+                        plaintext = open_line(fernet, raw)
                     except InvalidToken:
                         return False
                 else:
@@ -1798,7 +1813,7 @@ class SoulStore:
                                      "content that cannot be verified",
                             "verified_through": i - 1}
                 try:
-                    raw = fernet.decrypt(bytes(row["raw_line"]))
+                    raw = open_line(fernet, bytes(row["raw_line"]))
                 except InvalidToken:
                     return {"anchor_sid": anchor_sid, "folded": False,
                             "error": f"decryption failed at line {i}: no configured "

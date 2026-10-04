@@ -1440,6 +1440,25 @@ async def soul_encrypt_heartbeat(ctx: dict[str, Any]) -> int:
     return int(record.get("rows_done", 0)) - before
 
 
+async def soul_recompress_heartbeat(ctx: dict[str, Any]) -> int:
+    """THE BACKGROUND RE-ENCODE: compress the transcript lines stored before lines were
+    compressed (`soul_recompress.recompress_tick` holds all the logic). It needs the key to
+    open each sealed line, so a missing key fails loudly here like every other job (the
+    boot gate refuses without one), and it can be switched off with
+    OSIRIS_SOUL_RECOMPRESS_DISABLED. A cheap file read once the pass has finished. Returns
+    the rows rewritten this tick."""
+    from src.ingest.soul_crypto import get_soul_fernet
+    from src.orchestrator import soul_recompress
+
+    if soul_recompress.disabled():
+        return 0
+    actions: Actions = ctx["cascade"].actions
+    fernet = get_soul_fernet()
+    before = int(soul_recompress.read_progress().get("rows_done", 0))
+    record = await soul_recompress.recompress_tick(actions.pool, fernet)
+    return int(record.get("rows_done", 0)) - before
+
+
 async def soul_key_tpm_heartbeat(ctx: dict[str, Any]) -> int:
     """THE TPM UPGRADE, AUTOMATIC: a key sealed to the host alone moves onto the machine's
     TPM as soon as this process can use the device (the user joined the tss group and the
@@ -1806,6 +1825,10 @@ class WorkerSettings:
         # a bounded slice of the still-plaintext rows, throttled to at most half duty so live
         # ingest is never starved; a no-op file read once everything is encrypted.
         cron(watched(soul_encrypt_heartbeat, every=30), second={10, 40}, timeout=120,
+             run_at_startup=True),
+        # THE BACKGROUND RE-ENCODE (storage redesign): every 30s, a bounded, throttled slice of
+        # the transcript lines stored before compression existed; a file read once finished.
+        cron(watched(soul_recompress_heartbeat, every=30), second={25, 55}, timeout=120,
              run_at_startup=True),
         cron(watched(soul_key_tpm_heartbeat, every=900), minute={4, 19, 34, 49},
              second={20}, timeout=60, run_at_startup=True),
