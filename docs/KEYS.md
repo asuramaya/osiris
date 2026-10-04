@@ -248,6 +248,17 @@ before and after, the ratio). Rows the current key cannot open are skipped and c
 altered, and every update is a compare-and-swap on the exact stored bytes, so a key rotation or a
 live write is never overwritten.
 
+A second, smaller form uses a trained dictionary (`ZS2`). Transcript lines are short and their
+keys repeat on every line, so zstd with a dictionary learned from a sample of the real lines
+stores them in roughly a third of the original space, against about a half without one. The worker
+trains the dictionary once, when the store holds enough lines (5,000), before it starts the
+re-encode, so the existing rows go straight to the best form. The dictionary is derived from
+private text, so it is stored encrypted (`soul_dicts`), re-sealed with the lines when the key
+rotates, and held decrypted only in memory; each line names its dictionary, so an older one stays
+readable as long as any line uses it. Plain, `ZS1` and `ZS2` lines all open through the same code.
+`OSIRIS_SOUL_DICT_DISABLED=1` keeps new lines in the plain `ZS1` form. A dictionary the worker
+cannot find fails the read loudly, never with garbage.
+
 Two things to know:
 
 - **The disk file shrinks later.** Dumps and every backup shrink as soon as rows are re-encoded

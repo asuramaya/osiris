@@ -1476,6 +1476,9 @@ async def soul_recompress_heartbeat(ctx: dict[str, Any]) -> int:
         return 0
     actions: Actions = ctx["cascade"].actions
     fernet = get_soul_fernet()
+    # train the compression dictionary first (once, when the store has enough lines), so the
+    # existing rows go straight to the dictionary form instead of being rewritten twice
+    await soul_recompress.maybe_train_dictionary(actions.pool, fernet)
     before = int(soul_recompress.read_progress().get("rows_done", 0))
     record = await soul_recompress.recompress_tick(actions.pool, fernet)
     return int(record.get("rows_done", 0)) - before

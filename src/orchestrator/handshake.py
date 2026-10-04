@@ -30,6 +30,7 @@ from cryptography.fernet import InvalidToken
 from src.actions.core import Actions
 from src.ingest.sessions import locate_current_transcript
 from src.ingest.soul_crypto import get_soul_fernet, is_encrypted, open_line
+from src.ingest.soul_dicts import ensure_dictionaries
 from src.ingest.transcript_store import identity_reading
 from src.orchestrator import forks, mounts
 from src.orchestrator.agents import register_agent, resolve_identity
@@ -135,6 +136,7 @@ async def _find_anchor_sid_containing(
     Ordered by `(anchor_sid, line_idx)` so a resumable/idempotent re-scan is possible
     in principle, though this call never actually resumes one (it always runs once,
     start to finish, per `compact_seat` invocation)."""
+    await ensure_dictionaries(pool)
     fernet = get_soul_fernet()
     needle_bytes = needle.encode()
     cursor: tuple[str, int] | None = None

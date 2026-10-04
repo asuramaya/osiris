@@ -127,6 +127,9 @@ _RESET_TABLES = (
     # content for every other test reusing the same id, silently, for the rest of the
     # run.
     "soul_lines", "soul_sessions",
+    # soul_dicts (the trained compression dictionaries) is FK-free and holds sealed bytes; a
+    # dictionary one test trained must never be the active one for the next
+    "soul_dicts",
     # soul_lines_cold (the cold tier): the third instance of this exact omission
     # class, caught live while building the encryption key-rotation path:
     # rewrap_soul_lines_key's own dry-run census, run against the shared suite-wide
@@ -654,6 +657,16 @@ def _no_real_key_setup(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest
         return "restore drills do not run inside tests unless a test injects its own"
 
     monkeypatch.setattr("src.orchestrator.scheduled_drill._real_run_drill", _no_real_drill)
+
+
+@pytest.fixture(autouse=True)
+def _no_loaded_soul_dictionaries() -> None:
+    """A compression dictionary lives decrypted in process memory; one test's must never be
+    the active one (or even known) in the next, or a later test would write a format its own
+    database cannot read back."""
+    from src.ingest import soul_crypto
+
+    soul_crypto.clear_dictionaries()
 
 
 @pytest.fixture(autouse=True)
