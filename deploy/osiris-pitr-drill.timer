@@ -1,0 +1,11 @@
+[Unit]
+Description=Osiris weekly point-in-time restore drill (Sunday, after the base backup)
+
+[Timer]
+# 02:00 base backup, 03:00 prune, then this; the longest it can run (6h hard stop) ends before
+# Monday 05:00 preflight.
+OnCalendar=Sun *-*-* 05:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

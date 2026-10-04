@@ -27,6 +27,8 @@ docstring states for 'local'."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import fcntl
 import json
 import os
 import subprocess
@@ -117,7 +119,34 @@ def _run_restic_backup(
         return f"{type(exc).__name__}: {exc}"
 
 
+def _lock_path() -> Path:
+    return _receipts_path().with_name("offload_tick.lock")
+
+
 async def run_offload_tick(pool: asyncpg.Pool, *, vault: Path | None = None) -> dict[str, Any]:
+    """One tick, never two at once: a second tick (the 15 minute timer firing while a tick
+    started by hand, or a long first copy, is still running) would start a second restic
+    backup into the same repository. The tick holds an exclusive lock on a file beside the
+    receipts for its whole run; a tick that cannot take it returns at once with
+    `skipped: "already running"` and does nothing. The lock belongs to the process, so a
+    crashed tick never leaves it held."""
+    lock_path = _lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return {"skipped": "already running", "targets": []}
+        try:
+            return await _run_offload_tick_locked(pool, vault=vault)
+        finally:
+            with contextlib.suppress(OSError):
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+async def _run_offload_tick_locked(
+    pool: asyncpg.Pool, *, vault: Path | None = None,
+) -> dict[str, Any]:
     """ONE TICK, meant to be `osiris-offload.timer`'s own `ExecStart`, opportunistic
     (never blocks, never fails the caller): for every ENABLED `offload_targets[]`
     row that is PRESENT right now, runs one restic backup, records a receipt.

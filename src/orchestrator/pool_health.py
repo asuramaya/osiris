@@ -86,7 +86,6 @@ async def pg_activity_by_app(pool: asyncpg.Pool) -> dict[str, Any]:
         "fixed_budget": fixed_budget,
         "headroom": (max_connections - fixed_budget) if max_connections is not None else None,
         "pg_autotune": await _last_scheduled_run(pool, "job:pg-autotune"),
-        "retention_reaper": await _last_scheduled_run(pool, "job:retention-reaper"),
         # THE ANSWER pg_stat_activity structurally cannot give:
         # queueing for a free connection happens client-side, before any backend is
         # touched, so it's invisible to any Postgres-side view, src/db/pool.py's own

@@ -11,7 +11,7 @@ NOT wrapped by /fleet: `.claude/commands/fleet.md` calls the `fleet`/`fleet_dige
 tools, never this script (an earlier version of this docstring claimed otherwise and was
 wrong; verified directly against the command file). DEAD AS A PROGRAM, LIVE AS A
 PRECEDENT: no systemd unit or CLI subcommand runs it today, but
-osiris_retention_reaper/osiris_pg_autotune/osiris_smoke/osiris_preflight and
+osiris_pg_autotune/osiris_smoke/osiris_preflight and
 pool_health.py all cite it BY NAME for its deferred-import pattern and the `job:%`
 sick-job convention, so deleting it orphans those citations. It stays for the case
 (task #97) where a vendor-neutral arrival with no statusline and no MCP surface still
