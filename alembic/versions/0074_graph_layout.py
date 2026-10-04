@@ -1,7 +1,7 @@
 """graph_layout: where the layout heartbeat's positions live (storage redesign S13)
 
-Revision ID: 0073
-Revises: 0072
+Revision ID: 0074
+Revises: 0073
 
 The layout heartbeat used to store each object's position as three ordinary property
 assertions (graph_x, graph_y, graph_layout_v), superseding the previous row on every
@@ -17,8 +17,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0073"
-down_revision = "0072"
+revision = "0074"
+down_revision = "0073"
 branch_labels = None
 depends_on = None
 

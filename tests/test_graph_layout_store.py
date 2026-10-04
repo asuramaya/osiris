@@ -1,6 +1,6 @@
 """A graph position is a current value, not a fact with a history. The layout heartbeat keeps
 one graph_layout row per object (upserted in place); the three property assertions it used to
-write on every re-layout (graph_x, graph_y, graph_layout_v) are copied across by the 0073
+write on every re-layout (graph_x, graph_y, graph_layout_v) are copied across by the 0074
 upgrade and then retired from the assertions table."""
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ OLD = NOW - timedelta(days=30)
 
 def _migration_module() -> Any:
     spec = importlib.util.spec_from_file_location(
-        "m0073", ROOT / "alembic" / "versions" / "0073_graph_layout.py")
+        "m0074", ROOT / "alembic" / "versions" / "0074_graph_layout.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
