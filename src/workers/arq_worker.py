@@ -1238,11 +1238,12 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     docstring — measured live 2026-09-08: outbox 803 MB, audit_log 1.2 GB, neither ever
     pruned), so this DELETEs (execute=True, batched — the acting logic lives entirely in
     retention.py, never duplicated here) published outbox rows and audit_log rows older
-    than 90 days, once a day (not every-15-min like this file's other siblings — a
-    multi-million-row table does not need that granularity, and the operator's own
-    acceptance test is "flat over a week", not "flat over 15 minutes"). A no-op unless
-    osiris_retention_heartbeat_enabled (TRUE BY DEFAULT, a named exception to this file's
-    dark-by-default convention — the operator asked for this to RUN, not merely exist).
+    than their windows (outbox 30 days, audit_log 90), once a day (not every-15-min like this
+    file's other siblings — a multi-million-row table does not need that granularity, and
+    the operator's own acceptance test is "flat over a week", not "flat over 15 minutes").
+    A no-op unless osiris_retention_heartbeat_enabled (TRUE BY DEFAULT, a named exception
+    to this file's dark-by-default convention — the operator asked for this to RUN, not
+    merely exist).
 
     A DESK RECEIPT EVERY RUN (the operator's own explicit acceptance: "the first run's
     counts on the desk"), unlike every sibling above's "log only when something happened"
@@ -1254,7 +1255,11 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     line — the other table's run is independent, same "one hiccup never sinks a sibling"
     discipline as classification_laws_heartbeat's four sub-sweeps."""
     from src.orchestrator.mailbox import send_message
-    from src.orchestrator.retention import audit_log_retention, outbox_retention
+    from src.orchestrator.retention import (
+        OUTBOX_RETENTION_DAYS,
+        audit_log_retention,
+        outbox_retention,
+    )
     from src.orchestrator.settings_service import settings_with_overlay
 
     actions: Actions = ctx["cascade"].actions
@@ -1265,7 +1270,7 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     lines: list[str] = []
     deleted = 0
     try:
-        outbox = await outbox_retention(pool, days=90, execute=True)
+        outbox = await outbox_retention(pool, days=OUTBOX_RETENTION_DAYS, execute=True)
     except Exception as exc:  # a DB hiccup must not kill the cron
         _log.warning("outbox retention heartbeat failed: %r", exc)
     else:
@@ -1437,6 +1442,25 @@ async def soul_encrypt_heartbeat(ctx: dict[str, Any]) -> int:
     fernet = get_soul_fernet()
     before = int(soul_encrypt_progress.read_progress().get("rows_done", 0))
     record = await soul_encrypt_progress.encrypt_tick(actions.pool, fernet)
+    return int(record.get("rows_done", 0)) - before
+
+
+async def soul_recompress_heartbeat(ctx: dict[str, Any]) -> int:
+    """THE BACKGROUND RE-ENCODE: compress the transcript lines stored before lines were
+    compressed (`soul_recompress.recompress_tick` holds all the logic). It needs the key to
+    open each sealed line, so a missing key fails loudly here like every other job (the
+    boot gate refuses without one), and it can be switched off with
+    OSIRIS_SOUL_RECOMPRESS_DISABLED. A cheap file read once the pass has finished. Returns
+    the rows rewritten this tick."""
+    from src.ingest.soul_crypto import get_soul_fernet
+    from src.orchestrator import soul_recompress
+
+    if soul_recompress.disabled():
+        return 0
+    actions: Actions = ctx["cascade"].actions
+    fernet = get_soul_fernet()
+    before = int(soul_recompress.read_progress().get("rows_done", 0))
+    record = await soul_recompress.recompress_tick(actions.pool, fernet)
     return int(record.get("rows_done", 0)) - before
 
 
@@ -1806,6 +1830,10 @@ class WorkerSettings:
         # a bounded slice of the still-plaintext rows, throttled to at most half duty so live
         # ingest is never starved; a no-op file read once everything is encrypted.
         cron(watched(soul_encrypt_heartbeat, every=30), second={10, 40}, timeout=120,
+             run_at_startup=True),
+        # THE BACKGROUND RE-ENCODE (storage redesign): every 30s, a bounded, throttled slice of
+        # the transcript lines stored before compression existed; a file read once finished.
+        cron(watched(soul_recompress_heartbeat, every=30), second={25, 55}, timeout=120,
              run_at_startup=True),
         cron(watched(soul_key_tpm_heartbeat, every=900), minute={4, 19, 34, 49},
              second={20}, timeout=60, run_at_startup=True),

@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from src.actions.core import Actions
-from src.ingest.soul_crypto import get_soul_fernet
+from src.ingest.soul_crypto import get_soul_fernet, open_line
 from src.ingest.soul_store import (
     SoulStore,
     _addressable_entries,
@@ -70,7 +70,7 @@ async def test_ingest_stores_every_line_verbatim(store: SoulStore, tmp_path: Pat
         "SELECT line_idx, raw_line FROM soul_lines WHERE harness='claude-code' "
         "AND anchor_sid='deadbeef' ORDER BY line_idx")
     fernet = get_soul_fernet()
-    assert [fernet.decrypt(bytes(r["raw_line"])).decode() for r in rows] == lines
+    assert [open_line(fernet, bytes(r["raw_line"])).decode() for r in rows] == lines
     assert [r["line_idx"] for r in rows] == list(range(5))
     # ENCRYPTED AT REST: the stored bytes are never the plaintext, confirming this
     # isn't accidentally a no-op Fernet passthrough.
@@ -1054,7 +1054,7 @@ async def test_splice_sources_chains_two_files_into_one(
         "SELECT line_idx, raw_line FROM soul_lines WHERE harness='claude-code' "
         "AND anchor_sid='splicedsid' ORDER BY line_idx")
     fernet = get_soul_fernet()
-    assert [fernet.decrypt(bytes(r["raw_line"])).decode() for r in rows] == lines
+    assert [open_line(fernet, bytes(r["raw_line"])).decode() for r in rows] == lines
     assert [r["line_idx"] for r in rows] == list(range(10))
     assert await store.verify_chain("splicedsid") is True
 
@@ -1495,7 +1495,7 @@ async def test_hot_read_falls_back_to_legacy_plaintext(
     lines = _synthetic_lines(5)
     p = _write_transcript(tmp_path / "t.jsonl", lines)
     await store.ingest_path(str(p), "legacyhot1")
-    plaintext_line = fernet.decrypt(await store.pool.fetchval(
+    plaintext_line = open_line(fernet, await store.pool.fetchval(
         "SELECT raw_line FROM soul_lines WHERE anchor_sid='legacyhot1' AND line_idx=2"))
     await store.pool.execute(
         "UPDATE soul_lines SET raw_line=$1 WHERE anchor_sid='legacyhot1' AND line_idx=2",
@@ -1542,7 +1542,7 @@ async def test_verify_round_trip_sample_reports_the_legacy_count(
     fernet = get_soul_fernet()
     p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(3))
     await store.ingest_path(str(p), "legacyrt01")
-    plaintext_line = fernet.decrypt(await store.pool.fetchval(
+    plaintext_line = open_line(fernet, await store.pool.fetchval(
         "SELECT raw_line FROM soul_lines WHERE anchor_sid='legacyrt01' AND line_idx=0"))
     await store.pool.execute(
         "UPDATE soul_lines SET raw_line=$1 WHERE anchor_sid='legacyrt01' AND line_idx=0",
@@ -1957,7 +1957,7 @@ async def test_ingest_crush_session_stores_every_message_verbatim(
         "SELECT line_idx, raw_line FROM soul_lines WHERE harness='crush' "
         "AND anchor_sid='sessa000' ORDER BY line_idx")
     assert [r["line_idx"] for r in rows] == list(range(5))
-    decoded = json.loads(get_soul_fernet().decrypt(bytes(rows[0]["raw_line"])))
+    decoded = json.loads(open_line(get_soul_fernet(), bytes(rows[0]["raw_line"])))
     assert decoded["session_id"] == "sess-a"
     assert decoded["id"] == "msg-0"
     assert decoded["parts"] == '[{"type":"text","data":{"text":"line 0"}}]'
@@ -2290,7 +2290,7 @@ async def test_encrypt_existing_soul_lines_migrates_plaintext_rows(
     fernet = get_soul_fernet()
     # simulate a LEGACY plaintext row (written before this build ever existed) by
     # overwriting one already-encrypted row with the bare plaintext it decrypts to
-    plaintext_line = fernet.decrypt(await store.pool.fetchval(
+    plaintext_line = open_line(fernet, await store.pool.fetchval(
         "SELECT raw_line FROM soul_lines WHERE anchor_sid='migrate01' AND line_idx=2"))
     await store.pool.execute(
         "UPDATE soul_lines SET raw_line=$1 WHERE anchor_sid='migrate01' AND line_idx=2",
@@ -2348,7 +2348,7 @@ async def test_encrypt_existing_soul_lines_reports_batches_progress_and_elapsed(
     fernet = get_soul_fernet()
     # all 5 rows start as legacy plaintext, forcing every batch to do real work
     for idx in range(5):
-        plaintext_line = fernet.decrypt(await store.pool.fetchval(
+        plaintext_line = open_line(fernet, await store.pool.fetchval(
             "SELECT raw_line FROM soul_lines WHERE anchor_sid='migrate-progress' "
             "AND line_idx=$1", idx))
         await store.pool.execute(

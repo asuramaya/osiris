@@ -233,6 +233,31 @@ uv run python scripts/osiris_encrypt_soul_lines.py --apply  # actually re-write 
 Both are safe to run at any time, including in the middle of a deploy against a process that
 is still actively writing new rows.
 
+### Compression of stored transcript lines
+
+An encrypted line cannot be compressed, so each transcript line is compressed (zstd, level 3)
+**before** it is encrypted. The compressed form sits inside the encryption in a small versioned
+envelope (`ZS1`), so a line stored the old way and a line stored the new way are told apart from
+the decrypted bytes alone, and both are read by the same code. A line shorter than 256 bytes, or
+one that does not shrink, is stored as it always was.
+
+New lines are compressed as they are written. The lines already in the database are re-encoded by
+the worker in the background, a few hundred at a time at no more than half duty, resumable after a
+restart and visible in `osiris soul-key status` under `compression` (rows done and remaining, bytes
+before and after, the ratio). Rows the current key cannot open are skipped and counted, never
+altered, and every update is a compare-and-swap on the exact stored bytes, so a key rotation or a
+live write is never overwritten.
+
+Two things to know:
+
+- **The disk file shrinks later.** Dumps and every backup shrink as soon as rows are re-encoded
+  (they hold live rows only). The table's own file shrinks at the next `VACUUM FULL` or
+  `pg_repack`, which is a deliberate, scheduled step and not part of this pass.
+- **It is forward-only.** Once a row holds the envelope, a build without the reader cannot read
+  it, so a rollback to an older release has to stop the re-encode first. Set
+  `OSIRIS_SOUL_RECOMPRESS_DISABLED=1` in the worker's environment to stop new slices; nothing is
+  lost, the pass resumes from its saved position.
+
 ## The restic password
 
 `osiris restic-key <status|init> [flags]` manages the second credential under the exact same

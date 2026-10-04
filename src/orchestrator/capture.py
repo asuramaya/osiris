@@ -4938,6 +4938,9 @@ async def _verify_transcript_line(
     `ingested_at` (this stage stores raw bytes only, no semantic parse of an embedded
     per-line timestamp; this is the store's own observation time, not a claim about
     when the words were first typed)."""
+    from cryptography.fernet import InvalidToken
+
+    from src.ingest.soul_crypto import SoulKeyMissing, get_soul_fernet, is_encrypted, open_line
     from src.ingest.soul_store import _chain_hash
     row = await pool.fetchrow(
         "SELECT raw_line, line_hash, prev_hash, ingested_at FROM soul_lines "
@@ -4947,6 +4950,14 @@ async def _verify_transcript_line(
         return {"verified": False, "reason": f"no soul_lines row at harness={harness!r}, "
                 f"anchor_sid={anchor_sid!r}, line_idx={line_idx}"}
     raw_line = bytes(row["raw_line"])
+    if is_encrypted(raw_line):
+        # the stored line is sealed (and, since the storage redesign, compressed inside the
+        # seal); the chain hash is over the plain line, so open it first
+        try:
+            raw_line = open_line(get_soul_fernet(), raw_line)
+        except (InvalidToken, SoulKeyMissing) as exc:
+            return {"verified": False, "reason": "this line is sealed and the configured "
+                    f"key cannot open it ({type(exc).__name__}); it cannot be verified"}
     if line_idx > 0:
         prior_hash = await pool.fetchval(
             "SELECT line_hash FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
