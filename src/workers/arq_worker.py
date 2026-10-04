@@ -1230,6 +1230,10 @@ def _retention_receipt_line(table: str, deleted: int, cutoff: str, days: int = 9
     return f"{table}: removed {deleted} {noun} older than {days} days (cutoff {cutoff})"
 
 
+# How long one retention run may spend retiring the audit rows that duplicate assertions.
+_AUDIT_DUPLICATE_RETIREMENT_SECS = 240.0
+
+
 async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     """THE RETENTION HEARTBEAT (wave 12 item 1, operator's word via Thoth DM 8378: "put
     outbox_retention and audit_log_retention ... on the heartbeat"): outbox/audit_log are
@@ -1253,7 +1257,11 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     line — the other table's run is independent, same "one hiccup never sinks a sibling"
     discipline as classification_laws_heartbeat's four sub-sweeps."""
     from src.orchestrator.mailbox import send_message
-    from src.orchestrator.retention import audit_log_retention, outbox_retention
+    from src.orchestrator.retention import (
+        assert_property_audit_retirement,
+        audit_log_retention,
+        outbox_retention,
+    )
     from src.orchestrator.settings_service import settings_with_overlay
 
     actions: Actions = ctx["cascade"].actions
@@ -1278,6 +1286,22 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     else:
         deleted += audit["deleted"]
         lines.append(_retention_receipt_line("audit_log", audit["deleted"], audit["cutoff"]))
+
+    # One write per fact: retire the audit rows that only restate an assertions row. Bounded
+    # per run (the backlog was millions of rows), so a later run continues where this stopped;
+    # a run with nothing left to remove says nothing.
+    try:
+        dup = await assert_property_audit_retirement(
+            pool, execute=True, max_seconds=_AUDIT_DUPLICATE_RETIREMENT_SECS)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("audit_log duplicate retirement failed: %r", exc)
+    else:
+        deleted += dup["deleted"]
+        if dup["deleted"] or not dup["finished"]:
+            noun = "row" if dup["deleted"] == 1 else "rows"
+            more = "" if dup["finished"] else ", more remain for the next run"
+            lines.append(f"audit_log: removed {dup['deleted']} {noun} that only repeated an "
+                         f"assertion{more}")
 
     if lines:
         with contextlib.suppress(Exception):  # the desk being unreachable must not sink the cron

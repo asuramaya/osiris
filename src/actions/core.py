@@ -314,13 +314,21 @@ class Actions:
                 # above — never a new read, since `prior` is exactly the row current_
                 # assertions' anti-join would have excluded anyway.
                 await conn.execute("UPDATE assertions SET is_current=false WHERE id=$1", prior)
-            await self._audit(
-                conn,
-                "assert_property",
-                actor,
-                case_id,
-                {"object_id": str(object_id), "name": name, "supersedes": prior},
-            )
+            # ONE WRITE PER FACT: the assertions row just inserted already records who spoke
+            # (`source_id`), when (`created_at`), what it replaced (`supersedes`), and the
+            # object and name, so an audit row saying the same thing is a second copy of the
+            # same fact (it was 6.6M of the audit table's 7.0M rows). The audit row is kept
+            # only when it adds something the assertions table cannot hold: an `actor` that
+            # is not the source (a caller writing on someone else's behalf). audit_log stays
+            # the record of non-assertion actions.
+            if actor != source_id:
+                await self._audit(
+                    conn,
+                    "assert_property",
+                    actor,
+                    case_id,
+                    {"object_id": str(object_id), "name": name, "supersedes": prior},
+                )
             await self._outbox(conn, "property_added", object_id, case_id, {"name": name})
             return new_id
 

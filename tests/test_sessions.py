@@ -364,12 +364,12 @@ async def test_first_sight_plants_cursor_then_senses_only_forward(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='about_agent'",
         row["object_id"]) == "agent:session1"                        # whom it spoke ABOUT
     assert row["evidence_class"] == "derived"  # an LLM reading is an inference, never more
-    # ...but the MINER stays the ACTOR (audit_log): a mined row is still tellable from a declared
-    # one two ways: the DERIVED grade AND the miner-vs-agent actor. Provenance preserved.
+    # ...and the MINER is the actor too, which the assertion row itself already says: a mined
+    # row is tellable from a declared one by the DERIVED grade AND the miner-vs-agent source.
+    # The write is recorded once, so there is no second audit row restating it.
     assert await actions.pool.fetchval(
-        "SELECT actor FROM audit_log WHERE action='assert_property' "
-        "AND payload->>'object_id' = $1::text ORDER BY id LIMIT 1", str(row["object_id"])
-    ) == "session-miner"
+        "SELECT count(*) FROM audit_log WHERE action='assert_property' "
+        "AND payload->>'object_id' = $1::text", str(row["object_id"])) == 0
     # the object's create event is likewise the miner's, not the agent's
     assert await actions.pool.fetchval(
         "SELECT actor FROM object_events WHERE object_id=$1 AND event_type='create'",

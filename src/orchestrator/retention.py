@@ -100,3 +100,88 @@ async def audit_log_retention(
     if execute:
         return await _apply(pool, "audit_log", _AUDIT_ELIGIBLE, days, batch_size)
     return await _dry_run(pool, "audit_log", _AUDIT_ELIGIBLE, days)
+
+
+# THE DUPLICATE WRITE, RETIRED (storage redesign, one write per fact): every property
+# assertion once also wrote an audit_log row ('assert_property') restating what the
+# assertions row already holds (who spoke, when, what it replaced). Actions.assert_property
+# no longer writes it unless the actor differs from the source; this retires the ones
+# already written. A row goes ONLY when an assertion exists that says the same thing: same
+# object and name, source equal to the audit row's actor, the same transaction timestamp
+# (both columns default to now(), which is fixed per transaction), and the same
+# `supersedes`. An audit row with no such assertion carries information the assertions
+# table lacks (an actor that is not the source, or a fact since removed) and is kept.
+# The rest of the audit table (links, objects, mount drops, ...) is untouched, and nothing
+# here reads or writes the graph.
+#
+# TWO PASSES, because the match key differs. A re-assertion names the row it replaced, so
+# the assertion is found by that id through the `supersedes` index (one row). A FIRST
+# assertion of a triple has no predecessor, so it is found through (object, name), which
+# is cheap only because there is exactly one such row per triple: matching every row that
+# way instead walks chains tens of thousands of rows deep (measured 20 s per 200 rows).
+_ASSERT_AUDIT_MATCH = (
+    " a.source_id = audit_log.actor"
+    " AND a.created_at = audit_log.created_at")
+_ASSERT_AUDIT_PASSES = (
+    # `supersedes` is the id of the row replaced, so it already fixes the object and the
+    # name: equating those too only tempts the planner into the (object, name) index, which
+    # for the busiest chains is tens of thousands of rows deep per lookup.
+    ("chained",
+     "action = 'assert_property' AND audit_log.payload->>'supersedes' IS NOT NULL AND EXISTS ("
+     " SELECT 1 FROM assertions a"
+     " WHERE a.supersedes = (audit_log.payload->>'supersedes')::bigint AND" + _ASSERT_AUDIT_MATCH
+     + ")"),
+    ("first",
+     "action = 'assert_property' AND audit_log.payload->>'supersedes' IS NULL AND EXISTS ("
+     " SELECT 1 FROM assertions a"
+     " WHERE a.object_id = (audit_log.payload->>'object_id')::uuid"
+     " AND a.name = audit_log.payload->>'name' AND a.supersedes IS NULL AND"
+     + _ASSERT_AUDIT_MATCH + ")"),
+)
+
+
+async def assert_property_audit_retirement(
+    pool: asyncpg.Pool, *, execute: bool = False, batch_size: int = 5000,
+    max_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Delete the assert_property audit rows that duplicate an assertions row, in id-ordered
+    batches of `batch_size`, each its own short statement. `execute=False` (the default)
+    counts the first `batch_size * 20` candidates of each pass only (a full count over
+    millions of rows is a long scan), so `eligible` is a floor and `capped` says whether it
+    is the whole answer. `execute=True` deletes; `max_seconds` stops between batches once
+    spent, and the result's `finished` says whether the job ran dry (a later run simply
+    continues from where the table now stands)."""
+    import time
+
+    if not execute:
+        cap = batch_size * 20
+        eligible = 0
+        capped = False
+        for _name, where in _ASSERT_AUDIT_PASSES:
+            n = await pool.fetchval(
+                f"SELECT count(*) FROM (SELECT 1 FROM audit_log WHERE {where} LIMIT $1) t", cap)
+            eligible += n
+            capped = capped or n >= cap
+        return {"table": "audit_log", "action": "assert_property", "eligible": eligible,
+               "capped": capped, "executed": False}
+    started = time.monotonic()
+    deleted = 0
+    finished = True
+    for _name, where in _ASSERT_AUDIT_PASSES:
+        cursor = 0
+        while True:
+            rows = await pool.fetch(
+                "DELETE FROM audit_log WHERE id IN ("
+                f" SELECT id FROM audit_log WHERE id > $1 AND {where}"
+                " ORDER BY id LIMIT $2) RETURNING id", cursor, batch_size)
+            deleted += len(rows)
+            if len(rows) < batch_size:
+                break
+            cursor = max(r["id"] for r in rows)
+            if max_seconds is not None and time.monotonic() - started >= max_seconds:
+                finished = False
+                break
+        if not finished:
+            break
+    return {"table": "audit_log", "action": "assert_property", "deleted": deleted,
+           "finished": finished, "executed": True}
