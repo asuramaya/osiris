@@ -1,7 +1,7 @@
 """soul_dicts: the trained compression dictionaries for soul lines (storage redesign)
 
-Revision ID: 0074
-Revises: 0073
+Revision ID: 0075
+Revises: 0074
 
 A transcript line is small and its JSON keys repeat on every line, so zstd with a dictionary
 trained on a sample of the real lines stores them in roughly half the space plain zstd needs.
@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0074"
-down_revision = "0073"
+revision = "0075"
+down_revision = "0074"
 branch_labels = None
 depends_on = None
 
