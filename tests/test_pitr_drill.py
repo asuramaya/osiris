@@ -274,3 +274,29 @@ def test_soul_encryption_state_reads_the_progress_record_and_never_raises(monkey
 
     monkeypatch.setattr("src.orchestrator.soul_encrypt_progress.read_progress", boom)
     assert drill._soul_encryption_state() == "unknown"
+
+
+# --- a passing drill is the only thing that marks a base backup verified ----------------
+
+def test_a_passing_drill_marks_the_newest_base_backup_verified_and_a_failing_one_does_not(
+    tmp_path: Path, monkeypatch,  # noqa: ANN001
+) -> None:
+    from scripts import osiris_pitr_drill
+    from scripts.osiris_prune_ladder import is_base_backup_verified
+
+    bases = tmp_path / "basebackups"
+    bases.mkdir()
+    old = bases / "osiris-basebackup-20260901-000000.tar.gz"
+    new = bases / "osiris-basebackup-20260908-000000.tar.gz"
+    old.write_bytes(b"old")
+    new.write_bytes(b"new")
+    monkeypatch.setattr(osiris_pitr_drill, "pick_and_ensure_marker", lambda: "message:1")
+
+    monkeypatch.setattr(osiris_pitr_drill, "run_drill", lambda *a, **k: "replay failed")
+    assert osiris_pitr_drill.main(["--vault", str(tmp_path)]) == 1
+    assert not is_base_backup_verified(new)
+
+    monkeypatch.setattr(osiris_pitr_drill, "run_drill", lambda *a, **k: None)
+    assert osiris_pitr_drill.main(["--vault", str(tmp_path)]) == 0
+    assert is_base_backup_verified(new)
+    assert not is_base_backup_verified(old)
