@@ -23,7 +23,13 @@ and the general knowledge graph actually live):
     goes through Actions, which writes an audit_log row atomically with the domain write
     (src/actions/core.py's own docstring: "the domain write, its audit_log row, and any
     [outbox event]"). This alone covers threads, decisions, practices, roadmap, docs, lint,
-    family, portfolio: most of DEFAULT_COMPOSITIONS.
+    family, portfolio: most of DEFAULT_COMPOSITIONS. EXCEPT a property assertion: that
+    write is recorded once, in the assertions table itself, and no longer duplicated here
+    (an audit row only when the actor is not the source), so it has its own marker below.
+  - assertions_hot.id (bigserial, PK-indexed): every new assertion row, which is where an
+    ordinary fact write now lands. New rows are always inserted into the hot table, so
+    its newest id moves on every one; archiving old history to the cold tier never
+    changes it. A no-op re-assertion inserts nothing and never moved the old marker either.
   - fleet_messages.id (bigserial, PK-indexed): new mail. audit_log does NOT cover this:
     send_message is a direct INSERT, outside the Actions/audit_log gate (mail is
     operational state, not graph knowledge).
@@ -77,6 +83,7 @@ import asyncpg
 _WATERMARK_SQL = (
     "SELECT "
     " (SELECT max(id) FROM audit_log) AS audit_log, "
+    " (SELECT max(id) FROM assertions_hot) AS assertions, "
     " (SELECT max(id) FROM fleet_messages) AS fleet_messages, "
     " (SELECT max(mounted_at) FROM agent_mounts) AS agent_mounts, "
     " (SELECT max(id) FROM agent_wakes) AS agent_wakes, "
@@ -102,6 +109,7 @@ async def graph_watermark(pool: asyncpg.Pool) -> dict[str, Any]:
     row = await pool.fetchrow(_WATERMARK_SQL)
     return {
         "audit_log": row["audit_log"],
+        "assertions": row["assertions"],
         "fleet_messages": row["fleet_messages"],
         "agent_mounts": row["agent_mounts"].isoformat() if row["agent_mounts"] else None,
         "agent_wakes": row["agent_wakes"],
