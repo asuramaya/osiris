@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 import numpy as np
 from src.actions.core import Actions
 from src.orchestrator.graph_layout import (
-    _LAYOUT_VERSION_PROP,
+    _LAYOUT_VERSION,
     _MIN_SEPARATION,
     LAST_DECLUMP_WORK,
     _declump,
@@ -252,10 +252,12 @@ async def test_layout_batch_stamps_graph_x_graph_y_and_the_version_marker(
     assert a in positions and b in positions
     assert all(math.isfinite(v) for v in (*positions[a], *positions[b]))
 
-    marker = await actions.pool.fetchval(
-        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name=$2",
-        a, _LAYOUT_VERSION_PROP)
-    assert marker is not None
+    assert await actions.pool.fetchval(
+        "SELECT layout_v FROM graph_layout WHERE object_id=$1", a) == _LAYOUT_VERSION
+    # a position is one row updated in place, never a fact history
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name IN "
+        "('graph_x','graph_y','graph_layout_v')", a) == 0
 
 
 async def test_layout_batch_never_repositions_an_already_positioned_object(
@@ -394,15 +396,12 @@ async def test_layout_batch_separates_many_objects_of_the_same_type_in_one_proje
 async def test_layout_batch_migrates_an_object_placed_under_a_prior_version(
     actions: Actions,
 ) -> None:
-    """An object carrying graph_x/graph_y from an older layout (missing today's version
+    """An object carrying a position from an older layout (missing today's version
     marker) is swept up by the very next tick and re-placed under the current scheme --
     the mechanism a version bump relies on for its one-time migration pass."""
-    from src.orchestrator import graph_layout as gl
-
     oid = await actions.create_or_find_object("Thread", "thread:gl-old-scheme", "test")
-    now = datetime.now(UTC)
-    await actions.assert_property(oid, "graph_x", -999.0, gl.GRAPH_LAYOUT_SOURCE, now, 0.9)
-    await actions.assert_property(oid, "graph_y", -999.0, gl.GRAPH_LAYOUT_SOURCE, now, 0.9)
+    await actions.pool.execute(
+        "INSERT INTO graph_layout (object_id, x, y, layout_v) VALUES ($1, -999, -999, 0)", oid)
 
     assert oid in await unplaced_batch(actions)
     n = await layout_batch(actions, limit=1000)

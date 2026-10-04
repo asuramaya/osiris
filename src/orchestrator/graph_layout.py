@@ -1,8 +1,9 @@
 """THE GRAPH VISUALIZER: extended for NAVIGABLE SPACE, THE
 SERVER, piece A: server-side placement over the WHOLE graph, run incrementally by the
 heartbeat -- positions
-stored as current_assertions (graph_x/graph_y), never computed live in the browser or the
-renderer. This module feeds the /graph endpoints (supernodes/clusters/viewport) and the
+stored in the graph_layout table (one row per object: x, y, layout version), never
+computed live in the browser or the renderer. This module feeds the /graph endpoints
+(supernodes/clusters/viewport) and the
 whole-graph typed-array stream (graph_stream.py).
 
 DECLUMP FIX (the operator's own screenshot of the deployed
@@ -47,12 +48,14 @@ deterministic correction, not another force-simulation step, so the guarantee ho
 regardless of how attraction behaved before it ran.
 
 INCREMENTAL, NEVER REVISITED: unchanged mechanism -- a tick only ever considers objects
-still missing the CURRENT `graph_layout_v` marker, so a re-run over already-placed objects
+still missing the CURRENT layout version, so a re-run over already-placed objects
 moves nothing.
 
-WRITE PATH: unchanged -- graph_x/graph_y/graph_layout_v land as ordinary property
-assertions via one multi-row UPDATE+INSERT per property per tick, safe only because
-GRAPH_LAYOUT_SOURCE is this triple's sole writer.
+WRITE PATH (storage redesign): a position is not a fact with a history, so it is one
+graph_layout row per object, upserted in place, one multi-row statement per tick. It used to
+be three ordinary property assertions (graph_x, graph_y, graph_layout_v) that left a new
+history row per object per re-layout (about 2.1M rows nothing read); retire_layout_history
+removes those.
 
 THE READING LAYER (the operator's own second
 screenshot: clusters far apart, huge cross-cluster bundles). Live measurement: repo:osiris
@@ -166,7 +169,6 @@ way the old sunflower scheme could; see that module's own docstring).
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import uuid
 from collections import defaultdict
@@ -187,7 +189,6 @@ _IDEAL_EDGE_LEN = 60.0
 _MAX_STEP = 10.0
 
 # NAVIGABLE SPACE, piece A additions ---------------------------------------------------
-_LAYOUT_VERSION_PROP = "graph_layout_v"
 _LAYOUT_VERSION = 9  # bump this to force one migration pass over every already-placed object
 _RELAX_ITERATIONS = 6  # "a FEW iterations" -- a nudge on top of the deterministic base,
                        # never enough to erase the sunflower structure
@@ -286,10 +287,10 @@ async def unplaced_batch(actions: Actions, limit: int = _BATCH_SIZE) -> list[uui
     rows = await actions.pool.fetch(
         "SELECT o.id FROM objects o "
         "WHERE o.status NOT IN ('archived','merged','retired') "
-        "  AND NOT EXISTS (SELECT 1 FROM current_assertions a "
-        "    WHERE a.object_id=o.id AND a.name=$2 AND (a.value #>> '{}')::int = $3) "
+        "  AND NOT EXISTS (SELECT 1 FROM graph_layout g "
+        "    WHERE g.object_id=o.id AND g.layout_v = $2) "
         "ORDER BY o.created_at ASC LIMIT $1",
-        limit, _LAYOUT_VERSION_PROP, _LAYOUT_VERSION)
+        limit, _LAYOUT_VERSION)
     return [r["id"] for r in rows]
 
 
@@ -301,14 +302,8 @@ async def positions_for(
     if not ids:
         return {}
     rows = await actions.pool.fetch(
-        "SELECT object_id, name, value #>> '{}' AS v FROM current_assertions "
-        "WHERE object_id = ANY($1::uuid[]) AND name IN ('graph_x','graph_y')",
-        ids)
-    xs: dict[uuid.UUID, float] = {}
-    ys: dict[uuid.UUID, float] = {}
-    for r in rows:
-        (xs if r["name"] == "graph_x" else ys)[r["object_id"]] = float(r["v"])
-    return {oid: (xs[oid], ys[oid]) for oid in xs if oid in ys}
+        "SELECT object_id, x, y FROM graph_layout WHERE object_id = ANY($1::uuid[])", ids)
+    return {r["object_id"]: (float(r["x"]), float(r["y"])) for r in rows}
 
 
 async def _project_and_type(
@@ -967,11 +962,8 @@ _LAYOUT_MOVED_EVENT = "layout_moved"  # see graph_stream.deltas_since's own comm
 async def _bulk_assert_positions(
     actions: Actions, placed: dict[uuid.UUID, tuple[float, float]], observed_at: datetime,
 ) -> None:
-    """Records graph_x, graph_y, and the version marker for a whole tick's batch --
-    append-only and superseding exactly like assert_property (an existing current row for
-    this source+name is flipped non-current, never mutated in place), just covering the
-    batch with one multi-row statement per property instead of one call per object (see
-    the module docstring's WRITE PATH section for why that's safe here).
+    """Records x, y and the layout version for a whole tick's batch: one multi-row upsert
+    into graph_layout (see the module docstring's WRITE PATH section), not a fact history.
 
     THE OUTBOX GAP (confirmed live: a tab already open when a tick lands
     sees the DB genuinely update and never learns about it): bypassing
@@ -979,8 +971,8 @@ async def _bulk_assert_positions(
     /graph/stream/deltas -- which polls the outbox -- could never observe a layout tick,
     not just at first-install-empty-graph (worked around client-side in space.js) but for
     ANY object positioned for the first time while a tab is already watching. Closed here
-    with one more bulk multi-row INSERT into outbox per tick (same discipline as the
-    assertions writes above: one statement, not `len(ids)` round-trips), object_id-keyed,
+    with one bulk multi-row INSERT into outbox per tick (one statement, not `len(ids)`
+    round-trips), object_id-keyed,
     `_LAYOUT_MOVED_EVENT` typed (see that constant's own comment for why not
     'property_added'). graph_stream.deltas_since needs exactly one line changed (widen its
     event_type IN-list) to pick these up: it already resolves x/y per object_id generically
@@ -988,24 +980,17 @@ async def _bulk_assert_positions(
     if not placed:
         return
     ids = list(placed.keys())
-    columns: list[tuple[str, list[object]]] = [
-        ("graph_x", [round(placed[i][0], 2) for i in ids]),
-        ("graph_y", [round(placed[i][1], 2) for i in ids]),
-        (_LAYOUT_VERSION_PROP, [_LAYOUT_VERSION for _ in ids]),
-    ]
+    xs = [round(placed[i][0], 2) for i in ids]
+    ys = [round(placed[i][1], 2) for i in ids]
+    versions = [_LAYOUT_VERSION for _ in ids]
     async with actions.pool.acquire() as conn, conn.transaction():
-        for name, values in columns:
-            await conn.execute(
-                "UPDATE assertions SET is_current=false WHERE object_id = ANY($1::uuid[]) "
-                "  AND name=$2 AND source_id=$3 AND is_current",
-                ids, name, GRAPH_LAYOUT_SOURCE)
-            await conn.execute(
-                "INSERT INTO assertions (object_id, name, value, source_id, observed_at, "
-                "  confidence, is_current) "
-                "SELECT oid, $2, val::jsonb, $3, $4, $5, true "
-                "FROM unnest($1::uuid[], $6::text[]) AS t(oid, val)",
-                ids, name, GRAPH_LAYOUT_SOURCE, observed_at, 0.9,
-                [json.dumps(v) for v in values])
+        await conn.execute(
+            "INSERT INTO graph_layout (object_id, x, y, layout_v, updated_at) "
+            "SELECT oid, x, y, v, $5 FROM unnest($1::uuid[], $2::float8[], $3::float8[], "
+            "  $4::int[]) AS t(oid, x, y, v) "
+            "ON CONFLICT (object_id) DO UPDATE SET x = EXCLUDED.x, y = EXCLUDED.y, "
+            "  layout_v = EXCLUDED.layout_v, updated_at = EXCLUDED.updated_at",
+            ids, xs, ys, versions, observed_at)
         await conn.execute(
             "INSERT INTO outbox (event_type, object_id, payload) "
             "SELECT $2, oid, '{}'::jsonb FROM unnest($1::uuid[]) AS t(oid)",

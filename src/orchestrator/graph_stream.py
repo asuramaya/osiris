@@ -589,10 +589,8 @@ async def fetch_snapshot(pool: asyncpg.Pool) -> bytes:
     watermark, _ = await safe_outbox_ceiling(pool)
     rows = await pool.fetch(
         "SELECT o.id, o.type, o.canonical, o.created_at, "
-        "  (SELECT (a.value #>> '{}')::float8 FROM current_assertions a "
-        "   WHERE a.object_id=o.id AND a.name='graph_x') AS x, "
-        "  (SELECT (a.value #>> '{}')::float8 FROM current_assertions a "
-        "   WHERE a.object_id=o.id AND a.name='graph_y') AS y, "
+        "  (SELECT g.x FROM graph_layout g WHERE g.object_id=o.id) AS x, "
+        "  (SELECT g.y FROM graph_layout g WHERE g.object_id=o.id) AS y, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='handle' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS handle, "
@@ -612,8 +610,7 @@ async def fetch_snapshot(pool: asyncpg.Pool) -> bytes:
         "LEFT JOIN objects ap ON ap.type='SoftwareProject' "
         "  AND ap.canonical = 'repo:' || (pa.value #>> '{}') "
         "WHERE o.status NOT IN ('archived','merged','retired') "
-        "  AND EXISTS (SELECT 1 FROM current_assertions a "
-        "    WHERE a.object_id=o.id AND a.name='graph_x') "
+        "  AND EXISTS (SELECT 1 FROM graph_layout g WHERE g.object_id=o.id) "
         "ORDER BY o.created_at ASC, o.id ASC")
     # MEMBERSHIP FOLLOWS A MERGE: either join above can name a
     # SoftwareProject already folded into a survivor (in_repo minted, or a `project`
@@ -924,11 +921,10 @@ async def deltas_since(
         ") "
         "SELECT DISTINCT ON (r.object_id) "
         "  r.object_id, r.outbox_id, r.event_type, "
-        "  (gx.value #>> '{}')::float8 AS x, (gy.value #>> '{}')::float8 AS y, "
+        "  g.x AS x, g.y AS y, "
         "  max(r.outbox_id) OVER () AS page_max "
         "FROM raw r "
-        "LEFT JOIN current_assertions gx ON gx.object_id=r.object_id AND gx.name='graph_x' "
-        "LEFT JOIN current_assertions gy ON gy.object_id=r.object_id AND gy.name='graph_y' "
+        "LEFT JOIN graph_layout g ON g.object_id=r.object_id "
         "ORDER BY r.object_id, r.outbox_id DESC",
         cursor, limit, ceiling)
     if not rows:

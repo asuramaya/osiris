@@ -191,3 +191,57 @@ async def assert_property_audit_retirement(
             break
     return {"table": "audit_log", "action": "assert_property", "deleted": deleted,
            "finished": finished, "executed": True}
+
+
+# THE LAYOUT HISTORY, RETIRED (storage redesign): the layout heartbeat used to store every
+# object's position as three property assertions (graph_x, graph_y, graph_layout_v), a new
+# row per object per re-layout; about 2.1M rows nothing reads. Positions now live in the
+# graph_layout table. A row is removed only when the layout heartbeat wrote it (its own
+# source) AND the object already has its position in graph_layout, so an object that has
+# not been copied across keeps its assertions until it is.
+_LAYOUT_PROPERTY_NAMES = ("graph_x", "graph_y", "graph_layout_v")
+_LAYOUT_SOURCE = "cron:graph_layout"
+_LAYOUT_WINDOW = 50000
+
+
+async def retire_layout_history(
+    pool: asyncpg.Pool, *, execute: bool = False, window: int = _LAYOUT_WINDOW,
+    max_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Delete the layout heartbeat's graph_x/graph_y/graph_layout_v assertion rows (current
+    and superseded, hot and cold) for every object whose position is in graph_layout, in id
+    windows of `window`. `execute=False` counts the first few windows only; `execute=True`
+    deletes, stopping between windows once `max_seconds` is spent (`finished` says whether
+    the whole id range was covered; a later run continues, and rows already gone cost
+    nothing to skip)."""
+    import time
+
+    high = await pool.fetchval("SELECT max(id) FROM assertions_hot") or 0
+    where = (
+        "name = ANY($3::text[]) AND source_id = $4 AND EXISTS ("
+        " SELECT 1 FROM graph_layout g WHERE g.object_id = {t}.object_id)")
+    if not execute:
+        sample = 0
+        for table in ("assertions_hot", "assertions_cold"):
+            sample += await pool.fetchval(
+                f"SELECT count(*) FROM {table} WHERE id > $1 AND id <= $2 AND "
+                + where.format(t=table), 0, min(window * 4, high),
+                list(_LAYOUT_PROPERTY_NAMES), _LAYOUT_SOURCE)
+        return {"eligible": sample, "sampled": window * 4 < high, "executed": False}
+    started = time.monotonic()
+    deleted = 0
+    lo = 0
+    finished = True
+    while lo < high:
+        hi = lo + window
+        for table in ("assertions_hot", "assertions_cold"):
+            n = await pool.fetchval(
+                f"WITH d AS (DELETE FROM {table} WHERE id > $1 AND id <= $2 AND "
+                + where.format(t=table) + " RETURNING 1) SELECT count(*) FROM d",
+                lo, hi, list(_LAYOUT_PROPERTY_NAMES), _LAYOUT_SOURCE)
+            deleted += n
+        lo = hi
+        if max_seconds is not None and time.monotonic() - started >= max_seconds and lo < high:
+            finished = False
+            break
+    return {"deleted": deleted, "finished": finished, "executed": True}

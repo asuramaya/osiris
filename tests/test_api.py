@@ -224,6 +224,13 @@ async def test_object_edge_counts_is_empty_for_no_ids(client: httpx.AsyncClient)
     assert r.json() == {}
 
 
+async def _place(actions: Actions, oid: Any, x: float, y: float) -> None:
+    """A position as the layout heartbeat stores it: one graph_layout row per object."""
+    await actions.pool.execute(
+        "INSERT INTO graph_layout (object_id, x, y, layout_v) VALUES ($1, $2, $3, 1)",
+        oid, x, y)
+
+
 async def test_object_viewport_returns_only_nodes_inside_the_bounding_box(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
@@ -231,10 +238,8 @@ async def test_object_viewport_returns_only_nodes_inside_the_bounding_box(
     read straight off graph_x/graph_y (wave B item 1's positions)."""
     inside = await actions.create_or_find_object("Thread", "thread:vp-inside", "test")
     outside = await actions.create_or_find_object("Thread", "thread:vp-outside", "test")
-    await actions.assert_property(inside, "graph_x", 10.0, "test", datetime.now(UTC), 1.0)
-    await actions.assert_property(inside, "graph_y", 10.0, "test", datetime.now(UTC), 1.0)
-    await actions.assert_property(outside, "graph_x", 9000.0, "test", datetime.now(UTC), 1.0)
-    await actions.assert_property(outside, "graph_y", 9000.0, "test", datetime.now(UTC), 1.0)
+    await _place(actions, inside, 10.0, 10.0)
+    await _place(actions, outside, 9000.0, 9000.0)
 
     r = await client.get("/objects/viewport",
                          params={"minx": 0, "maxx": 100, "miny": 0, "maxy": 100})
@@ -250,10 +255,8 @@ async def test_object_viewport_edges_only_among_the_returned_nodes(
     b = await actions.create_or_find_object("Thread", "thread:vp-b", "test")
     c = await actions.create_or_find_object("Thread", "thread:vp-c", "test")
     for oid, x in ((a, 5.0), (b, 6.0)):
-        await actions.assert_property(oid, "graph_x", x, "test", datetime.now(UTC), 1.0)
-        await actions.assert_property(oid, "graph_y", 5.0, "test", datetime.now(UTC), 1.0)
-    await actions.assert_property(c, "graph_x", 9000.0, "test", datetime.now(UTC), 1.0)
-    await actions.assert_property(c, "graph_y", 9000.0, "test", datetime.now(UTC), 1.0)
+        await _place(actions, oid, x, 5.0)
+    await _place(actions, c, 9000.0, 9000.0)
     await actions.create_link(a, b, "cites", "test", datetime.now(UTC), 1.0)
     await actions.create_link(a, c, "cites", "test", datetime.now(UTC), 1.0)
 
@@ -271,8 +274,7 @@ async def test_object_viewport_exclude_skips_ids_the_caller_already_holds(
     a = await actions.create_or_find_object("Thread", "thread:vp-excl-a", "test")
     b = await actions.create_or_find_object("Thread", "thread:vp-excl-b", "test")
     for oid in (a, b):
-        await actions.assert_property(oid, "graph_x", 1.0, "test", datetime.now(UTC), 1.0)
-        await actions.assert_property(oid, "graph_y", 1.0, "test", datetime.now(UTC), 1.0)
+        await _place(actions, oid, 1.0, 1.0)
 
     r = await client.get("/objects/viewport", params={
         "minx": 0, "maxx": 100, "miny": 0, "maxy": 100, "exclude": str(a)})
@@ -375,8 +377,7 @@ async def test_graph_supernodes_unfiled_is_positioned_and_id_matches_the_sentine
     the centroid of whichever of its members the heartbeat already placed, never a
     bespoke layout of its own."""
     positioned = await actions.create_or_find_object("Thread", "thread:gv-unfiled-pos", "test")
-    await actions.assert_property(positioned, "graph_x", 12.0, "test", datetime.now(UTC), 1.0)
-    await actions.assert_property(positioned, "graph_y", -4.0, "test", datetime.now(UTC), 1.0)
+    await _place(actions, positioned, 12.0, -4.0)
 
     r = await client.get("/graph/supernodes")
     unfiled = r.json()["unfiled"]
