@@ -165,9 +165,17 @@ def render_mail_text(messages: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+_MAIL_ROW_CHARS = 100
+
+
 def _render_mail_row(m: dict[str, Any]) -> str:
+    """One line for an ask. The body is flattened to a single line and, when it is cut, the
+    line says so and how much is missing, so a glance is never mistaken for the whole mail."""
     thread = m.get("thread")
-    snippet = (m.get("body") or "")[:100]
+    flat = " ".join((m.get("body") or "").split())
+    snippet = flat[:_MAIL_ROW_CHARS]
+    if len(flat) > _MAIL_ROW_CHARS:
+        snippet += f" [+{len(flat) - _MAIL_ROW_CHARS} more characters: inbox() reads it whole]"
     return f"{m.get('id')} ask from:{m.get('from')} thread:{thread}: {snippet}"
 
 
