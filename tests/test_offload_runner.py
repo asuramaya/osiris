@@ -88,7 +88,10 @@ async def test_run_offload_tick_skips_a_local_target_with_no_mountpoint(
     out = await offload_runner.run_offload_tick(actions.pool)
     assert out["targets"] == [
         {"name": "drive", "skipped": "not present (mountpoint absent)"}]
-    assert offload_runner.offload_receipts() == {}
+    receipt = offload_runner.offload_receipts()["drive"]
+    assert receipt["last_skip_reason"] == "not present (mountpoint absent)"
+    assert "last_successful_offload" not in receipt  # a skip is not a success
+    assert not receipt.get("last_error")  # and not a failure
 
 
 async def test_run_offload_tick_records_a_success_receipt(

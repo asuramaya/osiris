@@ -555,6 +555,8 @@ class Settings(BaseSettings):
     osiris_miner_daily_budget_base: int = 5
     osiris_miner_new_pair_starter_budget: int = 1
     osiris_miner_zero_acceptance_window_days: int = 7
+    # days without a successful offload before an enabled target is flagged (0 = never flag)
+    osiris_offload_stale_days: int = 7
     # Layout knobs (product convention: every action is configurable): the heartbeat's own per-tick
     # batch size and cron cadence, both previously bare module constants. batch_size takes
     # effect on the next tick and is genuinely table-driven (the layout batch job reads it

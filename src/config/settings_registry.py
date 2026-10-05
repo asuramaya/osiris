@@ -271,6 +271,11 @@ def _validate_offload_targets(value: Any) -> str | None:
 # shipped default, the same "clearing an input and saving drops it" experience the old
 # panel had.
 _BACKUP_SETTINGS: tuple[SettingSpec, ...] = (
+    # An enabled offload target with no successful offload for this many days is shown in
+    # readiness and told to the desk once; 0 turns it off.
+    SettingSpec("backup.offload_stale_days", "int", 7, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_offload_stale_days"),
     SettingSpec("backup.vault_path", "path", None, effect="next_deploy",
                authority="operator_or_ruling", requires_because=True,
                consequence="high", write_name="backup_settings"),
