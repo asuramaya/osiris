@@ -30,7 +30,8 @@ StepStatus = Literal["done", "missing", "needs_attention"]
 STEP_ORDER = (
     "key_set_up", "services_restarted", "recovery_enrolled", "recovery_verified",
     "recovery_copy_off_box", "data_encrypted", "backup_password_set",
-    "offload_target_present", "offload_run", "restore_test_passed", "key_tpm_sealed",
+    "offload_target_present", "offload_run", "offload_current", "restore_test_passed",
+    "key_tpm_sealed",
 )
 
 
@@ -153,12 +154,32 @@ def _restore_test_step(
                  "Runs automatically after the first backup, then weekly.", None)
 
 
+def _offload_current_step(
+    enabled_targets: list[dict[str, Any]], stale: list[dict[str, Any]], stale_days: int,
+) -> dict[str, Any]:
+    """Backups keep happening: no enabled target has gone `stale_days` without a successful
+    offload. A skip while away from home is correct behaviour, but one that lasts this long
+    means nothing is being copied off the box, so it is said here with its reason."""
+    from src.orchestrator.offload_staleness import stale_sentence
+
+    label = "Backups up to date"
+    if not enabled_targets:
+        return _step("offload_current", label, "missing", "Waiting for a backup target.", None)
+    if stale:
+        return _step("offload_current", label, "needs_attention",
+                     " ".join(stale_sentence(e, stale_days) + "." for e in stale), None)
+    return _step("offload_current", label, "done", None, None)
+
+
 def compute_readiness_steps(
     *, soul_key: dict[str, Any], restic_key: dict[str, Any],
     offload_targets: list[dict[str, Any]], restore_drill_receipts: dict[str, Any],
     services_restarted: bool | None,
+    stale_offload: list[dict[str, Any]] | None = None, stale_days: int = 7,
 ) -> list[dict[str, Any]]:
-    """`offload_targets`: backup_settings.get_backup_settings's own list, each dict
+    """`stale_offload`: offload_staleness.stale_offload_targets's list for this box, computed by
+    the caller from the receipts and the `backup.offload_stale_days` limit (`stale_days`).
+    `offload_targets`: backup_settings.get_backup_settings's own list, each dict
     already carrying `presence` (live for 'local', None for 'restic', per
     backup_settings._target_presence's own documented reason) merged with
     offload_runner.offload_receipts()'s per-name last_successful_offload/
@@ -279,6 +300,8 @@ def compute_readiness_steps(
         steps.append(_step(
             "offload_run", "First offload run", "missing",
             "Runs automatically once a backup target is present.", None))
+
+    steps.append(_offload_current_step(enabled_targets, stale_offload or [], stale_days))
 
     steps.append(_restore_test_step(enabled_targets, restore_drill_receipts))
 

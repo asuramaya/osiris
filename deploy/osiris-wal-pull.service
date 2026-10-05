@@ -1,0 +1,10 @@
+# Pulls completed WAL segments out of the database container into the vault, and removes the
+# in-container copy once it is safely out. Paired with osiris-wal-pull.timer (every 15 minutes).
+# Its own unit, not part of the dump: a dump of a database this size takes long and saturates
+# the disk, and the pull is small and should run often regardless.
+[Unit]
+Description=Osiris WAL pull into the vault
+
+[Service]
+Type=oneshot
+ExecStart=%h/code/osiris/scripts/osiris_wal_pull.sh

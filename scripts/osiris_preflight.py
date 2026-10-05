@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 DSN = "postgresql://osiris:osiris@127.0.0.1:5601/osiris"
 UNITS = ["osiris-mcp", "osiris-worker", "osiris-pulse", "osiris-console"]
-TIMERS = ["osiris-backup.timer", "osiris-base-backup.timer"]
+TIMERS = ["osiris-backup.timer", "osiris-base-backup.timer", "osiris-wal-pull.timer"]
 CONTAINERS = ["osiris-pg", "osiris-redis"]
 NAMED_VOLUMES = {"osiris-pg-data", "osiris-redis-data"}
 # Portable: derive the repo from THIS file, never a hardcoded home. A path baked to one

@@ -6057,7 +6057,7 @@ async def test_cmd_backup_status_json_shape(actions: Actions, tmp_path: Path) ->
     parsed = _json.loads(buf.getvalue())
     assert set(parsed) >= {"as_of", "timers", "vault", "disk", "ladder",
                           "prune_manifest", "pitr_drill", "offbox"}
-    assert len(parsed["timers"]) == 5
+    assert len(parsed["timers"]) == 6
 
 
 async def test_cli_parser_accepts_backup_status(actions: Actions) -> None:
