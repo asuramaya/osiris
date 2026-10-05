@@ -5241,12 +5241,21 @@ async def _fn_backup_status(
     except Exception as exc:  # noqa: BLE001 - one section never blanks the panel
         brake_section = {"error": f"disk/WAL brake unreadable: {exc}"}
 
+    try:
+        from src.orchestrator.db_compaction import compaction_status
+
+        compaction_section: dict[str, Any] = (
+            await compaction_status(pool) if pool is not None else {"error": "no database"})
+    except Exception as exc:  # noqa: BLE001 - one section never blanks the panel
+        compaction_section = {"error": f"compaction status unavailable: {exc}"}
+
     return {
         "as_of": now.isoformat(),
         "timers": timers,
         "vault": vault_section,
         "disk": disk_section,
         "storage_brake": brake_section,
+        "compaction": compaction_section,
         "ladder": ladder_section,
         "prune_manifest": manifest_section,
         "pitr_drill": pitr_section,
