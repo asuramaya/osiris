@@ -1359,6 +1359,7 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
         _log.warning("audit_log duplicate retirement failed: %r", exc)
     else:
         changed += dup["deleted"]
+        await _flag_drain(pool, ("audit_log",), not dup["finished"])
         if dup["deleted"]:
             more = "" if dup["finished"] else ", more remain for the next run"
             lines.append(f"audit_log: removed {dup['deleted']} rows that only repeated an "
@@ -1370,6 +1371,7 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
         _log.warning("layout history retirement failed: %r", exc)
     else:
         changed += layout["deleted"]
+        await _flag_drain(pool, ("assertions_hot", "assertions_cold"), not layout["finished"])
         if layout["deleted"]:
             more = "" if layout["finished"] else ", more remain for the next run"
             lines.append(f"assertions: removed {layout['deleted']} graph layout rows that "
@@ -1380,6 +1382,7 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
         _log.warning("assertion fold failed: %r", exc)
     else:
         changed += fold["folded"]
+        await _flag_drain(pool, ("assertions_hot", "assertions_cold"), not fold["finished"])
         if fold["folded"]:
             more = "" if fold["finished"] else ", more remain for the next run"
             lines.append(f"assertions: folded {fold['folded']} rows that repeated the row "
@@ -1392,6 +1395,8 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
         _log.warning("assertion history archive failed: %r", exc)
     else:
         changed += moved["rows_moved"]
+        await _flag_drain(pool, ("assertions_hot", "assertions_cold"),
+                          bool(moved["paused"]) or moved["rows_moved"] > 0)
         if moved["rows_moved"]:
             lines.append(f"assertions: moved {moved['rows_moved']} rows of old history to the "
                          "cold table")
@@ -1404,6 +1409,53 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
     if changed:
         _log.info("storage housekeeping: %d row(s) removed or moved", changed)
     return changed
+
+
+async def _flag_drain(pool: Any, tables: tuple[str, ...], running: bool) -> None:
+    """Tell the night compaction whether a bulk drain on these tables is still going."""
+    from src.orchestrator.db_compaction import set_drain
+
+    with contextlib.suppress(Exception):  # a flag that cannot be written never sinks the job
+        await set_drain(pool, tables, running)
+
+
+# The night compaction window: the cron starts it at 03:00 and it stops itself before 05:00.
+_COMPACTION_WINDOW_SECS = 6900.0
+
+
+async def db_compaction_heartbeat(ctx: dict[str, Any]) -> int:
+    """NIGHTLY DATABASE COMPACTION (operator ruling: automatic, overnight): rewrite the big
+    tables that are mostly dead or free space (src.orchestrator.db_compaction holds all of
+    it) so the space the clean-ups freed goes back to the disk. One table at a time inside
+    a 03:00 to 05:00 window; skips a table while the disk/WAL brake is paused, while the disk
+    could not hold the rewrite, or while a bulk drain is still emptying it. Not at startup.
+    Gated on the retention flag (true by default). A desk receipt only when a table was
+    rewritten or a rewrite failed. Returns the bytes given back."""
+    import os
+
+    from src.orchestrator.db_compaction import compact_tonight
+    from src.orchestrator.mailbox import send_message
+    from src.orchestrator.settings_service import settings_with_overlay
+
+    actions: Actions = ctx["cascade"].actions
+    pool = actions.pool
+    if not (await settings_with_overlay(pool)).osiris_retention_heartbeat_enabled:
+        return 0
+    receipts = await compact_tonight(
+        pool, window_secs=_COMPACTION_WINDOW_SECS, dsn=os.environ.get("DATABASE_URL"))
+    done = [r for r in receipts.values() if r.get("action") == "rewritten"]
+    failed = [r for r in receipts.values() if r.get("action") == "failed"]
+    freed = int(sum(max(0, r["before_bytes"] - r["after_bytes"]) for r in done))
+    if done or failed:
+        parts = [f"{r['table']} {r['before_bytes'] / 1024 ** 3:.1f} GB to "
+                 f"{r['after_bytes'] / 1024 ** 3:.1f} GB" for r in done]
+        parts += [f"{r['table']} failed ({r['reason']})" for r in failed]
+        with contextlib.suppress(Exception):
+            await send_message(
+                pool, from_agent="cron:db_compaction_heartbeat", from_project="osiris",
+                to_project="operator", body="database compaction: " + "; ".join(parts),
+                desk_kind="fyi", dedup_window_secs=3600)
+    return freed
 
 
 async def soul_cold_tier_heartbeat(ctx: dict[str, Any]) -> int:
@@ -1864,8 +1916,12 @@ class WorkerSettings:
              second={0}, timeout=600, run_at_startup=True),
         # ONE WRITE PER FACT / TIERED FACT HISTORY: four bounded steps over millions of
         # rows, so it is NOT run_at_startup (that would hold the boot lock for minutes).
-        cron(watched(storage_housekeeping_heartbeat, every=86400), hour={4}, minute={15},
+        cron(watched(storage_housekeeping_heartbeat, every=86400), hour={2}, minute={15},
              second={0}, timeout=1500),
+        # NIGHTLY COMPACTION: after the housekeeping drains (02:15), inside 03:00 to 05:00;
+        # hard-stops itself before 05:00. Not run_at_startup (hours-long rewrites).
+        cron(watched(db_compaction_heartbeat, every=86400), hour={3}, minute={0},
+             second={0}, timeout=7200),
         # wave 13 item 3: the harness signal's own catch-up sweep — same 15-min cadence
         # class as classification_laws_heartbeat/obligation_hygiene_heartbeat, offset
         # from all nine so none contend for CPU at the same wall-clock second.
