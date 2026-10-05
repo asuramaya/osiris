@@ -564,6 +564,17 @@ def _host_disk_is_not_a_test_input(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _network_targets_are_not_resolved(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A network offload target is checked for a tunnel route (at home or away) by resolving
+    its host and asking the kernel; a test must not depend on this machine's DNS or routes.
+    Unresolvable means "tell by trying", which is what every offload test already assumed;
+    tests/test_network_presence.py sets its own addresses and route text."""
+    from src.orchestrator import network_presence
+
+    monkeypatch.setattr(network_presence, "resolve_address", lambda host: None)
+
+
+@pytest.fixture(autouse=True)
 def _no_inherited_git_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test inherits git's per-invocation GIT_* variables. Defence in depth.
 
