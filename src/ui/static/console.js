@@ -776,9 +776,9 @@ function renderSettingsPanelHtml(items) {
         ? ' <span class="o-faint" title="The value actually running right now">running: ' +
           esc(JSON.stringify(it.live)) + '</span>' : '';
       return '<tr><td style="vertical-align:top"><code>' + esc(it.key) + '</code>' +
-        (it.consequence === 'high' ? ' <span title="Significant change" style="color:#e5534b">▲</span>' : '') +
+        (it.consequence === 'high' ? ' <span title="Significant change" style="color:var(--err)">▲</span>' : '') +
         '</td><td style="vertical-align:top">' + settingsFieldInput(it) + live +
-        '<div id="setting-err-' + esc(it.key) + '" class="o-faint" style="color:#e5534b"></div></td>' +
+        '<div id="setting-err-' + esc(it.key) + '" class="o-faint" style="color:var(--err)"></div></td>' +
         '<td class="o-faint" style="vertical-align:top">' + esc(settingsEffectProse(it.effect)) + '</td>' +
         '<td style="vertical-align:top">' + settingsActionCell(it) + '</td></tr>';
     }).join('');
@@ -1364,7 +1364,7 @@ function offloadPresenceCell(t) {
   var p = t.presence;
   if (!p) return '<span class="o-faint" title="No expected folder is set">-</span>';
   var dot = p.present
-    ? '<span style="color:#2ea043" title="Connected now">● Connected</span>'
+    ? '<span style="color:var(--accent)" title="Connected now">● Connected</span>'
     : '<span class="o-faint" title="Not connected right now. Expected for a target that is only sometimes plugged in.">○ Not connected</span>';
   var extra = p.present
     ? ' <span class="o-faint">' + (p.writable === false ? 'read-only' : 'writable') +
@@ -1474,12 +1474,14 @@ async function renderSettingsPane() {
   container.innerHTML =
     '<div style="padding:16px;max-width:1100px;margin:0 auto">' +
     '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:12px">Settings</h2>' +
+    settingsSectionShell('appearance', 'Appearance') +
     settingsSectionShell('key', 'Key') +
     settingsSectionShell('offload', 'Backup &amp; Offload') +
     settingsSectionShell('box', 'Readiness') +
     settingsSectionShell('registry', 'Registry') +
     settingsSectionShell('desk', 'Operator Desk') +
     '</div>';
+  renderSettingsSectionAppearance();
   await Promise.all([
     renderSettingsSectionKey(), renderSettingsSectionOffload(),
     renderSettingsSectionRegistry(), renderSettingsSectionDesk(), renderSettingsSectionBox(),
@@ -1489,6 +1491,28 @@ function settingsSectionShell(id, title) {
   return '<section style="margin-bottom:28px;border-top:1px solid var(--border);padding-top:16px">' +
     '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px">' +
     title + '</h3><div id="settings-sec-' + id + '" class="o-faint">Loading…</div></section>';
+}
+
+// --- APPEARANCE: light, dark, or follow the device. theme.js owns the choice (it applies it
+// before first paint and remembers it in this browser); this is only the control. ----------
+var THEME_CHOICES = [['system', 'Match this device'], ['light', 'Light'], ['dark', 'Dark']];
+function renderSettingsSectionAppearance() {
+  var el = $('settings-sec-appearance');
+  if (!el) return;
+  var cur = window.OsirisTheme ? window.OsirisTheme.get() : 'system';
+  el.className = '';
+  el.innerHTML =
+    '<div class="theme-choice" role="group" aria-label="Colour theme">' +
+    THEME_CHOICES.map(function(c) {
+      return '<button class="iconbtn' + (c[0] === cur ? ' sel' : '') + '" data-theme-choice="' + c[0] +
+        '" aria-pressed="' + (c[0] === cur) + '" onclick="setThemeChoice(\'' + c[0] + '\')">' + c[1] + '</button>';
+    }).join('') + '</div>' +
+    '<div class="o-faint" style="margin-top:6px">Match this device follows your system setting. ' +
+    'Your choice is remembered in this browser.</div>';
+}
+function setThemeChoice(mode) {
+  if (window.OsirisTheme) window.OsirisTheme.set(mode);
+  renderSettingsSectionAppearance();
 }
 
 // --- section 1: KEY, the existing Key panel, embedded not re-implemented ---------------
@@ -1523,7 +1547,7 @@ async function renderResticCredentialWidget() {
   el.innerHTML = renderResticCredentialHtml(status);
 }
 function renderResticCredentialHtml(s) {
-  var dot = s.present ? '<span style="color:#2ea043">●</span>' : '<span class="o-faint">○</span>';
+  var dot = s.present ? '<span style="color:var(--accent)">●</span>' : '<span class="o-faint">○</span>';
   var setupForm = s.present ? ''
     : '<label>Storage method: <select id="restic-init-backend"><option value="">Default for this machine</option>' +
       '<option value="host-cred">System credential store</option>' +
@@ -1596,7 +1620,7 @@ function renderBackupStatusHtml(status) {
     var mismatch = t.configured_schedule && t.configured_schedule !== t.schedule;
     var configuredCell = t.configured_schedule
       ? (mismatch
-         ? '<span style="color:#e5534b" title="Set, but not active yet. Takes effect on the next update.">' +
+         ? '<span style="color:var(--err)" title="Set, but not active yet. Takes effect on the next update.">' +
            esc(t.configured_schedule) + '</span>'
          : esc(t.configured_schedule))
       : '<span class="o-faint">(default)</span>';
@@ -1791,8 +1815,8 @@ async function renderSettingsSectionBox() {
   if (working) window._readinessTimer = setTimeout(refreshReadinessIfShown, live ? 10000 : 60000);
 }
 function readinessStepDot(status) {
-  if (status === 'done') return '<span style="color:#2ea043">●</span>';
-  if (status === 'needs_attention') return '<span style="color:#e5534b">!</span>';
+  if (status === 'done') return '<span style="color:var(--accent)">●</span>';
+  if (status === 'needs_attention') return '<span style="color:var(--err)">!</span>';
   return '<span class="o-faint">○</span>';
 }
 function readinessStepRow(s) {
@@ -1807,7 +1831,7 @@ function readinessStepRow(s) {
   var pctText = pct === null ? '' : ' (' + (p.estimate ? 'about ' : '') + pct + '%)';
   var bar = pct === null ? '' :
     '<div style="height:3px;margin-top:3px;background:var(--panel2)"><div style="height:3px;width:' +
-    pct + '%;background:var(--border-focus, #58a6ff)"></div></div>';
+    pct + '%;background:var(--border-focus)"></div></div>';
   var reason = s.reason ? esc(s.reason) + (s.progress && s.status !== 'done' ? esc(pctText) : '') : '';
   var tip = READINESS_STEP_TIPS[s.key] ? ' title="' + esc(READINESS_STEP_TIPS[s.key]) + '"' : '';
   return '<tr class="' + (s.current ? 'readiness-current' : '') + '"' + tip + '>' +
@@ -1852,7 +1876,7 @@ function readinessJump(targetId) {
   if (!el) return;
   el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   el.style.transition = 'background-color 0.3s';
-  el.style.backgroundColor = 'var(--accent-bg, #1f2937)';
+  el.style.backgroundColor = 'var(--chip)';
   setTimeout(function() { el.style.backgroundColor = ''; }, 900);
 }
 

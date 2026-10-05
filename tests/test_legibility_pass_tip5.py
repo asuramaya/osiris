@@ -107,7 +107,7 @@ def test_sizing_is_a_shader_uniform_no_world_unit_scheme_no_cap() -> None:
 def test_scene_renders_offscreen_hdr_then_tone_maps_with_a_bounded_curve() -> None:
     assert "new THREE.WebGLRenderTarget(1, 1, {" in _SPACE_JS
     assert "type: THREE.HalfFloatType" in _SPACE_JS
-    body = _SPACE_JS.split("const toneMapMaterial = new THREE.ShaderMaterial(", 1)[1][:1200]
+    body = _SPACE_JS.split("const toneMapMaterial = new THREE.ShaderMaterial(", 1)[1][:2600]
     assert "color / (color + vec3(1.0))" in body  # Reinhard: bounded in [0,1) for any x >= 0
 
 

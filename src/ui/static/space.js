@@ -306,6 +306,32 @@ export async function initSpace(container) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0d1219);
   const pickScene = new THREE.Scene();
+  // THEME: the scene colours follow the console's tokens (theme.js picks light, dark or the OS
+  // setting). Dark keeps the original navy canvas. Light renders the same additive density on
+  // black into the HDR target and the tone-map pass draws it as ink on the paper colour; with
+  // no HDR target (old GPU) the canvas just takes the paper colour.
+  function themeIsLight() {
+    return !!(window.OsirisTheme && window.OsirisTheme.effective() === "light");
+  }
+  function cssRgb(name, fallback) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const m = /^#([0-9a-f]{6})$/i.exec(v);
+    return m ? parseInt(m[1], 16) : fallback;
+  }
+  function applyThemeToScene() {
+    const light = themeIsLight();
+    const paper = cssRgb("--panel", light ? 0xffffff : 0x0d1219);
+    if (light) {
+      scene.background = new THREE.Color(sceneTarget ? 0x000000 : paper);
+    } else {
+      scene.background = new THREE.Color(paper);
+    }
+    if (toneMapScene) {
+      const u = toneMapScene.children[0].material.uniforms;
+      u.uLight.value = light ? 1 : 0;
+      u.uPaper.value.set(((paper >> 16) & 255) / 255, ((paper >> 8) & 255) / 255, (paper & 255) / 255);
+    }
+  }
 
   // THE LAST RENDERER: a per-pixel saturation cap (tone-map the additive pass) so overlap
   // reads as brightness and never as white. Additive blending alone can sum well past 1.0
@@ -325,7 +351,11 @@ export async function initSpace(container) {
     toneMapCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     toneMapScene = new THREE.Scene();
     const toneMapMaterial = new THREE.ShaderMaterial({
-      uniforms: { tDiffuse: { value: sceneTarget.texture } },
+      uniforms: {
+        tDiffuse: { value: sceneTarget.texture },
+        uLight: { value: 0 },
+        uPaper: { value: new THREE.Vector3(1, 1, 1) },
+      },
       depthTest: false, depthWrite: false,
       vertexShader: `
         varying vec2 vUv;
@@ -333,11 +363,24 @@ export async function initSpace(container) {
       `,
       fragmentShader: `
         uniform sampler2D tDiffuse;
+        uniform float uLight;
+        uniform vec3 uPaper;
         varying vec2 vUv;
         void main() {
           vec3 color = texture2D(tDiffuse, vUv).rgb;
-          vec3 mapped = color / (color + vec3(1.0)); // Reinhard: bounded in [0,1) always
-          gl_FragColor = vec4(mapped, 1.0);
+          if (uLight > 0.5) {
+            // LIGHT THEME: the scene is still summed additively on black (density = how much
+            // is drawn), then drawn as ink on paper: coverage is the same bounded Reinhard
+            // curve on the brightest channel, and the ink keeps the summed hue at full
+            // strength, a little deepened so it holds contrast on a light ground.
+            float L = max(max(color.r, color.g), color.b);
+            float cover = clamp(1.5 * L / (L + 1.0), 0.0, 1.0);
+            vec3 hue = L > 0.00001 ? pow(color / L, vec3(1.0 / 2.2)) : vec3(0.0);
+            gl_FragColor = vec4(mix(uPaper, hue * 0.78, cover), 1.0);
+          } else {
+            vec3 mapped = color / (color + vec3(1.0)); // Reinhard: bounded in [0,1) always
+            gl_FragColor = vec4(mapped, 1.0);
+          }
         }
       `,
     });
@@ -451,6 +494,14 @@ export async function initSpace(container) {
       renderer.render(scene, camera);
     }
   }
+  applyThemeToScene();
+  function onThemeChange() {
+    applyThemeToScene();
+    // the fills carry a per-theme tone, so they are rebuilt, not just repainted
+    try { buildProjectFillMeshes(); buildCommunityFills(); } catch (e) { /* not built yet */ }
+    markDirty();
+  }
+  window.addEventListener("osiris-theme", onThemeChange);
   function renderIfDirty() {
     rafPending = false;
     if (!running || !dirty) return;
@@ -942,6 +993,7 @@ export async function initSpace(container) {
     if (!projectFills.length) return;
     projectFillMeshGroup = new THREE.Group();
     const dc = new THREE.Color("#2a3f5f");
+    if (themeIsLight()) dc.set("#58a6ff").multiplyScalar(0.3); // ink on paper: a wash, never a block
     for (const d of projectFills) {
       const geo = new THREE.CircleGeometry(Math.max(d.radius, 1), 32);
       const mat = new THREE.MeshBasicMaterial({ color: dc, transparent: true, opacity: 0.14, depthWrite: false });
@@ -1020,6 +1072,7 @@ export async function initSpace(container) {
     if (!communities.length) return;
     communityMeshGroup = new THREE.Group();
     const cc = new THREE.Color("#3a2f5f"); // a distinct, warmer tone from the project fill's
+    if (themeIsLight()) cc.set("#bc8cff").multiplyScalar(0.4); // ink on paper: a wash
     for (const c of communities) {          // #2a3f5f -- nesting must read visually, not just logically
       const geo = new THREE.CircleGeometry(Math.max(c.radius, 1), 24);
       const mat = new THREE.MeshBasicMaterial({ color: cc, transparent: true, opacity: 0.22, depthWrite: false });
