@@ -308,7 +308,8 @@ class WalSegment:
 
 
 _START_FILE_RE = re.compile(r"START WAL LOCATION: \S+ \(file ([0-9A-F]{24})\)")
-_WAL_SEGMENT_RE = re.compile(r"^[0-9A-F]{24}$")
+# a segment is a plain 24-hex name, or the same name with the archive step's `.zst` suffix
+_WAL_SEGMENT_RE = re.compile(r"^([0-9A-F]{24})(?:\.zst)?$")
 
 
 def _segment_key(name: str) -> tuple[int, int, int]:
@@ -364,7 +365,7 @@ def plan_prune_wal(
         if not _WAL_SEGMENT_RE.match(name):
             keep.append(seg)
             continue
-        tl, log, no = _segment_key(name)
+        tl, log, no = _segment_key(_WAL_SEGMENT_RE.match(name).group(1))  # type: ignore[union-attr]
         needed = any(tl > a_tl or (tl == a_tl and (log, no) >= (a_log, a_no))
                      for a_tl, a_log, a_no in anchors)
         (keep if needed else remove).append(seg)

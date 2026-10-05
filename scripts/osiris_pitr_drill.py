@@ -82,6 +82,20 @@ def postgresql_auto_conf_pitr(
     return conf
 
 
+def restore_command_for(dirs: tuple[Path, ...]) -> str:
+    """Postgres' `restore_command` for an archive that holds each segment either raw
+    (`<name>`) or compressed by the archive step (`<name>.zst`, decompressed straight to
+    the path recovery asks for). Directories are tried in order, compressed form first;
+    the first that yields the file wins and a failure in every one is the nonzero exit
+    that tells recovery the segment is not there. Raw segments archived before compression
+    existed keep restoring exactly as before."""
+    tries = []
+    for d in dirs:
+        tries.append(f"{{ test -f {d}/%f.zst && zstd -dcq {d}/%f.zst > %p; }}")
+        tries.append(f"cp {d}/%f %p 2>/dev/null")
+    return " || ".join(tries)
+
+
 def _gather_wal_segments(container: str, vault_wal_dir: Path, scratch_wal_dir: Path) -> int:
     """Stage the WAL the drill container's `restore_command` can read. Segments already
     pulled into the vault are NOT copied: the vault directory is mounted read-only into
@@ -97,7 +111,7 @@ def _gather_wal_segments(container: str, vault_wal_dir: Path, scratch_wal_dir: P
         capture_output=True, text=True, timeout=30)
     for seg in listing.stdout.split():
         dest = scratch_wal_dir / seg
-        if dest.exists() or (vault_wal_dir / seg).is_file():
+        if seg.endswith(".tmp") or dest.exists() or (vault_wal_dir / seg).is_file():
             continue
         with open(dest, "wb") as fh:
             subprocess.run(
@@ -249,7 +263,7 @@ def _soul_round_trip_check(container: str) -> str | None:
 def run_drill(
     base_backup: Path, target_time: str | None, marker_canonical: str, *,
     container: str = CONTAINER, drill_name: str = DRILL_NAME,
-    scratch: Path | None = None,
+    scratch: Path | None = None, wal_dir_override: Path | None = None,
 ) -> str | None:
     """Returns a failure string, or None on success. Cleans up the drill container and
     its scratch dirs in every case (`finally`), same discipline as
@@ -275,13 +289,14 @@ def run_drill(
         with tarfile.open(base_backup, "r:gz") as tf:
             tf.extractall(pgdata, filter="data")  # noqa: S202, our own trusted backup
 
-        n_wal = _gather_wal_segments(container, VAULT_WAL_DIR, wal_dir)
+        vault_wal = wal_dir_override or VAULT_WAL_DIR
+        n_wal = _gather_wal_segments(container, vault_wal, wal_dir)
         if n_wal == 0:
             return "no WAL segments available anywhere: cannot replay past the base backup"
 
         (pgdata / "recovery.signal").touch()
         conf = postgresql_auto_conf_pitr(
-            f"cp {VAULT_WAL_DIR}/%f %p 2>/dev/null || cp {wal_dir}/%f %p", target_time)
+            restore_command_for((vault_wal, wal_dir)), target_time)
         with open(pgdata / "postgresql.auto.conf", "a") as fh:
             fh.write("\n" + conf)
 
@@ -291,7 +306,7 @@ def run_drill(
             ["docker", "run", "-d", "--name", drill_name,
              "--memory", SCRATCH_MEMORY, "--memory-swap", SCRATCH_MEMORY,
              "-v", f"{pgdata}:/var/lib/postgresql/data",
-             "-v", f"{VAULT_WAL_DIR}:{VAULT_WAL_DIR}:ro",
+             "-v", f"{vault_wal}:{vault_wal}:ro",
              "-v", f"{wal_dir}:{wal_dir}:ro",
              "-e", "POSTGRES_PASSWORD=osiris", "postgres:16", *SCRATCH_POSTGRES_ARGS],
             capture_output=True, timeout=60, check=True)
@@ -360,6 +375,10 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vault", type=Path, default=Path.home() / "osiris-vault")
+    parser.add_argument("--wal-dir", type=Path, default=None,
+                        help="read archived WAL from this directory instead of the vault's "
+                             "wal_archive (to drill a prepared archive, for example one "
+                             "mixing raw and compressed segments)")
     parser.add_argument("--marker", default=None,
                         help="canonical of an object known to exist AFTER the base "
                              "backup completed: the drill's own pass condition. "
@@ -387,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(f"osiris_pitr_drill: restoring {newest.path} to target_time={target_time!r}, "
           f"marker={marker!r}")
-    fail = run_drill(Path(newest.path), target_time, marker)
+    fail = run_drill(Path(newest.path), target_time, marker, wal_dir_override=args.wal_dir)
     if fail:
         print(f"PITR DRILL FAILED: {fail}", file=sys.stderr)
         return 1

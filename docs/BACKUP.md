@@ -30,8 +30,12 @@ against before it decides what is safe to discard.
 
 Each dump also refreshes a full copy of the repository's version history into the vault, and
 a local cache of the last 4 dumps stays in `backups/` for fast access without touching the
-vault. Completed write-ahead log segments are pulled out of the database container's own
-archive directory into `$OSIRIS_VAULT/wal_archive` once safely captured.
+vault. Completed write-ahead log segments are compressed (zstd, verified against the source)
+as the database archives them, then pulled out of the database container's own archive
+directory into `$OSIRIS_VAULT/wal_archive` once safely captured. A segment is a full 16 MB on
+disk however little of it holds data, and the database closes one at least every five
+minutes, so compressing at the source is what keeps the archive small. Segments archived
+before compression existed stay raw, and recovery reads either form.
 
 ### The prune schedule
 
