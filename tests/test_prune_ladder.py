@@ -684,3 +684,15 @@ def test_apply_removes_a_pruned_base_backups_marker_with_it(tmp_path, capsys) ->
 
     assert not old.exists() and not verified_marker_path(old).exists()
     assert new.exists() and verified_marker_path(new).exists()
+
+
+def test_compressed_segments_are_pruned_by_position_like_raw_ones() -> None:
+    """The archive step stores segments as `<name>.zst`; the same name is the same segment,
+    so retention must remove an old compressed one and keep a needed one, and must never
+    treat the suffix as an unrecognised file to keep forever."""
+    old, at, later = (_seg("000000010000001A00000016.zst"), _seg(A + ".zst"),
+                      _seg("000000010000001A00000018.zst"))
+    raw_old = _seg("000000010000001A00000015")
+    plan = plan_prune_wal([raw_old, old, at, later], kept_start_segments=[A])
+    assert plan["remove"] == [raw_old, old]
+    assert plan["keep"] == [at, later]

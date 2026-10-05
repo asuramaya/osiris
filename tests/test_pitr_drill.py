@@ -3,6 +3,7 @@ orchestration was proven by an actual run against a real base backup, the same d
 osiris_archive_wal.sh's own WAL-writing half was verified with."""
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from scripts.osiris_pitr_drill import CONTAINER, DRILL_NAME, postgresql_auto_conf_pitr, run_drill
@@ -300,3 +301,78 @@ def test_a_passing_drill_marks_the_newest_base_backup_verified_and_a_failing_one
     assert osiris_pitr_drill.main(["--vault", str(tmp_path)]) == 0
     assert is_base_backup_verified(new)
     assert not is_base_backup_verified(old)
+
+
+# --- the archive holds segments raw or compressed; recovery must read both ---------------------
+
+def _restore(command: str, name: str, target: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["sh", "-c", command.replace("%f", name).replace("%p", str(target))],
+                          capture_output=True, text=True, timeout=30)
+
+
+def test_restore_command_reads_a_compressed_segment_back_to_the_raw_bytes(tmp_path) -> None:
+    import shutil
+
+    import pytest
+
+    if shutil.which("zstd") is None:
+        pytest.skip("zstd not installed")
+    from scripts.osiris_pitr_drill import restore_command_for
+
+    vault, staged = tmp_path / "vault", tmp_path / "staged"
+    vault.mkdir(), staged.mkdir()
+    payload = b"segment bytes " * 1000
+    subprocess.run(["zstd", "-q", "-o", str(vault / "000000010000000000000007.zst")],
+                   input=payload, check=True, timeout=30)
+    cmd = restore_command_for((vault, staged))
+    out = tmp_path / "recovered"
+    assert _restore(cmd, "000000010000000000000007", out).returncode == 0
+    assert out.read_bytes() == payload
+
+
+def test_restore_command_still_reads_a_raw_segment_and_walks_the_directories_in_order(
+    tmp_path,
+) -> None:
+    from scripts.osiris_pitr_drill import restore_command_for
+
+    vault, staged = tmp_path / "vault", tmp_path / "staged"
+    vault.mkdir(), staged.mkdir()
+    (vault / "000000010000000000000001").write_bytes(b"raw in the vault")
+    (staged / "000000010000000000000002").write_bytes(b"raw in the staging copy")
+    (staged / "00000002.history").write_bytes(b"1\t0/5000000\tno recovery target\n")
+    cmd = restore_command_for((vault, staged))
+    for name, expect in (("000000010000000000000001", b"raw in the vault"),
+                         ("000000010000000000000002", b"raw in the staging copy"),
+                         ("00000002.history", b"1\t0/5000000\tno recovery target\n")):
+        out = tmp_path / ("got-" + name)
+        assert _restore(cmd, name, out).returncode == 0
+        assert out.read_bytes() == expect
+
+
+def test_restore_command_fails_when_no_directory_has_the_segment(tmp_path) -> None:
+    """A nonzero exit is how recovery learns the archive has ended; it must not be masked."""
+    from scripts.osiris_pitr_drill import restore_command_for
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    assert _restore(restore_command_for((vault,)), "000000010000000000000099",
+                    tmp_path / "x").returncode != 0
+
+
+def test_gather_skips_a_segment_copy_that_is_still_being_written(tmp_path, monkeypatch) -> None:
+    from scripts import osiris_pitr_drill as drill
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    def fake_run(cmd, **kw):  # noqa: ANN001, ANN202
+        if cmd[3] == "ls":
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="000000010000000100000002.zst\n000000010000000100000003.zst.tmp\n",
+                stderr="")
+        kw["stdout"].write(b"staged")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(drill.subprocess, "run", fake_run)
+    drill._gather_wal_segments("pg", vault, tmp_path / "scratch")
+    assert [p.name for p in (tmp_path / "scratch").iterdir()] == ["000000010000000100000002.zst"]

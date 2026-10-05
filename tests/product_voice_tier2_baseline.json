@@ -1,5 +1,5 @@
 {
-  "scripts": 190,
+  "scripts": 189,
   "src/cli.py": 44,
   "src/ingest": 6,
   "src/mcp_server.py": 3,

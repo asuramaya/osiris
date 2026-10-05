@@ -26,24 +26,57 @@
 set -euo pipefail
 SRC="$1"   # %p, the WAL segment's own full path
 NAME="$2"  # %f, its bare filename
-DEST_DIR="/var/lib/postgresql/data/wal_archive"
+# overridable only so the script can be exercised against a temporary directory
+DEST_DIR="${OSIRIS_WAL_ARCHIVE_DIR:-/var/lib/postgresql/data/wal_archive}"
 DEST="$DEST_DIR/$NAME"
 
 mkdir -p "$DEST_DIR"
 
+# COMPRESSED AT THE SOURCE: a WAL segment is always 16 MB on disk however little of it holds
+# data, and archive_timeout closes a segment every few minutes even when the database is
+# quiet, so a mostly-empty segment costs a full 16 MB in the container, the vault and every
+# copy of it unless it is compressed. zstd takes such a segment to a few hundred kilobytes.
+# Only the plain 24-hex-character segment files are compressed (as "<name>.zst"); timeline
+# history, backup-label and partial files are tiny and recovery wants them verbatim. The
+# compressed copy is verified by decompressing it against the source before it is moved
+# into place, and if zstd is missing or fails for any reason the segment is archived raw
+# exactly as before: archiving must never fail because compression is unavailable.
+# Restore reads either form (see osiris_pitr_drill.py's restore_command).
+COMPRESS=0
+if [[ "$NAME" =~ ^[0-9A-F]{24}$ ]] && command -v zstd >/dev/null 2>&1; then
+  COMPRESS=1
+fi
+
 # ATOMIC AND IDEMPOTENT (Postgres's own archive_command contract): if the destination
 # already exists, a PRIOR attempt already archived this exact segment. WAL segment names
-# are unique and immutable, so an existing file of the SAME size is success already
-# achieved, never overwritten (overwriting a completed archive risks corrupting it mid-
-# write against a concurrent reader on the host side). A same-name, different-size file
-# is impossible under normal operation (WAL segments are fixed-size) and is refused
-# loudly rather than silently trusted.
+# are unique and immutable, so an existing identical copy is success already achieved,
+# never overwritten (overwriting a completed archive risks corrupting it mid-write against
+# a concurrent reader on the host side). A same-name, different copy is impossible under
+# normal operation and is refused loudly rather than silently trusted. An existing copy
+# may be raw (written before compression, or by the fallback) or compressed.
 if [ -e "$DEST" ]; then
   if [ "$(stat -c%s "$DEST" 2>/dev/null)" = "$(stat -c%s "$SRC")" ]; then
     exit 0
   fi
-  echo "osiris_archive_wal: $DEST exists with a DIFFERENT size than $SRC — refusing to overwrite" >&2
+  echo "osiris_archive_wal: $DEST exists with a DIFFERENT size than $SRC, refusing to overwrite" >&2
   exit 1
+fi
+if [ -e "$DEST.zst" ]; then
+  if zstd -dcq "$DEST.zst" 2>/dev/null | cmp -s - "$SRC"; then
+    exit 0
+  fi
+  echo "osiris_archive_wal: $DEST.zst exists but does not match $SRC, refusing to overwrite" >&2
+  exit 1
+fi
+
+if [ "$COMPRESS" = 1 ]; then
+  if zstd -q -T1 -3 -f -o "$DEST.zst.tmp" "$SRC" \
+      && zstd -dcq "$DEST.zst.tmp" | cmp -s - "$SRC"; then
+    mv "$DEST.zst.tmp" "$DEST.zst"
+    exit 0
+  fi
+  rm -f "$DEST.zst.tmp"
+  echo "osiris_archive_wal: compressing $NAME failed or did not verify, archiving it raw" >&2
 fi
 
 cp "$SRC" "$DEST.tmp" && mv "$DEST.tmp" "$DEST"
