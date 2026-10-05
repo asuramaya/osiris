@@ -33,6 +33,7 @@ file shrinks only when the table is rewritten (see compact_assertion_tables)."""
 from __future__ import annotations
 
 import time
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -118,10 +119,13 @@ async def _fold_window(conn: asyncpg.Connection, rows: list[asyncpg.Record]) -> 
 async def apply_fold(
     pool: asyncpg.Pool, *, min_age_days: int = DEFAULT_MIN_AGE_DAYS, window: int = DEFAULT_WINDOW,
     max_seconds: float | None = None,
+    pause_check: Callable[[], Awaitable[str | None]] | None = None,
 ) -> dict[str, Any]:
     """Fold every foldable row, window by window, from the oldest id up. `max_seconds` stops
     between windows once spent (`finished` says whether the whole id range was covered); a
-    later run starts over from the oldest id, which is cheap because folded rows are gone."""
+    later run starts over from the oldest id, which is cheap because folded rows are gone.
+    `pause_check`, when given, is asked before every window and returns a reason to stop (the
+    disk/WAL brake); the receipt then carries it as `paused`."""
     started = time.monotonic()
     cutoff = _cutoff(min_age_days)
     high = await pool.fetchval("SELECT max(id) FROM assertions_hot") or 0
@@ -129,7 +133,11 @@ async def apply_fold(
     folded = 0
     windows = 0
     finished = True
+    paused: str | None = None
     while lo < high:
+        if pause_check is not None and (paused := await pause_check()):
+            finished = False
+            break
         hi = lo + window
         async with pool.acquire() as conn, conn.transaction():
             rows = await conn.fetch(_CANDIDATES_SQL, lo, hi, cutoff)
@@ -141,7 +149,7 @@ async def apply_fold(
             finished = False
             break
     return {"folded": folded, "windows": windows, "finished": finished, "executed": True,
-           "min_age_days": min_age_days, "reached_id": min(lo, high)}
+           "min_age_days": min_age_days, "reached_id": min(lo, high), "paused": paused}
 
 
 async def compact_assertion_tables(pool: asyncpg.Pool) -> dict[str, Any]:

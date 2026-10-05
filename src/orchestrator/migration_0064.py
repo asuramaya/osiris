@@ -71,6 +71,7 @@ never move this number and can never trigger a spurious raise.
 from __future__ import annotations
 
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -168,6 +169,7 @@ async def apply_migration_0064(
     batch_size: int = DEFAULT_BATCH_SIZE,
     cutoff: datetime | None = None,
     max_seconds: float | None = None,
+    pause_check: Callable[[], Awaitable[str | None]] | None = None,
 ) -> dict[str, Any]:
     """Moves every is_current=false row older than `cutoff` from assertions_hot into
     assertions_cold, in bounded batches (see module docstring for the copy-verify-delete
@@ -209,8 +211,11 @@ async def apply_migration_0064(
     batches = 0
     started = time.monotonic()
 
+    paused: str | None = None
     while True:
         if max_seconds is not None and batches and time.monotonic() - started >= max_seconds:
+            break
+        if pause_check is not None and (paused := await pause_check()):
             break
         async with pool.acquire() as conn, conn.transaction():
             id_rows = await conn.fetch(
@@ -314,4 +319,4 @@ async def apply_migration_0064(
             f"COUNT MISMATCH after migration 0064: before={before_total} "
             f"after={after_total} -- receipt={receipt.as_dict()!r}"
         )
-    return receipt.as_dict()
+    return {**receipt.as_dict(), "paused": paused}
