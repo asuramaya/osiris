@@ -70,9 +70,9 @@ const Osiris = (() => {
   // against the upstream_readers Function.
   function provenanceSignals(p) {
     const bits = [];
-    if (p.agreement === "contradicting") bits.push('<span class="o-faint" style="color:#e5534b" title="sources disagree on this value">contradicting</span>');
+    if (p.agreement === "contradicting") bits.push('<span class="o-faint" style="color:var(--err)" title="sources disagree on this value">contradicting</span>');
     else if (p.agreement === "agreeing") bits.push('<span class="o-faint" title="multiple sources, same value">agreeing</span>');
-    if (p.disputed) bits.push('<span class="o-faint" style="color:#e5534b" title="a spawned/succeeded ancestor genuinely disagreed, per the independence oracle">disputed</span>');
+    if (p.disputed) bits.push('<span class="o-faint" style="color:var(--err)" title="a spawned/succeeded ancestor genuinely disagreed, per the independence oracle">disputed</span>');
     if (typeof p.distinct_upstreams === "number") {
       bits.push(`<span class="o-faint" title="independence-oracle collapse: this many DISTINCT upstream witnesses, not just source count">${p.distinct_upstreams} upstream${p.distinct_upstreams === 1 ? "" : "s"}</span>`);
     }

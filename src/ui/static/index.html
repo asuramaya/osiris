@@ -4,6 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Osiris · Console</title>
+<meta name="color-scheme" content="dark light" />
+<meta name="theme-color" content="#090d13" />
+<script src="/ui/theme.js"></script>
 <link rel="stylesheet" href="/ui/osiris.css" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 <script src="/ui/vendor/marked.min.js"></script>
@@ -11,51 +14,51 @@
   #canvas-wrap { position: absolute; inset: 0; }
   #canvas-wrap canvas { display: block; }
   #labels { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
-  .lbl { position: absolute; font-size: 10px; color: #c9d1d9; background: rgba(13,18,25,0.75);
+  .lbl { position: absolute; font-size: 10px; color: var(--label-text); background: rgb(var(--panel-rgb) / 0.75);
          padding: 1px 4px; border-radius: 3px; transform: translate(-50%, -140%);
          white-space: nowrap; pointer-events: none; }
-  .lbl.lit { color: #f0f6fc; background: rgba(35,55,80,0.9); font-weight: 600; }
+  .lbl.lit { color: var(--text); background: var(--label-lit-bg); font-weight: 600; }
   /* The clicked object must be unmistakable: a ring or halo, its label pinned and larger.
      focus-label is strictly bigger than even a lit label (not just bolder) and is never
      subject to positionLabels' own overlapsPlaced declutter -- it always shows. */
   .lbl.focus-label { font-size: 13px; padding: 2px 6px; }
-  .lbl.project-label { color: #8ab4f8; font-weight: 700; font-size: 11px; padding: 2px 6px;
-                         background: rgba(21,32,48,0.85); }
-  .lbl.community-label { color: #d2a8ff; font-weight: 600; font-size: 10px; padding: 1px 5px;
-                          background: rgba(28,20,42,0.85); }
-  .focus-ring { position: absolute; border: 2px solid #58a6ff; border-radius: 50%;
+  .lbl.project-label { color: var(--label-project); font-weight: 700; font-size: 11px; padding: 2px 6px;
+                         background: var(--label-project-bg); }
+  .lbl.community-label { color: var(--label-community); font-weight: 600; font-size: 10px; padding: 1px 5px;
+                          background: var(--label-community-bg); }
+  .focus-ring { position: absolute; border: 2px solid var(--blue); border-radius: 50%;
                 transform: translate(-50%, -50%); pointer-events: none;
-                box-shadow: 0 0 8px rgba(88,166,255,0.6); }
+                box-shadow: 0 0 8px rgb(var(--blue-rgb) / 0.6); }
   /* The LOD glyph's own label: a project or type summary ("name (count)") shown only at
      the far/mid zoom tiers, styled bigger and bolder than a plain node .lbl since it's
      standing in for a whole group, not one object. */
-  .lod-glyph-label { position: absolute; font-size: 12px; font-weight: 700; color: #f0f6fc;
-                      background: rgba(13,18,25,0.82); padding: 2px 7px; border-radius: 4px;
+  .lod-glyph-label { position: absolute; font-size: 12px; font-weight: 700; color: var(--text);
+                      background: rgb(var(--panel-rgb) / 0.82); padding: 2px 7px; border-radius: 4px;
                       transform: translate(-50%, -50%); white-space: nowrap; pointer-events: none;
                       letter-spacing: 0.2px; }
   /* A container's own type/"more" nodes and a cross-project anchor are genuinely clickable
      (expand, page, drill, or re-focus): pointer-events: auto overrides the plain tier
      label's own none, plus a left accent so a reader can tell "this one does something"
      from "this one is just a name." */
-  .ego-drill-label { pointer-events: auto; border-left: 2px solid #58a6ff; }
-  .storyline-axis-label { color: #8b949e; font-weight: 400; font-size: 10px;
-                           background: rgba(13,18,25,0.6); border-top: 1px solid #30363d; }
+  .ego-drill-label { pointer-events: auto; border-left: 2px solid var(--blue); }
+  .storyline-axis-label { color: var(--muted); font-weight: 400; font-size: 10px;
+                           background: rgb(var(--panel-rgb) / 0.6); border-top: 1px solid var(--border2); }
   /* The table drawer owns the bottom edge now -- nothing floats in its collapsed 34px
      handle band any more (a screenshot showed the canvas controls colliding with it
      there). */
   #space-status-line { position: absolute; bottom: 44px; left: 14px; z-index: 10;
                         font-size: 11px; color: var(--muted); }
   .hover-card { position: absolute; z-index: 12; pointer-events: none; max-width: 260px;
-                background: rgba(13,18,25,0.92); backdrop-filter: blur(8px);
+                background: rgb(var(--panel-rgb) / 0.92); backdrop-filter: blur(8px);
                 border: 1px solid var(--border2); border-radius: 6px; padding: 6px 8px;
-                box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
-  .hover-label { font-size: 11px; color: #f0f6fc; font-weight: 600; white-space: nowrap;
+                box-shadow: 0 8px 24px rgb(var(--shadow-rgb) / calc(0.5 * var(--shadow-k))); }
+  .hover-label { font-size: 11px; color: var(--text); font-weight: 600; white-space: nowrap;
                  overflow: hidden; text-overflow: ellipsis; }
   .hover-meta { font-size: 10px; color: var(--muted); margin-top: 2px; }
   .table-drawer { position: absolute; left: 0; right: 0; bottom: 0; z-index: 20;
                   background: var(--panel); border-top: 1px solid var(--border2);
                   display: flex; flex-direction: column; height: 34px;
-                  transition: height .15s ease; box-shadow: 0 -4px 14px rgba(0,0,0,0.35); }
+                  transition: height .15s ease; box-shadow: 0 -4px 14px rgb(var(--shadow-rgb) / calc(0.35 * var(--shadow-k))); }
   .table-drawer.open { height: 42%; }
   .table-drawer-handle { flex: 0 0 34px; display: flex; align-items: center; gap: 8px;
                           padding: 0 14px; cursor: pointer; font-size: 11px; font-weight: 600;
@@ -71,9 +74,9 @@
      a non-browse surface takes over #result via the pre-existing #stage.panel toggle. */
   #stage.panel .table-drawer { display: none; }
   .legend-panel { position: absolute; top: 52px; right: 14px; z-index: 11; max-height: 60%;
-                   overflow-y: auto; background: rgba(13,18,25,0.92); backdrop-filter: blur(8px);
+                   overflow-y: auto; background: rgb(var(--panel-rgb) / 0.92); backdrop-filter: blur(8px);
                    border: 1px solid var(--border2); border-radius: 6px; padding: 8px 10px;
-                   font-size: 11px; min-width: 200px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
+                   font-size: 11px; min-width: 200px; box-shadow: 0 8px 24px rgb(var(--shadow-rgb) / calc(0.5 * var(--shadow-k))); }
   .legend-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; color: var(--muted);
                 cursor: pointer; white-space: nowrap; }
   .legend-row input { flex: none; }
@@ -82,7 +85,7 @@
   .legend-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; }
 </style>
 <style>
-  .pop { position: absolute; z-index: 30; background: var(--panel); border: 1px solid var(--border2); border-radius: 9px; padding: 14px; box-shadow: 0 16px 48px rgba(0,0,0,0.6); font-size: 12px; min-width: 220px; }
+  .pop { position: absolute; z-index: 30; background: var(--panel); border: 1px solid var(--border2); border-radius: 9px; padding: 14px; box-shadow: 0 16px 48px rgb(var(--shadow-rgb) / calc(0.6 * var(--shadow-k))); font-size: 12px; min-width: 220px; }
   .keyrow { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
 </style>
 </head>
