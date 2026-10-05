@@ -1757,7 +1757,13 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             soul_key=soul_key, restic_key=restic_key, offload_targets=offload_targets,
             restore_drill_receipts=restore_drill_receipts(),
             services_restarted=services_restarted)
-        return {"steps": steps}
+        from src.orchestrator.disk_brake import brake_state
+
+        try:
+            storage_brake = await brake_state(p)
+        except Exception as exc:  # noqa: BLE001 - the stepper never fails over this extra
+            storage_brake = {"error": str(exc)}
+        return {"steps": steps, "storage_brake": storage_brake}
 
     # THE OPERATOR DESK, AS JSON (for the Settings pane's own Operator Desk section):
     # the EXISTING /desk route (above) only ever served server-rendered HTML (the old

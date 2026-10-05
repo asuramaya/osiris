@@ -553,6 +553,17 @@ def pg_dsn(request: pytest.FixtureRequest, worker_id: str) -> Iterator[str]:
 
 
 @pytest.fixture(autouse=True)
+def _host_disk_is_not_a_test_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bulk-rewrite jobs stop when the root disk is short of room (the disk and WAL
+    brake), so a test that runs one of them would pass or fail by how full THIS machine's
+    disk happens to be. Every test sees a roomy disk unless it sets its own figure
+    (tests/test_disk_brake.py does, through the same attribute)."""
+    from src.orchestrator import disk_brake
+
+    monkeypatch.setattr(disk_brake, "disk_usage", lambda: (5 * 1024 ** 4, 10 * 1024 ** 4))
+
+
+@pytest.fixture(autouse=True)
 def _no_inherited_git_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test inherits git's per-invocation GIT_* variables. Defence in depth.
 

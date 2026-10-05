@@ -19,10 +19,14 @@ default, it is required explicit opt-in every time; there is no environment-vari
 just because nobody bothered to unset a flag."""
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
+
+# A bulk job's "may I keep going?" question: None to continue, otherwise the reason to stop.
+PauseCheck = Callable[[], Awaitable[str | None]]
 
 # The outbox window, in days (the operator's storage ruling): ONE value for the CLI's
 # default and the daily heartbeat. The heartbeat used to pass 90 while this module's
@@ -148,7 +152,7 @@ _ASSERT_AUDIT_PASSES = (
 
 async def assert_property_audit_retirement(
     pool: asyncpg.Pool, *, execute: bool = False, batch_size: int = 5000,
-    max_seconds: float | None = None,
+    max_seconds: float | None = None, pause_check: PauseCheck | None = None,
 ) -> dict[str, Any]:
     """Delete the assert_property audit rows that duplicate an assertions row, in id-ordered
     batches of `batch_size`, each its own short statement. `execute=False` (the default)
@@ -156,7 +160,9 @@ async def assert_property_audit_retirement(
     millions of rows is a long scan), so `eligible` is a floor and `capped` says whether it
     is the whole answer. `execute=True` deletes; `max_seconds` stops between batches once
     spent, and the result's `finished` says whether the job ran dry (a later run simply
-    continues from where the table now stands)."""
+    continues from where the table now stands).
+    `pause_check`, when given, is asked before every batch and returns a reason to stop (the
+    disk/WAL brake); the result then carries it as `paused`."""
     import time
 
     if not execute:
@@ -173,9 +179,13 @@ async def assert_property_audit_retirement(
     started = time.monotonic()
     deleted = 0
     finished = True
+    paused: str | None = None
     for _name, where in _ASSERT_AUDIT_PASSES:
         cursor = 0
         while True:
+            if pause_check is not None and (paused := await pause_check()):
+                finished = False
+                break
             rows = await pool.fetch(
                 "DELETE FROM audit_log WHERE id IN ("
                 f" SELECT id FROM audit_log WHERE id > $1 AND {where}"
@@ -190,7 +200,7 @@ async def assert_property_audit_retirement(
         if not finished:
             break
     return {"table": "audit_log", "action": "assert_property", "deleted": deleted,
-           "finished": finished, "executed": True}
+           "finished": finished, "executed": True, "paused": paused}
 
 
 # THE LAYOUT HISTORY, RETIRED (storage redesign): the layout heartbeat used to store every
@@ -206,7 +216,7 @@ _LAYOUT_WINDOW = 50000
 
 async def retire_layout_history(
     pool: asyncpg.Pool, *, execute: bool = False, window: int = _LAYOUT_WINDOW,
-    max_seconds: float | None = None,
+    max_seconds: float | None = None, pause_check: PauseCheck | None = None,
 ) -> dict[str, Any]:
     """Delete the layout heartbeat's graph_x/graph_y/graph_layout_v assertion rows (current
     and superseded, hot and cold) for every object whose position is in graph_layout, in id
@@ -232,7 +242,11 @@ async def retire_layout_history(
     deleted = 0
     lo = 0
     finished = True
+    paused: str | None = None
     while lo < high:
+        if pause_check is not None and (paused := await pause_check()):
+            finished = False
+            break
         hi = lo + window
         for table in ("assertions_hot", "assertions_cold"):
             n = await pool.fetchval(
@@ -244,4 +258,4 @@ async def retire_layout_history(
         if max_seconds is not None and time.monotonic() - started >= max_seconds and lo < high:
             finished = False
             break
-    return {"deleted": deleted, "finished": finished, "executed": True}
+    return {"deleted": deleted, "finished": finished, "executed": True, "paused": paused}

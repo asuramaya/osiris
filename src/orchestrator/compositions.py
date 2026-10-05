@@ -5232,11 +5232,21 @@ async def _fn_backup_status(
         "note": "scripts/osiris_pitr_drill.py: manual-only today, no receipt persisted",
     }
 
+    # THE DISK/WAL BRAKE: whether the bulk-rewrite jobs are paused right now, and why
+    try:
+        from src.orchestrator.disk_brake import brake_state
+
+        brake_section: dict[str, Any] = (
+            await brake_state(pool) if pool is not None else {"error": "no database"})
+    except Exception as exc:  # noqa: BLE001 - one section never blanks the panel
+        brake_section = {"error": f"disk/WAL brake unreadable: {exc}"}
+
     return {
         "as_of": now.isoformat(),
         "timers": timers,
         "vault": vault_section,
         "disk": disk_section,
+        "storage_brake": brake_section,
         "ladder": ladder_section,
         "prune_manifest": manifest_section,
         "pitr_drill": pitr_section,

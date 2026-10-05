@@ -1528,3 +1528,15 @@ async def test_backfill_route_operator_charter_dry_run_still_works(
         "target": "operator_charter", "dry_run": True})
     assert r.status_code == 200
     assert "error" not in r.json()
+
+
+async def test_readiness_carries_the_disk_and_wal_brake_reading(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import disk_brake
+
+    monkeypatch.setattr(disk_brake, "disk_usage", lambda: (10 * 1024 ** 3, 1000 * 1024 ** 3))
+    body = (await client.get("/readiness")).json()
+    assert body["storage_brake"]["paused"] is True
+    assert body["storage_brake"]["label"] == "paused: disk/WAL budget"
+    assert isinstance(body["steps"], list)

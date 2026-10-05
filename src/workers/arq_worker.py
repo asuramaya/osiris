@@ -1267,6 +1267,11 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     if not (await settings_with_overlay(pool)).osiris_retention_heartbeat_enabled:
         return 0
 
+    from src.orchestrator.disk_brake import pause_reason
+
+    if await pause_reason(pool, "retention"):
+        return 0
+
     lines: list[str] = []
     deleted = 0
     try:
@@ -1336,11 +1341,20 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
     if not (await settings_with_overlay(pool)).osiris_retention_heartbeat_enabled:
         return 0
 
+    from src.orchestrator.disk_brake import pause_reason
+
+    async def brake() -> str | None:
+        return await pause_reason(pool, "storage_housekeeping")
+
+    if await brake():
+        return 0
+
     lines: list[str] = []
     changed = 0
     try:
         dup = await assert_property_audit_retirement(
-            pool, execute=True, max_seconds=_AUDIT_DUPLICATE_RETIREMENT_SECS)
+            pool, execute=True, max_seconds=_AUDIT_DUPLICATE_RETIREMENT_SECS,
+            pause_check=brake)
     except Exception as exc:  # a DB hiccup must not kill the cron
         _log.warning("audit_log duplicate retirement failed: %r", exc)
     else:
@@ -1351,7 +1365,7 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
                          f"assertion{more}")
     try:
         layout = await retire_layout_history(
-            pool, execute=True, max_seconds=_LAYOUT_HISTORY_SECS)
+            pool, execute=True, max_seconds=_LAYOUT_HISTORY_SECS, pause_check=brake)
     except Exception as exc:
         _log.warning("layout history retirement failed: %r", exc)
     else:
@@ -1361,7 +1375,7 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
             lines.append(f"assertions: removed {layout['deleted']} graph layout rows that "
                          f"now live in the layout table{more}")
     try:
-        fold = await apply_fold(pool, max_seconds=_ASSERTION_FOLD_SECS)
+        fold = await apply_fold(pool, max_seconds=_ASSERTION_FOLD_SECS, pause_check=brake)
     except Exception as exc:
         _log.warning("assertion fold failed: %r", exc)
     else:
@@ -1373,7 +1387,7 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
     try:
         moved = await apply_migration_0064(
             pool, cutoff=datetime.now(UTC) - timedelta(days=_ASSERTION_HOT_WINDOW_DAYS),
-            max_seconds=_ASSERTION_ARCHIVE_SECS)
+            max_seconds=_ASSERTION_ARCHIVE_SECS, pause_check=brake)
     except Exception as exc:
         _log.warning("assertion history archive failed: %r", exc)
     else:
@@ -1420,6 +1434,10 @@ async def soul_cold_tier_heartbeat(ctx: dict[str, Any]) -> int:
     pool = actions.pool
     if not (await settings_with_overlay(pool)).osiris_soul_cold_tier_enabled:
         return 0
+    from src.orchestrator.disk_brake import pause_reason
+
+    if await pause_reason(pool, "soul_cold_tier"):
+        return 0
     try:
         report = await SoulStore(pool).fold_cold_tier_batch(idle_days=30, limit=20)
     except Exception as exc:  # a DB hiccup must not kill the cron
@@ -1454,8 +1472,11 @@ async def soul_encrypt_heartbeat(ctx: dict[str, Any]) -> int:
     re-raised the same way, and the next tick resumes from the same cursor."""
     from src.ingest.soul_crypto import get_soul_fernet
     from src.orchestrator import soul_encrypt_progress
+    from src.orchestrator.disk_brake import pause_reason
 
     actions: Actions = ctx["cascade"].actions
+    if await pause_reason(actions.pool, "soul_encrypt"):
+        return 0
     fernet = get_soul_fernet()
     before = int(soul_encrypt_progress.read_progress().get("rows_done", 0))
     record = await soul_encrypt_progress.encrypt_tick(actions.pool, fernet)
@@ -1474,7 +1495,11 @@ async def soul_recompress_heartbeat(ctx: dict[str, Any]) -> int:
 
     if soul_recompress.disabled():
         return 0
+    from src.orchestrator.disk_brake import pause_reason
+
     actions: Actions = ctx["cascade"].actions
+    if await pause_reason(actions.pool, "soul_recompress"):
+        return 0
     fernet = get_soul_fernet()
     # train the compression dictionary first (once, when the store has enough lines), so the
     # existing rows go straight to the dictionary form instead of being rewritten twice
@@ -1555,6 +1580,7 @@ async def graph_layout_heartbeat(ctx: dict[str, Any]) -> int:
     `osiris layout --migrate` is mid-run and already holds the same layout lock --
     see graph_layout._try_acquire_layout_lock's own docstring for why this is a
     session-scoped advisory lock and why that's safe here."""
+    from src.orchestrator.disk_brake import pause_reason
     from src.orchestrator.graph_layout import (
         _release_layout_lock,
         _try_acquire_layout_lock,
@@ -1562,6 +1588,8 @@ async def graph_layout_heartbeat(ctx: dict[str, Any]) -> int:
     )
 
     actions: Actions = ctx["cascade"].actions
+    if await pause_reason(actions.pool, "graph_layout"):
+        return 0
     async with actions.pool.acquire() as lock_conn:
         if not await _try_acquire_layout_lock(lock_conn):
             return 0
