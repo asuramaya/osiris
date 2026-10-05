@@ -252,9 +252,11 @@ async def sync_recovery_copies(
 
 async def present_targets(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     """Enabled offload targets that can take a copy right now: a local one whose mountpoint
-    is mounted, and every sftp one (reachability is only knowable by trying)."""
+    is mounted, and an sftp one unless its route leaves through a tunnel (away from home;
+    see network_presence). Beyond that, reachability is only knowable by trying."""
     from src.orchestrator.backup_settings import get_backup_settings
     from src.orchestrator.backup_validation import check_local_target_presence
+    from src.orchestrator.network_presence import lan_presence
 
     settings = await get_backup_settings(pool)
     out = []
@@ -266,6 +268,8 @@ async def present_targets(pool: asyncpg.Pool) -> list[dict[str, Any]]:
             presence = await asyncio.to_thread(check_local_target_presence, mountpoint)
             if not presence.get("present"):
                 continue
+        elif not (await asyncio.to_thread(lan_presence, t)).get("present"):
+            continue
         out.append(t)
     return out
 

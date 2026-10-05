@@ -23,7 +23,13 @@ check: presence there means "an attempt to reach it, bounded by a real timeout,
 either succeeds or doesn't"; a reachability failure is treated identically to an
 absent mountpoint (skip, record, never raise), the same "an absent target is the
 expected common case, never an error" law `check_local_target_presence`'s own
-docstring states for 'local'."""
+docstring states for 'local'.
+
+AT HOME ONLY: a network target counts as present only while the route to it leaves through a
+local interface (`network_presence.lan_presence`). Away from home the NAS still answers, but
+over the VPN, and a full upload over a tunnel is what the operator's rule forbids; such a
+target is skipped quietly with a receipt reason ("reachable only over tailscale0"), and a
+target with `allow_tunnel: true` opts out of the check."""
 from __future__ import annotations
 
 import asyncio
@@ -163,6 +169,7 @@ async def _run_offload_tick_locked(
     from src.orchestrator import recovery_copies
     from src.orchestrator.backup_settings import get_backup_settings
     from src.orchestrator.backup_validation import check_local_target_presence
+    from src.orchestrator.network_presence import lan_presence
     from src.orchestrator.restic_credential import ResticPasswordMissing, get_restic_password
 
     settings = await get_backup_settings(pool)
@@ -185,6 +192,15 @@ async def _run_offload_tick_locked(
             if not presence.get("present"):
                 results.append({"name": name, "skipped": "not present (mountpoint absent)"})
                 continue
+        else:
+            lan = await asyncio.to_thread(lan_presence, target)
+            if not lan.get("present"):
+                reason = str(lan.get("reason"))
+                # a quiet skip, not a failure: it must never clobber a real last success,
+                # and it adds no `last_error` for the readiness view to report
+                _write_receipt(name, {"last_skip_reason": reason, "last_skip_at": now})
+                results.append({"name": name, "skipped": reason})
+                continue
         present.append(target)
 
     extra: dict[str, Any] = {}
@@ -204,7 +220,7 @@ async def _run_offload_tick_locked(
             _run_restic_backup, repository=repository, password=password, source=source)
         if fail is None:
             _write_receipt(name, {"last_successful_offload": now, "last_attempt_at": now,
-                                  "last_error": None})
+                                  "last_error": None, "last_skip_reason": None})
             results.append({"name": name, "ok": True})
         else:
             # a 'restic' target's own unreachability surfaces here identically to a

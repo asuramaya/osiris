@@ -256,6 +256,9 @@ def _validate_offload_targets(value: Any) -> str | None:
             return f"offload_targets[{i}] ({name!r}) needs a non-empty string 'schedule'"
         if not isinstance(t.get("enabled"), bool):
             return f"offload_targets[{i}] ({name!r}) needs a boolean 'enabled'"
+        if "allow_tunnel" in t and not isinstance(t["allow_tunnel"], bool):
+            return (f"offload_targets[{i}] ({name!r}) 'allow_tunnel' must be a boolean "
+                    "(true lets a network target upload over a VPN/tunnel; default false)")
     return None
 
 
@@ -291,7 +294,7 @@ _BACKUP_SETTINGS: tuple[SettingSpec, ...] = (
     SettingSpec("backup.offload_targets", "records", [], effect="next_deploy",
                item_shape={"name": "str", "kind": "enum", "path_or_url": "str",
                           "expected_mountpoint": "str", "schedule": "schedule",
-                          "enabled": "bool"},
+                          "enabled": "bool", "allow_tunnel": "bool"},
                validate=_validate_offload_targets,
                authority="operator_or_ruling", requires_because=True,
                consequence="high", write_name="backup_settings"),
