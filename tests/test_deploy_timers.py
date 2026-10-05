@@ -82,3 +82,20 @@ def test_the_restore_drill_unit_is_capped_low_priority_and_runs_the_drill_script
     assert "IOSchedulingClass=idle" in service
     assert "scripts/osiris_pitr_drill.py" in service
     assert (ROOT / "scripts" / "osiris_pitr_drill.py").is_file()
+
+
+def test_the_wal_pull_runs_on_its_own_frequent_timer_apart_from_the_dump() -> None:
+    """A full dump of a large database is slow and saturates the disk; the pull of completed
+    WAL segments is small and must run often. They are separate units: a daily dump, and a
+    pull every 15 minutes."""
+    backup_timer = (DEPLOY / "osiris-backup.timer").read_text()
+    pull_timer = (DEPLOY / "osiris-wal-pull.timer").read_text()
+    assert "OnCalendar=*-*-* 04:30:00" in backup_timer
+    assert "OnCalendar=*:0/15" in pull_timer
+    assert "osiris_wal_pull.sh" in (DEPLOY / "osiris-wal-pull.service").read_text()
+    assert "osiris-wal-pull" in _installed_units() and "osiris-wal-pull" in _enabled_timers()
+    dump_script = (ROOT / "scripts" / "osiris_backup.sh").read_text()
+    assert "docker exec osiris-pg cat" not in dump_script   # the pull is not in the dump script
+    assert "pg_dump" in dump_script and "osiris_disk_guard.py" in dump_script
+    pull_script = (ROOT / "scripts" / "osiris_wal_pull.sh").read_text()
+    assert "wal_archive" in pull_script and "docker exec osiris-pg pg_dump" not in pull_script

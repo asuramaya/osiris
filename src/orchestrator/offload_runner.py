@@ -88,6 +88,22 @@ def _write_receipt(name: str, receipt: dict[str, Any]) -> None:
     path.write_text(json.dumps(receipts, indent=2))
 
 
+def _note_skip(name: str, reason: str, now: str) -> None:
+    """A quiet skip: why, when, and when this run of skips began (kept while the same
+    skipping continues, cleared by the next attempt)."""
+    existing = _read_receipts().get(name) or {}
+    began = existing.get("skipped_since") if existing.get("last_skip_reason") else None
+    _write_receipt(name, {"last_skip_reason": reason, "last_skip_at": now,
+                          "skipped_since": began or now})
+
+
+def _ensure_tracked(name: str, now: str) -> None:
+    """The first time a tick sees a target enabled, remember it: that is the clock a target
+    that has never succeeded is judged from (offload_staleness)."""
+    if not (_read_receipts().get(name) or {}).get("tracked_since"):
+        _write_receipt(name, {"tracked_since": now})
+
+
 def offload_receipts() -> dict[str, Any]:
     """Public read entry point for `compositions._fn_backup_status`'s own `offbox_section`,
     never writes, mirrors `_read_receipts` under a name that doesn't look
@@ -144,10 +160,51 @@ async def run_offload_tick(pool: asyncpg.Pool, *, vault: Path | None = None) -> 
         except OSError:
             return {"skipped": "already running", "targets": []}
         try:
-            return await _run_offload_tick_locked(pool, vault=vault)
+            out = await _run_offload_tick_locked(pool, vault=vault)
+            told = await _surface_stale(pool)
+            if told:
+                out["stale_targets"] = told
+            return out
         finally:
             with contextlib.suppress(OSError):
                 fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+async def _surface_stale(pool: asyncpg.Pool) -> list[str]:
+    """Tell the desk, once, about every enabled target that has gone the stale limit (the
+    `backup.offload_stale_days` setting, default 7) without a successful offload, naming why.
+    "Once" is per stretch of silence: the receipt remembers which clock it told about, and a
+    successful offload clears it. A limit of 0 turns this off. Never fails the tick."""
+    import logging
+
+    from src.orchestrator.backup_settings import get_backup_settings
+    from src.orchestrator.mailbox import send_message
+    from src.orchestrator.offload_staleness import stale_offload_targets, stale_sentence
+    from src.orchestrator.settings_service import settings_with_overlay
+
+    told: list[str] = []
+    try:
+        limit = int((await settings_with_overlay(pool)).osiris_offload_stale_days)
+        if limit <= 0:
+            return told
+        targets = (await get_backup_settings(pool)).get("offload_targets") or []
+        receipts = _read_receipts()
+        stale = stale_offload_targets(targets, receipts, now=datetime.now(UTC), stale_days=limit)
+        for entry in stale:
+            if (receipts.get(entry["name"]) or {}).get("stale_notified_clock") == entry["clock"]:
+                continue
+            sentence = stale_sentence(entry, limit)
+            physical = "since" in entry["reason"] and "attempt failed" not in entry["reason"]
+            await send_message(
+                pool, from_agent="cron:offload_runner", from_project="osiris",
+                to_project="operator", body=f"offload: {sentence}",
+                desk_kind="hands" if physical else "fyi", dedup_window_secs=3600)
+            _write_receipt(entry["name"], {"stale_notified_clock": entry["clock"]})
+            told.append(sentence)
+    except Exception:  # noqa: BLE001 - telling the desk must never fail the tick
+        logging.getLogger(__name__).warning("could not surface stale offload targets",
+                                            exc_info=True)
+    return told
 
 
 async def _run_offload_tick_locked(
@@ -190,7 +247,9 @@ async def _run_offload_tick_locked(
             mountpoint = target.get("expected_mountpoint") or ""
             presence = await asyncio.to_thread(check_local_target_presence, mountpoint)
             if not presence.get("present"):
-                results.append({"name": name, "skipped": "not present (mountpoint absent)"})
+                reason = "not present (mountpoint absent)"
+                _note_skip(name, reason, now)
+                results.append({"name": name, "skipped": reason})
                 continue
         else:
             lan = await asyncio.to_thread(lan_presence, target)
@@ -198,10 +257,13 @@ async def _run_offload_tick_locked(
                 reason = str(lan.get("reason"))
                 # a quiet skip, not a failure: it must never clobber a real last success,
                 # and it adds no `last_error` for the readiness view to report
-                _write_receipt(name, {"last_skip_reason": reason, "last_skip_at": now})
+                _note_skip(name, reason, now)
                 results.append({"name": name, "skipped": reason})
                 continue
         present.append(target)
+    for target in targets:
+        if isinstance(target, dict) and target.get("enabled"):
+            _ensure_tracked(str(target.get("name", "<unnamed>")), now)
 
     extra: dict[str, Any] = {}
     copies = await recovery_copies.sync_recovery_copies(present, source)
@@ -220,7 +282,8 @@ async def _run_offload_tick_locked(
             _run_restic_backup, repository=repository, password=password, source=source)
         if fail is None:
             _write_receipt(name, {"last_successful_offload": now, "last_attempt_at": now,
-                                  "last_error": None, "last_skip_reason": None})
+                                  "last_error": None, "last_skip_reason": None,
+                                  "skipped_since": None, "stale_notified_clock": None})
             results.append({"name": name, "ok": True})
         else:
             # a 'restic' target's own unreachability surfaces here identically to a
@@ -228,7 +291,8 @@ async def _run_offload_tick_locked(
             # probe for restic targets (the standing rule in this domain is never a
             # network call outside the real operation itself),
             # so "tried and failed" is the only signal a sftp/NAS target ever gets.
-            _write_receipt(name, {"last_attempt_at": now, "last_error": fail})
+            _write_receipt(name, {"last_attempt_at": now, "last_error": fail,
+                                  "last_skip_reason": None, "skipped_since": None})
             results.append({"name": name, "ok": False, "error": fail})
 
     return {"as_of": now, "targets": results, **extra}
