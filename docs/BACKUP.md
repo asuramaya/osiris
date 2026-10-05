@@ -17,7 +17,8 @@ them all):
 
 | What | Schedule | Unit |
 |------|----------|------|
-| Postgres dump (`pg_dump -Fc`, compressed custom format) | every 6 hours (`04,10,16,22:30`) | `osiris-backup.timer` |
+| Postgres dump (`pg_dump -Fc`, compressed custom format) | daily at 04:30 | `osiris-backup.timer` |
+| Write-ahead log pull (completed segments from the database container into the vault) | every 15 minutes | `osiris-wal-pull.timer` |
 | Weekly base backup (`pg_basebackup`, for point-in-time recovery) | Sunday 02:00 | `osiris-base-backup.timer` |
 | Prune schedule: mail the dry-run plan | Saturday 03:00 | `osiris-prune-manifest.timer` |
 | Prune schedule: actually delete, if the plan is clear | Sunday 03:00 | `osiris-prune-apply.timer` |
@@ -199,7 +200,7 @@ osiris backup-settings write \
 osiris backup-settings write --offload-remove big-drive --because "retiring the old drive"
 
 # reschedule just one timer, leaving the rest untouched
-osiris backup-settings write --timer osiris-backup.timer="*-*-* 00,06,12,18:00:00" \
+osiris backup-settings write --timer osiris-backup.timer="*-*-* 03:30:00" \
   --because "shifting the dump schedule"
 ```
 

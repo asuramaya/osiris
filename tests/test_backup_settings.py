@@ -299,9 +299,10 @@ async def test_write_backup_settings_a_worker_citing_a_matching_ruling_succeeds(
     assert res["vault_path"] == str(tmp_path)
 
 
-def test_backup_timer_units_is_a_tuple_of_five() -> None:
-    assert len(BACKUP_TIMER_UNITS) == 5
+def test_backup_timer_units_is_a_tuple_of_six() -> None:
+    assert len(BACKUP_TIMER_UNITS) == 6
     assert "osiris-backup.timer" in BACKUP_TIMER_UNITS
+    assert "osiris-wal-pull.timer" in BACKUP_TIMER_UNITS
     assert "osiris-preflight.timer" in BACKUP_TIMER_UNITS
 
 

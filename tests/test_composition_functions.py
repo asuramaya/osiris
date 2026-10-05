@@ -530,7 +530,7 @@ async def test_backup_status_degrades_a_missing_vault_without_blanking_other_sec
     assert data["vault"]["base_backups"]["count"] == 0
     assert "error" in data["disk"]
     # every OTHER section still renders: a missing vault dir doesn't blank the panel
-    assert len(data["timers"]) == 5
+    assert len(data["timers"]) == 6
     assert "prune_manifest" in data and "error" not in data["prune_manifest"]
     # THE OPPORTUNISTIC OFFLOAD RUNNER wired this section up for real (offload_runner.py):
     # a missing vault degrades `vault`/`disk`, never this section (no
@@ -552,7 +552,7 @@ async def test_backup_status_timers_carry_their_shipped_schedule(
     res = await _fn_backup_status(None, None, {"vault": str(tmp_path / "v"),
                                                "backups": str(tmp_path / "b")})
     by_unit = {t["unit"]: t for t in res["timers"]}
-    assert by_unit["osiris-backup.timer"]["schedule"] == "*-*-* 04,10,16,22:30:00"
+    assert by_unit["osiris-backup.timer"]["schedule"] == "*-*-* 04:30:00"
     assert by_unit["osiris-base-backup.timer"]["schedule"] == "Sun 02:00:00"
     assert by_unit["osiris-prune-manifest.timer"]["schedule"] == "Sat 03:00:00"
     assert by_unit["osiris-prune-apply.timer"]["schedule"] == "Sun 03:00:00"
@@ -584,7 +584,7 @@ async def test_backup_status_shows_a_configured_schedule_override_distinct_from_
                                                  "backups": str(tmp_path / "b")}}, None)
     by_unit = {t["unit"]: t for t in res["items"]["timers"]}
     assert by_unit["osiris-backup.timer"]["configured_schedule"] == "*-*-* 00,12:00:00"
-    assert by_unit["osiris-backup.timer"]["schedule"] == "*-*-* 04,10,16,22:30:00"  # unchanged
+    assert by_unit["osiris-backup.timer"]["schedule"] == "*-*-* 04:30:00"  # unchanged
     assert by_unit["osiris-base-backup.timer"]["configured_schedule"] is None
 
 

@@ -2,7 +2,7 @@
 # The graph's backup process (born 2026-07-08, the day an anonymous-volume arrangement
 # nearly lost the whole database at a reboot; residuals closed under task #51).
 #
-# Every 6 hours (timer): dump the durable container's DB straight to the VAULT (the
+# Daily (timer, 04:30): dump the durable container's DB straight to the VAULT (the
 # canonical copy: backups/ keeps only the last day, and the vault owns retention),
 # refresh the repo's git bundle, and hardlink the dump into backups/ for fast local
 # access to the last day only. Same-disk still (an off-box destination remains a future
@@ -66,14 +66,14 @@ git -C "$REPO" bundle create "$VAULT/osiris-repo.bundle.new" --all 2>/dev/null \
 
 # backups/ HARDLINKS the vault's own new dump (same filesystem, free: never a second
 # copy of the bytes) purely for fast local access; ITS OWN retention is a fixed, small
-# "keep 1 day" cutoff (6-hourly * 4), nothing more. This is a CACHE, not a second
+# "keep the last two dumps" cutoff (the dump is daily now), nothing more. This is a CACHE, not a second
 # archive. `ln` falling back to `cp` covers the rare case of $DIR and $VAULT crossing a
 # filesystem boundary (a hardlink can't span one; a plain copy still can).
 if [ -n "$NEW_DUMP" ]; then
   ln "$NEW_DUMP" "$DIR/$(basename "$NEW_DUMP")" 2>/dev/null \
     || cp "$NEW_DUMP" "$DIR/$(basename "$NEW_DUMP")"
 fi
-ls -1t "$DIR"/osiris-*.dump 2>/dev/null | tail -n +5 | xargs -r rm -- || true
+ls -1t "$DIR"/osiris-*.dump 2>/dev/null | tail -n +3 | xargs -r rm -- || true
 
 # THE TRANSCRIPT VAULT IS RETIRED: once the round-trip proof passes, the transcript
 # archive line leaves osiris_backup.sh; the DB backups (WAL + the retention plan) carry
@@ -90,30 +90,7 @@ ls -1t "$DIR"/osiris-*.dump 2>/dev/null | tail -n +5 | xargs -r rm -- || true
 # (piece 1's own scope was claude-code only): a real gap, tracked rather than silently
 # reintroduced later.
 
-# WAL PULL (vault lane item 3): osiris_archive_wal.sh (deployed to
-# /var/lib/postgresql/data/osiris_archive_wal.sh, INSIDE the pgdata VOLUME so it survives
-# a real container recreate) stages each completed WAL segment there. This container
-# carries no bind mount for the vault (checked: `docker inspect osiris-pg` shows exactly
-# one mount, the pgdata volume), so getting segments OUT is this script's own job, same
-# division of labor as everything else in this file (the container does the Postgres-
-# side work, the host does the vault-side work). Copies whatever's staged into the vault,
-# then prunes the in-container staging copy once it's safely out, bounding pgdata volume
-# growth while the vault becomes the durable, off-container copy. Silent no-op (never a
-# hard failure) when archiving isn't enabled yet or the container isn't reachable:
-# WAL archiving is opt-in infrastructure, not assumed here.
-WAL_VAULT="$VAULT/wal_archive"
-mkdir -p "$WAL_VAULT"
-if docker exec osiris-pg test -d /var/lib/postgresql/data/wal_archive 2>/dev/null; then
-  while IFS= read -r seg; do
-    [ -n "$seg" ] || continue
-    if [ ! -e "$WAL_VAULT/$seg" ]; then
-      docker exec osiris-pg cat "/var/lib/postgresql/data/wal_archive/$seg" \
-        > "$WAL_VAULT/$seg.tmp" 2>/dev/null \
-        && mv "$WAL_VAULT/$seg.tmp" "$WAL_VAULT/$seg" \
-        || rm -f "$WAL_VAULT/$seg.tmp"
-    fi
-    # pulled (or already had a copy): safe to prune the in-container staging file
-    [ -e "$WAL_VAULT/$seg" ] \
-      && docker exec osiris-pg rm -f "/var/lib/postgresql/data/wal_archive/$seg" 2>/dev/null || true
-  done < <(docker exec osiris-pg ls -1 /var/lib/postgresql/data/wal_archive 2>/dev/null)
-fi
+# THE WAL PULL IS NOT HERE ANY MORE: it is scripts/osiris_wal_pull.sh on its own 15 minute timer
+# (osiris-wal-pull.timer). A full dump of a database this size takes a long time and a lot of IO,
+# and the pull of completed WAL segments out of the container is small, so tying the two to one
+# timer made the cheap, time-critical job wait behind the slow, heavy one.

@@ -185,6 +185,7 @@ _MINER_BUDGETS: tuple[SettingSpec, ...] = (
 # orchestrator layer to build its own SettingSpecs, only the reverse.
 BACKUP_TIMER_UNITS: tuple[str, ...] = (
     "osiris-backup.timer",
+    "osiris-wal-pull.timer",
     "osiris-base-backup.timer",
     "osiris-prune-manifest.timer",
     "osiris-prune-apply.timer",

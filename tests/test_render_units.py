@@ -37,14 +37,14 @@ def test_render_substitutes_the_override_and_leaves_everything_else_untouched(
 ) -> None:
     deploy = tmp_path / "deploy"
     deploy.mkdir()
-    _write_timer(deploy, "osiris-backup.timer", "*-*-* 04,10,16,22:30:00")
+    _write_timer(deploy, "osiris-backup.timer", "*-*-* 04:30:00")
     out = tmp_path / "out"
     n = render(deploy, out, {"backup.timer_schedule.osiris-backup.timer": "*-*-* 00,12:00:00"})
     assert n == 1
     rendered = (out / "osiris-backup.timer").read_text()
     assert "OnCalendar=*-*-* 00,12:00:00" in rendered
     assert "Persistent=true" in rendered  # everything else survives byte-for-byte
-    assert "OnCalendar=*-*-* 04,10,16,22:30:00" not in rendered
+    assert "OnCalendar=*-*-* 04:30:00" not in rendered
     # the .service ships unchanged
     assert (out / "osiris-backup.service").read_text() == (
         deploy / "osiris-backup.service").read_text()

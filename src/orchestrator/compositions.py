@@ -5014,7 +5014,8 @@ async def _fn_obligation_backlog(
 
 
 _BACKUP_TIMER_UNITS: list[tuple[str, str]] = [
-    ("osiris-backup.timer", "dumps (pg_dump, every 6h)"),
+    ("osiris-backup.timer", "dumps (pg_dump, daily)"),
+    ("osiris-wal-pull.timer", "WAL pull into the vault (every 15 min)"),
     ("osiris-base-backup.timer", "base backups (pg_basebackup, weekly)"),
     ("osiris-prune-manifest.timer", "prune ladder: manifest (dry run, mailed)"),
     ("osiris-prune-apply.timer", "prune ladder: apply (deletes if the manifest is clear)"),
