@@ -30,8 +30,8 @@ StepStatus = Literal["done", "missing", "needs_attention"]
 STEP_ORDER = (
     "key_set_up", "services_restarted", "recovery_enrolled", "recovery_verified",
     "recovery_copy_off_box", "data_encrypted", "backup_password_set",
-    "offload_target_present", "offload_run", "offload_current", "restore_test_passed",
-    "key_tpm_sealed",
+    "offload_target_present", "offload_run", "offload_current", "wal_backlog",
+    "restore_test_passed", "key_tpm_sealed",
 )
 
 
@@ -171,11 +171,31 @@ def _offload_current_step(
     return _step("offload_current", label, "done", None, None)
 
 
+def _wal_backlog_step(backlog: dict[str, Any] | None, limit_gb: int) -> dict[str, Any]:
+    """Write-ahead log older than the newest VERIFIED base backup is waiting to be pruned. A
+    lot of it means the weekly clean-up did not run (a laptop that slept through its slot) or
+    could not, and the disk keeps paying. Judged only once a base backup has been verified."""
+    label = "Old write-ahead log cleared"
+    if not backlog or not backlog.get("verified"):
+        return _step("wal_backlog", label, "missing",
+                     "Waiting for the first verified base backup (the weekly restore test).",
+                     None, optional=True)
+    gb = backlog["bytes"] / 1e9
+    if limit_gb > 0 and gb > limit_gb:
+        return _step(
+            "wal_backlog", label, "needs_attention",
+            f"{gb:.0f} GB of write-ahead log older than the newest verified base backup is "
+            f"waiting to be removed (limit {limit_gb} GB). The daily clean-up applies the "
+            "weekly plan: check that it ran.", None)
+    return _step("wal_backlog", label, "done", None, None)
+
+
 def compute_readiness_steps(
     *, soul_key: dict[str, Any], restic_key: dict[str, Any],
     offload_targets: list[dict[str, Any]], restore_drill_receipts: dict[str, Any],
     services_restarted: bool | None,
     stale_offload: list[dict[str, Any]] | None = None, stale_days: int = 7,
+    wal_backlog: dict[str, Any] | None = None, wal_limit_gb: int = 50,
 ) -> list[dict[str, Any]]:
     """`stale_offload`: offload_staleness.stale_offload_targets's list for this box, computed by
     the caller from the receipts and the `backup.offload_stale_days` limit (`stale_days`).
@@ -302,6 +322,8 @@ def compute_readiness_steps(
             "Runs automatically once a backup target is present.", None))
 
     steps.append(_offload_current_step(enabled_targets, stale_offload or [], stale_days))
+
+    steps.append(_wal_backlog_step(wal_backlog, wal_limit_gb))
 
     steps.append(_restore_test_step(enabled_targets, restore_drill_receipts))
 

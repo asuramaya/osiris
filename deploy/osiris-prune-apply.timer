@@ -1,8 +1,13 @@
 [Unit]
-Description=Osiris weekly prune-ladder apply (weekly, one day after the manifest)
+Description=Osiris prune-ladder apply (daily; acts only on a manifest that is old enough and not yet applied)
 
 [Timer]
-OnCalendar=Sun 03:00:00
+# Daily, not weekly: a laptop that slept through the weekly slot used to push a whole week of
+# retention to the next Sunday (WAL grew to 417 GB). Most days this finds nothing new and exits
+# quietly. 14:00 sits after the Sunday restore drill's 6 hour stop (05:30 + 6h), so it never
+# prunes while the drill is reading the archive; the drill also runs this itself the moment it
+# passes (osiris-pitr-drill.service), which is what lets WAL be pruned back to the NEW base.
+OnCalendar=*-*-* 14:00:00
 Persistent=true
 
 [Install]

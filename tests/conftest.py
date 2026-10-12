@@ -712,6 +712,7 @@ def _no_real_home_state(monkeypatch: pytest.MonkeyPatch,
     monkeypatch.setenv("OSIRIS_OFFLOAD_RECEIPTS_FILE", str(home / "state" / "offload.json"))
     monkeypatch.setenv("OSIRIS_LEASE_KEY_FILE", str(home / "config" / "osiris" / "lease.key"))
     monkeypatch.setenv("OSIRIS_GRAPH_SNAPSHOT_FILE", str(home / "state" / "graph_snapshot.bin"))
+    monkeypatch.setenv("OSIRIS_PRUNE_APPLIED_FILE", str(home / "state" / "prune_applied.json"))
 
 
 @pytest.fixture(autouse=True)

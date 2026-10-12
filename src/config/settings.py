@@ -557,6 +557,8 @@ class Settings(BaseSettings):
     osiris_miner_zero_acceptance_window_days: int = 7
     # days without a successful offload before an enabled target is flagged (0 = never flag)
     osiris_offload_stale_days: int = 7
+    # gigabytes of WAL older than the newest verified base backup before readiness flags it
+    osiris_wal_backlog_gb: int = 50
     # Layout knobs (product convention: every action is configurable): the heartbeat's own per-tick
     # batch size and cron cadence, both previously bare module constants. batch_size takes
     # effect on the next tick and is genuinely table-driven (the layout batch job reads it

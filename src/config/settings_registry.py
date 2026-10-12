@@ -277,6 +277,11 @@ _BACKUP_SETTINGS: tuple[SettingSpec, ...] = (
     SettingSpec("backup.offload_stale_days", "int", 7, effect="next_tick",
                consequence="low", requires_because=False,
                env_field="osiris_offload_stale_days"),
+    # Readiness flags archived WAL older than the newest verified base backup above this many
+    # gigabytes (the weekly clean-up did not run); 0 turns the flag off.
+    SettingSpec("backup.wal_backlog_gb", "int", 50, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_wal_backlog_gb"),
     SettingSpec("backup.vault_path", "path", None, effect="next_deploy",
                authority="operator_or_ruling", requires_because=True,
                consequence="high", write_name="backup_settings"),

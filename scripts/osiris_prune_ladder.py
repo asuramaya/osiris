@@ -56,6 +56,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import re
 import sys
 import tarfile
@@ -749,6 +750,35 @@ async def find_clear_manifest(
     return int(row["id"]), f"manifest {row['id']}, sent {age} ago, not dimmed, clear"
 
 
+
+# WHICH MANIFEST HAS ALREADY BEEN APPLIED: apply runs daily and acts on the newest undimmed
+# manifest that is old enough, once. Without this record a daily timer would re-apply the same
+# manifest every day; with it, a run that finds nothing new is a quiet skip, and a week where
+# the laptop slept through the Sunday run is made up the next day instead of the next Sunday.
+_APPLIED_ENV = "OSIRIS_PRUNE_APPLIED_FILE"
+_DEFAULT_APPLIED_FILE = "~/.local/state/osiris/prune_applied.json"
+
+
+def applied_path() -> Path:
+    return Path(os.environ.get(_APPLIED_ENV) or _DEFAULT_APPLIED_FILE).expanduser()
+
+
+def last_applied_manifest() -> int | None:
+    try:
+        return int(json.loads(applied_path().read_text()).get("manifest_id"))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def record_applied(manifest_id: int, *, now: datetime | None = None) -> None:
+    path = applied_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"manifest_id": manifest_id,
+                               "applied_at": (now or datetime.now(UTC)).isoformat()}) + "\n")
+    tmp.replace(path)
+
+
 def _apply(
     plans: dict[str, dict[str, list[DumpFile]]],
     chain_plan: dict[str, list[TranscriptChain]],
@@ -826,9 +856,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.apply_if_clear:
         existing_mid, reason = asyncio.run(find_clear_manifest())
+        # Nothing to apply today is NOT a failure: this runs every day, and most days the
+        # newest manifest is too young, was dimmed on purpose, or was applied already.
         if existing_mid is None:
-            print(f"REFUSING: {reason}", file=sys.stderr)
-            return 1
+            print(f"SKIPPING, nothing to apply: {reason}")
+            return 0
+        if last_applied_manifest() == existing_mid:
+            print(f"SKIPPING, nothing new to apply: manifest {existing_mid} was already applied")
+            return 0
         plans, chain_plan, wal_plan, legacy_plan = _compute_plans(args.backups, args.vault)
         session_plan = asyncio.run(_collect_session_prune_plan())
         total_remove = sum(len(p["remove"]) for p in plans.values())
@@ -841,6 +876,7 @@ def main(argv: list[str] | None = None) -> int:
               f"segment(s), {total_legacy_remove} legacy transcript tarball(s), and "
               f"{total_session_remove} transcript cache file(s) now.")
         _apply(plans, chain_plan, wal_plan, legacy_plan, session_plan)
+        record_applied(existing_mid)
         return 0
 
     plans, chain_plan, wal_plan, legacy_plan = _compute_plans(args.backups, args.vault)

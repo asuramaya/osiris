@@ -155,7 +155,9 @@ async def test_collect_session_prune_plan_delegates_to_the_cache_prune_script(
 
     dead = SessionRow("dead-sid", "/tmp/dead.jsonl",
                       datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 1, tzinfo=UTC))
-    alive = SessionRow("alive-sid", "/tmp/alive.jsonl", NOW, NOW)
+    # "alive" is judged against the real clock (30 days), so it must be recent in real time
+    just_now = datetime.now(UTC)
+    alive = SessionRow("alive-sid", "/tmp/alive.jsonl", just_now, just_now)
 
     async def _fake_collect_sessions(harness: str = "claude-code") -> list[SessionRow]:
         return [dead, alive]
