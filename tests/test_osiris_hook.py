@@ -1983,3 +1983,49 @@ def test_precompact_fallback_stays_silent_when_already_settled(
             "transcript_path": ""}
     assert _cmd_precompact(hook) == 0
     assert seen == []
+
+
+# --- /mail with fyi rows and the ack act: through a real (fake) CLI -----------------------------
+
+def _fake_cli(tmp_path: Path, canned: str) -> tuple[str, Path]:
+    """A tiny executable standing in for `osiris`: prints canned text and logs its argv."""
+    log = tmp_path / "argv.log"
+    script = tmp_path / "osiris"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        f"open({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+        f"print({canned!r})\n")
+    script.chmod(0o755)
+    return str(script), log
+
+
+def test_mail_serves_the_fyi_rows_the_cli_prints_and_never_acks(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    canned = ("7 fyi from:deploy:disconnect-warning thread:7: osiris-mcp is back up.\n"
+              "1 fyi message(s); to settle them: osiris inbox --ack all-fyi (or --ack <id,id>)")
+    binary, log = _fake_cli(tmp_path, canned)
+    monkeypatch.setattr(osiris_hook, "_OSIRIS_BIN", binary)
+    monkeypatch.setenv("OSIRIS_HOOK_PROJECT", "osiris")
+    printed: list[str] = []
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: printed.append(s))
+
+    hook = {"prompt": "/mail", "session_id": "sessnid1-0000-4000-8000-000000000000"}
+    assert _cmd_read(hook) == 0
+
+    reason = json.loads(printed[0])["reason"]
+    assert "7 fyi from:deploy:disconnect-warning" in reason
+    assert "osiris inbox --ack all-fyi" in reason
+    argv = log.read_text()
+    assert "inbox" in argv and "--text" in argv and "--ack" not in argv
+
+
+def test_mail_ack_is_an_act_the_hook_never_serves(tmp_path: Path, monkeypatch: Any) -> None:
+    binary, log = _fake_cli(tmp_path, "should never run")
+    monkeypatch.setattr(osiris_hook, "_OSIRIS_BIN", binary)
+    monkeypatch.setenv("OSIRIS_HOOK_PROJECT", "osiris")
+    for prompt in ("/mail ack", "/mail ack all-fyi", "/mail --ack all-fyi", "/mail --ack 3,5"):
+        hook = {"prompt": prompt, "session_id": "sessnid1-0000-4000-8000-000000000000"}
+        assert _cmd_read(hook) == 0
+    assert not log.exists()   # the CLI was never even run

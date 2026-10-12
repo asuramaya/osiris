@@ -2516,6 +2516,7 @@ async def _call_and_emit_text(
     url: str, tool: str, params: dict[str, Any], *, as_json: bool, title: str,
     error_prefix: str, text_only: bool = False,
     fallback_params: dict[str, Any] | None = None,
+    text_transform: Callable[[str], str] | None = None,
 ) -> int:
     """Shared body for the human-paint read commands (backlog/threads/roster/team).
     `--json` gets the full structured response, unchanged. Human mode asks the server for
@@ -2545,6 +2546,9 @@ async def _call_and_emit_text(
         print(f"{error_prefix}: {result}. Is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
+    if text_transform is not None and isinstance(result, dict) \
+            and isinstance(result.get("text"), str):
+        result = {**result, "text": text_transform(result["text"])}
     if text_only:
         text = result.get("text") if isinstance(result, dict) else None
         print(text if text is not None else json.dumps(result))
@@ -2668,8 +2672,47 @@ def _session_anchor(session: str | None) -> str | None:
     return str(Path.home() / ".claude" / "jobs" / sid[:8])
 
 
+async def _ack_mail(
+    url: str, params: dict[str, Any], spec: str,
+) -> int:
+    """The act behind `osiris inbox --ack`: settle named messages, or every fyi one."""
+    from src.orchestrator.mcp_client import call_mcp_tool
+
+    if spec == "all-fyi":
+        seen = await call_mcp_tool(url, "inbox", params)
+        if isinstance(seen, str) or not isinstance(seen, dict) or seen.get("error"):
+            print(f"osiris inbox: could not read the mailbox to find the fyi messages "
+                  f"({seen if isinstance(seen, str) else seen.get('error')})", file=sys.stderr)
+            return 1
+        ids = [int(m["id"]) for m in seen.get("messages", []) if m.get("grade") != "ask"]
+    else:
+        try:
+            ids = [int(part) for part in spec.split(",") if part.strip()]
+        except ValueError:
+            print(f"osiris inbox: --ack takes message ids (3,5,8) or all-fyi, not {spec!r}",
+                  file=sys.stderr)
+            return 2
+        if not ids:
+            print("osiris inbox: --ack named no message ids", file=sys.stderr)
+            return 2
+    if not ids:
+        print("osiris inbox: no fyi messages to ack")
+        return 0
+    ack_params = {k: v for k, v in params.items() if k != "peek"}
+    ack_params["ack"] = ids
+    result = await call_mcp_tool(url, "inbox", ack_params)
+    if isinstance(result, str) or not isinstance(result, dict) or result.get("error"):
+        why = result if isinstance(result, str) else result.get("error")
+        print(f"osiris inbox: the ack failed ({why})", file=sys.stderr)
+        return 1
+    settled = result.get("settled") or []
+    print(f"osiris inbox: acked {len(settled)} message(s): "
+          + ", ".join(str(i) for i in settled))
+    return 0
+
+
 async def cmd_inbox(*, project: str | None, session: str | None = None,
-                    as_json: bool = False, text: bool = False) -> int:
+                    as_json: bool = False, text: bool = False, ack: str | None = None) -> int:
     """osiris inbox [--project <repo>] [--session <id>]: a peek at a mailbox,
     terminal-native. Always a peek (never leases): settling mail is an agent's own act
     mid-session, not a human glancing from a terminal.
@@ -2678,7 +2721,12 @@ async def cmd_inbox(*, project: str | None, session: str | None = None,
     holds, and its project's broadcasts), the same scope every in-session door reads. With
     only `--project` it is the project's broadcasts alone, and the server's output says so.
     Given both, the session's own mailbox leads and the project is the fallback when the
-    session's identity does not resolve."""
+    session's identity does not resolve.
+
+    `--ack <id,id|all-fyi>` is the one ACT here (settling mail is the reader's own word, so
+    the read hook never serves it): it acks the named messages, or every fyi one, in the
+    same mailbox the read would show. Nothing is leased and no ask is ever acked by
+    `all-fyi`."""
     anchor = _session_anchor(session)
     if anchor is None and not project:
         print("osiris inbox: pass --project <repo>, or --session <id> to read a session's own "
@@ -2691,10 +2739,21 @@ async def cmd_inbox(*, project: str | None, session: str | None = None,
     else:
         params = {"project": project, "peek": True}
         fallback = None
+    if ack is not None:
+        return await _ack_mail(url, params, ack.strip().lower())
+    scope = (f" --session {session}" if session else "") + (f" --project {project}"
+                                                            if project else "")
+
+    def _name_the_mailbox(rendered: str) -> str:
+        from src.orchestrator.textrender import MAIL_ACK_COMMAND
+
+        return rendered.replace(MAIL_ACK_COMMAND, MAIL_ACK_COMMAND.replace(
+            "osiris inbox", f"osiris inbox{scope}"))
+
     return await _call_and_emit_text(
         url, "inbox", params, as_json=as_json,
         title=f"inbox · {project or 'this session'}", error_prefix="osiris inbox",
-        text_only=text, fallback_params=fallback)
+        text_only=text, fallback_params=fallback, text_transform=_name_the_mailbox)
 
 
 # --- desk / show: READING THE RECORD. A CLI-surface audit found it had shipped many
@@ -8300,6 +8359,10 @@ def _build_parser() -> argparse.ArgumentParser:
                               "direct mail, held seats, and project broadcasts)")
     p_inbox.add_argument("--json", action="store_true", dest="as_json",
                          help="machine-readable: one compact JSON line, for a script or an agent")
+    p_inbox.add_argument("--ack", default=None, metavar="IDS|all-fyi",
+                         help="settle mail instead of reading it: comma-separated message "
+                              "ids, or all-fyi for every non-ask message (an act: the "
+                              "/mail read hook never serves it)")
     _add_text_flag(p_inbox)
 
     p_desk = sub.add_parser("desk", description=_d(
@@ -9704,7 +9767,7 @@ def main(argv: list[str] | None = None) -> int:
                                        text=args.text))
     if args.command == "inbox":
         return asyncio.run(cmd_inbox(project=args.project, session=args.session,
-                                     as_json=args.as_json, text=args.text))
+                                     as_json=args.as_json, text=args.text, ack=args.ack))
     if args.command == "team":
         return asyncio.run(cmd_team(seat=args.seat, as_json=args.as_json, text=args.text))
     if args.command == "desk":
