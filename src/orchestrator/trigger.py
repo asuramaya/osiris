@@ -994,18 +994,27 @@ def _turn_fresh_sync(root: Path, sid: str, active_secs: int, job_dir: str = "") 
     through to the wake path": the safe default either way (waking a genuinely-busy
     agent costs a redundant nudge; failing to wake a genuinely-idle one is the worse
     failure), never a claim this function could not actually verify."""
+    age = _last_turn_age_sync(root, sid, job_dir)
+    return age is not None and age < active_secs
+
+
+def _last_turn_age_sync(root: Path, sid: str, job_dir: str = "") -> float | None:
+    """Seconds since the newest real turn (a `user`/`assistant` line carrying a timestamp)
+    in session `sid`'s transcript, or None when there is no transcript, it cannot be read,
+    or its tail holds no timestamped turn. None is "cannot say", never "long idle": a caller
+    that must prove idleness treats it as unproven. The rules are `_turn_fresh_sync`'s own."""
     if not sid:
-        return False
+        return None
     t = locate_current_transcript(root, job_dir or f"jobs/{sid}", anchored_only=True)
     if t is None:
-        return False
+        return None
     try:
         size = t.stat().st_size
         with t.open("rb") as f:
             f.seek(max(0, size - 65_536))
             tail = f.read().decode("utf-8", errors="replace")
     except OSError:
-        return False
+        return None
     for line in reversed(tail.splitlines()):
         try:
             d = json.loads(line)
@@ -1032,8 +1041,8 @@ def _turn_fresh_sync(root: Path, sid: str, active_secs: int, job_dir: str = "") 
             at = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
         except ValueError:
             continue
-        return (datetime.now(UTC) - at).total_seconds() < active_secs
-    return False
+        return (datetime.now(UTC) - at).total_seconds()
+    return None
 
 
 ResidentVerdict = Literal["match", "mismatch", "unknown"]
@@ -1836,6 +1845,101 @@ async def _confirm_listener(job: dict[str, Any], agents_json: Any) -> bool:
     return False
 
 
+_IDLE_LISTED_STATES = frozenset({"idle", "blocked", "done"})
+
+
+async def _listed_row(session_id: str, agents_json: Any) -> dict[str, Any] | None:
+    """The `claude agents --json` row for `session_id` (matched exactly as
+    `_confirm_listener` matches), or None when the roster cannot be read or lists no such
+    session."""
+    try:
+        rows = await agents_json()
+    except (OSError, TimeoutError, ValueError):
+        return None
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        rsid = str(r.get("sessionId") or "")
+        rid = str(r.get("id") or "")
+        if rsid == session_id or rid == session_id[:8] or (rsid and rsid[:8] == session_id[:8]):
+            return r
+    return None
+
+
+async def _holder_stale_idle(
+    root: Path, session_id: str, job_dir: str, agents_json: Any, st: Settings,
+) -> str | None:
+    """A holder the harness lists as live but that is idle in fact. Returns the evidence
+    (a short sentence) when the roster row's `status` or `state` is idle, blocked or done AND
+    the transcript's newest real turn is older than `osiris_wake_stale_idle_mins`; None
+    otherwise, including whenever either half cannot be established (no row, no state, no
+    readable transcript): idleness is proven, never assumed. `claude agents --json` keeps
+    listing a session after its turn ended, so a listing alone says nothing about whether a
+    next turn is coming."""
+    mins = st.osiris_wake_stale_idle_mins
+    if mins <= 0:
+        return None
+    row = await _listed_row(session_id, agents_json)
+    if row is None:
+        return None
+    listed = {str(row.get("state") or "").lower(), str(row.get("status") or "").lower()}
+    states = sorted(listed & _IDLE_LISTED_STATES)
+    if not states:
+        return None
+    age = await asyncio.to_thread(_last_turn_age_sync, root, session_id, job_dir)
+    if age is None or age < mins * 60:
+        return None
+    return (f"listed {'/'.join(states)} with no turn for {int(age // 60)} min "
+            f"(limit {mins})")
+
+
+async def _nudge_stale_holder(
+    pool: asyncpg.Pool, *, msg_id: int, project: str, sender: str | None, target: str,
+    grade: str | None, preview: str, jobs: Any, nudge: Any, ids: set[str],
+    root: Path, session_id: str, sleep: Any, attempts: int = 3, delay_secs: float = 2.0,
+) -> tuple[dict[str, Any] | None, bool]:
+    """Deliver to an idle-in-fact holder through the daemon reply lane AND check the turn
+    started: the envelope must show up as a submitted user line in the transcript. Returns
+    `(receipt, ledgered)`. A receipt means the mail is handled (nudged and seen, or another
+    dispatcher already woke for it); None means nothing started a turn, so the caller
+    resumes. `ledgered` says a dm-reply row is already filed for this message, so the
+    caller's own resume must not read it as someone else's wake."""
+    from src.orchestrator.seats import held_seat
+
+    job = await jobs(ids)
+    if job is None:
+        return None, False
+    s_handle = ((await held_seat(pool, sender)) or {}).get("handle") if sender else None
+    a_handle = ((await held_seat(pool, target)) or {}).get("handle")
+    env = _mail_envelope(
+        msg_id, grade=grade, preview=preview,
+        sender_label=(f"{s_handle} ({sender})" if s_handle else (sender or "the fleet")),
+        addressee_label=(f"you, {a_handle} ({target})" if a_handle else f"you ({target})"))
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended('osiris-dm-' || $1, 7445))",
+            str(msg_id))
+        prior = await conn.fetchval(
+            "SELECT 1 FROM agent_wakes WHERE message_id=$1 "
+            "AND mode IN ('dm-reply','dm-resume','dm-poke')", msg_id)
+        if prior:
+            return ({"mode": "skipped-once-per-message",
+                     "detail": "another dispatcher already woke for this message"}, False)
+        if not await nudge(job, env):
+            return None, False
+        await conn.execute(
+            "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+            "VALUES ($1,$2,$3,'dm-reply')", project, sender, msg_id)
+    for _ in range(attempts):
+        if await asyncio.to_thread(
+                _marker_landed_sync, root, session_id[:8], f"DM #{msg_id} "):
+            return ({"mode": "nudged-live-holder",
+                     "detail": "the listed holder was idle in fact; the daemon reply lane "
+                               "started its turn (the envelope is in its transcript)"}, True)
+        await sleep(delay_secs)
+    return None, True
+
+
 async def _resume_occupancy_gate(
     resume: tuple[str, str, float, str], *, agents_json: Any, spawn_cwd: str | None = None,
 ) -> tuple[str, str] | None:
@@ -1903,7 +2007,7 @@ async def dispatch_dm(
     pool: asyncpg.Pool, *, addressee: str, msg_id: int, sender: str | None,
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
     poke: Any = None, jobs: Any = None, nudge: Any = None, agents_json: Any = None,
-    fresh_spawn: Any = None,
+    fresh_spawn: Any = None, sleep: Any = None,
 ) -> dict[str, str]:
     """Thin wrapper around `_dispatch_dm_body`: persists the verdict it returns onto the
     message before handing it back, one write site instead of duplicating it onto every
@@ -1917,7 +2021,7 @@ async def dispatch_dm(
     result = await _dispatch_dm_body(
         pool, addressee=addressee, msg_id=msg_id, sender=sender, settings=settings,
         spawn=spawn, windows=windows, poke=poke, jobs=jobs, nudge=nudge,
-        agents_json=agents_json, fresh_spawn=fresh_spawn)
+        agents_json=agents_json, fresh_spawn=fresh_spawn, sleep=sleep)
     await pool.execute(
         "UPDATE fleet_messages SET dispatch_mode=$1, dispatch_mode_at=now() WHERE id=$2",
         result["mode"], msg_id)
@@ -1928,7 +2032,7 @@ async def _dispatch_dm_body(
     pool: asyncpg.Pool, *, addressee: str, msg_id: int, sender: str | None,
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
     poke: Any = None, jobs: Any = None, nudge: Any = None, agents_json: Any = None,
-    fresh_spawn: Any = None,
+    fresh_spawn: Any = None, sleep: Any = None,
 ) -> dict[str, str]:
     """Dispatch one DM: the whole delivery grammar in one function, shared verbatim by
     send()'s immediate leg and the worker tick's backstop sweep (two callers, one rule: the
@@ -1970,6 +2074,7 @@ async def _dispatch_dm_body(
     windows = windows or _manager_windows
     poke = poke or _poke_window
     agents_json = agents_json or _claude_agents_json
+    sleep = sleep or asyncio.sleep
     if jobs is None or nudge is None:
         # The injection point: `nudge` defaults to claude_daemon.reply, the daemon
         # turn-injection channel, disclosed to Anthropic and confirmed as intended design.
@@ -2175,6 +2280,17 @@ async def _dispatch_dm_body(
         # The crossed-registry case: the registry pointed here, but the session's own
         # signed testimony names someone else (or nobody). Never leak the notice.
         job = None
+    if job is not None and st.osiris_wake_stale_idle_mins > 0:
+        # The wake gap (thread b21fd390): the daemon accepts a reply for a job it still
+        # lists after the turn ended, so {ok:true} here proves nothing about a turn
+        # starting. A holder listed idle/blocked/done and quiet past the threshold skips
+        # this lane's unchecked nudge; the occupancy branch below nudges it AND confirms
+        # the turn landed, and resumes when it did not.
+        job_sid = str(job.get("sessionId") or "")
+        job_short = str(job.get("short") or "")
+        if job_sid and await _holder_stale_idle(
+                root, job_sid, f"jobs/{job_short}" if job_short else "", agents_json, st):
+            job = None
     if job is not None:
         s_handle = ((await held_seat(pool, sender)) or {}).get("handle") if sender else None
         a_handle = ((await held_seat(pool, target)) or {}).get("handle")
@@ -2385,6 +2501,8 @@ async def _dispatch_dm_body(
     occupied = await _resume_occupancy_gate(
         (graph_resume[0], graph_resume[1], graph_resume[2], graph_resume[3]),
         agents_json=agents_json, spawn_cwd=spawn_cwd)
+    ledgered = False
+    stale_note = ""
     if occupied is not None:
         which, reason = occupied
         if which == "self":
@@ -2397,16 +2515,35 @@ async def _dispatch_dm_body(
             # minutes in one worker's idle session while three sibling sends the same
             # minute were nudged and read within seconds. The daemon reply path (job_for +
             # reply, the same path the earlier daemon-nudge rung and wake()/self-compaction
-            # already use) pokes an idle process without duplicating it - `-p --resume` is
-            # the only thing that runs a second copy, and this never calls it.
+            # already use) pokes an idle process without duplicating it.
             root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
                 else Path.home() / ".claude" / "projects"
             busy = await asyncio.to_thread(
                 _turn_fresh_sync, root, session_id, st.osiris_dm_active_secs, graph_resume[3])
-            if not busy:
-                ids = {i for i in (session_id, session_id[:8],
-                                   Path(graph_resume[3]).name if graph_resume[3] else None)
-                       if i}
+            ids = {i for i in (session_id, session_id[:8],
+                               Path(graph_resume[3]).name if graph_resume[3] else None)
+                   if i}
+            # The wake gap (thread b21fd390): `claude agents --json` keeps LISTING a
+            # session after its turn ended, so "listed" never meant "a next turn is
+            # coming". A holder listed idle/blocked/done whose transcript has had no turn
+            # for `osiris_wake_stale_idle_mins` is idle in fact. Only a holder that is
+            # genuinely mid-turn earns the pull-only outcome below.
+            stale = None if busy else await _holder_stale_idle(
+                root, session_id, graph_resume[3], agents_json, st)
+            if stale is not None:
+                receipt, ledgered = await _nudge_stale_holder(
+                    pool, msg_id=msg_id, project=project, sender=sender, target=target,
+                    grade=grade, preview=preview, jobs=jobs, nudge=nudge, ids=ids,
+                    root=root, session_id=session_id, sleep=sleep)
+                if receipt is not None:
+                    if receipt["mode"] == "nudged-live-holder":
+                        receipt["detail"] = f"{reason}, {stale}: " + receipt["detail"]
+                    return receipt
+                # Nothing started a turn (no daemon job, the reply was refused, or the
+                # envelope never reached the transcript): the resume below is the path
+                # that does, by the same ledger discipline as any other resume.
+                stale_note = f" ({stale}; the nudge did not start a turn)"
+            elif not busy:
                 job = await jobs(ids)
                 if job is not None:
                     s_handle = (((await held_seat(pool, sender)) or {}).get("handle")
@@ -2442,17 +2579,18 @@ async def _dispatch_dm_body(
                                          "through the daemon reply lane instead of "
                                          "waiting on an unscheduled next turn; no fork, "
                                          "no resume"}
-            # Busy (a turn is genuinely moving), or the daemon has no matching job, or the
-            # poke itself failed - every one of those falls back to the honest pull-only
-            # outcome, exactly as before this fix existed.
-            return {"mode": "queued-live-holder",
-                    "detail": f"{reason}, it reads this from its own inbox at its next "
-                              "turn; a resume would only duplicate the live process, so "
-                              "none was spent. Nothing is lost and nothing is owed"}
-        return {"mode": "resume-refused-occupied-foreign",
-                "detail": f"{reason}: refusing to run a second process beside it; whether "
-                          "that process ever reads this mail is UNKNOWN, never a resolved "
-                          "delivery"}
+            if stale is None:
+                # Busy (a turn is genuinely moving), or the daemon has no matching job, or
+                # the poke itself failed - the honest pull-only outcome.
+                return {"mode": "queued-live-holder",
+                        "detail": f"{reason}, it reads this from its own inbox at its next "
+                                  "turn; a resume would only duplicate the live process, so "
+                                  "none was spent. Nothing is lost and nothing is owed"}
+        else:
+            return {"mode": "resume-refused-occupied-foreign",
+                    "detail": f"{reason}: refusing to run a second process beside it; "
+                              "whether that process ever reads this mail is UNKNOWN, never "
+                              "a resolved delivery"}
     # The ledger row goes in under an advisory lock, before the spawn: two dispatchers
     # (send's immediate leg and a concurrent tick) can both reach here for one message -
     # exactly one of them may spend.
@@ -2460,7 +2598,7 @@ async def _dispatch_dm_body(
         await conn.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended('osiris-dm-' || $1, 7445))",
             str(msg_id))
-        prior = await conn.fetchval(
+        prior = None if ledgered else await conn.fetchval(
             "SELECT 1 FROM agent_wakes WHERE message_id=$1 "
             "AND mode IN ('dm-reply','dm-resume','dm-poke')", msg_id)
         if prior:
@@ -2474,7 +2612,7 @@ async def _dispatch_dm_body(
                 allowed_tools=st.osiris_wake_allowed_tools or None)
     return {"mode": "resumed", "session_id": session_id,
             "detail": f"the addressee's own session ({session_id[:8]}) is continued with "
-                      "this mail as its next turn; watch the hop in the agents view"}
+                      "this mail as its next turn; watch the hop in the agents view" + stale_note}
 
 
 # ═══ wake() ═══════════════════════════════════════════════════════════════════════════

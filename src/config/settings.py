@@ -323,6 +323,12 @@ class Settings(BaseSettings):
     # "perceiving": it idles with no next turn coming, and mail beside it sits unread
     # forever, the exact silent case this setting exists to close.
     osiris_dm_active_secs: int = 120
+    # A holder the harness still LISTS as live (`claude agents --json`) whose own transcript
+    # has had no new turn for this many minutes, and whose listed state is idle, blocked or
+    # done, is idle in fact: a mail is delivered by a path that starts a turn (nudge, checked
+    # landed, else resume), never parked as "queued-live-holder" behind a next turn that is
+    # not coming. 0 turns the check off.
+    osiris_wake_stale_idle_mins: int = 30
     # The per-seat mail-wake rate brake: at most this many wakes per addressee per hour,
     # on top of per-message dedup, the fleet hourly budget, and the daily dollar ceiling.
     # An A-to-B reply ping-pong is legal work until a brake says otherwise; this is the
