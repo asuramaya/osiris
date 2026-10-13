@@ -1756,15 +1756,23 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         from src.orchestrator.offload_staleness import stale_offload_targets
         from src.orchestrator.settings_service import settings_with_overlay
 
-        stale_days = int((await settings_with_overlay(p)).osiris_offload_stale_days)
+        overlay = await settings_with_overlay(p)
+        stale_days = int(overlay.osiris_offload_stale_days)
         stale = stale_offload_targets(
             settings.get("offload_targets", []), receipts, now=datetime.now(UTC),
             stale_days=stale_days) if stale_days > 0 else []
+        from src.orchestrator.wal_backlog import wal_backlog
+
+        try:
+            backlog: dict[str, Any] | None = await asyncio.to_thread(wal_backlog)
+        except Exception:  # noqa: BLE001 - an unreadable vault must not fail the stepper
+            backlog = None
         steps = compute_readiness_steps(
             soul_key=soul_key, restic_key=restic_key, offload_targets=offload_targets,
             restore_drill_receipts=restore_drill_receipts(),
             services_restarted=services_restarted, stale_offload=stale,
-            stale_days=stale_days)
+            stale_days=stale_days, wal_backlog=backlog,
+            wal_limit_gb=int(overlay.osiris_wal_backlog_gb))
         from src.orchestrator.disk_brake import brake_state
 
         try:

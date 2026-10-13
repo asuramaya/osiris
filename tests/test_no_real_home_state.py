@@ -10,6 +10,7 @@ import pwd
 from pathlib import Path
 
 import pytest
+import scripts.osiris_prune_ladder as prune_ladder
 from src.ingest import soul_crypto, systemd_credential
 from src.orchestrator import (
     graph_stream,
@@ -43,6 +44,7 @@ def _resolved_paths() -> dict[str, Path]:
         "restore drill receipts": soul_key._restore_drill_receipts_path(),
         "recovery verify receipt": soul_key._verify_receipt_path(),
         "graph snapshot": graph_stream.snapshot_file_path(),
+        "prune applied record": prune_ladder.applied_path(),
     }
 
 
@@ -50,7 +52,7 @@ _NAMES = [
     "credential store", "soul key (logical)", "soul key (credential)",
     "soul key recovery file", "backup password (logical)", "backup password (credential)",
     "offload receipts", "recovery copies receipts", "encryption progress", "recompress progress",
-    "restore drill receipts", "recovery verify receipt", "graph snapshot",
+    "restore drill receipts", "recovery verify receipt", "graph snapshot", "prune applied record",
 ]
 
 

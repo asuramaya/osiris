@@ -555,7 +555,7 @@ async def test_backup_status_timers_carry_their_shipped_schedule(
     assert by_unit["osiris-backup.timer"]["schedule"] == "*-*-* 04:30:00"
     assert by_unit["osiris-base-backup.timer"]["schedule"] == "Sun 02:00:00"
     assert by_unit["osiris-prune-manifest.timer"]["schedule"] == "Sat 03:00:00"
-    assert by_unit["osiris-prune-apply.timer"]["schedule"] == "Sun 03:00:00"
+    assert by_unit["osiris-prune-apply.timer"]["schedule"] == "*-*-* 14:00:00"
     assert by_unit["osiris-preflight.timer"]["schedule"] == "Mon *-*-* 05:00:00"
 
 

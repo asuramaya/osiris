@@ -149,17 +149,27 @@ def render_roster_text(rows: list[dict[str, Any]]) -> str:
     return "\n\n".join(blocks)
 
 
+_MAIL_FYI_ROWS = 15
+# the exact act that settles fyi mail; the CLI fills in whose mailbox (--session/--project)
+MAIL_ACK_COMMAND = "osiris inbox --ack all-fyi"
+
+
 def render_mail_text(messages: list[dict[str, Any]]) -> str:
-    """One line per ASK message (needs a reply/ack), FYI messages folded into a single
-    trailing count line rather than itemized: an inbox full of fyi noise must never bury
-    the handful of asks that actually need a decision."""
+    """One line per message: the ASKS first (they need a reply), then the FYI messages in
+    the same shape, capped at `_MAIL_FYI_ROWS` with a "+N more fyi" line, so an inbox that
+    holds only fyi still shows who wrote and what (a bare count was all a reader got before,
+    with no way to see or settle them). A closing line names the command that acks them."""
     if not messages:
         return "mail: empty"
     asks = [m for m in messages if m.get("grade") == "ask"]
     fyi = [m for m in messages if m.get("grade") != "ask"]
-    lines = [_render_mail_row(m) for m in asks]
+    lines = [_render_mail_row(m, "ask") for m in asks]
+    lines += [_render_mail_row(m, "fyi") for m in fyi[:_MAIL_FYI_ROWS]]
+    if len(fyi) > _MAIL_FYI_ROWS:
+        lines.append(f"+{len(fyi) - _MAIL_FYI_ROWS} more fyi")
     if fyi:
-        lines.append(f"{len(fyi)} fyi message(s), ack to settle")
+        lines.append(f"{len(fyi)} fyi message(s); to settle them: {MAIL_ACK_COMMAND} "
+                     "(or --ack <id,id>)")
     if not lines:
         return "mail: empty"
     return "\n".join(lines)
@@ -168,15 +178,15 @@ def render_mail_text(messages: list[dict[str, Any]]) -> str:
 _MAIL_ROW_CHARS = 100
 
 
-def _render_mail_row(m: dict[str, Any]) -> str:
-    """One line for an ask. The body is flattened to a single line and, when it is cut, the
+def _render_mail_row(m: dict[str, Any], grade: str = "ask") -> str:
+    """One line for a message. The body is flattened to a single line and, when it is cut, the
     line says so and how much is missing, so a glance is never mistaken for the whole mail."""
     thread = m.get("thread")
     flat = " ".join((m.get("body") or "").split())
     snippet = flat[:_MAIL_ROW_CHARS]
     if len(flat) > _MAIL_ROW_CHARS:
         snippet += f" [+{len(flat) - _MAIL_ROW_CHARS} more characters: inbox() reads it whole]"
-    return f"{m.get('id')} ask from:{m.get('from')} thread:{thread}: {snippet}"
+    return f"{m.get('id')} {grade} from:{m.get('from')} thread:{thread}: {snippet}"
 
 
 def render_desk_text(desk: dict[str, Any], *, backlog_text: str | None = None) -> str:
