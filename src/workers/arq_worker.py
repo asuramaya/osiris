@@ -1280,7 +1280,8 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
         _log.warning("outbox retention heartbeat failed: %r", exc)
     else:
         deleted += outbox["deleted"]
-        lines.append(_retention_receipt_line("outbox", outbox["deleted"], outbox["cutoff"]))
+        lines.append(_retention_receipt_line(
+            "outbox", outbox["deleted"], outbox["cutoff"], days=outbox["days"]))
 
     try:
         audit = await audit_log_retention(pool, days=90, execute=True)
@@ -1288,7 +1289,8 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
         _log.warning("audit_log retention heartbeat failed: %r", exc)
     else:
         deleted += audit["deleted"]
-        lines.append(_retention_receipt_line("audit_log", audit["deleted"], audit["cutoff"]))
+        lines.append(_retention_receipt_line(
+            "audit_log", audit["deleted"], audit["cutoff"], days=audit["days"]))
 
     if lines:
         with contextlib.suppress(Exception):  # the desk being unreachable must not sink the cron
