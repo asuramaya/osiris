@@ -3500,6 +3500,33 @@ def _harness_row_is_live(row: dict[str, Any], *, read_cmdline: Any = None) -> bo
     return not _is_bg_spare(read_cmdline(pid_int))
 
 
+async def _harness_row_seat(pool: asyncpg.Pool, row: dict[str, Any]) -> str | None:
+    """The seat a harness roster row's session belongs to, by the session ledger
+    (`anchor_sid:<sid8>`, or the sid-derived `agent:<sid8>` identity) and the lineage-wide
+    holds link (`held_seat`); None when the session cannot be tied to any seat."""
+    from src.orchestrator.handshake import _sid8
+    from src.orchestrator.seats import held_seat
+
+    session = str(row.get("sessionId") or "").strip().lower()
+    if len(session) < 8:
+        return None
+    sid8 = _sid8(session)
+    owner = await pool.fetchval(
+        "SELECT o.canonical FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
+        "WHERE a.name = 'anchor_sid:' || $1 ORDER BY a.observed_at DESC LIMIT 1", sid8)
+    if owner is None:
+        base = f"agent:{sid8}"
+        owner = await pool.fetchval(
+            "SELECT canonical FROM objects WHERE type='Agent' AND status='active' "
+            "AND (canonical=$1 OR canonical LIKE $1 || '-%') ORDER BY canonical DESC LIMIT 1",
+            base)
+    if owner is None:
+        return None
+    held = await held_seat(pool, str(owner))
+    return str(held["seat_id"]) if held and held.get("seat_id") else None
+
+
 async def _launch_twin_check(
     pool: asyncpg.Pool, agents_json: Any, launch_cwd: str, *, seat_id: str | None = None,
     read_cmdline: Any = None,
@@ -3525,7 +3552,9 @@ async def _launch_twin_check(
     both mean the same thing (don't mint), so both are reported and both refuse the same
     way; there is no genuinely ambiguous case here to invent a third verdict for, only one
     or the other or neither, and this reports exactly which. A third key,
-    `stale_harness_row`, is independent of whether a real duplicate was found: a
+    `other_seat_rows` lists live roster rows at this cwd that belong to a different seat (a cwd
+    is not an identity; two seats can share one tree), skipped exactly as a different seat's
+    mount is. `stale_harness_row`, is independent of whether a real duplicate was found: a
     cwd/session match against `claude agents --json` is filtered through
     `_harness_row_is_live` before it can ever become `harness`. One real specimen row for
     a session kept naming `state: "failed"`, its pid long dead, and never left the
@@ -3568,14 +3597,25 @@ async def _launch_twin_check(
     except (OSError, TimeoutError, ValueError):
         roster = []
     stale_harness_row: dict[str, Any] | None = None
-    cwd_match = next((r for r in roster
-                      if isinstance(r, dict) and r.get("cwd") == launch_cwd), None)
-    if cwd_match is not None and _harness_row_is_live(cwd_match, read_cmdline=read_cmdline):
-        from_harness = cwd_match
-    else:
-        from_harness = None
-        if cwd_match is not None:
-            stale_harness_row = cwd_match
+    other_seat_rows: list[dict[str, Any]] = []
+    from_harness: dict[str, Any] | None = None
+    cwd_rows = [r for r in roster if isinstance(r, dict) and r.get("cwd") == launch_cwd]
+    for row in cwd_rows:
+        if not _harness_row_is_live(row, read_cmdline=read_cmdline):
+            if stale_harness_row is None:
+                stale_harness_row = row
+            continue
+        # A cwd is not an identity: two seats can share one tree. A live row at this cwd
+        # whose session is confirmed to belong to a DIFFERENT seat is that seat's own body,
+        # not a twin of this one. Only a positive mismatch is skipped; a row whose owner
+        # cannot be resolved still counts (refusing is the safe side of an unknown).
+        if seat_id is not None:
+            owner_seat = await _harness_row_seat(pool, row)
+            if owner_seat is not None and owner_seat != seat_id:
+                other_seat_rows.append(row)
+                continue
+        from_harness = row
+        break
     from_mounts = None
     if seat_id is not None:
         from src.orchestrator.seats import held_seat
@@ -3639,7 +3679,7 @@ async def _launch_twin_check(
                                "last_seen": lineage_row["last_seen"].isoformat(),
                                "cwd": lineage_row["cwd"]}
     return {"harness": from_harness, "mounts": from_mounts,
-            "stale_harness_row": stale_harness_row}
+            "stale_harness_row": stale_harness_row, "other_seat_rows": other_seat_rows}
 
 
 async def _launch_target_setup(
@@ -4002,6 +4042,7 @@ async def launch_seat(
         twin = await _launch_twin_check(pool, agents_json, launch_cwd, seat_id=target_seat,
                                         read_cmdline=read_cmdline)
         stale_harness_row = twin.get("stale_harness_row")
+        other_seat_rows = twin.get("other_seat_rows") or []
         if twin["harness"] or twin["mounts"]:
             seen_via = [s for s in (
                 f"claude agents --json ({twin['harness'].get('name')!r})"
@@ -4149,6 +4190,10 @@ async def launch_seat(
             # discarded, so a caller can see the harness's own roster still hasn't
             # reaped it even though this launch proceeded correctly around it.
             out["stale_harness_row"] = stale_harness_row
+        if other_seat_rows:
+            # Live sessions at this shared tree that belong to other seats: named, never
+            # counted as this seat's twin.
+            out["other_seat_rows"] = other_seat_rows
         # The ceiling's read path: a --bg session is a real billed session on a metered
         # backend, same as any other one; otherwise it gets recorded into llm_usage and
         # the ceiling never learns it happened, so cost stops being governable.
