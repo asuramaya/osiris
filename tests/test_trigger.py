@@ -7945,3 +7945,72 @@ async def test_bind_before_spawn_single_holder_named_in_the_graph_is_tenure(
 
     assert out["agent"] == "agent:jennyline-iii"
     assert "thothfounder" not in out["agent"]
+
+
+async def test_launch_never_treats_a_different_seats_live_harness_row_as_its_own_twin(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The harness-roster half of the shared-tree crossing: a live `claude --bg` row at the
+    shared tree_cwd that the session ledger ties to a DIFFERENT seat's holder is that seat's
+    own body, not a twin of this one. Before, only the mounts half was owner-aware, so a
+    sibling's live --bg session refused this seat's launch."""
+    from src.orchestrator.handshake import record_session_anchor
+    from src.orchestrator.seats import bind_seat_tree
+
+    chowder_seat, _chowder_mgr = await _managed_pair(
+        actions, worker_agent="agent:cho02", manager_agent="agent:chom02",
+        worker_handle="Chowder2", manager_handle="ChowderMgr2", house="monsterhouse")
+    dustin_seat, _dustin_mgr = await _managed_pair(
+        actions, worker_agent="agent:dus02", manager_agent="agent:dusm02",
+        worker_handle="Dustin2", manager_handle="DustinMgr2", house="monsterhouse")
+    shared_tree = tmp_path / "monsterhouse2"
+    shared_tree.mkdir()
+    await _office(actions, chowder_seat, "/home/asuramaya/.osiris/seats/chowder2")
+    await _office(actions, dustin_seat, "/home/asuramaya/.osiris/seats/dustin2")
+    for seat in (chowder_seat, dustin_seat):
+        await bind_seat_tree(actions, seat_id=seat, tree_cwd=str(shared_tree),
+                             actor="operator", because="test: shared tree")
+    dustin_session = "d1d2d3d4-0000-4000-8000-000000000002"
+    assert await record_session_anchor(
+        actions, agent_id="agent:dus02", session_id=dustin_session, actor="test",
+        root=tmp_path / "no-transcripts")
+    sibling_row = {"cwd": str(shared_tree), "name": "[MO] Dustin2", "sessionId": "d1d2d3d4",
+                   "status": "idle", "state": "running", "pid": os.getpid()}
+
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:chom02", target=chowder_seat,
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[sibling_row]]),
+        read_cmdline=lambda pid: b"claude\x00--bg")
+
+    assert d["status"] == "launched"  # the sibling's body at the shared tree is not a twin
+    assert d["other_seat_rows"] == [sibling_row]
+    assert spawned and spawned[0]["repo"] == str(shared_tree)
+
+
+async def test_launch_still_refuses_a_live_harness_row_it_cannot_tie_to_another_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The safe side of an unknown: a live row at the tree whose session the ledger cannot
+    place under any other seat still counts as this seat's twin."""
+    from src.orchestrator.seats import bind_seat_tree
+
+    seat, _mgr = await _managed_pair(
+        actions, worker_agent="agent:own03", manager_agent="agent:ownm03",
+        worker_handle="Owner3", house="monsterhouse")
+    tree = tmp_path / "tree3"
+    tree.mkdir()
+    await _office(actions, seat, "/home/asuramaya/.osiris/seats/owner3")
+    await bind_seat_tree(actions, seat_id=seat, tree_cwd=str(tree), actor="operator",
+                         because="test: tree")
+    unknown_row = {"cwd": str(tree), "name": "[MO] Mystery", "sessionId": "eeeeeeee",
+                   "status": "idle", "state": "running", "pid": os.getpid()}
+
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:ownm03", target=seat,
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[unknown_row]]),
+        read_cmdline=lambda pid: b"claude\x00--bg")
+
+    assert d["status"] == "already-live"
+    assert not spawned
