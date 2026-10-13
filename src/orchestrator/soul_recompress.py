@@ -169,7 +169,10 @@ async def _batch(
     """One keyset page after `cursor`. Returns rows rewritten, rows skipped (not openable
     with the current key), bytes before and after for the rewritten rows, the new cursor and
     whether the table is exhausted. A row is only ever rewritten into a form that is strictly
-    smaller than the one it holds; otherwise just its marker is brought up to date."""
+    smaller than the one it holds; otherwise just its marker is brought up to date, and a row
+    whose marker would not change is left alone and counted in `kept`, never written (a
+    same-bytes UPDATE still writes the whole value again, and the row would be picked up by
+    every sweep, so the pass would never finish)."""
     await soul_dicts.ensure_dictionaries(pool)
     cols = "SELECT harness, anchor_sid, line_idx, raw_line, codec FROM soul_lines "
     if cursor is None:
@@ -182,10 +185,10 @@ async def _batch(
             "ORDER BY harness, anchor_sid, line_idx LIMIT $5",
             FERNET_TOKEN_PREFIX, cursor[0], cursor[1], cursor[2], batch_size)
     if not rows:
-        return {"rewritten": 0, "skipped": 0, "before": 0, "after": 0,
+        return {"rewritten": 0, "skipped": 0, "kept": 0, "before": 0, "after": 0,
                 "cursor": cursor, "exhausted": True}
     updates: list[tuple[bytes, int, str, str, int, bytes, int]] = []
-    skipped = before = after = 0
+    skipped = kept = before = after = 0
     for r in rows:
         old = bytes(r["raw_line"])
         try:
@@ -197,7 +200,11 @@ async def _batch(
             continue
         if codec == CODEC_PLAIN or len(payload) >= len(plain):
             # nothing smaller is available: keep what the row holds, fix only its marker
-            updates.append((old, _envelope_codec(plain), r["harness"], r["anchor_sid"],
+            marker = _envelope_codec(plain)
+            if marker == r["codec"]:
+                kept += 1
+                continue
+            updates.append((old, marker, r["harness"], r["anchor_sid"],
                             r["line_idx"], old, r["codec"]))
             continue
         new = fernet.encrypt(payload)
@@ -212,7 +219,8 @@ async def _batch(
                 "WHERE harness = $3 AND anchor_sid = $4 AND line_idx = $5 "
                 "AND raw_line = $6 AND codec = $7", updates)
     last = rows[-1]
-    return {"rewritten": len(updates), "skipped": skipped, "before": before, "after": after,
+    return {"rewritten": len(updates), "skipped": skipped, "kept": kept,
+            "before": before, "after": after,
             "cursor": [last["harness"], last["anchor_sid"], last["line_idx"]],
             "exhausted": len(rows) < batch_size}
 
@@ -261,7 +269,7 @@ async def recompress_tick(
             _write_progress(record)
             return record
         # stragglers (or rows the key could not open): sweep again, keeping the totals
-        record.update(state="running", cursor=None, sweep_rewritten=0)
+        record.update(state="running", cursor=None, sweep_rewritten=0, sweep_kept=0)
     if not record.get("started_at"):
         total, estimated = await _initial_count(pool)
         record = {
@@ -281,6 +289,7 @@ async def recompress_tick(
             record["rows_done"] = int(record.get("rows_done", 0)) + res["rewritten"]
             record["sweep_rewritten"] = int(record.get("sweep_rewritten", 0)) + res["rewritten"]
             record["rows_skipped"] = int(record.get("rows_skipped", 0)) + res["skipped"]
+            record["sweep_kept"] = int(record.get("sweep_kept", 0)) + res["kept"]
             record["bytes_before"] = int(record.get("bytes_before", 0)) + res["before"]
             record["bytes_after"] = int(record.get("bytes_after", 0)) + res["after"]
             if record["rows_done"] > int(record.get("rows_total", 0)):
@@ -303,7 +312,8 @@ async def recompress_tick(
                                   verified_epoch=now_wall, last_error=None, cursor=None)
                     _write_progress(record)
                     break
-                record.update(cursor=None, sweep_rewritten=0)  # confirm with one more sweep
+                # confirm with one more sweep
+                record.update(cursor=None, sweep_rewritten=0, sweep_kept=0)
             _write_progress(record)
             await sleep(spent)  # at most half the time on the database, ever
     except Exception as exc:
