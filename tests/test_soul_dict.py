@@ -242,6 +242,26 @@ async def test_the_reencode_leaves_the_dictionary_form_alone_and_never_enlarges_
     assert await _codecs(actions, "dict0012") == [CODEC_ZS2] * 3       # only the marker moved
 
 
+async def test_a_row_with_nothing_smaller_is_not_rewritten_and_the_pass_still_finishes(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row already in ZS1 whose dictionary form is not smaller keeps its marker, so writing
+    it back changes nothing but costs the whole value again, and counting that write as work
+    kept the pass sweeping the same rows for ever."""
+    await _ingest(actions, tmp_path, "dict0014", 200)                 # ZS1
+    await _train(actions)
+    assert await rc._any_pending(actions.pool)                         # the rows are queued
+    monkeypatch.setattr(rc, "pack_line", lambda line: (line, CODEC_PLAIN))
+    marks = "SELECT xmin::text FROM soul_lines WHERE anchor_sid='dict0014' ORDER BY line_idx"
+    before = [r[0] for r in await actions.pool.fetch(marks)]
+    record = await rc.recompress_tick(
+        actions.pool, get_soul_fernet(), clock=_Clock(), sleep=_no_sleep)
+    assert record["state"] == "complete"
+    assert record["sweep_rewritten"] == 0 and record["rows_done"] == 0
+    assert [r[0] for r in await actions.pool.fetch(marks)] == before   # no UPDATE happened
+    assert await _codecs(actions, "dict0014") == [CODEC_ZS1] * 200
+
+
 async def test_without_a_dictionary_the_reencode_still_stops_at_zs1(
     actions: Actions, tmp_path: Path,
 ) -> None:
