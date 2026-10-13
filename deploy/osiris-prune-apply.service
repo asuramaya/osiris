@@ -1,8 +1,8 @@
-# Weekly retention-ladder apply — ACTUALLY DELETES the files osiris-prune-manifest's own
-# brief listed the day before, but ONLY if find_clear_manifest finds that brief at least
-# 20h old and not dimmed (thread 9fac4e0d part 1 — "apply next day unless dimmed").
-# Refuses loudly and deletes nothing when the gate isn't clear (no manifest sent, too
-# young, or dimmed) — see osiris_prune_ladder.py's own find_clear_manifest docstring.
+# Retention-ladder apply, run DAILY — ACTUALLY DELETES the files the newest manifest
+# (osiris-prune-manifest, weekly) listed, but ONLY if find_clear_manifest finds that brief at
+# least 20h old and not dimmed, and only once per manifest (the last applied manifest is
+# recorded). A day with nothing to apply (too young, dimmed, already applied) is a quiet skip
+# that exits 0 and says why; see osiris_prune_ladder.py's own find_clear_manifest docstring.
 # Covers dump files, base backups, WAL segments, transcript chains, the legacy
 # pre-week-key transcript tarballs, AND the transcript-cache-prune session population
 # (Thoth mail 8441 items 1-2) — one gate, every population.
@@ -10,7 +10,9 @@
 # deploy` keeps this installed, current, and enabled without a hand — unlike osiris-
 # manager.service beside it, which stays hand-install-only plumbing.
 [Unit]
-Description=Osiris weekly prune-ladder apply, gated on an undimmed manifest
+Description=Osiris prune-ladder apply, gated on an undimmed manifest
+# Ordering only: a catch-up run after the machine slept starts behind the restore drill.
+After=osiris-pitr-drill.service
 
 [Service]
 Type=oneshot

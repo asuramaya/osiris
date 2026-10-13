@@ -384,7 +384,8 @@ def test_fully_ready_install_has_no_current_step() -> None:
     receipts = {"sftp:nas.local:/x": {"last_passed_at": "2026-09-02T00:00:00+00:00"}}
     steps = compute_readiness_steps(
         soul_key=KEY_READY, restic_key=RESTIC_READY, offload_targets=targets,
-        restore_drill_receipts=receipts, services_restarted=True)
+        restore_drill_receipts=receipts, services_restarted=True,
+        wal_backlog={"verified": True, "bytes": 0, "segments": 0})
     assert all(s["status"] == "done" for s in steps)
     assert not any(s["current"] for s in steps)
 

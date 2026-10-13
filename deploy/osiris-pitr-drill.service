@@ -24,3 +24,8 @@ IOSchedulingClass=idle
 TimeoutStartSec=6h
 WorkingDirectory=%h/code/osiris
 ExecStart=%h/code/osiris/.venv/bin/python scripts/osiris_pitr_drill.py
+# Only after the drill PASSED (a failed ExecStart skips this): apply the retention plan now, so
+# WAL is pruned back to the base backup that was just verified instead of waiting a week. The
+# leading "-" keeps a failing apply from marking a passed drill as failed; the daily apply timer
+# is the safety net.
+ExecStartPost=-%h/code/osiris/.venv/bin/python scripts/osiris_prune_ladder.py --apply-if-clear --backups %h/code/osiris/backups --vault %h/osiris-vault
