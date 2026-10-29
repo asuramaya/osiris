@@ -14,6 +14,7 @@ from src.config.settings import get_settings
 from src.orchestrator import capture
 from src.orchestrator.abstention_miner import (
     _LANES,
+    _dominant_project,
     _next_abstained_object,
     abstention_miner_tick,
     abstention_survey,
@@ -421,3 +422,62 @@ async def test_the_survey_lists_the_next_objects_from_the_lane_position(
                 if r["lane"] == "Decision:in_repo")
     assert [r["object"] for r in lane["next"]] == [str(b), str(c), str(a)]    # then wraps
     assert lane["position"] == str(a)
+
+
+async def _seat_named(actions: Actions, name: str) -> None:
+    from src.ontology.catalog import ensure_type
+
+    await ensure_type(actions, name="Seat", kind="object", actor="test")
+    seat = await actions.create_or_find_object("Seat", f"seat:{uuid.uuid4().hex[:8]}", "test")
+    await actions.assert_property(seat, "name", name, "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+
+
+async def _mint_bare_named(actions: Actions, type_name: str, canonical: str) -> None:
+    from src.ontology.catalog import ensure_type
+
+    await ensure_type(actions, name=type_name, kind="object", actor="test")
+    await actions.create_or_find_object(type_name, canonical, "test")
+
+
+async def _pick(actions: Actions, text: str) -> uuid.UUID | None:
+    d = await _abstained_decision(actions, text)
+    picked, _text, _signal = await _dominant_project(actions.pool, ("summary",), d)
+    return picked
+
+
+async def test_a_project_named_like_a_seat_counts_only_when_mentioned_like_a_repo(
+    actions: Actions,
+) -> None:
+    """The bare word is the author of the text, so a seat's name does not count as the project
+    of the same name unless the text points at the repository."""
+    alfred = await actions.create_or_find_object("SoftwareProject", "repo:alfred", "test")
+    sutra = await actions.create_or_find_object("SoftwareProject", "repo:sutra", "test")
+    await _seat_named(actions, "Alfred")
+    assert await _pick(actions, "Alfred XIII state of the board, alfred alfred, sutra once") \
+        == sutra
+    assert await _pick(actions, "alfred says hello and nothing else") is None
+    assert await _pick(actions, "the fix lives in repo:alfred") == alfred
+    assert await _pick(actions, "see ~/code/alfred for it") == alfred
+    assert await _pick(actions, "the alfred repo needs it") == alfred
+    assert await _pick(actions, "see /home/alfred/notes for it") is None     # a home directory
+    assert await _pick(actions, "opened github.com/alfred/widget#4") is None  # a GitHub owner
+
+
+async def test_a_person_or_ordinary_word_named_project_needs_the_same_context(
+    actions: Actions,
+) -> None:
+    person = await actions.create_or_find_object("SoftwareProject", "repo:ballgem", "test")
+    word = await actions.create_or_find_object("SoftwareProject", "repo:network", "test")
+    await _mint_bare_named(actions, "Person", "dev:ballgem@local")
+    assert await _pick(actions, "ballgem asked about the network") is None
+    assert await _pick(actions, "ballgem asked about repo:ballgem") == person
+    assert await _pick(actions, "the network is flaky, see /srv/network/log") == word
+
+
+async def test_a_name_that_collides_with_nothing_still_counts_as_a_bare_word(
+    actions: Actions,
+) -> None:
+    ramstein = await actions.create_or_find_object("SoftwareProject", "repo:ramstein", "test")
+    await _seat_named(actions, "Somebody else")
+    assert await _pick(actions, "ramstein ramstein harness") == ramstein
