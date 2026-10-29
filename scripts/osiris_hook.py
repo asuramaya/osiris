@@ -28,14 +28,110 @@ from __future__ import annotations
 
 import json
 import os
-import socket
-import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
-from pathlib import Path
-from typing import Any
+
+# THE STATUS BAR'S FAST PATH, before any heavy import. The harness runs `statusline` about
+# every ten seconds in every live tab, and a full render (resolver imports, a heartbeat POST)
+# costs a few tenths of a CPU-second, which across two dozen tabs is a quarter of a core all the
+# time. A render is therefore cached per session for `_RENDER_TTL` seconds under
+# `_render_dir()`, keyed by everything the line is drawn from (cwd, model, context figures, rate
+# limits); a hit is a stat, a small read and a print with the standard library only. It is stale
+# when the TTL has passed or when a message was sent since it was written (the mtime of
+# `_mail_bump_path()`, touched by mailbox.send_message). Only a LIVE render is cached, never the
+# stale-fallback or the no-answer line. The default paths mirror src/orchestrator/mail_bump.py
+# (a test pins them); the whole fast path fails open to a normal render on any trouble.
+_RENDER_TTL = 20.0
+_STDIN_TEXT: str | None = None
+_LIVE_RENDER = False
+
+
+def _render_dir() -> str:
+    return os.path.expanduser(os.environ.get("OSIRIS_STATUSLINE_RENDER_DIR")
+                              or "~/.osiris/statusline-render")
+
+
+def _mail_bump_path() -> str:
+    return os.path.expanduser(os.environ.get("OSIRIS_MAIL_BUMP_FILE") or "~/.osiris/mail-bump")
+
+
+def _render_key(hook: dict) -> tuple[str, str] | None:
+    """(session file name, signature of the inputs the line is drawn from); None when there
+    is no session to key on."""
+    sid = str(hook.get("session_id") or "")
+    slug = "".join(c for c in sid if c.isalnum() or c in "-_")[:64]
+    if not slug:
+        return None
+    ws = hook.get("workspace") or {}
+    cw = hook.get("context_window") or {}
+    rl = hook.get("rate_limits") or {}
+    signature = json.dumps(
+        [str(ws.get("current_dir") or ws.get("project_dir") or hook.get("cwd") or ""),
+         (hook.get("model") or {}).get("id") if isinstance(hook.get("model"), dict) else None,
+         cw.get("used_percentage") if isinstance(cw, dict) else None,
+         cw.get("context_window_size") if isinstance(cw, dict) else None,
+         [(rl.get(k) or {}).get("used_percentage") if isinstance(rl.get(k), dict) else None
+          for k in ("five_hour", "seven_day")] if isinstance(rl, dict) else None,
+         str(hook.get("transcript_path") or "")], sort_keys=True)
+    return f"{slug}.json", signature
+
+
+def _render_cache_read(hook: dict) -> str | None:
+    key = _render_key(hook)
+    if key is None:
+        return None
+    try:
+        with open(os.path.join(_render_dir(), key[0])) as handle:
+            raw = json.loads(handle.read())
+        if raw.get("sig") != key[1] or not isinstance(raw.get("out"), str):
+            return None
+        written = float(raw.get("ts") or 0)
+        if time.time() - written > _RENDER_TTL:
+            return None
+        try:
+            if os.stat(_mail_bump_path()).st_mtime > written:
+                return None  # a message was sent since this line was drawn
+        except OSError:
+            pass  # no bump file yet: nothing has been sent since it existed
+        return str(raw["out"])
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def _render_cache_write(hook: dict, out: str) -> None:
+    key = _render_key(hook)
+    if key is None or not out:
+        return
+    try:
+        directory = _render_dir()
+        os.makedirs(directory, exist_ok=True)
+        tmp = os.path.join(directory, f"{key[0]}.{os.getpid()}.tmp")
+        with open(tmp, "w") as handle:
+            handle.write(json.dumps({"ts": time.time(), "sig": key[1], "out": out}))
+        os.replace(tmp, os.path.join(directory, key[0]))
+    except OSError:
+        pass  # the bar never breaks on a cache write
+
+
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "statusline":
+    try:
+        _STDIN_TEXT = sys.stdin.read()
+        _hit = _render_cache_read(json.loads(_STDIN_TEXT))
+    except (OSError, ValueError, UnicodeDecodeError):
+        _hit = None
+    if _hit is not None:
+        sys.stdout.write(_hit)
+        sys.stdout.flush()
+        sys.exit(0)
+
+# the heavier standard-library imports come after the fast path on purpose (urllib alone costs
+# tens of milliseconds of CPU on every start)
+import socket  # noqa: E402
+import subprocess  # noqa: E402
+import urllib.error  # noqa: E402
+import urllib.request  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Any  # noqa: E402
 
 # Single source of truth for the two-tier compaction thresholds
 # (src/orchestrator/context_lens.py's own ALARM_PCT/HARD_ALARM_PCT), never a second,
@@ -223,6 +319,7 @@ def _post(url: str, data: dict[str, Any], *, timeout: int = 3) -> Any | None:
 
 
 def _cmd_statusline(hook: dict[str, Any]) -> int:
+    global _LIVE_RENDER
     """Render the two-line Osiris chrome (ported from osiris_statusline.py's own `main()`):
     resolve project/model intent locally (pure filesystem pin-climb, no DB), POST the
     resolved fields to /heartbeat for the shared counts, then render exactly as the old
@@ -283,6 +380,7 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
     r: dict[str, Any] | None = None
     if resp is not None and not resp.get("error"):
         r = resp.get("result") or resp
+        _LIVE_RENDER = True  # a render drawn from fresh counts may be cached for the TTL
         # A bucket keyed on ignorance has no shared identity to hold, and a live specimen
         # showed exactly that: a bar that rendered a stale agent's name it had no business
         # wearing. `cache_key is None` means `project_hint` never resolved locally (any
@@ -1603,13 +1701,37 @@ def main() -> int:
     if handler is None:
         return 1
     try:
-        hook = json.load(sys.stdin)
+        hook = json.loads(_STDIN_TEXT) if _STDIN_TEXT is not None else json.load(sys.stdin)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return 0
+    if sys.argv[1] == "statusline" and isinstance(hook, dict):
+        return _run_statusline_cached(handler, hook)
     try:
         return handler(hook)
     except Exception:  # noqa: BLE001, fail-open
         return 0
+
+
+def _run_statusline_cached(handler: Any, hook: dict[str, Any]) -> int:
+    """Run the render, keeping a copy of what it printed; a render drawn from live counts is
+    cached for the next refreshes of this session (see the fast path at the top)."""
+    import io
+
+    real = sys.stdout
+    buf = io.StringIO()
+    sys.stdout = buf
+    try:
+        code = handler(hook)
+    except Exception:  # noqa: BLE001, fail-open
+        code = 0
+    finally:
+        sys.stdout = real
+    text = buf.getvalue()
+    real.write(text)
+    real.flush()
+    if code == 0 and _LIVE_RENDER:
+        _render_cache_write(hook, text)
+    return int(code)
 
 
 if __name__ == "__main__":
