@@ -225,21 +225,12 @@ async def test_matrix_cache_never_rebuilds_on_a_wall_clock_only_on_the_fingerpri
     await _decision(actions, "decision:matrixcache1", "the warm swap demotion ruling stands")
     await semantics.embed_backfill(actions.pool, fake_embedder)
 
-    real_fetch = actions.pool.fetch
-    calls = {"full_fetch": 0}
-
-    async def _counting_fetch(query: str, *args: object) -> object:
-        if "SELECT object_id, field, vec FROM search_vectors" in query:
-            calls["full_fetch"] += 1
-        return await real_fetch(query, *args)
-
-    monkeypatch.setattr(actions.pool, "fetch", _counting_fetch)
     first = await semantics._matrix(actions.pool, fake_embedder.model)
     real_monotonic = time.monotonic
     monkeypatch.setattr(semantics.time, "monotonic", lambda: real_monotonic() + 121.0)
     second = await semantics._matrix(actions.pool, fake_embedder.model)
     assert first is not None and second is not None
-    assert calls["full_fetch"] == 1  # only the first call actually fetched the rows
+    assert second is first  # the cached matrix itself came back: nothing was rebuilt
 
 
 async def test_matrix_cache_rebuilds_the_moment_the_fingerprint_moves(

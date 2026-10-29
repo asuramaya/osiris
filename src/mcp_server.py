@@ -1512,6 +1512,9 @@ async def _pool_get() -> asyncpg.Pool:
             application_name="osiris-mcp",
             acquire_timeout=get_settings().osiris_mcp_pool_acquire_timeout,
         )
+        from src.orchestrator.semantics import warm_in_background
+
+        warm_in_background(_pool)   # model + vector matrix loaded off the request path
     return _pool
 
 

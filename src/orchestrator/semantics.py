@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import time
 from typing import Any, Protocol
 
@@ -75,6 +76,26 @@ _RETRY_COOLDOWN_S = 300.0  # the original latch never
 # most one extra silently-skipped tick, never a stampede.
 
 
+def local_model_dir(model: str) -> str | None:
+    """Where the model already sits in the local Hugging Face cache, or None. Looks at disk
+    only: `local_files_only=True` means the hub is never contacted, not even for the
+    revision lookup that a plain `from_pretrained` makes on every load."""
+    try:
+        from huggingface_hub import snapshot_download
+
+        return str(snapshot_download(model, local_files_only=True))
+    except Exception:  # noqa: BLE001 - absent, partial or unreadable cache all read as "not here"
+        return None
+
+
+def fetch_model(model: str) -> str:
+    """Download the model into the local cache. The ONLY network step: run it from the
+    background embed pass or by hand, never from a request. Returns the local directory."""
+    from huggingface_hub import snapshot_download
+
+    return str(snapshot_download(model))
+
+
 class Model2VecEmbedder:
     """Static-embedding backend (minishlab/model2vec). Lazy: the model loads on FIRST
     embed (never at import: CI installs the package but must never touch the network).
@@ -109,7 +130,14 @@ class Model2VecEmbedder:
         if self._m is None:
             from model2vec import StaticModel  # import here: the dep is optional at runtime
 
-            self._m = StaticModel.from_pretrained(self.model)
+            # Offline, always: a request must never make a network call. A model that is
+            # not in the local cache closes the semantic route (the lexical legs carry the
+            # search) until the background embed pass has fetched it.
+            where = local_model_dir(self.model)
+            if where is None:
+                self.last_error = f"{self.model} is not in the local cache (offline)"
+                raise RuntimeError(self.last_error)
+            self._m = StaticModel.from_pretrained(where, force_download=False)
         return self._m
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
@@ -243,8 +271,6 @@ async def _matrix(pool: asyncpg.Pool, model: str) -> tuple[list[Any], list[str],
     np.asarray ever discarded them, on a clock unrelated to whether anything changed. The
     fix is not a smaller TTL, it is removing the wall-clock condition entirely: the
     fingerprint alone is already authoritative."""
-    import numpy as np
-
     fp_row = await pool.fetchrow(
         "SELECT count(*) AS n, max(embedded_at) AS latest FROM search_vectors WHERE model=$1",
         model)
@@ -255,16 +281,68 @@ async def _matrix(pool: asyncpg.Pool, model: str) -> tuple[list[Any], list[str],
     if hit and hit[0] == fp:
         cached: tuple[list[Any], list[str], Any] = hit[1]
         return cached
-    rows = await pool.fetch(
-        "SELECT object_id, field, vec FROM search_vectors WHERE model=$1", model)
-    ids = [r["object_id"] for r in rows]
-    fields = [r["field"] for r in rows]
-    mat = np.asarray([r["vec"] for r in rows], dtype=np.float32)
+    # Built in slices: converting 39k Python float lists to numpy holds the GIL, so a
+    # worker thread would not free the loop; instead each slice is fetched, converted and
+    # followed by a yield, so no one step blocks the loop for more than a slice (the single
+    # fetch + convert blocked it ~1.6 s).
+    import numpy as np
+
+    ids: list[Any] = []
+    fields: list[str] = []
+    parts: list[Any] = []
+    async with pool.acquire() as conn, conn.transaction():
+        cur = await conn.cursor(
+            "SELECT object_id, field, vec FROM search_vectors WHERE model=$1", model)
+        while chunk := await cur.fetch(1000):
+            ids.extend(r["object_id"] for r in chunk)
+            fields.extend(r["field"] for r in chunk)
+            parts.append(np.asarray([r["vec"] for r in chunk], dtype=np.float32))
+            await asyncio.sleep(0)
+    mat = np.concatenate(parts)
     norms = np.linalg.norm(mat, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
     packed = (ids, fields, mat / norms)
     _matrix_cache["v"] = (fp, packed)
     return packed
+
+
+def _top_k(mat: Any, qv: list[float], k: int, floor: float) -> list[tuple[int, float]]:
+    """The k nearest rows to the query by cosine, as (row index, cosine), above `floor`."""
+    import numpy as np
+
+    v = np.asarray(qv, dtype=np.float32)
+    n = float(np.linalg.norm(v))
+    if not n:
+        return []
+    sims = mat @ (v / n)
+    order = np.argsort(-sims)[:k]
+    return [(int(i), float(sims[i])) for i in order if float(sims[i]) >= floor]
+
+
+_warm_task: asyncio.Task[bool] | None = None
+
+
+async def warm(pool: asyncpg.Pool) -> bool:
+    """Load the model and build the vector matrix now. True when the semantic route is
+    ready; False (never an exception) when the model is not cached or the index is empty."""
+    try:
+        embedder = resolve_embedder()
+        if embedder is None:
+            return False
+        await embedder.embed(["warm"])
+        return await _matrix(pool, embedder.model) is not None
+    except Exception:  # noqa: BLE001 - warming is an optimisation, never a failure
+        return False
+
+
+def warm_in_background(pool: asyncpg.Pool) -> None:
+    """Warm once per process, off the request path, so the first search after a restart
+    pays for neither the model load nor the matrix build. A test run starts no background
+    work of its own."""
+    global _warm_task
+    if _warm_task is not None or "PYTEST_CURRENT_TEST" in os.environ:
+        return
+    _warm_task = asyncio.get_running_loop().create_task(warm(pool))
 
 
 async def semantic_candidates(
@@ -274,21 +352,13 @@ async def semantic_candidates(
     """Top-k (object_id, field, cosine) for a query: the semantic route's raw candidates.
     `floor` keeps garbage out: below it a nearest neighbor is noise wearing a rank. Errors
     degrade to []; the lexical routes must never pay for a semantic failure."""
-    import numpy as np
-
     try:
         packed = await _matrix(pool, embedder.model)
         if packed is None:
             return []
         ids, fields, mat = packed
         (qv,) = await embedder.embed([q[:_MAX_CHARS]])
-        v = np.asarray(qv, dtype=np.float32)
-        n = float(np.linalg.norm(v))
-        if not n:
-            return []
-        sims = mat @ (v / n)
-        order = np.argsort(-sims)[:k]
-        return [{"object_id": ids[i], "field": fields[i], "cos": float(sims[i])}
-                for i in order if float(sims[i]) >= floor]
+        top = await asyncio.to_thread(_top_k, mat, qv, k, floor)
+        return [{"object_id": ids[i], "field": fields[i], "cos": cos} for i, cos in top]
     except Exception:  # noqa: BLE001 -- the semantic route fails closed, never loudly
         return []
