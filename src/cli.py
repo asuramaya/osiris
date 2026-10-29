@@ -1519,7 +1519,7 @@ async def _resolve_and_guard_launch(
 async def _cmd_launch_harness(
     handle: str, *, model: str | None, pool: asyncpg.Pool, wake_default: str | None,
     spawn: SpawnClaudeBg, agents_json: AgentsJson,
-    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep, message: str = "",
 ) -> int:
     """THE DEFAULT LANE, following trigger.launch_seat's own flip: `claude --bg` +
     `claude agents --json`, the harness's own front-end surface. Every body this creates
@@ -1572,7 +1572,7 @@ async def _cmd_launch_harness(
     out = await launch_seat(
         Actions(pool), caller="operator", target=handle, model=model, settings=st,
         substrate="harness", spawn=spawn, agents_json=agents_json,
-        operator_authorized=True)
+        operator_authorized=True, message=message)
 
     status = out.get("status")
     if status == "already-live":
@@ -1765,6 +1765,7 @@ async def _cmd_resume_harness(
     handle: str, *, model: str | None, pool: asyncpg.Pool, wake_default: str | None,
     agents_json: AgentsJson, resume_spawn: ResumeSpawn, settings: Settings | None = None,
     clear_stale_record: ClearStaleRecord | None = None,
+    launch_spawn: SpawnClaudeBg | None = None,
 ) -> int:
     """A PERSISTENT `--bg --resume` TURN, superseding the old one-shot `-p --resume`
     lane: same `_lineage_resume_candidate` + `_resume_guard` + `resume_spawn` primitives,
@@ -1866,6 +1867,27 @@ async def _cmd_resume_harness(
     name = await _window_name(pool, facts["house"], facts["handle"],
                               await _governed_project_name(
                                   pool, facts["seat_id"], cwd=facts["anchor_cwd"]))
+    # Whose history is it? The harness loads none of a transcript another account owns, so
+    # resuming it would only start an amnesiac session. Say so, then launch fresh with a
+    # briefing built from the store (trigger.resume_seat takes the same road).
+    from src.orchestrator.mounts import _harness_slug
+    from src.orchestrator.resume_account import account_mismatch, store_briefing
+    sense_root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+        else Path.home() / ".claude" / "projects"
+    finding = await account_mismatch(
+        sense_root / _harness_slug(spawn_cwd) / f"{resumed_session_id}.jsonl")
+    if finding is not None:
+        from src.orchestrator.trigger import _spawn_claude_bg
+        print(f"osiris resume: {handle!r}: {finding['detail']}. Launching a FRESH session "
+              "seeded with a briefing built from the store instead (path: "
+              "fresh-launch-account-mismatch).", file=sys.stderr)
+        brief = await store_briefing(
+            pool, handle=handle, anchor_sid=resumed_session_id[:8], finding=finding,
+            project=await _governed_project_name(
+                pool, facts["seat_id"], cwd=facts["anchor_cwd"]))
+        return await _cmd_launch_harness(
+            handle, model=model, pool=pool, wake_default=wake_default,
+            spawn=launch_spawn or _spawn_claude_bg, agents_json=agents_json, message=brief)
     cleared = await clear_stale_record(resumed_session_id[:8])
     await resume_spawn(spawn_cwd, prompt=_DM_RESUME_PROMPT,
                        resume_session=resumed_session_id, name=name, model=resolved_model,
@@ -1892,7 +1914,7 @@ async def _cmd_resume_harness(
         print(f"osiris resume: cleared a stale stopped record for "
               f"{resumed_session_id[:8]} before spawning. This pre-empts the copy quirk, "
               "not just adopts it.", file=sys.stderr)
-    print(f"osiris resume: resumed session {resumed_session_id[:8]} at {spawn_cwd}. "
+    print(f"osiris resume: path: resumed. resumed session {resumed_session_id[:8]} at {spawn_cwd}. "
           f"Walked {resume[5]} generation(s) back to find it "
           f"({_collapse_resume_log(resume_log)}). Runs persistently under `claude --bg "
           f"--resume`: it idles after this turn rather than exiting, and shows up in "
@@ -1910,6 +1932,7 @@ async def cmd_resume(
     handle: str, *, model: str | None = None, pool: asyncpg.Pool | None = None,
     wake_default: str | None = None, agents_json: AgentsJson | None = None,
     resume_spawn: ResumeSpawn | None = None, settings: Settings | None = None,
+    launch_spawn: SpawnClaudeBg | None = None,
 ) -> int:
     """Continue a seat's last session PERSISTENTLY via `claude --bg --resume`: idles
     after this turn rather than exiting, visible in `claude agents`, reachable again by
@@ -1942,7 +1965,8 @@ async def cmd_resume(
     try:
         return await _cmd_resume_harness(handle, model=model, pool=pool,
                                          wake_default=wake_default, agents_json=agents_json,
-                                         resume_spawn=resume_spawn, settings=settings)
+                                         resume_spawn=resume_spawn, settings=settings,
+                                         launch_spawn=launch_spawn)
     finally:
         if owns_pool:
             await pool.close()

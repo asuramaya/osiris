@@ -16,8 +16,8 @@ _SECTION = _DOC.split("## The connection envelope at scale", 1)[1].split("\n## "
 _FIELD = {"osiris-mcp": "osiris_mcp_pool_size", "osiris-worker": "osiris_worker_pool_size",
           "osiris-console": "osiris_api_pool_size", "osiris-manager": "osiris_manager_pool_size"}
 _RESERVED = 3  # Postgres superuser_reserved_connections, as the doc states
-_HEARTBEAT_P50 = 0.595  # the 2026-10-13 live measurement, real-session render
-_STOP_P50 = 0.463
+_HEARTBEAT_P50 = 0.328  # the 2026-10-29 live measurement after the JIT fix, real session
+_STOP_P50 = 0.140
 
 
 def _default(field: str) -> int:
@@ -59,9 +59,9 @@ def test_headroom_is_max_minus_budget_minus_reserved() -> None:
 
 def test_route_ceilings_follow_the_mcp_pool() -> None:
     pool = _default("osiris_mcp_pool_size")
-    hb = re.search(r"`/heartbeat`: (\d+) connections / 0\.595 s is about \*\*(\d+) req/s\*\*",
+    hb = re.search(r"`/heartbeat`: (\d+) connections / 0\.328 s is about \*\*(\d+) req/s\*\*",
                    _SECTION)
-    st = re.search(r"`/stop`: (\d+) connections / 0\.463 s is about \*\*(\d+) req/s\*\*",
+    st = re.search(r"`/stop`: (\d+) connections / 0\.140 s is about \*\*(\d+) req/s\*\*",
                    _SECTION)
     assert hb and st
     assert int(hb.group(1)) == int(st.group(1)) == pool
@@ -81,8 +81,8 @@ def test_session_table_is_the_arithmetic_for_the_ceiling() -> None:
     # the headline and the decision both quote the 15-second row
     fifteen = next(int(a) for sec, a, _ in rows if sec == "15")
     flat = " ".join(_SECTION.replace("> ", " ").split())
-    assert round(fifteen, -2) == 200
-    assert "about 200 concurrent sessions at a 15-second" in flat
+    assert abs(fifteen - 366) <= 4 and abs(fifteen - ceiling * 15) <= 4
+    assert "about 370 concurrent sessions at a 15-second" in flat
 
 
 def test_the_old_pre_cut_caps_appear_only_as_history() -> None:

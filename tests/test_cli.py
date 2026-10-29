@@ -7833,3 +7833,51 @@ async def test_cmd_rename_project_gathers_evidence_when_a_seat_governs_it(
         actor="agent:test", pool=actions.pool)
 
     assert code == 0
+
+
+async def test_cmd_resume_says_so_and_launches_fresh_when_the_history_is_another_accounts(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The real CLI resume entry on a transcript another Claude account owns: no resume
+    is spawned, the reason is printed plainly, and a fresh launch is handed a briefing
+    built from the store."""
+    from src import cli
+    from src.orchestrator import resume_account
+
+    old, new = "74d4ddbd-67aa-4830-aaee-388b128e19d5", "2e54b530-8738-4bee-86c9-56a49e200cd2"
+    monkeypatch.setattr(resume_account, "current_account_uuid", lambda home=None: new)
+    sense = await _resumable_seat(
+        actions, tmp_path, handle="cliacct", agent_id="agent:cliacct01",
+        anchor_cwd="/tmp/cliacct-office")
+    t = sense / "-repo-demo" / f"{_RESUME_SID}.jsonl"
+    signed = ('{"type":"user","ownerAccountUuid":"' + old + '","toolUseResult":'
+              '"{\\"sent\\":1,\\"from\\":\\"agent:cliacct01\\"}"}\n')
+    t.write_text(signed + "".join(
+        json.dumps({"type": "assistant", "ownerAccountUuid": old,
+                    "message": {"content": f"cli old turn {i}"}}) + "\n" for i in range(20)))
+
+    launches: list[dict[str, Any]] = []
+
+    async def _launch(handle: str, **kw: Any) -> int:
+        launches.append({"handle": handle, **kw})
+        return 0
+
+    async def _boom(*a: Any, **kw: Any) -> Any:
+        raise AssertionError("another account's history must not be resumed")
+
+    monkeypatch.setattr(cli, "_cmd_launch_harness", _launch)
+
+    async def _agents(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return []
+
+    rc = await cli._cmd_resume_harness(
+        "cliacct", model="claude-sonnet-5", pool=actions.pool, wake_default=None,
+        agents_json=_agents, resume_spawn=_boom, settings=_resume_settings(sense),
+        clear_stale_record=_boom)
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "history belongs to another Claude account; the harness will not load it" in err
+    assert "fresh-launch-account-mismatch" in err
+    assert len(launches) == 1 and launches[0]["handle"] == "cliacct"
+    assert "cli old turn 19" in launches[0]["message"]
