@@ -214,7 +214,7 @@ async def _credence_streams(
     ]
     if not oids:
         return [], []
-    result = await credence_props(actions, oids)
+    result = await credence_props(actions, oids, contested_only=True)
     laundering = [
         {"object_id": str(w.object_id), "name": w.name, "value": w.value,
          "laundering_sources": list(w.laundering)}
