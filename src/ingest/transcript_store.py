@@ -254,7 +254,8 @@ class TranscriptStore:
                 if discover_at is None:
                     continue
                 try:
-                    locator = discover_at(p)
+                    # a directory walk: off the loop, which serves every other tool call
+                    locator = await asyncio.to_thread(discover_at, p)
                 except Exception:  # noqa: BLE001, an adapter failure must never block mount
                     continue
                 if locator is not None:
@@ -263,7 +264,8 @@ class TranscriptStore:
                         return reading
         for adapter in (adapters or self._default_adapters):
             try:
-                locator = adapter.discover(cwd=cwd, job_dir=job_dir, root=root)
+                locator = await asyncio.to_thread(
+                    adapter.discover, cwd=cwd, job_dir=job_dir, root=root)
             except Exception:  # noqa: BLE001, an adapter failure must never block mount
                 continue
             if locator is None:

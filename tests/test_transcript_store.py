@@ -11,6 +11,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -852,7 +853,6 @@ async def test_a_transcript_is_read_off_the_event_loop() -> None:
     a worker thread and hands back a plain list."""
     import threading
     from types import SimpleNamespace
-    from typing import Any
 
     from src.ingest.transcript_store import _read_turns_off_loop
 
@@ -866,3 +866,34 @@ async def test_a_transcript_is_read_off_the_event_loop() -> None:
     out = await _read_turns_off_loop(_Adapter(), object(), 2)  # type: ignore[arg-type]
     assert [t.turn_idx for t in out] == [2, 3, 4]
     assert seen and seen[0] != threading.get_ident()
+
+
+async def test_discovery_walks_the_disk_off_the_event_loop(actions: Actions) -> None:
+    """An adapter's discover() is a directory walk; mount() runs it on the shared loop, so a slow
+    disk stalled every other tool call. The loop must keep ticking while it runs."""
+    import asyncio
+    import time
+
+    class _Slow:
+        harness = "slow"
+
+        def discover(self, **kwargs: Any) -> None:
+            time.sleep(0.4)
+
+    ticks = 0
+
+    async def _ticker() -> None:
+        nonlocal ticks
+        while True:
+            ticks += 1
+            await asyncio.sleep(0.02)
+
+    task = asyncio.create_task(_ticker())
+    try:
+        got = await TranscriptStore(actions.pool).discover_and_ingest(
+            cwd="/x", job_dir="/j", adapters=[_Slow()])  # type: ignore[list-item]
+    finally:
+        task.cancel()
+
+    assert got is None
+    assert ticks >= 10  # blocked on the loop, this would be 1
