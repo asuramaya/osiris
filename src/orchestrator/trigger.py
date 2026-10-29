@@ -456,6 +456,12 @@ async def _dms_with_unread(
         "  AND r.agent_id=m.to_agent AND r.read_at IS NOT NULL) "
         "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
         "  AND r.agent_id=m.to_agent AND r.delivered_at >= now() - make_interval(secs => $2)) "
+        # A message that already spent its one wake (dispatch_dm's once-per-message brake)
+        # can only ever answer 'skipped-once-per-message' again. Left in, it would keep the
+        # addressee's single DISTINCT ON slot forever (a push delivery never sets read_at)
+        # and starve every newer ask behind it, including one that was told 'mid-turn'.
+        "AND COALESCE((SELECT w.mode FROM agent_wakes w WHERE w.message_id=m.id "
+        "  ORDER BY w.woke_at DESC LIMIT 1), '') NOT IN ('dm-reply', 'dm-resume', 'dm-poke') "
         "ORDER BY m.to_agent, m.created_at", OPERATOR_ADDR, lease_secs)
     return [(r["to_agent"], r["id"], r["from_agent"]) for r in rows]
 

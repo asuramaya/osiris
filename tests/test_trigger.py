@@ -2318,12 +2318,50 @@ async def test_trigger_mail_tick_escalates_a_stuck_wake_in_flight_ask(
 
     report = await trigger_mail_tick(actions, settings=st, spawn=_spawn,
                                      windows=_no_windows)
-    assert report["wake_in_flight_reevaluated"] == 1
-    assert report["wake_in_flight_escalated"] == 1
+    # m1 spent its wake, so the DM lane no longer pins its slot on m1: it reaches m2
+    # directly (the stuck-ask lane stays as the query-level backstop, tested above)
+    assert report["woke"] == 1
     assert len(calls) == 2  # m2 now genuinely spawned its own turn
     persisted = await actions.pool.fetchval(
         "SELECT dispatch_mode FROM fleet_messages WHERE id=$1", m2_id)
     assert persisted != "queued-wake-in-flight"
+
+
+async def test_a_mid_turn_ask_behind_a_spent_head_is_reached_by_the_sweep(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE HEAD-OF-LINE LOSS: `_dms_with_unread` keeps one DM per addressee, the oldest
+    unread. An earlier DM that already spent its one wake stays unread (a push delivery never
+    sets read_at) and can only answer 'skipped-once-per-message', so a newer ask told
+    'mid-turn' was never re-dispatched once its addressee went idle."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    head = await _dm_to_owner(actions)
+    calls: list[dict[str, Any]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append(kw)
+
+    st = _settings(enabled=True, sense=str(sense), grace=300)
+    d1 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=head,
+                           sender="agent:sender", settings=st, spawn=_spawn,
+                           windows=_no_windows)
+    assert d1["mode"] == "resumed"
+    ask = await send_message(actions.pool, from_agent="agent:third", from_project="other",
+                             to_agent="agent:abcd1234", grade="ask",
+                             body="arrived while the addressee was mid-turn")
+    ask_id = int(ask["id"])
+    await actions.pool.execute(
+        "UPDATE fleet_messages SET dispatch_mode='mid-turn', dispatch_mode_at=now() "
+        "WHERE id=$1", ask_id)
+    # the head's wake and the ask's mid-turn verdict are long past: the turn has ended
+    await actions.pool.execute("UPDATE agent_wakes SET woke_at = now() - interval '10 minutes'")
+    assert len(calls) == 1
+
+    await trigger_mail_tick(actions, settings=st, spawn=_spawn, windows=_no_windows)
+
+    assert len(calls) == 2  # the ask got its own turn
+    assert await actions.pool.fetchval(
+        "SELECT dispatch_mode FROM fleet_messages WHERE id=$1", ask_id) != "mid-turn"
 
 
 async def test_a_dm_resume_never_pins_the_triage_model(
