@@ -56,10 +56,20 @@ async def test_the_chain_reaches_0078_and_the_index_exists(actions: Actions) -> 
 async def test_the_lineage_lookup_seeks_the_index_instead_of_scanning_objects(
     actions: Actions,
 ) -> None:
-    await actions.pool.execute("SET enable_seqscan = off")
-    plan = "\n".join(r[0] for r in await actions.pool.fetch(
-        "EXPLAIN SELECT a.id FROM objects a WHERE a.type='Agent' "
-        "AND (a.canonical=$1 OR a.canonical LIKE $1 || '-%')", "agent:aad6603a"))
+    # Deterministic plan choice: on a near-empty table the planner may serve the type
+    # predicate from objects_type_idx and filter the rest, which is cheap there and says
+    # nothing about the index. Seed enough Agent rows that the type-only path is clearly
+    # the costlier one, ANALYZE, and run the SET and the EXPLAIN on ONE connection (a
+    # pool.execute SET may land on a different connection than the EXPLAIN).
+    for i in range(400):
+        await actions.create_or_find_object("Agent", f"agent:seed{i:04d}", "test")
+    async with actions.pool.acquire() as conn:
+        await conn.execute("ANALYZE objects")
+        await conn.execute("SET enable_seqscan = off")
+        plan = "\n".join(r[0] for r in await conn.fetch(
+            "EXPLAIN SELECT a.id FROM objects a WHERE a.type='Agent' "
+            "AND (a.canonical=$1 OR a.canonical LIKE $1 || '-%')", "agent:aad6603a"))
+        await conn.execute("RESET enable_seqscan")
     assert _INDEX in plan, plan
 
 
