@@ -643,9 +643,11 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
 
 # THE RARITY-WEIGHTED RELAXATION: the ANY-term retry's rank is the sum
 # of ln(N/df) over the query words each candidate matches. df is computed against the same
-# corpus the route searches, in the same statement (the corpus CTE materializes once, and
-# this leg only runs when strict-AND found nothing). Stopwords parse to empty tsqueries
-# and drop out; a word present in EVERY document scores ln(1)=0 by construction. The
+# corpus the route searches, in the same statement, through the FTS expression index (the
+# earlier form rebuilt to_tsvector for all ~74k indexed rows on every call, 3.4 to 5.3 s
+# measured 2026-10-29; fetching only the rows that match ANY word is 1 to 2.5 s with the
+# same top ranks; this leg only runs when strict-AND found nothing). Stopwords parse to
+# empty tsqueries and drop out; a word present in EVERY document scores ln(1)=0 by construction. The
 # snippet still headlines with the OR query, and grade x recency weigh exactly as the
 # strict route does.
 #
@@ -657,16 +659,25 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
 # under 4s combined: real at scale, but not this query's actual villain.
 _RELAX_SQL = (
     "WITH words AS (SELECT DISTINCT lower(w) AS w FROM unnest($1::text[]) AS w), "
-    "corpus AS ("
-    "  SELECT o.id, o.type, o.canonical, a.name AS field, "
-    "   a.value #>> '{}' AS text, a.source_id, a.evidence_class, a.observed_at, "
+    "n AS MATERIALIZED (SELECT count(*)::float + 1 AS total FROM current_assertions a "
+    "  JOIN objects o ON o.id = a.object_id AND o.status = 'active' "
+    "  WHERE a.name IN (" + _FTS_FIELDS + ")), "
+    # df per word through the expression index (ix_assertions_fts), never a corpus scan
+    "df AS MATERIALIZED (SELECT w.w, (SELECT count(*) FROM current_assertions a "
+    "  JOIN objects o ON o.id = a.object_id AND o.status = 'active' "
+    "  WHERE a.name IN (" + _FTS_FIELDS + ") "
+    "    AND to_tsvector('english', a.value #>> '{}') @@ plainto_tsquery('english', w.w)) "
+    "  + 1 AS d FROM words w), "
+    # only rows that match ANY word are fetched, via the same index, and each builds its
+    # tsvector once
+    "hit AS MATERIALIZED ("
+    "  SELECT o.id, o.type, o.canonical, a.name AS field, a.value #>> '{}' AS text, "
+    "   a.source_id, a.evidence_class, a.observed_at, "
     "   to_tsvector('english', a.value #>> '{}') AS tv, " + _GRADE_W + " AS gw "
     "  FROM current_assertions a JOIN objects o ON o.id = a.object_id "
     "   AND o.status = 'active' "
-    "  WHERE a.name IN (" + _FTS_FIELDS + ")), "
-    "n AS MATERIALIZED (SELECT count(*)::float + 1 AS total FROM corpus), "
-    "df AS (SELECT w.w, count(*) + 1 AS d FROM words w "
-    "       JOIN corpus c ON c.tv @@ plainto_tsquery('english', w.w) GROUP BY w.w), "
+    "  WHERE a.name IN (" + _FTS_FIELDS + ") "
+    "    AND to_tsvector('english', a.value #>> '{}') @@ websearch_to_tsquery('english', $2)), "
     "cand AS ("
     "  SELECT DISTINCT ON (c.id) c.id, c.type, c.canonical, c.field, c.text, "
     "   c.source_id, c.evidence_class, c.observed_at, "
@@ -674,9 +685,7 @@ _RELAX_SQL = (
     "     WHERE c.tv @@ plainto_tsquery('english', df.w)) * c.gw * "
     "    (1.0 / (1.0 + EXTRACT(epoch FROM (now() - c.observed_at)) / 7776000.0)))::real "
     "     AS rank "
-    "  FROM corpus c "
-    "  WHERE EXISTS (SELECT 1 FROM df WHERE c.tv @@ plainto_tsquery('english', df.w)) "
-    "  ORDER BY c.id, rank DESC), "
+    "  FROM hit c ORDER BY c.id, rank DESC), "
     "top AS (SELECT * FROM cand ORDER BY rank DESC LIMIT $3) "
     "SELECT top.*, ts_headline('english', top.text, websearch_to_tsquery('english', $2), "
     "         'MaxWords=20, MinWords=8, MaxFragments=1') AS snippet "
