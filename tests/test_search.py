@@ -343,3 +343,17 @@ async def test_relaxed_flag_lands_in_the_telemetry(actions: Actions) -> None:
         "SELECT query, hits, relaxed FROM search_log ORDER BY id")
     assert [bool(r["relaxed"]) for r in rows] == [False, True]
     assert rows[1]["hits"] > 0  # it did survive, on relaxation
+
+
+def test_the_relaxed_leg_reads_through_the_index_not_the_whole_corpus() -> None:
+    """The relaxed query used to build to_tsvector for every indexed assertion (about
+    74,000 rows) on each call: 3.4 to 5.3 s on the live graph. It now counts document
+    frequency per word through the FTS expression index and tokenizes only the rows that
+    match some word."""
+    from src.orchestrator.compositions import _RELAX_SQL
+
+    assert "corpus AS" not in _RELAX_SQL
+    assert "hit AS MATERIALIZED" in _RELAX_SQL and "df AS MATERIALIZED" in _RELAX_SQL
+    # the candidate filter uses the exact indexed expression, so ix_assertions_fts applies
+    assert ("to_tsvector('english', a.value #>> '{}') @@ websearch_to_tsquery('english', $2)"
+            in _RELAX_SQL)
