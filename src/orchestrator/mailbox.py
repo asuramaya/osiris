@@ -998,9 +998,16 @@ async def desk_briefs_from(pool: asyncpg.Pool, agent_id: str | None) -> int:
     if not mt:
         return 0
     base = mt.group(0)
-    q = ("SELECT count(*) FROM fleet_messages m WHERE " + _DESK_BRIEF_ROW
-         + " AND (m.from_agent = $2 OR m.from_agent LIKE $2 || '-%')").replace("$op", "$1")
-    return await pool.fetchval(q, OPERATOR_ADDR, base)  # type: ignore[no-any-return]
+    # The lineage lookup is by the first 14 characters of from_agent (`agent:` + 8 hex), the
+    # expression the partial index fleet_messages_operator_unread_lineage_idx (migration
+    # 0079) is built on; it is the same set as `from_agent = base OR from_agent LIKE
+    # base || '-%'`. The operator address is written into the text, not bound, because a
+    # partial index is only usable when the planner can see `to_project = 'operator'`.
+    q = ("SELECT count(*) FROM fleet_messages m WHERE "
+         + _DESK_BRIEF_ROW.replace("$op", "'" + OPERATOR_ADDR + "'")
+         + " AND left(m.from_agent, 14) = $1"
+         + " AND (length(m.from_agent) = 14 OR substr(m.from_agent, 15, 1) = '-')")
+    return await pool.fetchval(q, base)  # type: ignore[no-any-return]
 
 
 async def read_inbox(
