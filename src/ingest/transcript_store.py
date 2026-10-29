@@ -19,6 +19,7 @@ the store current without a mount. Until then, mount-time is the only ingest tri
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -39,12 +40,17 @@ _SYNTHETIC = "<synthetic>"
 
 async def _read_turns_off_loop(
     adapter: HarnessAdapter, locator: SessionLocator, since: int,
+    resume: tuple[int, int] | None = None,
 ) -> list[TurnRow]:
     """A transcript is read and JSON-parsed line by line; on the event loop that froze the
     whole daemon for as long as the file took (about 1 s for this session's, seconds for a
     long one), and every /heartbeat and tool call queued behind it: the multi-second tail
     on an otherwise 0.2 s statusline render. A worker thread does the read; the rows come
     back as a plain list."""
+    if resume is not None and "resume" in inspect.signature(adapter.read_turns).parameters:
+        return await asyncio.to_thread(
+            lambda: list(adapter.read_turns(  # type: ignore[call-arg]
+                locator, since_idx=since, resume=resume)))
     return await asyncio.to_thread(lambda: list(adapter.read_turns(locator, since_idx=since)))
 
 
@@ -220,6 +226,22 @@ class TranscriptStore:
             return (True, int(row["last_turn_idx"]), mtime, size)
         return (False, int(row["last_turn_idx"]), mtime, size)
 
+    async def _resume_point(
+        self, locator: SessionLocator, since: int,
+    ) -> tuple[int, int] | None:
+        """`(byte_offset, line_crc)` where the last ingest left off in this session's source
+        file, or None (the reader then scans). Only trusted when it was saved for exactly
+        the turn index the next read resumes from."""
+        if since <= 0:
+            return None
+        row = await self.pool.fetchrow(
+            "SELECT last_byte_offset, last_line_crc, last_offset_idx FROM harness_sessions "
+            "WHERE harness=$1 AND anchor_sid=$2", locator.harness, locator.anchor_sid)
+        if (row is None or row["last_byte_offset"] is None or row["last_line_crc"] is None
+                or row["last_offset_idx"] != since):
+            return None
+        return int(row["last_byte_offset"]), int(row["last_line_crc"])
+
     async def discover_and_ingest(
         self, *, cwd: str | None, job_dir: str | None,
         adapters: list[HarnessAdapter] | None = None,
@@ -288,7 +310,8 @@ class TranscriptStore:
             if stored is not None:
                 return replace(stored, anchored=locator.anchored)
             skip, since = False, 0  # a session row without turns: eat it whole
-        turns = await _read_turns_off_loop(adapter, locator, since)
+        turns = await _read_turns_off_loop(
+            adapter, locator, since, await self._resume_point(locator, since))
         if turns:
             await self._upsert(locator, turns, observed_at=observed, source_bytes=size)
         elif since == 0:
@@ -514,6 +537,7 @@ class TranscriptStore:
                     harness, reset)
                 await conn.execute(
                     "UPDATE harness_sessions SET last_turn_idx=0, "
+                    "  last_byte_offset=NULL, last_line_crc=NULL, last_offset_idx=NULL, "
                     "  last_ingested_at=to_timestamp(0) "
                     "WHERE harness=$1 AND anchor_sid=ANY($2)",
                     harness, reset)
@@ -544,7 +568,8 @@ class TranscriptStore:
                     skip, since, observed, size = await self._freshness(locator)
                     if skip:
                         continue
-                    turns = await _read_turns_off_loop(adapter, locator, since)
+                    turns = await _read_turns_off_loop(
+                        adapter, locator, since, await self._resume_point(locator, since))
                     if not turns:
                         continue
                     await self._upsert(locator, turns, observed_at=observed,
@@ -565,15 +590,18 @@ class TranscriptStore:
         last_ingested_at so the freshness gate compares against what was actually read,
         not against a later clock that would hide same-moment appends. `source_bytes`
         rides from the same stat (the overhead lens's byte fallback)."""
+        last_turn = max(turns, key=lambda t: t.turn_idx,
+                        default=TurnRow(turn_idx=0, role=""))
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
                     "INSERT INTO harness_sessions "
                     "   (anchor_sid, harness, session_id, cwd, project, source_path, "
                     "    last_ingested_at, last_turn_idx, channel, parent_sid, "
-                    "    agent_type, source_bytes) "
+                    "    agent_type, source_bytes, last_byte_offset, last_line_crc, "
+                    "    last_offset_idx) "
                     "VALUES ($1, $2, $3, $4, $5, $6, COALESCE($8, now()), $7, "
-                    "        $9, $10, $11, $12) "
+                    "        $9, $10, $11, $12, $13, $14, $15) "
                     "ON CONFLICT (harness, anchor_sid) DO UPDATE "
                     "   SET last_ingested_at = COALESCE($8, now()), "
                     "       last_turn_idx = GREATEST("
@@ -586,12 +614,27 @@ class TranscriptStore:
                     "       agent_type = COALESCE(EXCLUDED.agent_type, "
                     "                             harness_sessions.agent_type), "
                     "       source_bytes = COALESCE(EXCLUDED.source_bytes, "
-                    "                               harness_sessions.source_bytes)",
+                    "                               harness_sessions.source_bytes), "
+                    # the resume point moves only with the turn it belongs to: a write that
+                    # does not advance last_turn_idx (or carries no offset) leaves it be
+                    "       last_byte_offset = CASE WHEN EXCLUDED.last_byte_offset IS NOT NULL "
+                    "           AND EXCLUDED.last_turn_idx >= harness_sessions.last_turn_idx "
+                    "           THEN EXCLUDED.last_byte_offset "
+                    "           ELSE harness_sessions.last_byte_offset END, "
+                    "       last_line_crc = CASE WHEN EXCLUDED.last_byte_offset IS NOT NULL "
+                    "           AND EXCLUDED.last_turn_idx >= harness_sessions.last_turn_idx "
+                    "           THEN EXCLUDED.last_line_crc "
+                    "           ELSE harness_sessions.last_line_crc END, "
+                    "       last_offset_idx = CASE WHEN EXCLUDED.last_byte_offset IS NOT NULL "
+                    "           AND EXCLUDED.last_turn_idx >= harness_sessions.last_turn_idx "
+                    "           THEN EXCLUDED.last_offset_idx "
+                    "           ELSE harness_sessions.last_offset_idx END",
                     locator.anchor_sid, locator.harness, locator.session_id,
                     locator.cwd, locator.project, locator.source_path,
                     max((t.turn_idx for t in turns), default=0),
                     observed_at, locator.channel, locator.parent_sid,
                     locator.agent_type, source_bytes,
+                    last_turn.byte_offset, last_turn.line_crc, last_turn.turn_idx,
                 )
                 # idempotent: ON CONFLICT skips turns already ingested (re-mount, re-probe)
                 await conn.executemany(
