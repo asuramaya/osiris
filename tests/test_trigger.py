@@ -8385,3 +8385,68 @@ async def test_resume_seat_resumes_a_session_whose_disk_transcript_expired(
     assert resumed and resumed[0].get("resume_session") == FULL_SID
     from src.orchestrator.mounts import _harness_slug
     assert (sense / _harness_slug(resumed[0]["repo"]) / f"{FULL_SID}.jsonl").is_file()
+
+
+async def test_a_session_the_cache_prune_deleted_resumes_end_to_end(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The prune's own promise ("rematerialized on demand by the next resume"), kept: age
+    the transcript past the dead window, run the real prune plan and unlink exactly what it
+    lists, then resume the seat. The spawn is handed the full session id and the transcript
+    is back where the harness resumes from (the spawn is the turn: the harness starts the
+    session from that file)."""
+    import os
+    import time as _time
+
+    from scripts.osiris_transcript_cache_prune import (
+        SessionRow,
+        _file_mtime,
+        find_prunable_sessions,
+    )
+
+    sense, truncated = await _lineage_holder_with_truncated_session(
+        actions, tmp_path, agent_id="agent:pruned1")
+    seat, _m = await _managed_pair(
+        actions, worker_agent="agent:pruned1", manager_agent="agent:hm-pruned1",
+        worker_handle="Pruned1", house="osiris")
+    await _office(actions, seat, "/tmp/pruned1-test")
+    st = _settings(enabled=True, sense=str(sense))
+    # ingest while the file exists, then let the file go quiet for 60 days
+    assert isinstance(await trigger_module._lineage_resume_candidate(
+        actions.pool, "agent:pruned1", st, repo="/tmp/pruned1-test", seat_id=seat,
+        materialize=False), tuple)
+    t = sense / "-repo-demo" / f"{FULL_SID}.jsonl"
+    old = _time.time() - 60 * 86400
+    os.utime(t, (old, old))
+
+    rows = await actions.pool.fetch(
+        "SELECT anchor_sid, source_path, last_ingested_at FROM soul_sessions "
+        "WHERE anchor_sid=$1", truncated)
+    plan = find_prunable_sessions(
+        [SessionRow(r["anchor_sid"], r["source_path"], _file_mtime(Path(r["source_path"])),
+                    r["last_ingested_at"]) for r in rows],
+        now=datetime.now(UTC))
+    assert [x.anchor_sid for x in plan] == [truncated]
+    for x in plan:
+        Path(x.source_path).unlink(missing_ok=True)   # what --apply does
+    assert not t.exists()
+
+    resumed: list[dict[str, Any]] = []
+
+    async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
+        resumed.append({"repo": repo, **kw})
+
+    async def _clear(job_dir_key: str) -> bool:
+        return False
+
+    d = await trigger_module.resume_seat(
+        actions, caller="agent:hm-pruned1", target=seat, settings=st,
+        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]),
+        clear_stale_record=_clear)
+    assert d["status"] == "launched" and d["session"] == FULL_SID, d
+    assert resumed and resumed[0].get("resume_session") == FULL_SID
+    from src.orchestrator.mounts import _harness_slug
+    back = sense / _harness_slug(resumed[0]["repo"]) / f"{FULL_SID}.jsonl"
+    assert back.is_file() and back.stat().st_size == len(
+        b'{"type":"user","toolUseResult":"{\\"sent\\":1,\\"from\\":\\"agent:pruned1\\"}"}\n'
+         )
