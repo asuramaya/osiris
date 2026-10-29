@@ -299,25 +299,37 @@ class TranscriptStore:
     async def model_of_session(
         self, harness: str, anchor_sid: str,
     ) -> ModelReading | None:
-        """Read a model reading back from the store (for Slice 2's async readers)."""
-        rows = await self.pool.fetch(
-            "SELECT turn_idx, role, model, provider, recorded_at, is_summary, "
-            "       swap_deliberate "
-            "FROM harness_turns WHERE harness=$1 AND anchor_sid=$2 "
-            "ORDER BY turn_idx ASC",
-            harness, anchor_sid,
+        """Read a model reading back from the store (for Slice 2's async readers).
+
+        Reduced IN THE DATABASE: this used to fetch every turn of the session (thousands of
+        rows for a long one, ~0.22 s on this box on every mount) only to keep the last
+        model, the ordered distinct models, whether any swap was deliberate and the last
+        recorded time. The aggregate returns those four facts and nothing else; it is the
+        same reduction `_reading_from_turns` makes over a turn list (assistant turns that
+        are not summaries and name a real model)."""
+        row = await self.pool.fetchrow(
+            "WITH q AS ("
+            "  SELECT turn_idx, model, recorded_at, swap_deliberate FROM harness_turns "
+            "  WHERE harness=$1 AND anchor_sid=$2 AND role='assistant' "
+            "    AND NOT is_summary AND model IS NOT NULL AND model <> '' AND model <> $3) "
+            "SELECT EXISTS (SELECT 1 FROM harness_turns WHERE harness=$1 AND anchor_sid=$2) "
+            "         AS any_rows, "
+            "       (SELECT model FROM q ORDER BY turn_idx DESC LIMIT 1) AS current, "
+            "       (SELECT recorded_at FROM q WHERE recorded_at IS NOT NULL "
+            "          ORDER BY turn_idx DESC LIMIT 1) AS observed_at, "
+            "       COALESCE((SELECT bool_or(swap_deliberate) FROM q), false) AS deliberate, "
+            "       (SELECT array_agg(model ORDER BY first_idx) FROM "
+            "          (SELECT model, min(turn_idx) AS first_idx FROM q GROUP BY model) h) "
+            "         AS history",
+            harness, anchor_sid, _SYNTHETIC,
         )
-        if not rows:
+        if row is None or not row["any_rows"]:
             return None
-        turns = [
-            TurnRow(
-                turn_idx=r["turn_idx"], role=r["role"], model=r["model"],
-                provider=r["provider"], recorded_at=r["recorded_at"],
-                is_summary=r["is_summary"], swap_deliberate=r["swap_deliberate"],
-            )
-            for r in rows
-        ]
-        return _reading_from_turns(turns, harness, anchor_sid)
+        return ModelReading(
+            current=row["current"], history=tuple(row["history"] or ()),
+            deliberate=bool(row["deliberate"]), observed_at=row["observed_at"],
+            method=harness, anchor_sid=anchor_sid or None,
+        )
 
     async def last_usage_of_session(
         self, harness: str, anchor_sid: str,
