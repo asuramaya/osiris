@@ -7881,6 +7881,11 @@ async def test_cmd_resume_says_so_and_launches_fresh_when_the_history_is_another
     assert "fresh-launch-account-mismatch" in err
     assert len(launches) == 1 and launches[0]["handle"] == "cliacct"
     assert "cli old turn 19" in launches[0]["message"]
+    # decided from the store BEFORE rematerializing: no old-owner transcript was written
+    from src.orchestrator.mounts import _harness_slug
+    from src.orchestrator.offices import _default_office_root
+    office_slug = sense / _harness_slug(str(_default_office_root() / "cliacct"))
+    assert not office_slug.exists() or not list(office_slug.glob("*.jsonl"))
 
 
 async def _launch_seat_for_verify(actions: Actions, tmp_path: Path, handle: str) -> None:
@@ -7940,3 +7945,24 @@ async def test_launch_succeeds_when_the_named_session_shows_up_in_the_roster(
                                    sleep=_no_sleep)
     assert rc == 0
     assert "confirmed: find it in `claude agents`" in capsys.readouterr().out
+
+
+async def test_launch_fails_when_the_harness_named_a_session_that_never_appears(
+    actions: Actions, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from src.cli import _cmd_launch_harness
+
+    await _launch_seat_for_verify(actions, tmp_path, "ghostbg")
+
+    async def _spawn(repo: str, **kw: Any) -> str | None:
+        return "deadbeef"
+
+    async def _agents(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return []
+
+    rc = await _cmd_launch_harness("ghostbg", model="claude-sonnet-5", pool=actions.pool,
+                                   wake_default=None, spawn=_spawn, agents_json=_agents,
+                                   sleep=_no_sleep)
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "FAILED" in err and "deadbeef" in err and "Nothing is running" in err

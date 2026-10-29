@@ -428,10 +428,11 @@ async def test_spawn_claude_refuses_a_nonexistent_repo_without_raising(
     # fire-and-forget: no exception escapes, no subprocess spawned (proven by _unreachable)
 
 
-async def test_spawn_claude_bg_refuses_a_nonexistent_repo_without_raising(
+async def test_spawn_claude_bg_refuses_a_nonexistent_repo_loudly(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
-    """Same backstop as `_spawn_claude`'s own."""
+    """The existence backstop refuses before any subprocess, and the refusal is RAISED
+    (SpawnRefused), never a quiet no-op a launch would report as a started body."""
     from src.orchestrator import trigger
 
     async def _unreachable(*args: Any, **kwargs: Any) -> Any:
@@ -440,7 +441,8 @@ async def test_spawn_claude_bg_refuses_a_nonexistent_repo_without_raising(
 
     monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _unreachable)
     ghost = str(tmp_path / "never-created-bg")
-    await trigger._spawn_claude_bg(ghost, name="ghost")
+    with pytest.raises(trigger.SpawnRefused, match="does not exist"):
+        await trigger._spawn_claude_bg(ghost, name="ghost")
 
 
 async def test_spawn_claude_authorizes_the_graph_hands(monkeypatch: Any) -> None:
@@ -6691,6 +6693,10 @@ async def test_spawn_claude_bg_issues_the_documented_bg_flags(monkeypatch: Any) 
 
     class _Proc:
         pid = 4242
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, None]:
+            return b"backgrounded \xc2\xb7 ab12cd34 \xc2\xb7 name\n", None
 
     async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
         captured["args"] = args
@@ -6722,6 +6728,10 @@ async def test_spawn_claude_bg_issues_resume_before_the_other_flags(monkeypatch:
 
     class _Proc:
         pid = 99
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, None]:
+            return b"backgrounded \xc2\xb7 ab12cd34 \xc2\xb7 name\n", None
 
     async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
         captured["args"] = args
@@ -6751,6 +6761,10 @@ async def test_spawn_claude_bg_starts_its_own_process_group(monkeypatch: Any) ->
 
     class _Proc:
         pid = 7
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, None]:
+            return b"backgrounded \xc2\xb7 ab12cd34\n", None
 
     async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
         captured["kwargs"] = kwargs
@@ -6772,6 +6786,10 @@ async def test_spawn_claude_bg_never_leaks_the_spawners_own_anchor(monkeypatch: 
 
     class _Proc:
         pid = 1
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, None]:
+            return b"backgrounded \xc2\xb7 ab12cd34\n", None
 
     async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
         captured["env"] = kwargs.get("env")
@@ -6795,6 +6813,10 @@ async def test_spawn_claude_bg_omits_the_prompt_argument_when_none_given(
 
     class _Proc:
         pid = 9
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, None]:
+            return b"backgrounded \xc2\xb7 ab12cd34\n", None
 
     async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
         captured["args"] = args
@@ -8606,6 +8628,11 @@ async def test_resume_seat_launches_fresh_from_the_store_when_the_history_is_ano
     assert len(launched) == 1
     brief = launched[0]["message"]
     assert "AcctMis1, launched FRESH" in brief and "old turn 29" in brief
+    # decided from the store BEFORE rematerializing: nothing was written to the seat office
+    from src.orchestrator.mounts import _harness_slug
+    from src.orchestrator.offices import _default_office_root
+    office_slug = sense / _harness_slug(str(_default_office_root() / "acctmis1"))
+    assert not office_slug.exists() or not list(office_slug.glob("*.jsonl"))
 
 
 async def test_resume_seat_names_the_resumed_path_when_the_account_matches(
@@ -8636,3 +8663,61 @@ async def test_resume_seat_names_the_resumed_path_when_the_account_matches(
         clear_stale_record=_clear)
     assert d["path"] == "resumed" and d["status"] == "launched"
     assert resumed and resumed[0].get("resume_session") == FULL_SID
+
+
+# ═══ A `claude --bg` the harness refused must read as a failure, with its own words ═════════
+
+
+def _fake_bg_process(monkeypatch: Any, *, returncode: int, output: bytes,
+                     hang: bool = False) -> None:
+    from src.orchestrator import trigger
+
+    class _Proc:
+        pid = 7
+
+        def __init__(self) -> None:
+            self.returncode = returncode
+
+        async def communicate(self) -> tuple[bytes, None]:
+            if hang:
+                import asyncio
+                await asyncio.sleep(3600)
+            return output, None
+
+    async def _exec(*args: Any, **kwargs: Any) -> _Proc:
+        return _Proc()
+
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _exec)
+    monkeypatch.setattr(trigger, "_tree_exists", lambda p: True)
+
+
+async def test_a_refused_bg_spawn_raises_with_the_harnesss_own_words(
+    monkeypatch: Any,
+) -> None:
+    """The specimen: a project directory was renamed, the harness no longer trusted the new
+    path and printed "Workspace not trusted", and launch reported a body that never existed."""
+    from src.orchestrator import trigger
+
+    _fake_bg_process(monkeypatch, returncode=1, output=(
+        b"Workspace not trusted. Run `claude` in /x/code/loop once and accept the trust "
+        b"prompt, then retry.\n"))
+    with pytest.raises(trigger.SpawnRefused, match="Workspace not trusted"):
+        await trigger._spawn_claude_bg("/x/code/loop", name="n", prompt="p")
+
+
+async def test_a_good_bg_spawn_returns_the_harnesss_session_id(monkeypatch: Any) -> None:
+    from src.orchestrator import trigger
+
+    _fake_bg_process(monkeypatch, returncode=0,
+                     output="backgrounded \u00b7 602aab71 \u00b7 [HA] metron\n".encode())
+    assert await trigger._spawn_claude_bg("/x/code/loop", name="n") == "602aab71"
+
+
+async def test_a_bg_spawn_that_gives_no_answer_in_time_is_not_called_a_failure(
+    monkeypatch: Any,
+) -> None:
+    from src.orchestrator import trigger
+
+    _fake_bg_process(monkeypatch, returncode=0, output=b"", hang=True)
+    monkeypatch.setattr(trigger, "_BG_WAIT_SECS", 0.05)
+    assert await trigger._spawn_claude_bg("/x/code/loop", name="n") is None

@@ -19,6 +19,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 from datetime import UTC, datetime
@@ -1731,8 +1732,16 @@ async def _lineage_resume_candidate(
                    f"resumable, {hop_num} hop(s) back")
         materialized_at: str | None = None
         if materialize:
+            from src.orchestrator.resume_account import store_account_mismatch
+            foreign = await store_account_mismatch(pool, anchor_sid)
             office = await seat_office_target(pool, seat_id) if seat_id else None
-            if office is None:
+            if foreign is not None:
+                # Another Claude account's history: the harness would not load it, so
+                # writing a transcript (100+ MB) into the office buys nothing. The
+                # caller reads the same finding from the store and falls back.
+                log.append(f"gen {gen} (session {session[:8]}): history owned by another "
+                           "account, not rematerialized")
+            elif office is None:
                 log.append(f"gen {gen} (session {session[:8]}): no seat office target to "
                            "materialize into: resumable, but nowhere to emit it")
             else:
@@ -4294,7 +4303,8 @@ async def launch_seat(
             min_tail_bytes=st.osiris_resume_min_tail_bytes)
 
         try:
-            await spawn(launch_cwd, name=name, model=argv_model, prompt=boot_prompt)
+            spawned_id = await spawn(launch_cwd, name=name, model=argv_model,
+                                     prompt=boot_prompt)
         except OSError as exc:
             return {"status": "refused-spawn", "seat": target_seat,
                     "detail": f"claude --bg failed to start ({exc}); NOTHING was spawned"}
@@ -4343,6 +4353,8 @@ async def launch_seat(
                        "--json`"),
             "attach": attach,
         }
+        if spawned_id:
+            out["spawned_id"] = spawned_id   # the harness's own id for the new background session
         if dormant is not None:
             out["dormant_history"] = dormant
         if stale_harness_row is not None:
@@ -4595,12 +4607,8 @@ async def resume_seat(
     # none of it), so continuing it would only start an amnesiac session under the old
     # name. Say so plainly and launch fresh, seeded from the store, instead. The receipt's
     # `path` names which road was taken.
-    from src.orchestrator.mounts import _harness_slug
-    from src.orchestrator.resume_account import account_mismatch, store_briefing
-    sense_root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
-        else Path.home() / ".claude" / "projects"
-    finding = await account_mismatch(
-        sense_root / _harness_slug(spawn_cwd) / f"{session_id}.jsonl")
+    from src.orchestrator.resume_account import store_account_mismatch, store_briefing
+    finding = await store_account_mismatch(pool, session_id[:8])
     if finding is not None:
         brief = await store_briefing(
             pool, handle=handle, anchor_sid=session_id[:8], finding=finding,
@@ -5350,11 +5358,20 @@ async def _spawn_in_body(
 # patched around (contrast the attach-line receipt, which is an interim fix for the
 # old substrate's blind spot, not a replacement for this).
 
+class SpawnRefused(OSError):
+    """`claude --bg` was run and the harness refused it (non-zero exit), or its working
+    directory does not exist. The message carries the harness's own output, verbatim."""
+
+
+_BG_BACKGROUNDED = re.compile(r"backgrounded\s*\S*\s*([0-9a-f]{8})")
+_BG_WAIT_SECS = 30.0
+
+
 async def _spawn_claude_bg(
     repo: str, *, name: str | None = None, model: str | None = None,
     prompt: str | None = None, allowed_tools: str | None = None,
     resume_session: str | None = None,
-) -> None:
+) -> str | None:
     """`claude --bg` in `repo`: the harness's own documented background-session
     surface. Same fire-and-forget discipline as `_spawn_claude`/`_spawn_in_body` (a
     timeout that once awaited a live billing `claude -p` wedged a whole worker
@@ -5412,7 +5429,7 @@ async def _spawn_claude_bg(
     if not _tree_exists(repo):
         _log.error("trigger: _spawn_claude_bg refused: repo=%r does not exist on disk, "
                    "no subprocess spawned (name=%s)", repo, name)
-        return
+        raise SpawnRefused(f"{repo!r} does not exist on disk: nothing was spawned")
     env = os.environ.copy()
     # Same anchor discipline as _spawn_claude: a spawner's own anchor must never leak
     # into the child. Inert for --bg today (env vars don't reach the claimed spare
@@ -5430,9 +5447,26 @@ async def _spawn_claude_bg(
     if prompt:
         cmd.append(prompt)
     proc = await asyncio.create_subprocess_exec(
-        *cmd, cwd=repo, env=env, start_new_session=True,
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        *cmd, cwd=repo, env=env, start_new_session=True, stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    # `claude --bg` hands the session to the harness daemon and exits within moments, so
+    # its exit code and one-line output ARE the harness's answer: "backgrounded · <id>" on
+    # success, a refusal such as "Workspace not trusted" otherwise. This used to be thrown
+    # away (DEVNULL), so a refused spawn read as a launched body that never appeared. A
+    # wait that runs out proves nothing either way, so it is not an error.
+    try:
+        raw, _ = await asyncio.wait_for(proc.communicate(), _BG_WAIT_SECS)
+    except TimeoutError:
+        _log.warning("trigger: claude --bg for %s in %s gave no answer in %ss", name, repo,
+                     _BG_WAIT_SECS)
+        return None
+    text = raw.decode(errors="replace").strip()
+    if proc.returncode:
+        raise SpawnRefused(
+            f"claude --bg exited {proc.returncode} in {repo}: {text[:500] or '(no output)'}")
     _log.info("trigger: bg-spawned %s in %s (pid %s)", name or "(unnamed)", repo, proc.pid)
+    found = _BG_BACKGROUNDED.search(text)
+    return found.group(1) if found else None
 
 
 async def _claude_agents_json(
