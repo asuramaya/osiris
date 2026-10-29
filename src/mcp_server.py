@@ -205,6 +205,8 @@ class BoundedMCP(FastMCP):
         await _nudge_tool_list_refresh(ctx)
         _ensure_tool_stats_flush_task()
         _ensure_watchdog_task()
+        from src.orchestrator.loop_lag import ensure_started as _loop_lag_started
+        _loop_lag_started()
         t0 = time.monotonic()
         call_id = next(_in_flight_next_id)
         # Best-effort caller for the in-flight/watchdog view only: a mount() call's own
@@ -466,6 +468,11 @@ async def _watchdog_loop() -> None:
                 log, reason=(
                     f"SLOW TOOL CALL: {info['tool']!r} (caller={info['caller']!r}, "
                     f"call_id={call_id}) has been in flight {elapsed:.1f}s"))
+
+
+def _loop_lag_snapshot() -> dict[str, Any] | None:
+    from src.orchestrator.loop_lag import snapshot
+    return snapshot()
 
 
 def _ensure_watchdog_task() -> None:
@@ -927,6 +934,11 @@ async def tool_traffic(window_minutes: int = 60) -> dict[str, Any]:
         # other tool is exactly the shape a past stall incident had no visibility
         # into at all.
         "in_flight": in_flight,
+        # WHERE THE LOOP STALLS: the sampler thread's aggregate of every stretch the event
+        # loop missed its heartbeat by more than threshold_ms, by innermost frames. A tool's
+        # wall time includes everything blocking the loop while it waits; this names the
+        # blockers, whichever tool was running.
+        "loop_lag": _loop_lag_snapshot(),
         "measures": "MCP tool calls on this one shared osiris-mcp process only",
         "blind_spots": list(_TOOL_STATS_BLIND_SPOTS),
     }
