@@ -816,6 +816,9 @@ async def send_message(
         graphed = False
         _log.warning("send_message(%s): graph edge write failed, relational row %s "
                     "already committed: %s", from_agent, mid, exc)
+    from src.orchestrator.mail_bump import touch as _touch_mail_bump
+
+    _touch_mail_bump()  # the status bar's short cache must not hide this message
     return {"id": mid, "to": to_p, "to_agent": to_a, "thread_id": thread, "dedup": False,
             **({} if graphed else {"graphed": False}),
             **({"seat": seat, "lineage_head": lineage} if to_a else {}),

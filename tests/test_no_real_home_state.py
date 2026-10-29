@@ -14,6 +14,7 @@ import scripts.osiris_prune_ladder as prune_ladder
 from src.ingest import soul_crypto, systemd_credential
 from src.orchestrator import (
     graph_stream,
+    mail_bump,
     offload_runner,
     recovery_copies,
     restic_credential,
@@ -45,6 +46,7 @@ def _resolved_paths() -> dict[str, Path]:
         "recovery verify receipt": soul_key._verify_receipt_path(),
         "graph snapshot": graph_stream.snapshot_file_path(),
         "prune applied record": prune_ladder.applied_path(),
+        "mail bump": mail_bump.bump_path(),
     }
 
 
@@ -53,6 +55,7 @@ _NAMES = [
     "soul key recovery file", "backup password (logical)", "backup password (credential)",
     "offload receipts", "recovery copies receipts", "encryption progress", "recompress progress",
     "restore drill receipts", "recovery verify receipt", "graph snapshot", "prune applied record",
+    "mail bump",
 ]
 
 

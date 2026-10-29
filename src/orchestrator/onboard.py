@@ -167,7 +167,7 @@ def merge_settings(
     # Statusline needs the venv (shares MCP server's warm pool).
     entry = {"type": "command",
              "command": _hook_command(osiris_home, "statusline", venv=True),
-             "padding": 0, "refreshInterval": 10}
+             "padding": 0, "refreshInterval": 30}
     changed = doc.get("statusLine") != entry
     doc["statusLine"] = entry
     if hook:
