@@ -417,9 +417,9 @@ async def _proposal_telemetry(actions: Actions, since: datetime) -> dict[str, An
     whose own `miner` property (asserted once, at mint) falls in the window;
     `accepted`/`rejected` count a `status` transition (supersede_assertion, so its own
     `observed_at` is the transition time, not the mint time) in the window; `expired` is a
-    live snapshot, still `status='proposed'` but past its own `expires_at`, since nothing
-    sweeps a Proposal to a real 'expired' status yet. No dollar figure here: see the module
-    docstring's PROPOSALS note.
+    live snapshot: a real 'expired' status (`sweep_expired` in proposals.py), or one the sweep
+    has not reached yet, still `status='proposed'` but past its own `expires_at`. No dollar
+    figure here: see the module docstring's PROPOSALS note.
 
     `by_lane`: the weekly desk line reports proposals and acceptance per lane. A lane is
     `<abstained object's own type>:<link_type>`, read off each Proposal's own
@@ -475,8 +475,9 @@ async def _proposal_telemetry(actions: Actions, since: datetime) -> dict[str, An
         if r["status"] in ("accepted", "rejected") and r["status_at"] is not None \
                 and r["status_at"] >= since:
             agg[r["status"]] += 1
-        if r["status"] == "proposed" and r["expires_at"] is not None \
-                and datetime.fromisoformat(r["expires_at"]) < now:
+        if r["status"] == "expired" or (
+                r["status"] == "proposed" and r["expires_at"] is not None
+                and datetime.fromisoformat(r["expires_at"]) < now):
             agg["expired"] += 1
 
     by_pair: dict[tuple[str, str], dict[str, int]] = {}
@@ -696,6 +697,8 @@ async def fleet_digest(
     retrieval = await _retrieval(actions, effective_since)
     miner = await _miner(actions, effective_since)
     proposals = await _proposal_telemetry(actions, effective_since)
+    from src.orchestrator.abstention_miner import abstention_survey
+    abstention = await abstention_survey(actions.pool)
     obligation_pressure = await _obligation_pressure(actions)
     operator_inbox = await _operator_inbox(actions, lease_secs=lease_secs)
     # The danger map: a stamped swap (durable, from the transcript at mount) or a live swap
@@ -760,6 +763,7 @@ async def fleet_digest(
         "retrieval": retrieval,
         "miner": miner,
         "proposals": proposals,
+        "abstention_survey": abstention,
         "obligation_pressure": obligation_pressure,
         "operator_inbox": operator_inbox,
     }

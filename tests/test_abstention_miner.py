@@ -12,7 +12,12 @@ import pytest
 from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.orchestrator import capture
-from src.orchestrator.abstention_miner import _LANES, abstention_miner_tick
+from src.orchestrator.abstention_miner import (
+    _LANES,
+    _next_abstained_object,
+    abstention_miner_tick,
+    abstention_survey,
+)
 from src.orchestrator.monitor import set_cursor
 from src.orchestrator.proposals import propose
 
@@ -250,3 +255,90 @@ async def test_a_lane_can_be_silenced_without_touching_the_others(
     assert out["action"] == "skipped"
     assert "silenced" in out["reason"]
     assert p  # the candidate project existed; the lane simply never looked
+
+
+async def _abstained_decision(actions: Actions, text: str) -> uuid.UUID:
+    d = await _mint_bare(actions, "Decision")
+    await capture.derive_or_abstain(actions, d, "in_repo", [], "test")
+    await actions.assert_property(d, "summary", text, "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    return d
+
+
+async def test_an_expired_proposal_is_swept_and_stops_hiding_its_object(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import proposals
+    from src.orchestrator.proposals import sweep_expired
+
+    await actions.create_or_find_object("SoftwareProject", "repo:widgetfactory", "test")
+    d = await _abstained_decision(actions, "widgetfactory deploy gate")
+    lane = _LANES[_lane_index("Decision")]
+    monkeypatch.setattr(proposals, "_EXPIRY_DAYS", -1)       # minted already past its date
+    out = await propose(
+        actions, from_id=d, link_type="in_repo",
+        candidate={"kind": "link", "from_id": str(d), "to_id": str(d), "link_type": "in_repo"},
+        confidence=0.4, owner="operator", miner="abstention", actor="miner:abstention")
+    assert out["status"] == "proposed"
+    assert await _next_abstained_object(actions.pool, lane) is None      # hidden behind it
+
+    assert await sweep_expired(actions) == 1
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id="
+        "(SELECT id FROM objects WHERE canonical=$1) AND a.name='status'", out["proposal"])
+    assert status == "expired"
+    assert await _next_abstained_object(actions.pool, lane) == d         # free to be retried
+    assert await sweep_expired(actions) == 0                             # nothing left to move
+
+
+async def test_a_proposal_still_inside_its_window_is_not_swept(actions: Actions) -> None:
+    from src.orchestrator.proposals import sweep_expired
+
+    d = await _abstained_decision(actions, "anything")
+    await propose(
+        actions, from_id=d, link_type="in_repo",
+        candidate={"kind": "link", "from_id": str(d), "to_id": str(d), "link_type": "in_repo"},
+        confidence=0.4, owner="operator", miner="abstention", actor="miner:abstention")
+    assert await sweep_expired(actions) == 0
+    assert await _next_abstained_object(actions.pool, _LANES[_lane_index("Decision")]) is None
+
+
+async def test_every_counted_tick_outcome_lands_in_the_survey(actions: Actions) -> None:
+    await _abstained_decision(actions, "says nothing about any project")
+    await set_cursor(actions.pool, _CURSOR_KEY, str(_lane_index("Decision")))
+    assert (await abstention_miner_tick(actions))["action"] == "skipped"
+    await set_cursor(actions.pool, _CURSOR_KEY, str(_lane_index("Decision")))
+    assert (await abstention_miner_tick(actions))["action"] == "skipped"
+    await set_cursor(actions.pool, _CURSOR_KEY, str(_lane_index("Agent")))
+    await abstention_miner_tick(actions)
+    survey = await abstention_survey(actions.pool)
+    assert survey["outcomes_total"]["Decision:skipped"] == 2
+    assert survey["outcomes_total"]["Agent:skipped"] == 1
+    assert list(survey["outcomes_by_day"].values())[0]["Decision:skipped"] == 2
+
+
+async def test_the_survey_names_the_class_signal_and_pick_of_the_next_abstentions(
+    actions: Actions,
+) -> None:
+    await actions.create_or_find_object("SoftwareProject", "repo:widgetfactory", "test")
+    await actions.create_or_find_object("SoftwareProject", "repo:sidecar", "test")
+    silent = await _abstained_decision(actions, "no project named here")
+    lone = await _abstained_decision(actions, "widgetfactory only")
+    both = await _abstained_decision(actions, "widgetfactory widgetfactory and sidecar")
+    lane = next(r for r in (await abstention_survey(actions.pool, per_lane=10))["lanes"]
+                if r["lane"] == "Decision:in_repo")
+    rows = {r["object"]: r for r in lane["next"]}
+    assert lane["eligible"] == 3 and lane["first_abstains"] is True
+    assert rows[str(silent)]["mention_class"] == "0" and rows[str(silent)]["picks"] is None
+    assert "no project is mentioned" in rows[str(silent)]["abstain_reason"]
+    assert rows[str(lone)]["mention_class"] == "1" and rows[str(lone)]["picks"] == "widgetfactory"
+    assert rows[str(both)]["mention_class"] == "2+" and rows[str(both)]["signal"] == "dominance"
+    assert rows[str(both)]["mentions"] == {"widgetfactory": 2, "sidecar": 1}
+    assert lane["next_abstaining"] == 1
+
+
+async def test_the_survey_writes_nothing(actions: Actions) -> None:
+    await _abstained_decision(actions, "nothing to see")
+    before = await actions.pool.fetchval("SELECT count(*) FROM assertions")
+    await abstention_survey(actions.pool)
+    assert await actions.pool.fetchval("SELECT count(*) FROM assertions") == before

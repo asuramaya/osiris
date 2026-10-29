@@ -396,6 +396,7 @@ async def test_proposal_telemetry_counts_per_miner_owner_pair(actions: Actions) 
     assert dg["summary"]["proposals_accepted"] == 1
     assert dg["summary"]["proposals_rejected"] == 1
     assert dg["summary"]["proposals_expired"] == 1
+    assert set(dg["abstention_survey"]) >= {"lanes", "outcomes_by_day", "outcomes_total"}
 
 
 async def test_proposal_telemetry_reports_by_lane(actions: Actions) -> None:
