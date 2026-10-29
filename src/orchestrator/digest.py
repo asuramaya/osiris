@@ -221,7 +221,7 @@ async def _credence_streams(
     if not oids:
         return [], []
     t1 = time.perf_counter()
-    result = await credence_props(actions, oids, contested_only=True)
+    result = await credence_props(actions, oids, contested_only=True, timings=timings)
     if timings is not None:
         timings["credence_props"] = round((time.perf_counter() - t1) * 1000)
     laundering = [
