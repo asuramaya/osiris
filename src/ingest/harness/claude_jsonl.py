@@ -11,7 +11,9 @@ itself and the non-identity readers.
 from __future__ import annotations
 
 import json
+import os
 import re
+import zlib
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
@@ -87,6 +89,32 @@ def _ts(line: str | dict[str, Any]) -> datetime | None:
         return datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+
+def _resume_start(path: Path, resume: tuple[int, int]) -> int | None:
+    """The byte offset to seek to when `resume` still describes the file, else None. Checks
+    that the offset lies inside the file, that the byte before it ends a line (or it is 0),
+    and that the line there is a JSON-object line with the crc that was saved: any of those
+    failing means the file was truncated or rewritten since, and the caller scans."""
+    offset, crc = resume
+    try:
+        with path.open("rb") as f:
+            if offset < 0 or offset >= os.fstat(f.fileno()).st_size:
+                return None
+            # Line reads only (a bounded `.read(n)` is exactly what the blocking-transcript
+            # guard forbids in this module): from the byte before the offset, the first
+            # line is just b"\n" when that byte ends a line, which also leaves the stream
+            # at the offset ready for the line itself.
+            f.seek(offset - 1 if offset else 0)
+            if offset and f.readline() != b"\n":
+                return None
+            line = f.readline().rstrip()
+    except OSError:
+        return None
+    if not (line.startswith(b"{") and line.endswith(b"}")) or zlib.crc32(line) != crc:
+        return None
+    return offset
 
 
 def decode_claude_project_name(slug: str) -> str:
@@ -263,26 +291,47 @@ class ClaudeJsonlAdapter:
 
     def read_turns(
         self, locator: SessionLocator, *, since_idx: int = 0,
+        resume: tuple[int, int] | None = None,
     ) -> Iterator[TurnRow]:
         """Streamed, never a whole-file read: a 30MB+ transcript used to be materialized
         as one `str` via `read_text`, then `splitlines()`'d twice (once for
         operator_swapped, once for the main loop), keeping three full copies alive at
-        once, times however many sessions the boot backfill sweeps in its first pass. Two
-        line-by-line passes over the same path (the OS page cache makes the second nearly
-        free) hold only one line at a time instead."""
+        once, times however many sessions the boot backfill sweeps in its first pass.
+
+        `resume` is `(byte_offset, line_crc)` of the line holding turn `since_idx`, as the
+        store saved it after the last ingest. When the file still has that exact line at
+        that exact place (`_resume_valid`) the read SEEKS there and pays only for what was
+        added; otherwise (no offset yet, file shorter, bytes there not the line that was
+        saved, i.e. truncated or rewritten) it falls back to the full scan, which counts
+        the already-ingested prefix without parsing it. Each yielded row carries the byte
+        offset and crc of its own line so the store can save the next resume point."""
         path = Path(locator.source_path)
+        start = _resume_start(path, resume) if resume is not None and since_idx else None
         try:
-            with path.open(encoding="utf-8", errors="replace") as f:
-                deliberate = operator_swapped(f)
+            with path.open("rb") as raw_f:
+                if start is not None:
+                    raw_f.seek(start)
+                # The operator's own /model command anywhere in the part being read marks
+                # every assistant turn of it deliberate (the first pass over the same
+                # lines; the page cache makes the second nearly free). On a seek that is
+                # the new part only: the earlier turns kept the flag they were stored
+                # with, and the session's reading ORs them.
+                deliberate = operator_swapped(
+                    ln.decode("utf-8", errors="replace") for ln in raw_f)
         except OSError:
             return
-        idx = 0
+        idx = since_idx if start is not None else 0
+        pos = start or 0
         try:
-            f = path.open(encoding="utf-8", errors="replace")
+            f = path.open("rb")
         except OSError:
             return
         with f:
-            for ln in f:
+            if start is not None:
+                f.seek(start)
+            for raw in f:
+                line_start = pos
+                pos += len(raw)
                 if idx < since_idx:
                     # Already ingested: only COUNT it, never parse it. Re-parsing the whole
                     # prefix made every incremental ingest cost the size of the file (3 s of
@@ -292,10 +341,11 @@ class ClaudeJsonlAdapter:
                     # the one way this can differ from a real parse is a mid-file line
                     # that is brace-wrapped yet invalid, vanishingly rare in an append-only
                     # log the harness writes whole lines to.
-                    stripped = ln.rstrip()
-                    if stripped.startswith("{") and stripped.endswith("}"):
+                    stripped = raw.rstrip()
+                    if stripped.startswith(b"{") and stripped.endswith(b"}"):
                         idx += 1
                     continue
+                ln = raw.decode("utf-8", errors="replace")
                 try:
                     d = json.loads(ln)
                 except (json.JSONDecodeError, UnicodeDecodeError):
@@ -326,5 +376,7 @@ class ClaudeJsonlAdapter:
                     source_ref=f"line:{idx}",
                     reminders=reminders,
                     is_compaction=bool(d.get("isCompactSummary")),
+                    byte_offset=line_start,
+                    line_crc=zlib.crc32(raw.rstrip()),
                 )
                 idx += 1

@@ -53,6 +53,12 @@ class TurnRow:
     # is_summary (which also covers isMeta and so can't count compactions on its own).
     reminders: int | None = None
     is_compaction: bool = False
+    # WHERE this turn's line sits in its source file (byte offset of the line start, and the
+    # crc32 of the stripped line), for a harness whose source is an append-only file. Stored
+    # beside the last ingested turn so the next read can seek instead of scanning; None for
+    # a harness with no such file (a SQLite store).
+    byte_offset: int | None = None
+    line_crc: int | None = None
 
 
 @dataclass(frozen=True)
