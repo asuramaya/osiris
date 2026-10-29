@@ -562,3 +562,35 @@ async def test_fleet_digest_names_the_wall_time_of_each_stream(actions: Actions)
             "retrieval", "miner", "proposals", "abstention", "obligations",
             "operator_inbox"} <= set(dg["timings_ms"])
     assert all(isinstance(v, int) and v >= 0 for v in dg["timings_ms"].values())
+
+
+async def test_roster_takes_the_grade_then_recency_winner_in_one_pass(actions: Actions) -> None:
+    """The roster reads every Agent's facts in one pass; the winner per (agent, name) is still
+    the highest confidence, then the newest observation, and the newest mount's model is the
+    live one."""
+    from src.orchestrator import mounts
+    from src.orchestrator.digest import _roster
+
+    now = datetime.now(UTC)
+    agent = await actions.create_or_find_object("Agent", "agent:rst0a1b2", "t")
+    await actions.assert_property(agent, "source_model", "low-grade", "s1", now, 0.4)
+    await actions.assert_property(agent, "source_model", "high-grade", "s2",
+                                  now - timedelta(hours=3), 0.9)
+    await actions.assert_property(agent, "project", "older", "s1", now - timedelta(hours=2), 0.9)
+    await actions.assert_property(agent, "project", "newer", "s2", now, 0.9)
+    await mounts.save_mount(actions.pool, job_dir="/j/rst-old", agent_id="agent:rst0a1b2",
+                            project="p", cwd="/x", model="old-live", session_key="k1")
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '1 day' WHERE job_dir='/j/rst-old'")
+    await mounts.save_mount(actions.pool, job_dir="/j/rst-new", agent_id="agent:rst0a1b2",
+                            project="p", cwd="/x", model="new-live", session_key="k2")
+    await actions.create_or_find_object("Agent", "agent:rst0c3d4", "t")
+
+    rows = {r["agent"]: r for r in await _roster(actions)}
+
+    got = rows["agent:rst0a1b2"]
+    assert got["model"] == "high-grade" and got["project"] == "newer"
+    assert got["live_model"] == "new-live"
+    assert got["live_swap"] == "high-grade → new-live (unstamped)"
+    bare_row = rows["agent:rst0c3d4"]
+    assert bare_row["model"] is None and bare_row["project"] is None
