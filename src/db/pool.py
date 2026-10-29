@@ -244,7 +244,13 @@ async def create_pool(
 
     `acquire_timeout` bounds every acquire this pool serves (see PoolStarved): None keeps
     asyncpg's wait-forever default for callers that have not opted in."""
-    server_settings = {"application_name": application_name} if application_name else None
+    # JIT OFF for every pool (measured 2026-10-29): the mail predicate behind /heartbeat and
+    # /stop is costed at ~16 million by the planner (a hashed SubPlan multiplied per row), far
+    # past jit_above_cost, so Postgres spent 257 of its 305 ms compiling the query and ran it
+    # in 48 ms. JIT pays off on long analytic scans; this house runs short transactional reads.
+    server_settings = {"jit": "off"}
+    if application_name:
+        server_settings["application_name"] = application_name
     real_pool_cls = _asyncpg_pool_module.Pool
     _asyncpg_pool_module.Pool = _TimedPool
     try:
