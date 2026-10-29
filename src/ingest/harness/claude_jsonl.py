@@ -102,11 +102,13 @@ def _resume_start(path: Path, resume: tuple[int, int]) -> int | None:
         with path.open("rb") as f:
             if offset < 0 or offset >= os.fstat(f.fileno()).st_size:
                 return None
-            if offset:
-                f.seek(offset - 1)
-                if f.read(1) != b"\n":
-                    return None
-            f.seek(offset)
+            # Line reads only (a bounded `.read(n)` is exactly what the blocking-transcript
+            # guard forbids in this module): from the byte before the offset, the first
+            # line is just b"\n" when that byte ends a line, which also leaves the stream
+            # at the offset ready for the line itself.
+            f.seek(offset - 1 if offset else 0)
+            if offset and f.readline() != b"\n":
+                return None
             line = f.readline().rstrip()
     except OSError:
         return None
