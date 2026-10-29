@@ -3078,11 +3078,13 @@ async def mount(
     # the desk, scoped: this seat's own unanswered briefs
     clock.mark("unread_counts")
     op_unread = await mailbox.desk_briefs_from(pool, ident.agent_id)
+    clock.mark("desk_briefs")
     banner = swap_banner(classify_swap(
         ident.model_history, ident.model,
         expected=await _expected_model(pool, cwd, ident.project),  # repo intent wins
         anchored=ident.model_method == "job_dir",   # only a true anchor confesses a swap
         deliberate=ident.model_deliberate))         # a /model on the record is never a sin
+    clock.mark("swap_banner_expected_model")
     pin_warn = project_pin_banner(ident)  # cwd-missing / unparseable: real errors, agents.py
     pin_heal: dict[str, Any] | None = None
     if not pin_warn and ident.cwd:
@@ -3094,7 +3096,7 @@ async def mount(
             pin_state = project_pin_state(ident)  # calm state, not an error: agents.py
             if pin_state:
                 pin_heal = {"state": "unset", "note": pin_state}
-    clock.mark("desk_banner_heal")
+    clock.mark("pin_heal")
     seat = await handshake._seat_of(Actions(pool), ident.agent_id)
     # co-agent awareness at arrival: a live sibling in your own repo is the one blindness
     # that costs unrecoverable work (a stomped commit)

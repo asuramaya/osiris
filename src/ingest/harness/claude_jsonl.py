@@ -71,11 +71,15 @@ def _usage_of_line(d: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _ts(line: str) -> datetime | None:
-    try:
-        d: dict[str, Any] = json.loads(line)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None
+def _ts(line: str | dict[str, Any]) -> datetime | None:
+    """The line's timestamp. Given the already-parsed entry it parses nothing; given the raw
+    line it parses once."""
+    d: Any = line
+    if isinstance(line, str):
+        try:
+            d = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
     ts = d.get("timestamp") if isinstance(d, dict) else None
     if not isinstance(ts, str):
         return None
@@ -279,14 +283,24 @@ class ClaudeJsonlAdapter:
             return
         with f:
             for ln in f:
+                if idx < since_idx:
+                    # Already ingested: only COUNT it, never parse it. Re-parsing the whole
+                    # prefix made every incremental ingest cost the size of the file (3 s of
+                    # the 7 s a 278 MB transcript took) instead of the size of what was
+                    # added. A line counts when it looks like a JSON object (starts with
+                    # `{`, ends with `}`), which is what a line that parsed to a dict is;
+                    # the one way this can differ from a real parse is a mid-file line
+                    # that is brace-wrapped yet invalid, vanishingly rare in an append-only
+                    # log the harness writes whole lines to.
+                    stripped = ln.rstrip()
+                    if stripped.startswith("{") and stripped.endswith("}"):
+                        idx += 1
+                    continue
                 try:
                     d = json.loads(ln)
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     continue
                 if not isinstance(d, dict):
-                    continue
-                if idx < since_idx:
-                    idx += 1
                     continue
                 role = str(d.get("type") or "")
                 if role not in ("assistant", "user"):
@@ -306,7 +320,7 @@ class ClaudeJsonlAdapter:
                     tokens_out=usage.get("tokens_out"),
                     cache_read=usage.get("cache_read"),
                     cache_write=usage.get("cache_write"),
-                    recorded_at=_ts(ln),
+                    recorded_at=_ts(d),
                     is_summary=summary,
                     swap_deliberate=deliberate if role == "assistant" else None,
                     source_ref=f"line:{idx}",
