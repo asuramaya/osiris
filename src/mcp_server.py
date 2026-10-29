@@ -6071,7 +6071,9 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     # prior art by definition: searching the graph as it stood before this write is both
     # the fix and the more honest semantics.
     prior: list[dict[str, Any]] = []
-    if grade == "ask" or to_agent:
+    # An fyi never needs it (it asks nothing of anyone, the recipient only acks it), and the
+    # search behind it is most of a send's wall time.
+    if grade != "fyi" and (grade == "ask" or to_agent):
         prior = await _surface_prior_art(pool, body, repo=ident.project, actor=actor)
     try:
         res = await send_message(pool, from_agent=actor, from_project=ident.project,

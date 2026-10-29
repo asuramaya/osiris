@@ -553,3 +553,12 @@ async def test_obligation_pressure_never_lists_a_project_with_no_open_obligation
     await _seed_project(actions.pool, "quietproj")
     dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
     assert "quietproj" not in {r["project"] for r in dg["obligation_pressure"]}
+
+
+async def test_fleet_digest_names_the_wall_time_of_each_stream(actions: Actions) -> None:
+    dg = await fleet_digest(actions, since=datetime.now(UTC) - timedelta(hours=1))
+
+    assert {"roster", "activity", "credence", "conversations", "costs", "bodies",
+            "retrieval", "miner", "proposals", "abstention", "obligations",
+            "operator_inbox"} <= set(dg["timings_ms"])
+    assert all(isinstance(v, int) and v >= 0 for v in dg["timings_ms"].values())

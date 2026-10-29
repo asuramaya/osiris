@@ -7650,3 +7650,32 @@ async def test_read_transcript_citation_refuses_on_tampered_line(actions: Action
         "AND anchor_sid='anchor-cite-5' AND line_idx=0")
     with pytest.raises(ValueError, match="read_transcript_citation refused"):
         await read_transcript_citation(actions.pool, d, str(run))
+
+
+async def test_send_runs_prior_art_for_an_ask_but_not_for_an_fyi(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The prior-art search is most of a send's wall time; an fyi asks nothing of its
+    recipient, so it skips it (a DM or broadcast), while an ask still runs it."""
+    from src import mcp_server as srv
+
+    asked: list[str] = []
+
+    async def _spy(pool: Any, text: str, **kw: Any) -> list[dict[str, Any]]:
+        asked.append(text)
+        return []
+
+    monkeypatch.setattr(srv, "_surface_prior_art", _spy)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    ctx = await _mounted(actions, "agent:fyiskip0001", "Fyiskip0001")
+    other = await _mounted(actions, "agent:fyiskip0002", "Fyiskip0002")
+    try:
+        await srv.send("just so you know", to_agent="agent:fyiskip0002", grade="fyi", ctx=ctx)
+        assert asked == []
+        await srv.send("please do the thing", to_agent="agent:fyiskip0002", grade="ask", ctx=ctx)
+        assert asked == ["please do the thing"]
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+        srv._agents.pop(srv._conn_key(other), None)

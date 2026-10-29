@@ -48,6 +48,7 @@ finally meets a live surface.
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -676,6 +677,15 @@ async def _obligation_pressure(actions: Actions) -> list[dict[str, Any]]:
     return out
 
 
+async def _timed(timings: dict[str, int], name: str, coro: Any) -> Any:
+    """Await one digest stream and record its wall time in whole milliseconds."""
+    t0 = time.perf_counter()
+    try:
+        return await coro
+    finally:
+        timings[name] = round((time.perf_counter() - t0) * 1000)
+
+
 async def fleet_digest(
     actions: Actions, *, since: datetime | None = None, mark_seen: bool = False,
     lease_secs: int = 900,
@@ -687,20 +697,26 @@ async def fleet_digest(
     watermark. `mark_seen=True` is the deliberate act that does: after computing, it stamps the
     watermark to now, so the next glance is 'since this one'. Nothing else here writes to the
     graph (the operator-inbox read is a peek; spend reads telemetry, not the graph)."""
+    timings: dict[str, int] = {}
     effective_since, watermark = await _resolve_since(actions, since)
-    roster = await _roster(actions)
-    activity = await _activity(actions, effective_since)
-    laundering, disputes = await _credence_streams(actions, effective_since)
-    conversations = await _conversations(actions, effective_since)
-    costs = await _costs(actions, effective_since)
-    bodies = await _bodies(actions, effective_since)
-    retrieval = await _retrieval(actions, effective_since)
-    miner = await _miner(actions, effective_since)
-    proposals = await _proposal_telemetry(actions, effective_since)
+    roster = await _timed(timings, "roster", _roster(actions))
+    activity = await _timed(timings, "activity", _activity(actions, effective_since))
+    laundering, disputes = await _timed(
+        timings, "credence", _credence_streams(actions, effective_since))
+    conversations = await _timed(
+        timings, "conversations", _conversations(actions, effective_since))
+    costs = await _timed(timings, "costs", _costs(actions, effective_since))
+    bodies = await _timed(timings, "bodies", _bodies(actions, effective_since))
+    retrieval = await _timed(timings, "retrieval", _retrieval(actions, effective_since))
+    miner = await _timed(timings, "miner", _miner(actions, effective_since))
+    proposals = await _timed(
+        timings, "proposals", _proposal_telemetry(actions, effective_since))
     from src.orchestrator.abstention_miner import abstention_survey
-    abstention = await abstention_survey(actions.pool)
-    obligation_pressure = await _obligation_pressure(actions)
-    operator_inbox = await _operator_inbox(actions, lease_secs=lease_secs)
+    abstention = await _timed(timings, "abstention", abstention_survey(actions.pool))
+    obligation_pressure = await _timed(
+        timings, "obligations", _obligation_pressure(actions))
+    operator_inbox = await _timed(
+        timings, "operator_inbox", _operator_inbox(actions, lease_secs=lease_secs))
     # The danger map: a stamped swap (durable, from the transcript at mount) or a live swap
     # (the heartbeat caught the harness swapping the model since the last stamp, not yet in
     # the graph, but real and current). Both mean the harness got nervous; the operator must
@@ -766,4 +782,6 @@ async def fleet_digest(
         "abstention_survey": abstention,
         "obligation_pressure": obligation_pressure,
         "operator_inbox": operator_inbox,
+        # wall ms spent in each stream of this call: a slow digest names its slow stream
+        "timings_ms": timings,
     }
