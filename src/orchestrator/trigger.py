@@ -4312,8 +4312,12 @@ async def launch_seat(
             spawned_id = await spawn(launch_cwd, name=name, model=argv_model,
                                      prompt=boot_prompt)
         except OSError as exc:
+            fix = (f" Fix (the operator's to grant): run `claude` once in {launch_cwd} and "
+                   "accept the trust prompt, then launch again."
+                   if "not trusted" in str(exc).lower() else "")
             return {"status": "refused-spawn", "seat": target_seat,
-                    "detail": f"claude --bg failed to start ({exc}); NOTHING was spawned"}
+                    "detail": f"claude --bg failed to start ({exc}); NOTHING was spawned"
+                              + fix}
 
         # The graph head must be the running session, before its first turn:
         # `_bind_before_spawn` above deliberately does not move the seat's own `holds`

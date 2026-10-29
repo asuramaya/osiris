@@ -31,7 +31,7 @@ STEP_ORDER = (
     "key_set_up", "services_restarted", "recovery_enrolled", "recovery_verified",
     "recovery_copy_off_box", "data_encrypted", "backup_password_set",
     "offload_target_present", "offload_run", "offload_current", "wal_backlog",
-    "restore_test_passed", "key_tpm_sealed",
+    "workspace_trust", "restore_test_passed", "key_tpm_sealed",
 )
 
 
@@ -171,6 +171,19 @@ def _offload_current_step(
     return _step("offload_current", label, "done", None, None)
 
 
+def _workspace_trust_step(untrusted: list[str] | None) -> dict[str, Any]:
+    """Seat workspaces the harness does not trust. `claude --bg` refuses such a directory
+    ("Workspace not trusted") and the seat never starts. Trust is the operator's to grant
+    (run `claude` once in the directory and accept the prompt); osiris only reads it."""
+    from src.orchestrator.workspace_trust import hint
+
+    label = "Seat workspaces trusted"
+    if not untrusted:
+        return _step("workspace_trust", label, "done", None, None, optional=True)
+    return _step("workspace_trust", label, "needs_attention",
+                 "; ".join(hint(d) for d in untrusted), None, mode="hands", optional=True)
+
+
 def _wal_backlog_step(backlog: dict[str, Any] | None, limit_gb: int) -> dict[str, Any]:
     """Write-ahead log older than the newest VERIFIED base backup is waiting to be pruned. A
     lot of it means the weekly clean-up did not run (a laptop that slept through its slot) or
@@ -196,6 +209,7 @@ def compute_readiness_steps(
     services_restarted: bool | None,
     stale_offload: list[dict[str, Any]] | None = None, stale_days: int = 7,
     wal_backlog: dict[str, Any] | None = None, wal_limit_gb: int = 50,
+    untrusted_workspaces: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """`stale_offload`: offload_staleness.stale_offload_targets's list for this box, computed by
     the caller from the receipts and the `backup.offload_stale_days` limit (`stale_days`).
@@ -324,6 +338,8 @@ def compute_readiness_steps(
     steps.append(_offload_current_step(enabled_targets, stale_offload or [], stale_days))
 
     steps.append(_wal_backlog_step(wal_backlog, wal_limit_gb))
+
+    steps.append(_workspace_trust_step(untrusted_workspaces))
 
     steps.append(_restore_test_step(enabled_targets, restore_drill_receipts))
 

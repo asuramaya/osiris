@@ -47,6 +47,7 @@ import asyncpg
 
 from src.actions.core import Actions
 from src.db.pool import pin
+from src.orchestrator.workspace_trust import untrusted_dirs
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -1004,6 +1005,7 @@ async def roster(
             "anchor_cwd": anchor, "tree_cwd": facts["tree_cwd"], "live_cwd": live_cwd,
             "probed_anchor_cwd": probed_anchor,
             "office_exists": _dir_exists(effective_anchor),
+            "workspace_trust": {"untrusted": untrusted_dirs([facts["tree_cwd"], anchor])},
             "chartered_repos": chartered,
             "chartered_repos_display": chartered_display,
             "pin_charter_agreement": pin_charter_agreement,

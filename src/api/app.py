@@ -1767,12 +1767,20 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             backlog: dict[str, Any] | None = await asyncio.to_thread(wal_backlog)
         except Exception:  # noqa: BLE001 - an unreadable vault must not fail the stepper
             backlog = None
+        from src.orchestrator.seats import roster as seat_roster
+
+        try:
+            untrusted = sorted({d for r in (await seat_roster(p))["seats"]
+                                for d in r["workspace_trust"]["untrusted"]})
+        except Exception:  # noqa: BLE001 - the stepper never fails over this extra
+            untrusted = []
         steps = compute_readiness_steps(
             soul_key=soul_key, restic_key=restic_key, offload_targets=offload_targets,
             restore_drill_receipts=restore_drill_receipts(),
             services_restarted=services_restarted, stale_offload=stale,
             stale_days=stale_days, wal_backlog=backlog,
-            wal_limit_gb=int(overlay.osiris_wal_backlog_gb))
+            wal_limit_gb=int(overlay.osiris_wal_backlog_gb),
+            untrusted_workspaces=untrusted)
         from src.orchestrator.disk_brake import brake_state
 
         try:
