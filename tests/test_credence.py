@@ -306,3 +306,41 @@ def test_each_ancestor_chain_is_walked_once_per_resolve(monkeypatch: pytest.Monk
     assert len(calls) == len(set(calls)) <= 12
     monkeypatch.setattr(C, "_ancestors", real)
     assert resolve_credence(claims, parent_of, {}) == out
+
+
+async def test_contested_only_gives_the_same_laundering_and_disputes_for_less_data(
+    actions: Actions,
+) -> None:
+    """fleet_digest reads only laundering and disputes, which can only arise in an (object, name)
+    group with two or more distinct agent sources; fetching just those groups must not change
+    either stream."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator.credence import credence_props
+
+    now = datetime.now(UTC)
+    parent_src, child_src = "agent:cst00001", "agent:cst00001-ii"
+    parent = await actions.create_or_find_object("Agent", parent_src, "t")
+    child = await actions.create_or_find_object("Agent", child_src, "t")
+    await actions.create_link(child, parent, "spawned_by", "t", now, 0.9)
+    thing = await actions.create_or_find_object("Reference", "ref:cst-thing", "t")
+    # a relay: the parent restates the child's claim at an inflated grade (laundering)
+    await actions.assert_property(thing, "claim_a", "alpha beta", child_src, now, 0.5)
+    await actions.assert_property(thing, "claim_a", "alpha beta", parent_src, now, 0.95)
+    # a dispute: the parent says something materially different
+    await actions.assert_property(thing, "claim_b", "gamma delta epsilon", parent_src, now, 0.9)
+    await actions.assert_property(thing, "claim_b", "alpha beta", child_src, now, 0.5)
+    # uncontested facts of the same object: one source each, never laundering nor a dispute
+    await actions.assert_property(thing, "note", "x", child_src, now, 0.9)
+    await actions.assert_property(thing, "other", "y", "analyst:operator", now, 0.9)
+
+    full = await credence_props(actions, [thing])
+    part = await credence_props(actions, [thing], contested_only=True)
+
+    assert [w.name for w in full.winners if w.laundering] == ["claim_a"]
+    assert [d.name for d in full.disputes] == ["claim_b"]
+    assert sorted((w.name, w.laundering) for w in part.winners if w.laundering) == sorted(
+        (w.name, w.laundering) for w in full.winners if w.laundering)
+    assert [(d.name, d.positions) for d in part.disputes] == [
+        (d.name, d.positions) for d in full.disputes]
+    assert {w.name for w in part.winners} == {"claim_a", "claim_b"}  # the contested groups only

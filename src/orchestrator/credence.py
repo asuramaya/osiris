@@ -387,13 +387,26 @@ async def property_signals(
     }
 
 
-async def credence_props(actions: Actions, oids: Sequence[Any]) -> CredenceResult:
+async def credence_props(
+    actions: Actions, oids: Sequence[Any], *, contested_only: bool = False,
+) -> CredenceResult:
     """The lineage-aware resolution over `oids`: winning_props with the upstream credence
     discipline layered on. Fetches the latest per-source assertions, the spawned_by forest, and
-    the observation-rebuttal signal, then resolves purely into winners and disputes."""
+    the observation-rebuttal signal, then resolves purely into winners and disputes.
+
+    `contested_only` fetches only the (object, name) groups with two or more distinct agent
+    sources. Laundering and disputes can only arise there (a clamp or a dispute needs an agent
+    claim with an agent descendant in the same group), so a caller that reads only those two
+    streams gets identical output without loading every other fact of every object; `winners`
+    then covers the contested groups alone."""
+    contested = (
+        " AND (object_id, name) IN (SELECT object_id, name FROM current_assertions "
+        "  WHERE object_id = ANY($1::uuid[]) AND source_id LIKE 'agent:%' "
+        "  GROUP BY object_id, name HAVING count(DISTINCT source_id) > 1)"
+        if contested_only else "")
     rows = await actions.pool.fetch(
         "SELECT object_id, name, value, source_id, confidence, observed_at "
-        "FROM current_assertions WHERE object_id = ANY($1::uuid[])", list(oids))
+        "FROM current_assertions WHERE object_id = ANY($1::uuid[])" + contested, list(oids))
     claims = [
         Claim(str(r["object_id"]), r["name"], r["value"], r["source_id"],
               float(r["confidence"]), r["observed_at"])
