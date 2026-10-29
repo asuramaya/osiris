@@ -16,8 +16,8 @@ _SECTION = _DOC.split("## The connection envelope at scale", 1)[1].split("\n## "
 _FIELD = {"osiris-mcp": "osiris_mcp_pool_size", "osiris-worker": "osiris_worker_pool_size",
           "osiris-console": "osiris_api_pool_size", "osiris-manager": "osiris_manager_pool_size"}
 _RESERVED = 3  # Postgres superuser_reserved_connections, as the doc states
-_HEARTBEAT_P50 = 0.057
-_STOP_P50 = 0.016
+_HEARTBEAT_P50 = 0.595  # the 2026-10-13 live measurement, real-session render
+_STOP_P50 = 0.463
 
 
 def _default(field: str) -> int:
@@ -59,26 +59,30 @@ def test_headroom_is_max_minus_budget_minus_reserved() -> None:
 
 def test_route_ceilings_follow_the_mcp_pool() -> None:
     pool = _default("osiris_mcp_pool_size")
-    hb = re.search(r"`/heartbeat`: (\d+) connections / 0\.057s is about \*\*(\d+) req/s\*\*",
+    hb = re.search(r"`/heartbeat`: (\d+) connections / 0\.595 s is about \*\*(\d+) req/s\*\*",
                    _SECTION)
-    st = re.search(r"`/stop`: (\d+) connections / 0\.016s is about \*\*(\d+) req/s\*\*",
+    st = re.search(r"`/stop`: (\d+) connections / 0\.463 s is about \*\*(\d+) req/s\*\*",
                    _SECTION)
     assert hb and st
     assert int(hb.group(1)) == int(st.group(1)) == pool
     assert abs(int(hb.group(2)) - pool / _HEARTBEAT_P50) <= 1
-    assert abs(int(st.group(2)) - pool / _STOP_P50) <= 5
+    assert abs(int(st.group(2)) - pool / _STOP_P50) <= 1
 
 
-def test_render_cadence_table_is_the_arithmetic_for_1000_sessions() -> None:
+def test_session_table_is_the_arithmetic_for_the_ceiling() -> None:
     ceiling = _default("osiris_mcp_pool_size") / _HEARTBEAT_P50
-    rows = re.findall(r"^\| every (\d+)s[^|]*\| ~(\d+) req/s \|", _SECTION, flags=re.M)
-    assert rows, "the cadence table is missing"
-    for seconds, demand in rows:
-        assert int(demand) == round(1000 / int(seconds))
-    # the summary's cadence is the first row that sits comfortably under the ceiling
-    comfortable = [int(s) for s, d in rows if int(d) <= 0.5 * ceiling]
-    assert comfortable and min(comfortable) == 15
-    assert "about 15 seconds or slower" in _SECTION
+    rows = re.findall(r"^\| every (\d+)s \| about (\d+) \| about (\d+) \|", _SECTION,
+                      flags=re.M)
+    assert len(rows) >= 5, "the sessions table is missing"
+    for seconds, at_ceiling, half in rows:
+        tol = max(1.0, 0.01 * ceiling * int(seconds))  # the doc rounds the ceiling to 13.4
+        assert abs(int(at_ceiling) - ceiling * int(seconds)) <= tol
+        assert abs(int(half) - ceiling * int(seconds) / 2) <= tol
+    # the headline and the decision both quote the 15-second row
+    fifteen = next(int(a) for sec, a, _ in rows if sec == "15")
+    flat = " ".join(_SECTION.replace("> ", " ").split())
+    assert round(fifteen, -2) == 200
+    assert "about 200 concurrent sessions at a 15-second" in flat
 
 
 def test_the_old_pre_cut_caps_appear_only_as_history() -> None:

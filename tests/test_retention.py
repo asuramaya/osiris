@@ -194,7 +194,9 @@ async def test_retention_heartbeat_deletes_from_both_tables_and_briefs_the_desk(
     assert captured["desk_kind"] == "fyi"
     assert "outbox" in captured["body"] and "audit_log" in captured["body"]
     assert "-1 row" not in captured["body"] and ": -" not in captured["body"]  # a plain count
-    assert "removed 1 row older than 90 days" in captured["body"]
+    # each table's line names ITS OWN window: the outbox keeps 30 days, the audit log 90
+    assert "outbox: removed 1 row older than 30 days" in captured["body"]
+    assert "audit_log: removed 1 row older than 90 days" in captured["body"]
 
 
 def test_the_retention_receipt_reads_as_a_plain_count() -> None:

@@ -290,14 +290,13 @@ A watch that pages a real operator needs guards a demo doesn't:
 
 ## The connection envelope at scale
 
-> **Summary: roughly 1,000 concurrent Claude Code sessions fits this machine's current
-> pool sizes (8 for `osiris-mcp`, 4 for `osiris-worker`) at a statusline render cadence
-> of about 15 seconds or slower. That figure is derived arithmetic, not a fresh
-> measurement:** the per-request latencies under it were taken in August against a
-> 20-connection pool, and nothing has timed them against the current pool since.
-> pgbouncer is not needed at that scale; see "The decision" near the end of this
-> section. Read on for the reasoning, and for what has to be re-measured before the
-> number is trusted for anything tighter.
+> **Summary: on today's per-request cost, this machine's pools (8 for `osiris-mcp`, 4
+> for `osiris-worker`) serve roughly 200 concurrent Claude Code sessions at a statusline
+> render cadence of 15 seconds (about 100 with half the capacity kept free), not
+> 1,000.** The pools themselves are not the limit and are not saturating (measured
+> below); the limit is that a statusline render now costs about 0.6 seconds of one
+> connection, ten times the 57 ms this section was first built on. pgbouncer is still
+> not needed. Read on for the measurement and what would change the number.
 
 Before this work, every statusline render and every Stop-hook turn-end opened its own
 `asyncpg.connect()`, a per-process fork, not a pool checkout. Measured live: 138 tx/s
@@ -364,70 +363,102 @@ statusline/stop traffic is absorbed into `osiris-mcp`'s already-open 8-connectio
 pool. What scales with fleet size now is **request throughput against that pool**, not
 raw connection count.
 
-One live reading, a single sample and not a peak: on 2026-10-12 `pg_stat_activity` held
-15 client backends in all. `osiris-mcp` held 8 of its 8 (4 active), `osiris-worker` 4 of
-4 (1 active), `osiris-console` 1 of 10 and `osiris-manager` 1 of 10, plus this
-reading's own connection. Both busy daemons were at their caps at that instant, which is
-what a pool that has grown to its limit looks like; one sample cannot say how often a
-caller waits. `pool_health` (backend counts against caps) and
-`pool_acquire_wait_stats` (how long acquires waited) read that live; a sustained
-sample of both is the measurement this section still lacks.
+One live reading, a single sample: on 2026-10-12 `pg_stat_activity` held 15 client
+backends in all. `osiris-mcp` held 8 of its 8 (4 active), `osiris-worker` 4 of 4 (1
+active), `osiris-console` 1 of 10 and `osiris-manager` 1 of 10, plus the reading's own
+connection. A pool holding all its connections open is normal; it is idle retention, not
+saturation, and the 61-minute sample below is what says how busy they really are.
 
-### Per-session request cost (measured live)
+### Per-session request cost (measured live, 2026-10-13)
 
 `/heartbeat` (statusline render, the heavier of the two: mail/dm/briefs/souls/wakes/
 owed/spend/resolved-identity in one composite read) and `/stop` (turn-end, deliverable
-phase: one mail-count query) round-trip times over 20 samples each, against the live
-20-connection `osiris-mcp` pool that existed at measurement time. **These are August
-2026 numbers; they have not been taken again against the 8-connection pool or the
-current database size.** Everything derived from them below inherits that:
+phase: mail-count and stale-obligation reads) were timed over 61 minutes on the live
+`osiris-mcp` (8-connection pool, about 9 live sessions, the real fleet at its normal
+load), one probe of each every 10 seconds, about 300 samples each, no failures. The
+`/heartbeat` probe was sent two ways: as an anonymous render (a project only), and as a
+real session, which is what a statusline does (it resolves the session, its seat, its
+owed obligations and its team on top of the composite read).
 
-| Route | p50 | p90 | max |
+| Route | p50 | p95 | max |
 |---|---|---|---|
-| `/heartbeat` | 57ms | 89ms | 89ms |
-| `/stop` (deliverable phase) | 16ms | 21ms | 21ms |
+| `/heartbeat`, real session | 595 ms | 688 ms | 938 ms |
+| `/heartbeat`, anonymous | 110 ms | 133 ms | 1,793 ms (one outlier) |
+| `/stop` (deliverable phase) | 463 ms | 520 ms | 724 ms |
 
-Latency is expected to depend on Postgres round-trip time and not on queue depth, which
-would keep it roughly steady at the smaller cap until the pool starts queuing checkouts.
-That is an expectation, not a result. Naive serial-throughput ceiling per route
-(`pool_size / p50`, that is, every connection saturated back-to-back), computed from the
-August p50 and the current 8-connection `osiris-mcp` cap rather than the 20 connections
-the measurement ran against. Treat each figure as an estimate conditional on the old
-latency:
+The first measurement of this section, in August 2026 against a 20-connection pool and
+a smaller database, found 57 ms and 16 ms. Today's real-session `/heartbeat` is about ten
+times slower and `/stop` about thirty times slower. The time is spent inside the request,
+not waiting for a connection (the acquire-wait figures below are microseconds), so a
+bigger pool would not make a render faster; it would only let more of them run at once.
+Reducing the queries a render makes (the real-session path adds about 480 ms to the
+anonymous one) is the cheapest lever on every number that follows.
 
-- `/heartbeat`: 8 connections / 0.057s is about **140 req/s** (down from 350 at the old
-  20-connection cap)
-- `/stop`: 8 connections / 0.016s is about **500 req/s** (down from 1,250; rides the
-  same pool as `/heartbeat`, so the two compete for the same 8 connections under load,
-  a shared ceiling, not two independent ones)
+Throughput ceiling per route if each request holds one connection for its whole
+latency (`pool_size / p50`; an upper bound on what the pool can serve, since a request
+that holds its connection for less than its full latency would go faster, and a
+request bound by the Postgres or event-loop CPU would go slower):
 
-### The 1000-session envelope
+- `/heartbeat`: 8 connections / 0.595 s is about **13 req/s**
+- `/stop`: 8 connections / 0.463 s is about **17 req/s**. It rides the same pool as
+  `/heartbeat`, so the two share the 8 connections, one ceiling and not two.
 
-`/stop` fires once per turn-end. At 1000 concurrently active sessions averaging a turn
-every 45 seconds, that's about 22 req/s: trivial against either ceiling above.
+### Is the pool saturating? (measured live, 2026-10-13)
 
-`/heartbeat` fires once per statusline render. This is the actual constraint, re-derived
-against the current 140 req/s ceiling:
+No, on every signal available. Over the same 61 minutes:
 
-| Render cadence (per session) | Demand at 1000 sessions | vs 140 req/s ceiling |
+- **Backend occupancy**, sampled every 2 seconds (1,793 samples, from a separate
+  connection outside the daemons' pools): `osiris-mcp` had 0.53 backends busy on average
+  of 8 (p95 4, all 8 busy in 2 samples, 0.1%); `osiris-worker` had 0.13 of 4 busy on
+  average (p95 1, all 4 busy in 1 sample). Both pools hold all their connections open
+  nearly all the time, which is idle retention, not load.
+- **Acquire wait** (queueing for a free connection, which `pg_stat_activity` cannot see;
+  read from `osiris-mcp`'s own recent window of its last 1,000 acquires, 21 windows taken
+  three minutes apart): p50 0.011 to 0.017 ms, p99 0.039 ms or less, worst single wait
+  15.8 ms once and 0.23 ms or less in every other window. These windows cover only the
+  most recent seconds of traffic each, so they show typical queueing well and a rare
+  burst poorly.
+- **Starvation**: no starvation, acquire-timeout or too-many-connections line appears in
+  seven days of the journals of all four daemons (892,890 lines for `osiris-mcp`).
+- **Real demand**: the `osiris-mcp` access log for the same seven days shows 104,369
+  `/heartbeat` requests; the busiest minute had 82 of them (1.4 req/s), the 99th
+  percentile minute 1.0 req/s, and a typical active minute 12 (0.2 req/s). Against the
+  13 req/s ceiling that is a peak near 10%, which agrees with the occupancy above: 1.4
+  req/s at 0.6 s each holds 0.8 connections.
+
+`osiris-worker`'s own acquire waits cannot be read from outside its process (only the
+`osiris-mcp` window is exposed through `fleet()`), so for the worker the evidence is
+occupancy and the journal, not wait time. It is idle on both.
+
+### How many sessions this serves
+
+`/heartbeat` fires once per statusline render. Sessions served at the 13 req/s ceiling,
+and with half the ceiling kept free for bursts, by per-session render cadence:
+
+| Render cadence (per session) | Sessions at the ceiling | Sessions with half the ceiling free |
 |---|---|---|
-| every 2s (tight, every keystroke/render) | ~500 req/s | **over budget**: the pool queues, renders lag |
-| every 5s | ~200 req/s | **over budget** (was comfortable at the old 350 req/s ceiling) |
-| every 10s | ~100 req/s | tight, only ~29% headroom |
-| every 15s | ~67 req/s | comfortable, ~52% headroom |
+| every 2s | about 27 | about 13 |
+| every 5s | about 67 | about 33 |
+| every 10s | about 134 | about 67 |
+| every 15s | about 201 | about 100 |
+| every 30s | about 402 | about 201 |
+| every 60s | about 804 | about 402 |
 
-Claude Code's actual statusline refresh cadence varies by client and isn't fixed by
-this project; the table names the threshold, not a claimed cadence. At the current pool
-cap and the August latency, 1000 concurrently live sessions need a render cadence of
-roughly 15 seconds or slower to stay comfortably under the ceiling; the crossover to over-budget now lands
-around a 7-second average cadence, not the 3-4 seconds the pre-cut caps allowed. If the
-fleet approaches 1000 sessions rendering faster than that, `osiris_mcp_pool_size` needs
-raising back up before `/heartbeat` becomes the bottleneck (each +10 to the pool cap
-still buys roughly +175 req/s of ceiling, at the same August latency; the pool cap costs
-Postgres connections, not CPU. Raising any pool also raises the fixed budget, and
-`pg_autotune` moves `max_connections` with it (budget plus 40), but that setting only
-takes effect at a Postgres restart, so a pool bump is a config change plus a restart,
-not config alone).
+For comparison, the fleet at measurement time had about 9 live sessions and peaked at
+1.4 req/s, which is a render about every 6 to 7 seconds per session if all nine were
+rendering (the live-session count at the busiest minute was not recorded). `/stop`
+fires once per turn-end, far less often per session than a render, and shares the pool.
+At 1,000 concurrent sessions rendering every 15 seconds the demand would be about 67
+req/s, five times the ceiling; reaching 1,000 sessions needs either a cadence near 75
+seconds or a much cheaper render.
+
+If the session count grows toward the figures above, the levers in order: cut the
+queries a real-session render makes (it is the whole cost); then `osiris_mcp_pool_size`
+8 to 16, which doubles the ceiling to about 27 req/s if Postgres has CPU to spare (not
+measured here). A pool bump raises the fixed budget from 32 to 40, and `pg_autotune`
+derives `max_connections` as the budget plus 40, so the setting becomes 80; it takes
+effect only at a Postgres restart, which is the operator's decision, and the three
+reserved connections leave 37 for ad hoc use either way.
 
 ### Decision table: when pgbouncer becomes necessary
 
@@ -512,24 +543,19 @@ design would have been.
 
 ### The decision: pgbouncer is not needed, at least for now
 
-**pgbouncer is not warranted at 1,000 workers on the current architecture.** Numbers,
-the fixed 32-connection daemon budget (of 72) doesn't grow with worker count (see
-above); the daemons' own measured load (3,180 tx/min combined, about 53 req/s, measured
-against the larger, pre-2026-09-07 caps) is well under even the smaller, re-derived
-~140 req/s `/heartbeat` ceiling, though that ceiling rests on the August latency; RSS growth is capped by bounded in-process caches, not
-worker count. **Summary: roughly 1,000 concurrent sessions fits the current pool
-sizes at a render cadence of about 15 seconds or slower** (derived from the current
-8-connection `osiris-mcp` cap and the August latency; see the render-cadence table above). This is a tighter
-threshold than the 5-second figure this section originally concluded, because the pool
-caps that arithmetic was built on were cut on 2026-09-07 for an unrelated, idle-memory
-reason, after this hour-long measurement was taken, and nothing has re-measured actual
-throughput or worker-pool utilization against the smaller caps since. If a render
-cadence faster than roughly 7-10 seconds becomes the norm at fleet scale, raising
-`osiris_mcp_pool_size` back up is the first lever (a config change plus a Postgres
-restart, since `max_connections` follows the budget); revisit
-pgbouncer if a future measurement shows the untagged/ad-hoc connection class itself
-approaching the 37-connection headroom during a genuine burst, that is where it would
-help first, not the four named daemons.
+**pgbouncer is not warranted on the current architecture.** The fixed 32-connection
+daemon budget (of 72) doesn't grow with worker count; neither pool is saturating
+(measured above: 0.1% of samples with every connection busy, acquire waits in
+microseconds, no starvation in seven days); and RSS growth is capped by bounded
+in-process caches, not worker count. pgbouncer multiplies connections, and connections
+are not what limits this machine: the limit is the 0.6 seconds a real-session render
+now holds a connection, which pgbouncer would not shorten. **Summary: about 200
+concurrent sessions at a 15-second render cadence on the current pools** (derived from
+the latency measured on 2026-10-13; the 1,000-session figure this section started from
+rested on the August latency and does not hold). Revisit pgbouncer if a future
+measurement shows the untagged/ad-hoc connection class itself approaching the
+37-connection headroom during a genuine burst; that is where it would help first, not the
+four named daemons.
 
 ## Later cuts (not yet)
 
