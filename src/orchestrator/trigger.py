@@ -3539,6 +3539,23 @@ async def _legacy_lineage_confession(
             "guaranteed to stay that way.")
 
 
+async def _same_project(pool: asyncpg.Pool, a: str, b: str) -> bool:
+    """Do two project labels name the SAME SoftwareProject? A pin holds a label (often the
+    display name) while a charter holds the governed project's canonical, and a rename moves
+    one without the other: comparing the strings refused a launch whose charter and pin named
+    one project under two spellings. Both labels are resolved to the object (canonical, name
+    or a retired alias all resolve) and compared by id. An unresolvable or ambiguous label is
+    never the same: the refusal then stands."""
+    from src.orchestrator.projects import AmbiguousProjectRef, _resolve_software_project
+
+    try:
+        left = await _resolve_software_project(pool, a)
+        right = await _resolve_software_project(pool, b)
+    except AmbiguousProjectRef:
+        return False
+    return left is not None and right is not None and left["id"] == right["id"]
+
+
 async def _resolve_launch_project(
     pool: asyncpg.Pool, *, seat_id: str, office: str, ancestor: str | None,
 ) -> dict[str, Any]:
@@ -3567,7 +3584,8 @@ async def _resolve_launch_project(
         read_project_label(office))
     charter_repos = await charter_of(pool, seat_id)
     if len(charter_repos) == 1:
-        if candidate is not None and candidate != charter_repos[0]:
+        if (candidate is not None and candidate != charter_repos[0]
+                and not await _same_project(pool, candidate, charter_repos[0])):
             return {"project": None, "refuse": {
                 "charter_project": charter_repos[0], "resolved_project": candidate}}
         # Nothing else resolved (a fresh seat, no ancestor, no pin): the charter's own

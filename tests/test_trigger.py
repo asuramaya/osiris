@@ -8450,3 +8450,103 @@ async def test_a_session_the_cache_prune_deleted_resumes_end_to_end(
     assert back.is_file() and back.stat().st_size == len(
         b'{"type":"user","toolUseResult":"{\\"sent\\":1,\\"from\\":\\"agent:pruned1\\"}"}\n'
          )
+
+
+async def _renamed_name_only(actions: Actions, tmp_path: Path, tag: str) -> tuple[str, Path]:
+    """The state an EARLIER rename left behind: the project's display name moved but its
+    canonical stayed (`repo:<tag>old` named `<tag>new`), the seat charter holds the canonical
+    and the pin holds the name. Returns (worker seat, office)."""
+    from src.orchestrator.charter import set_charter
+
+    oid = await actions.create_or_find_object("SoftwareProject", f"repo:{tag}old", "test")
+    await actions.assert_singular_property(
+        oid, "name", f"{tag}new", "test", datetime.now(UTC), 0.9,
+        because="test: the old name-only rename", evidence_class="self_declared")
+    office = tmp_path / f"{tag}-office"
+    office.mkdir()
+    (office / ".osiris").write_text(f'project = "{tag}new"\n')
+    worker_seat, _mgr = await _managed_pair(
+        actions, worker_agent=f"agent:{tag}w", manager_agent=f"agent:{tag}m",
+        worker_handle=f"{tag}seat", house="osiris")
+    await _office(actions, worker_seat, str(office))
+    charter = await set_charter(actions, worker_seat, [f"{tag}old"], actor="operator")
+    assert not charter.get("rejected"), charter
+    return worker_seat, office
+
+
+async def test_launch_accepts_a_charter_and_pin_that_name_one_project_two_ways(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE RENAME THAT DID NOT CARRY OVER: charter says `renlaold`, pin says `renlanew`,
+    both the SAME SoftwareProject (name moved, canonical did not). The strings differ, the
+    project does not: the launch must not refuse as a fabricated project."""
+    seat, _office_dir = await _renamed_name_only(actions, tmp_path, "renla")
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:renlam", target=seat,
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[]]))
+    assert d["status"] == "launched", d
+    assert len(spawned) == 1
+
+
+async def test_launch_still_refuses_a_charter_and_pin_that_name_different_projects(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    seat, office = await _renamed_name_only(actions, tmp_path, "renlb")
+    await actions.create_or_find_object("SoftwareProject", "repo:renlbother", "test")
+    (office / ".osiris").write_text('project = "renlbother"\n')
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:renlbm", target=seat,
+        spawn=_fake_spawn([]), agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "refused-fabricated-project"
+
+
+async def test_renaming_again_to_the_current_name_carries_the_canonical_and_every_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE REPAIR FOR A RENAME ALREADY DONE: rename_project is idempotent on the name and
+    migrates the canonical when it lags, so the same door repairs the old name-only rename.
+    Dry run by default; the real run moves the canonical, keeps the old one as an alias,
+    and the seat's charter reads the new name afterwards."""
+    from src.orchestrator.charter import charter_of
+    from src.orchestrator.project_identity import rename_project
+    from src.orchestrator.projects import _resolve_software_project
+
+    seat, _office_dir = await _renamed_name_only(actions, tmp_path, "renlc")
+
+    plan = await rename_project(actions, project="renlcold", new_name="renlcnew",
+                                because="test: carry the earlier rename", actor="test")
+    assert plan["dry_run"] is True
+    assert plan["canonical_migration"]["migrates"] is True
+    assert plan["canonical_migration"]["to"] == "repo:renlcnew"
+    assert await charter_of(actions.pool, seat) == ["renlcold"]  # a dry run wrote nothing
+
+    done = await rename_project(actions, project="renlcold", new_name="renlcnew",
+                                because="test: carry the earlier rename", actor="test",
+                                dry_run=False)
+    assert done["project"] == "repo:renlcnew" and done["rename_confirmed"] is True
+    assert await charter_of(actions.pool, seat) == ["renlcnew"]
+    old = await _resolve_software_project(actions.pool, "renlcold")  # the alias still resolves
+    new = await _resolve_software_project(actions.pool, "renlcnew")
+    assert old is not None and new is not None and old["id"] == new["id"]
+
+    again = await rename_project(actions, project="renlcnew", new_name="renlcnew",
+                                 because="test: nothing left to carry", actor="test")
+    assert again["canonical_migration"]["migrates"] is False  # idempotent
+
+
+async def test_a_launch_after_the_repair_goes_through(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.project_identity import rename_project
+
+    seat, _office_dir = await _renamed_name_only(actions, tmp_path, "renld")
+    await rename_project(actions, project="renldold", new_name="renldnew",
+                         because="test: repair", actor="test", dry_run=False)
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:renldm", target=seat,
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[]]))
+    assert d["status"] == "launched", d
