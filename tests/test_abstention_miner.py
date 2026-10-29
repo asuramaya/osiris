@@ -76,8 +76,11 @@ async def test_a_lane_with_one_true_candidate_proposes_it(actions: Actions) -> N
     assert n == 0
 
 
-async def test_the_empty_agent_lane_proposes_nothing(actions: Actions) -> None:
-    """Agent's own candidate pool is empty by design: 'never guessing from names'."""
+async def test_the_agent_lane_is_not_in_the_rotation_and_proposes_nothing(
+    actions: Actions,
+) -> None:
+    """Agent's own candidate pool is empty by design ('never guessing from names'), so a tick
+    spent on it is a tick lost for the lanes that can act: the rotation steps over it."""
     a = await _mint_bare(actions, "Agent")
     await capture.derive_or_abstain(actions, a, "works_in", [], "test")
     await actions.assert_property(
@@ -85,11 +88,8 @@ async def test_the_empty_agent_lane_proposes_nothing(actions: Actions) -> None:
         evidence_class="self_declared")
 
     await set_cursor(actions.pool, _CURSOR_KEY, str(_lane_index("Agent")))
-    out = await abstention_miner_tick(actions)
-
-    assert out["lane"] == "Agent"
-    assert out["action"] == "skipped"
-    assert "empty candidate pool" in out["reason"]
+    lanes = [(await abstention_miner_tick(actions))["lane"] for _ in range(8)]
+    assert "Agent" not in lanes and len(set(lanes)) == 4
     n = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Proposal'")
     assert n == 0
 
@@ -172,10 +172,11 @@ async def test_round_robin_advances_to_the_next_lane_each_tick(actions: Actions)
     lanes, wrapping around."""
     await set_cursor(actions.pool, _CURSOR_KEY, "0")
     seen = []
-    for _ in range(len(_LANES) + 1):
+    rotation = [lane.object_type for lane in _LANES if lane.has_pool]
+    for _ in range(len(rotation) + 1):
         out = await abstention_miner_tick(actions)
         seen.append(out["lane"])
-    assert seen == [lane.object_type for lane in _LANES] + [_LANES[0].object_type]
+    assert seen == rotation + [rotation[0]]
 
 
 async def test_budget_refuses_the_sixth_proposal_in_a_day(actions: Actions) -> None:
@@ -310,11 +311,9 @@ async def test_every_counted_tick_outcome_lands_in_the_survey(actions: Actions) 
     assert (await abstention_miner_tick(actions))["action"] == "skipped"
     await set_cursor(actions.pool, _CURSOR_KEY, str(_lane_index("Decision")))
     assert (await abstention_miner_tick(actions))["action"] == "skipped"
-    await set_cursor(actions.pool, _CURSOR_KEY, str(_lane_index("Agent")))
-    await abstention_miner_tick(actions)
     survey = await abstention_survey(actions.pool)
     assert survey["outcomes_total"]["Decision:skipped"] == 2
-    assert survey["outcomes_total"]["Agent:skipped"] == 1
+    assert "Agent:skipped" not in survey["outcomes_total"]
     assert list(survey["outcomes_by_day"].values())[0]["Decision:skipped"] == 2
 
 
@@ -350,16 +349,40 @@ async def _tick_decision_lane(actions: Actions) -> dict[str, object]:
     return await abstention_miner_tick(actions)
 
 
-async def test_a_lane_moves_past_an_object_it_abstained_on(actions: Actions) -> None:
+async def test_a_tick_walks_past_abstentions_to_the_first_object_it_can_propose(
+    actions: Actions,
+) -> None:
     """The stall: an abstained object was the oldest eligible one on every later tick as
-    well, so the objects behind it were never reached."""
+    well, so the objects behind it were never reached. Now one tick steps past it."""
     await actions.create_or_find_object("SoftwareProject", "repo:widgetfactory", "test")
     silent = await _abstained_decision(actions, "says nothing about any project")
     lone = await _abstained_decision(actions, "widgetfactory only")
     first = await _tick_decision_lane(actions)
-    assert first["action"] == "skipped" and first["object"] == str(silent)
+    assert first["action"] == "proposed" and first["object"] == str(lone), first
+    assert first["examined"] == 2
+    assert await get_cursor(actions.pool, "abstention_miner:position:Decision") == str(lone)
+    assert silent != lone
+
+
+async def test_a_tick_stops_after_twenty_five_abstentions_and_the_next_one_continues(
+    actions: Actions,
+) -> None:
+    await actions.create_or_find_object("SoftwareProject", "repo:widgetfactory", "test")
+    silent = [await _abstained_decision(actions, f"nothing named {i}") for i in range(30)]
+    lone = await _abstained_decision(actions, "widgetfactory only")
+    first = await _tick_decision_lane(actions)
+    assert first["action"] == "skipped" and first["examined"] == 25
+    assert first["object"] == str(silent[24])
     second = await _tick_decision_lane(actions)
-    assert second["object"] == str(lone) and second["action"] == "proposed", second
+    assert second["action"] == "proposed" and second["object"] == str(lone), second
+    assert second["examined"] == 6                        # five silent ones, then the one
+
+
+async def test_a_lane_of_only_abstentions_is_walked_once_and_stops(actions: Actions) -> None:
+    for i in range(3):
+        await _abstained_decision(actions, f"nothing named {i}")
+    out = await _tick_decision_lane(actions)
+    assert out["action"] == "skipped" and out["examined"] == 3     # no second lap
 
 
 async def test_the_position_wraps_to_the_oldest_when_nothing_is_left_after_it(

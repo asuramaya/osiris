@@ -68,6 +68,7 @@ _ACTOR = "miner:abstention"
 _CURSOR_KEY = "abstention_miner:lane_index"
 _OUTCOMES_KEY_PREFIX = "abstention_miner:outcomes:"
 _POSITION_KEY_PREFIX = "abstention_miner:position:"
+_WALK_LIMIT = 25     # abstentions a single tick may step past before it stops
 
 
 @dataclass(frozen=True)
@@ -87,17 +88,28 @@ _LANES: tuple[_Lane, ...] = (
 )
 
 
-async def _next_lane_index(pool: asyncpg.Pool) -> int:
-    """Round-robin state, persisted in the generic cursor store (watermarks table, the
-    SAME call digest.py's own operator watermark uses), never in-process memory, since
-    a tick can run from any process and must pick up where the last one left off."""
-    raw = await get_cursor(pool, _CURSOR_KEY)
-    idx = int(raw) if raw and raw.isdigit() else 0
+def _rotation_after(idx: int) -> int:
+    """The first lane at or after `idx` (wrapping) that has a candidate pool. A lane with an
+    empty pool never acts, so a tick spent on it is a tick lost for the others."""
+    for step in range(len(_LANES)):
+        k = (idx + step) % len(_LANES)
+        if _LANES[k].has_pool:
+            return k
     return idx % len(_LANES)
 
 
+async def _next_lane_index(pool: asyncpg.Pool) -> int:
+    """Round-robin state, persisted in the generic cursor store (watermarks table, the
+    SAME call digest.py's own operator watermark uses), never in-process memory, since
+    a tick can run from any process and must pick up where the last one left off. Lanes
+    without a candidate pool are not in the rotation."""
+    raw = await get_cursor(pool, _CURSOR_KEY)
+    idx = int(raw) if raw and raw.isdigit() else 0
+    return _rotation_after(idx % len(_LANES))
+
+
 async def _advance_lane_index(pool: asyncpg.Pool, idx: int) -> None:
-    await set_cursor(pool, _CURSOR_KEY, str((idx + 1) % len(_LANES)))
+    await set_cursor(pool, _CURSOR_KEY, str(_rotation_after((idx + 1) % len(_LANES))))
 
 
 _ELIGIBLE_SQL = (
@@ -118,7 +130,9 @@ def _position_key(lane: _Lane) -> str:
     return f"{_POSITION_KEY_PREFIX}{lane.object_type}"
 
 
-async def _next_abstained_object(pool: asyncpg.Pool, lane: _Lane) -> uuid.UUID | None:
+async def _next_abstained_object(
+    pool: asyncpg.Pool, lane: _Lane, *, after: uuid.UUID | None = None,
+) -> uuid.UUID | None:
     """The next active object of this lane's own type carrying a LIVE (unresolved)
     `derivation_abstained_<link_type>` record, the exact predicate `propose()`'s own
     last-resort rule already requires (proposals.py's `_live_abstention_exists`, mirrored
@@ -133,23 +147,24 @@ async def _next_abstained_object(pool: asyncpg.Pool, lane: _Lane) -> uuid.UUID |
     is left it wraps to the oldest again. Without a position an object the miner abstains
     on is the oldest eligible one on every later tick too, so the lane never reaches the
     objects behind it (measured live: the first object of every lane abstained, 779 more
-    waiting). The position is advanced by `_advance_position` and nothing is written on
-    the objects themselves."""
+    waiting). `after` names the position explicitly (a tick walking forward holds it in
+    memory); without it the stored position is read. The position is advanced by
+    `_advance_position` and nothing is written on the objects themselves."""
     args = (lane.object_type, f"derivation_abstained_{lane.link_type}", lane.link_type)
     order = "ORDER BY o.created_at ASC, o.id ASC LIMIT 1"
-    after = await get_cursor(pool, _position_key(lane))
-    if after:
+    if after is None:
+        stored = await get_cursor(pool, _position_key(lane))
         try:
-            after_id = uuid.UUID(after)
+            after = uuid.UUID(stored) if stored else None
         except ValueError:
-            after_id = None
-        if after_id is not None:
-            found: uuid.UUID | None = await pool.fetchval(
-                "SELECT o.id " + _ELIGIBLE_SQL
-                + "AND (o.created_at, o.id) > (SELECT created_at, id FROM objects WHERE id=$4) "
-                + order, *args, after_id)
-            if found is not None:
-                return found
+            after = None
+    if after is not None:
+        found: uuid.UUID | None = await pool.fetchval(
+            "SELECT o.id " + _ELIGIBLE_SQL
+            + "AND (o.created_at, o.id) > (SELECT created_at, id FROM objects WHERE id=$4) "
+            + order, *args, after)
+        if found is not None:
+            return found
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT o.id " + _ELIGIBLE_SQL + order, *args)
 
@@ -265,6 +280,7 @@ def _pick_dominant(counts: dict[uuid.UUID, int]) -> uuid.UUID | None:
 
 async def _mention_counts(
     pool: asyncpg.Pool, text_fields: tuple[str, ...], obj_id: uuid.UUID,
+    patterns: list[tuple[uuid.UUID, re.Pattern[str], str]] | None = None,
 ) -> tuple[dict[uuid.UUID, int], str]:
     """Read `text_fields` off `obj_id`'s own CURRENT properties, concatenate, and count
     every LIVE SoftwareProject's own MENTION COUNT in that text (see `_project_patterns`).
@@ -282,7 +298,7 @@ async def _mention_counts(
     text = " ".join(parts)
     if not text.strip():
         return {}, text
-    return _count_mentions(text, await _project_patterns(pool)), text
+    return _count_mentions(text, patterns or await _project_patterns(pool)), text
 
 
 async def _author_works_in(pool: asyncpg.Pool, obj_id: uuid.UUID) -> uuid.UUID | None:
@@ -305,6 +321,7 @@ async def _author_works_in(pool: asyncpg.Pool, obj_id: uuid.UUID) -> uuid.UUID |
 
 async def _dominant_project(
     pool: asyncpg.Pool, text_fields: tuple[str, ...], obj_id: uuid.UUID,
+    patterns: list[tuple[uuid.UUID, re.Pattern[str], str]] | None = None,
 ) -> tuple[uuid.UUID | None, str, str]:
     """THE LANE SIGNAL (from the later ruling, replacing the old
     "exactly one mention" gate that real text almost never satisfied: telemetry
@@ -317,7 +334,7 @@ async def _dominant_project(
     "author_tiebreak", or "none", named so the miner's own outcome record and the lane
     telemetry can say which produced (or failed to produce) a proposal, never leave that
     invisible."""
-    counts, text = await _mention_counts(pool, text_fields, obj_id)
+    counts, text = await _mention_counts(pool, text_fields, obj_id, patterns)
     top = _pick_dominant(counts)
     if top is not None:
         return top, text, "dominance"
@@ -333,10 +350,11 @@ def _lanes_off(settings: Any) -> set[str]:
 
 
 async def _tick(actions: Actions) -> dict[str, Any]:
-    """One tick: advance the round-robin, look at the next lane, propose at most one
-    candidate against its next eligible abstention, or do nothing. Never raises past a
-    normal `{"action": ...}` result; `guarded_miner_tick` (the caller's own wrapper) is
-    where a genuine exception becomes a durable failure record; this function's own
+    """One tick: advance the round-robin, look at the next lane, step past up to `_WALK_LIMIT`
+    abstentions (one position write at the end, nothing on the objects) to the first object a
+    project can be proposed for, and propose at most one candidate, or do nothing. Never
+    raises past a normal `{"action": ...}` result; `guarded_miner_tick` (the caller's own
+    wrapper) is where a genuine exception becomes a durable failure record; this function's own
     business-as-usual "found nothing"/"too many candidates" outcomes are not failures.
 
     Reads `settings_with_overlay` (part of the settings-overlay design), not bare
@@ -358,26 +376,38 @@ async def _tick(actions: Actions) -> dict[str, Any]:
     if not lane.has_pool:
         return {"lane": lane.object_type, "action": "skipped",
                 "reason": "empty candidate pool by design: never guessing from names"}
-    obj_id = await _next_abstained_object(pool, lane)
-    if obj_id is None:
+    patterns = await _project_patterns(pool)
+    position = await _next_abstained_object(pool, lane)
+    if position is None:
         return {"lane": lane.object_type, "action": "none",
                 "reason": "no eligible abstention this tick"}
-    candidate_id, text, signal = await _dominant_project(pool, lane.text_fields, obj_id)
-    if candidate_id is None:
-        await _advance_position(pool, lane, obj_id)   # examined and left alone: move on
-        return {"lane": lane.object_type, "object": str(obj_id), "action": "skipped",
-                "reason": "no project dominates the text and no author to tie-break",
-                "text_read": text[:200]}
-    out = await propose(
-        actions, from_id=obj_id, link_type=lane.link_type,
-        candidate={"kind": "link", "from_id": str(obj_id), "to_id": str(candidate_id),
-                  "link_type": lane.link_type, "signal": signal},
-        confidence=0.4, owner="operator", miner=_MINER, actor=_ACTOR)
-    action = "refused" if "error" in out else "proposed"
-    if action == "proposed":
+    examined: list[uuid.UUID] = []
+    obj_id: uuid.UUID | None = position
+    last_text = ""
+    while obj_id is not None and obj_id not in examined and len(examined) < _WALK_LIMIT:
+        candidate_id, last_text, signal = await _dominant_project(
+            pool, lane.text_fields, obj_id, patterns)
+        if candidate_id is None:        # examined and left alone: step past it
+            examined.append(obj_id)
+            obj_id = await _next_abstained_object(pool, lane, after=obj_id)
+            continue
+        out = await propose(
+            actions, from_id=obj_id, link_type=lane.link_type,
+            candidate={"kind": "link", "from_id": str(obj_id), "to_id": str(candidate_id),
+                      "link_type": lane.link_type, "signal": signal},
+            confidence=0.4, owner="operator", miner=_MINER, actor=_ACTOR)
+        action = "refused" if "error" in out else "proposed"
+        if action == "proposed":
+            examined.append(obj_id)
         # a refusal (budget spent, throttled) keeps the object: it has not been examined away
-        await _advance_position(pool, lane, obj_id)
-    return {"lane": lane.object_type, "object": str(obj_id), "action": action, **out}
+        if examined:
+            await _advance_position(pool, lane, examined[-1])
+        return {"lane": lane.object_type, "object": str(obj_id), "action": action,
+                "examined": len(examined), **out}
+    await _advance_position(pool, lane, examined[-1])
+    return {"lane": lane.object_type, "object": str(examined[-1]), "action": "skipped",
+            "reason": "no project dominates the text and no author to tie-break",
+            "examined": len(examined), "text_read": last_text[:200]}
 
 
 async def abstention_miner_tick(actions: Actions) -> dict[str, Any]:
