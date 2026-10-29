@@ -18,6 +18,7 @@ the store current without a mount. Until then, mount-time is the only ingest tri
 """
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -34,6 +35,17 @@ from src.ingest.harness import (
 )
 
 _SYNTHETIC = "<synthetic>"
+
+
+async def _read_turns_off_loop(
+    adapter: HarnessAdapter, locator: SessionLocator, since: int,
+) -> list[TurnRow]:
+    """A transcript is read and JSON-parsed line by line; on the event loop that froze the
+    whole daemon for as long as the file took (about 1 s for this session's, seconds for a
+    long one), and every /heartbeat and tool call queued behind it: the multi-second tail
+    on an otherwise 0.2 s statusline render. A worker thread does the read; the rows come
+    back as a plain list."""
+    return await asyncio.to_thread(lambda: list(adapter.read_turns(locator, since_idx=since)))
 
 
 async def identity_reading(
@@ -274,7 +286,7 @@ class TranscriptStore:
             if stored is not None:
                 return replace(stored, anchored=locator.anchored)
             skip, since = False, 0  # a session row without turns: eat it whole
-        turns = list(adapter.read_turns(locator, since_idx=since))
+        turns = await _read_turns_off_loop(adapter, locator, since)
         if turns:
             await self._upsert(locator, turns, observed_at=observed, source_bytes=size)
         elif since == 0:
@@ -518,7 +530,7 @@ class TranscriptStore:
                     skip, since, observed, size = await self._freshness(locator)
                     if skip:
                         continue
-                    turns = list(adapter.read_turns(locator, since_idx=since))
+                    turns = await _read_turns_off_loop(adapter, locator, since)
                     if not turns:
                         continue
                     await self._upsert(locator, turns, observed_at=observed,

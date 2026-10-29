@@ -284,3 +284,25 @@ async def test_credence_props_a_successor_with_its_own_observation_is_not_clampe
         pytest.approx(0.9, abs=1e-6)
     assert winners["status"].laundering == ()
     assert res.disputes == []
+
+
+def test_each_ancestor_chain_is_walked_once_per_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The descendant scan re-walked a source's chain for every (claim, other claim) pair:
+    quadratic, seconds of unbroken CPU on the real graph (a frozen daemon). One walk per
+    source now, and the answer is unchanged."""
+    from src.orchestrator import credence as C
+
+    calls: list[str] = []
+    real = C._ancestors
+
+    def counting(src: str, parent_of: dict[str, str]) -> set[str]:
+        calls.append(src)
+        return real(src, parent_of)
+
+    monkeypatch.setattr(C, "_ancestors", counting)
+    parent_of = {f"agent:a{i}": f"agent:a{i - 1}" for i in range(1, 12)}
+    claims = [_c("o1", "summary", f"value {i}", f"agent:a{i}", 0.5 + i / 100) for i in range(12)]
+    out = resolve_credence(claims, parent_of, {})
+    assert len(calls) == len(set(calls)) <= 12
+    monkeypatch.setattr(C, "_ancestors", real)
+    assert resolve_credence(claims, parent_of, {}) == out
