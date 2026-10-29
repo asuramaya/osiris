@@ -90,6 +90,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from typing import Any
 
 from src.actions.core import Actions
@@ -152,10 +153,16 @@ def _is_agent(source_id: str) -> bool:
 _PUNCT = re.compile(r"[^\w\s]|_")
 
 
+@lru_cache(maxsize=8192)
+def _normalize_text(text: str) -> str:
+    return " ".join(_PUNCT.sub(" ", text.lower()).split())
+
+
 def _normalize(value: Any) -> str:
     """A value's comparison form: lowercased, punctuation dropped, whitespace collapsed. Cheap and
-    deterministic, with no embedding and no model (that would be a Tier-3 hook)."""
-    return " ".join(_PUNCT.sub(" ", str(value).lower()).split())
+    deterministic, with no embedding and no model (that would be a Tier-3 hook). Memoized on the
+    value's text: a digest compares the same long restated values against each other many times."""
+    return _normalize_text(str(value))
 
 
 def _same_claim(a: Any, b: Any, *, overlap: float = 0.7) -> bool:
@@ -227,15 +234,24 @@ def resolve_credence(
         # source_id -> (value, confidence): the disagreeing positions on this fact, if any.
         positions: dict[str, tuple[Any, float]] = {}
         scored: list[tuple[float, bool, Claim]] = []
+        # each agent claim with its ancestor chain, once per group: the descendant scan below
+        # asks it of every claim for every other claim, and re-deriving it per pair was most of
+        # a 26-object resolution's 0.8 s (a lineage's sources are each other's ancestors)
+        agent_claims = [(d, ancestors_of(d.source_id)) for d in group if _is_agent(d.source_id)]
+        # descendants by ancestor source, built once per group in group order (so each list
+        # reads exactly as the per-claim scan it replaces): a claim is a descendant of the
+        # source at the other end of each of its own chain links that also asserted here
+        group_srcs = {d.source_id for d, _ in agent_claims}
+        descs_of: dict[str, list[Claim]] = {}
+        for d, anc in agent_claims:
+            for up in anc & group_srcs:
+                if up != d.source_id:
+                    descs_of.setdefault(up, []).append(d)
         for r in order:
             eff = r.confidence
             clamped = False
             if _is_agent(r.source_id) and not looked.get(r.source_id, False):
-                descs = [
-                    d for d in group
-                    if d.source_id != r.source_id and _is_agent(d.source_id)
-                    and r.source_id in ancestors_of(d.source_id)
-                ]
+                descs = descs_of.get(r.source_id, [])
                 if descs:  # r is an ancestor of an asserting subtree: a relay or a disputant
                     origin = max(descs, key=lambda d: eff_by_src.get(d.source_id, d.confidence))
                     origin_conf = eff_by_src.get(origin.source_id, origin.confidence)
