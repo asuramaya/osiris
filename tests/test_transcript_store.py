@@ -897,3 +897,52 @@ async def test_discovery_walks_the_disk_off_the_event_loop(actions: Actions) -> 
 
     assert got is None
     assert ticks >= 10  # blocked on the loop, this would be 1
+
+async def test_the_database_reduction_equals_the_python_one_on_awkward_turns(
+    actions: Actions,
+) -> None:
+    """model_of_session aggregates in SQL; it must give exactly what _reading_from_turns
+    gives over the same turns: synthetic and empty models skipped, summaries skipped, user
+    turns skipped, a null recorded_at keeping the previous time, any deliberate swap
+    counting, history in order of first appearance."""
+    t0 = datetime(2026, 10, 1, tzinfo=UTC)
+
+    def at(n: int) -> datetime:
+        return datetime(2026, 10, 1, n, tzinfo=UTC)
+
+    turns = [
+        TurnRow(turn_idx=0, role="user", model="claude-user-line", recorded_at=at(1)),
+        TurnRow(turn_idx=1, role="assistant", model="<synthetic>", recorded_at=at(2)),
+        TurnRow(turn_idx=2, role="assistant", model="claude-fable-5", recorded_at=at(3)),
+        TurnRow(turn_idx=3, role="assistant", model="", recorded_at=at(4)),
+        TurnRow(turn_idx=4, role="assistant", model="glm-5.2", is_summary=True,
+                recorded_at=at(5)),
+        TurnRow(turn_idx=5, role="assistant", model="claude-opus-4-8", recorded_at=None,
+                swap_deliberate=True),
+        TurnRow(turn_idx=6, role="assistant", model="claude-fable-5", recorded_at=at(7)),
+        TurnRow(turn_idx=7, role="assistant", model="claude-opus-4-8", recorded_at=None),
+    ]
+    sid = "ee55ee55"
+    store = TranscriptStore(actions.pool)
+    loc = SessionLocator(anchor_sid=sid, session_id=sid + "-full", harness="claude-code",
+                         source_path="/tmp/ee55ee55-full.jsonl", cwd=None, project=None)
+    await store._upsert(loc, turns, observed_at=t0, source_bytes=1)
+
+    expected = _reading_from_turns(turns, "claude-code", sid)
+    got = await store.model_of_session("claude-code", sid)
+    assert got is not None
+    assert got.current == expected.current == "claude-opus-4-8"
+    assert got.history == expected.history == ("claude-fable-5", "claude-opus-4-8")
+    assert got.deliberate is expected.deliberate is True
+    assert got.observed_at == expected.observed_at == at(7)
+    assert got.method == expected.method and got.anchor_sid == expected.anchor_sid
+
+    # a session whose turns are all unusable still answers (not None), with nothing in it
+    loc2 = SessionLocator(anchor_sid="ff66ff66", session_id="ff66ff66-full",
+                          harness="claude-code", source_path="/tmp/ff66ff66-full.jsonl",
+                          cwd=None, project=None)
+    await store._upsert(loc2, [TurnRow(turn_idx=0, role="user")], observed_at=t0,
+                        source_bytes=1)
+    empty = await store.model_of_session("claude-code", "ff66ff66")
+    assert empty is not None and empty.current is None and empty.history == ()
+    assert await store.model_of_session("claude-code", "00000000") is None

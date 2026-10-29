@@ -53,7 +53,9 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 import re
+import threading
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -752,17 +754,63 @@ def locate_current_transcript(
     returns None rather than a co-tenant's file. Reading a neighbor's model as your own is a
     false-alarm swap, once verified live as a session appearing "demoted" to a different
     model off the box's hottest session."""
-    files = [p for p in root.expanduser().glob("*/*.jsonl") if p.is_file()]
-    if not files:
-        return None
+    root = root.expanduser()
     jid = _job_id(job_dir)
     if jid:
-        anchored = [p for p in files if p.stem.startswith(jid)]
+        # Names first, stats only for the few that match: the old walk stat()ed every
+        # transcript under every project directory (13k directories on this box, about
+        # 0.55 s warm and 5 s cold) to answer a question about one session id.
+        anchored = [p for p in _jsonl_with_prefix(root, jid) if p.is_file()]
         if anchored:
             return max(anchored, key=lambda p: p.stat().st_mtime)
     if anchored_only:  # no true anchor: report 'unknown', never guess a neighbor's transcript
         return None
+    files = [p for p in root.glob("*/*.jsonl") if p.is_file()]
+    if not files:
+        return None
     return max(files, key=lambda p: p.stat().st_mtime)
+
+
+_dir_listing_cache: dict[str, dict[str, tuple[int, tuple[str, ...]]]] = {}
+_dir_listing_lock = threading.Lock()
+
+
+def _jsonl_with_prefix(root: Path, prefix: str) -> list[Path]:
+    """Every `<root>/<dir>/<name>.jsonl` whose file name starts with `prefix`, same set the
+    old `root.glob("*/*.jsonl")` + `stem.startswith` produced. Directory listings are cached
+    per process and re-read only for a directory whose own mtime moved (a file added or
+    removed there); appends to an existing transcript never change it, and the matching
+    files' own mtimes are always read fresh by the caller."""
+    key = str(root)
+    with _dir_listing_lock:
+        cache = _dir_listing_cache.setdefault(key, {})
+    out: list[Path] = []
+    seen: set[str] = set()
+    try:
+        entries = list(os.scandir(root))
+    except OSError:
+        return out
+    for entry in entries:
+        try:
+            if not entry.is_dir():
+                continue
+            mtime = entry.stat().st_mtime_ns
+        except OSError:
+            continue
+        seen.add(entry.name)
+        cached = cache.get(entry.name)
+        if cached is None or cached[0] != mtime:
+            try:
+                names = tuple(e.name for e in os.scandir(entry.path)
+                              if e.name.endswith(".jsonl"))
+            except OSError:
+                continue
+            cached = (mtime, names)
+            cache[entry.name] = cached
+        out.extend(Path(entry.path) / n for n in cached[1] if n.startswith(prefix))
+    for gone in set(cache) - seen:
+        cache.pop(gone, None)
+    return out
 
 
 _CWD_SCAN_LINE_CAP = 500  # a session's own cwd lands in its first few turns' metadata
