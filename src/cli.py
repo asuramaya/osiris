@@ -123,9 +123,9 @@ from src.config.settings import Settings
 from src.manager.client import default_socket_path, manager_call
 
 ManagerCall = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
-SpawnClaudeBg = Callable[..., Awaitable[None]]
+SpawnClaudeBg = Callable[..., Awaitable[str | None]]
 AgentsJson = Callable[..., Awaitable[list[dict[str, Any]]]]
-ResumeSpawn = Callable[..., Awaitable[None]]
+ResumeSpawn = Callable[..., Awaitable[str | None]]
 ClearStaleRecord = Callable[..., Awaitable[bool]]
 
 # Every sanctioned-second-entry-point command below used to REQUIRE --actor, forcing a
@@ -1600,16 +1600,27 @@ async def _cmd_launch_harness(
         return 0
 
     launch_cwd = facts.get("tree_cwd") or office
+    spawned_id = out.get("spawned_id")
     alive_row: dict[str, Any] | None = None
-    for _ in range(8):
+    for _ in range(8 if not spawned_id else 15):
         try:
             alive_row = next((r for r in await agents_json(cwd=launch_cwd)
-                              if isinstance(r, dict) and r.get("cwd") == launch_cwd), None)
+                              if isinstance(r, dict)
+                              and (r.get("id") == spawned_id if spawned_id
+                                   else r.get("cwd") == launch_cwd)), None)
         except (OSError, TimeoutError, ValueError):
             alive_row = None
         if alive_row is not None:
             break
         await sleep(1.0)
+    if alive_row is None and spawned_id:
+        # The harness itself named the session ("backgrounded · <id>") and it never
+        # showed up: a body that does not exist, not one that is slow. Say so.
+        print(f"osiris launch: FAILED. The harness reported background session "
+              f"{spawned_id} for {handle!r} but it never appeared in `claude agents` "
+              "within 15 s. Nothing is running for this seat. Check `claude logs "
+              f"{spawned_id}`.", file=sys.stderr)
+        return 1
     if alive_row is None:
         print("  not yet visible in `claude agents --json`. It may still be booting or "
               "self-binding; re-check with `osiris fleet` in a few seconds.")
@@ -1870,12 +1881,8 @@ async def _cmd_resume_harness(
     # Whose history is it? The harness loads none of a transcript another account owns, so
     # resuming it would only start an amnesiac session. Say so, then launch fresh with a
     # briefing built from the store (trigger.resume_seat takes the same road).
-    from src.orchestrator.mounts import _harness_slug
-    from src.orchestrator.resume_account import account_mismatch, store_briefing
-    sense_root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
-        else Path.home() / ".claude" / "projects"
-    finding = await account_mismatch(
-        sense_root / _harness_slug(spawn_cwd) / f"{resumed_session_id}.jsonl")
+    from src.orchestrator.resume_account import store_account_mismatch, store_briefing
+    finding = await store_account_mismatch(pool, resumed_session_id[:8])
     if finding is not None:
         from src.orchestrator.trigger import _spawn_claude_bg
         print(f"osiris resume: {handle!r}: {finding['detail']}. Launching a FRESH session "
@@ -1889,9 +1896,15 @@ async def _cmd_resume_harness(
             handle, model=model, pool=pool, wake_default=wake_default,
             spawn=launch_spawn or _spawn_claude_bg, agents_json=agents_json, message=brief)
     cleared = await clear_stale_record(resumed_session_id[:8])
-    await resume_spawn(spawn_cwd, prompt=_DM_RESUME_PROMPT,
-                       resume_session=resumed_session_id, name=name, model=resolved_model,
-                       allowed_tools=st.osiris_wake_allowed_tools or None)
+    try:
+        await resume_spawn(spawn_cwd, prompt=_DM_RESUME_PROMPT,
+                           resume_session=resumed_session_id, name=name,
+                           model=resolved_model,
+                           allowed_tools=st.osiris_wake_allowed_tools or None)
+    except OSError as exc:
+        print(f"osiris resume: FAILED. The harness refused to start {handle!r}: {exc}. "
+              "Nothing is running for this seat.", file=sys.stderr)
+        return 1
     # WHAT THE HARNESS ACTUALLY STARTED: a stopped record still on file makes
     # `--bg --resume` start a COPY under a new id. Read the body back and say so, and
     # adopt the copy as the seat's own continuation before its first act mints an

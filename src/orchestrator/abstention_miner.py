@@ -60,6 +60,7 @@ _MINER = "abstention"
 _ACTOR = "miner:abstention"
 _CURSOR_KEY = "abstention_miner:lane_index"
 _OUTCOMES_KEY_PREFIX = "abstention_miner:outcomes:"
+_POSITION_KEY_PREFIX = "abstention_miner:position:"
 
 
 @dataclass(frozen=True)
@@ -106,35 +107,105 @@ _ELIGIBLE_SQL = (
     "    AND st.name='status' AND st.value #>> '{}' = 'proposed')) ")
 
 
+def _position_key(lane: _Lane) -> str:
+    return f"{_POSITION_KEY_PREFIX}{lane.object_type}"
+
+
 async def _next_abstained_object(pool: asyncpg.Pool, lane: _Lane) -> uuid.UUID | None:
-    """The OLDEST active object of this lane's own type carrying a LIVE (unresolved)
+    """The next active object of this lane's own type carrying a LIVE (unresolved)
     `derivation_abstained_<link_type>` record, the exact predicate `propose()`'s own
     last-resort rule already requires (proposals.py's `_live_abstention_exists`, mirrored
     here as a set-scan rather than a single-object check), that does NOT already carry
     an outstanding (`status='proposed'`) Proposal against the same (from_id, link_type)
     pair; an expired one is swept to 'expired' (proposals.py `sweep_expired`) first, so it
-    stops counting. Without this exclusion, every tick that lands on an exhausted budget or
-    a slow-to-judge owner would just re-propose the same top-of-queue object forever
-    instead of ever reaching the next one."""
+    stops counting.
+
+    OLDEST FIRST, AFTER THE LAST ONE EXAMINED: the lane keeps a position (the object its
+    last counted tick looked at, in the cursor store) and the pick is the oldest eligible
+    object strictly after it, ordered by (created_at, id) so the order is total; when none
+    is left it wraps to the oldest again. Without a position an object the miner abstains
+    on is the oldest eligible one on every later tick too, so the lane never reaches the
+    objects behind it (measured live: the first object of every lane abstained, 779 more
+    waiting). The position is advanced by `_advance_position` and nothing is written on
+    the objects themselves."""
+    args = (lane.object_type, f"derivation_abstained_{lane.link_type}", lane.link_type)
+    order = "ORDER BY o.created_at ASC, o.id ASC LIMIT 1"
+    after = await get_cursor(pool, _position_key(lane))
+    if after:
+        try:
+            after_id = uuid.UUID(after)
+        except ValueError:
+            after_id = None
+        if after_id is not None:
+            found: uuid.UUID | None = await pool.fetchval(
+                "SELECT o.id " + _ELIGIBLE_SQL
+                + "AND (o.created_at, o.id) > (SELECT created_at, id FROM objects WHERE id=$4) "
+                + order, *args, after_id)
+            if found is not None:
+                return found
     return await pool.fetchval(  # type: ignore[no-any-return]
-        "SELECT o.id " + _ELIGIBLE_SQL + "ORDER BY o.created_at ASC LIMIT 1",
-        lane.object_type, f"derivation_abstained_{lane.link_type}", lane.link_type)
+        "SELECT o.id " + _ELIGIBLE_SQL + order, *args)
+
+
+async def _advance_position(pool: asyncpg.Pool, lane: _Lane, obj_id: uuid.UUID) -> None:
+    """Remember that `obj_id` was the lane's last examined object."""
+    await set_cursor(pool, _position_key(lane), str(obj_id))
 
 
 _WORD_RE_CACHE: dict[str, re.Pattern[str]] = {}
 _DOMINANCE_FACTOR = 2
 
 
+async def _project_patterns(pool: asyncpg.Pool) -> list[tuple[uuid.UUID, re.Pattern[str], str]]:
+    """Every LIVE SoftwareProject's whole-word, case-insensitive name pattern:
+    word-boundary-anchored so a short project name never matches inside an unrelated longer
+    word (e.g. "os" inside "cosmos")."""
+    out: list[tuple[uuid.UUID, re.Pattern[str], str]] = []
+    for p in await pool.fetch(
+            "SELECT id, canonical FROM objects WHERE type='SoftwareProject' AND status='active'"):
+        name = p["canonical"].removeprefix("repo:").strip()
+        if not name:
+            continue
+        pattern = _WORD_RE_CACHE.get(name)
+        if pattern is None:
+            pattern = re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)
+            _WORD_RE_CACHE[name] = pattern
+        out.append((p["id"], pattern, name.lower()))
+    return out
+
+
+def _count_mentions(
+    text: str, patterns: list[tuple[uuid.UUID, re.Pattern[str], str]],
+) -> dict[uuid.UUID, int]:
+    counts: dict[uuid.UUID, int] = {}
+    low = text.lower()
+    for pid, pattern, name in patterns:
+        if name not in low:      # cheap exact pre-check: a name that is not there cannot match
+            continue
+        n = len(pattern.findall(text))
+        if n:
+            counts[pid] = n
+    return counts
+
+
+def _pick_dominant(counts: dict[uuid.UUID, int]) -> uuid.UUID | None:
+    """The project mentioned most often when it leads the runner-up by `_DOMINANCE_FACTOR`x."""
+    if not counts:
+        return None
+    ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+    top_id, top_n = ranked[0]
+    runner_n = ranked[1][1] if len(ranked) > 1 else 0
+    return top_id if top_n >= _DOMINANCE_FACTOR * runner_n else None
+
+
 async def _mention_counts(
     pool: asyncpg.Pool, text_fields: tuple[str, ...], obj_id: uuid.UUID,
 ) -> tuple[dict[uuid.UUID, int], str]:
     """Read `text_fields` off `obj_id`'s own CURRENT properties, concatenate, and count
-    every LIVE SoftwareProject's own whole-word, case-insensitive MENTION COUNT in that
-    text: word-boundary-anchored so a short project name never matches inside an
-    unrelated longer word (e.g. "os" inside "cosmos"). Returns ({project_id: count, ...}
-    with only projects mentioned at least once, joined_text); the text is handed back
-    too so a caller or log record can show what the miner actually read, never a black
-    box."""
+    every LIVE SoftwareProject's own MENTION COUNT in that text (see `_project_patterns`).
+    Returns ({project_id: count, ...} with only projects mentioned at least once,
+    joined_text); the text is handed back too so a caller or log record can show what the
+    miner actually read, never a black box."""
     parts = []
     for field in text_fields:
         val = await pool.fetchval(
@@ -146,21 +217,7 @@ async def _mention_counts(
     text = " ".join(parts)
     if not text.strip():
         return {}, text
-    projects = await pool.fetch(
-        "SELECT id, canonical FROM objects WHERE type='SoftwareProject' AND status='active'")
-    counts: dict[uuid.UUID, int] = {}
-    for p in projects:
-        name = p["canonical"].removeprefix("repo:").strip()
-        if not name:
-            continue
-        pattern = _WORD_RE_CACHE.get(name)
-        if pattern is None:
-            pattern = re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)
-            _WORD_RE_CACHE[name] = pattern
-        n = len(pattern.findall(text))
-        if n:
-            counts[p["id"]] = n
-    return counts, text
+    return _count_mentions(text, await _project_patterns(pool)), text
 
 
 async def _author_works_in(pool: asyncpg.Pool, obj_id: uuid.UUID) -> uuid.UUID | None:
@@ -196,12 +253,9 @@ async def _dominant_project(
     telemetry can say which produced (or failed to produce) a proposal, never leave that
     invisible."""
     counts, text = await _mention_counts(pool, text_fields, obj_id)
-    if counts:
-        ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
-        top_id, top_n = ranked[0]
-        runner_n = ranked[1][1] if len(ranked) > 1 else 0
-        if top_n >= _DOMINANCE_FACTOR * runner_n:
-            return top_id, text, "dominance"
+    top = _pick_dominant(counts)
+    if top is not None:
+        return top, text, "dominance"
     author_project = await _author_works_in(pool, obj_id)
     if author_project is not None:
         return author_project, text, "author_tiebreak"
@@ -245,6 +299,7 @@ async def _tick(actions: Actions) -> dict[str, Any]:
                 "reason": "no eligible abstention this tick"}
     candidate_id, text, signal = await _dominant_project(pool, lane.text_fields, obj_id)
     if candidate_id is None:
+        await _advance_position(pool, lane, obj_id)   # examined and left alone: move on
         return {"lane": lane.object_type, "object": str(obj_id), "action": "skipped",
                 "reason": "no project dominates the text and no author to tie-break",
                 "text_read": text[:200]}
@@ -254,6 +309,9 @@ async def _tick(actions: Actions) -> dict[str, Any]:
                   "link_type": lane.link_type, "signal": signal},
         confidence=0.4, owner="operator", miner=_MINER, actor=_ACTOR)
     action = "refused" if "error" in out else "proposed"
+    if action == "proposed":
+        # a refusal (budget spent, throttled) keeps the object: it has not been examined away
+        await _advance_position(pool, lane, obj_id)
     return {"lane": lane.object_type, "object": str(obj_id), "action": action, **out}
 
 
@@ -292,57 +350,151 @@ async def _note_outcome(pool: asyncpg.Pool, lane: str, action: str) -> None:
 _MENTION_CLASSES = ("0", "1", "2+")
 
 
+def _top_mentions(counts: dict[uuid.UUID, int], names: dict[uuid.UUID, str]) -> dict[str, int]:
+    top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:3]
+    return {names.get(k, str(k)): v for k, v in top}
+
+
 def _mention_class(counts: dict[uuid.UUID, int]) -> str:
     """How many DIFFERENT projects the text names: none, one, or two and more."""
     return _MENTION_CLASSES[min(len(counts), 2)]
 
 
+async def _eligible_in_pick_order(
+    pool: asyncpg.Pool, lane: _Lane, limit: int,
+) -> list[asyncpg.Record]:
+    """The next `limit` eligible objects in the order ticks will take them: after the lane's
+    position, then wrapping to the start (an object never twice)."""
+    args = (lane.object_type, f"derivation_abstained_{lane.link_type}", lane.link_type)
+    order = "ORDER BY o.created_at ASC, o.id ASC LIMIT "
+    rows: list[asyncpg.Record] = []
+    after = await get_cursor(pool, _position_key(lane))
+    try:
+        after_id = uuid.UUID(after) if after else None
+    except ValueError:
+        after_id = None
+    if after_id is not None:
+        rows = list(await pool.fetch(
+            "SELECT o.id, o.created_at " + _ELIGIBLE_SQL
+            + "AND (o.created_at, o.id) > (SELECT created_at, id FROM objects WHERE id=$4) "
+            + order + "$5", *args, after_id, limit))
+    if len(rows) < limit:
+        seen = {r["id"] for r in rows}
+        wrapped = await pool.fetch(
+            "SELECT o.id, o.created_at " + _ELIGIBLE_SQL + order + "$4", *args, limit)
+        rows += [r for r in wrapped if r["id"] not in seen][: limit - len(rows)]
+    return rows
+
+
+async def _lane_scan(
+    pool: asyncpg.Pool, lane: _Lane, patterns: list[tuple[uuid.UUID, re.Pattern[str], str]],
+) -> list[dict[str, Any]]:
+    """Every eligible object of the lane with the text the miner would read, its mention
+    counts and whether its author works in a project: three queries for the whole lane, not
+    three per object. (A multi-author object may differ from `_author_works_in`, which takes
+    the first producer; the aggregate is for judging the rule, the picks use the real one.)"""
+    fields = ", ".join(
+        f"(SELECT a.value #>> '{{}}' FROM current_assertions a WHERE a.object_id=o.id "
+        f"AND a.name=${4 + k} ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)"
+        for k in range(len(lane.text_fields)))
+    rows = await pool.fetch(
+        f"SELECT o.id, o.created_at, ARRAY[{fields}] AS parts " + _ELIGIBLE_SQL
+        + "ORDER BY o.created_at ASC, o.id ASC",
+        lane.object_type, f"derivation_abstained_{lane.link_type}", lane.link_type,
+        *lane.text_fields)
+    ids = [r["id"] for r in rows]
+    with_author = {r["obj"] for r in await pool.fetch(
+        "SELECT DISTINCT l.to_id AS obj FROM links l JOIN links w ON w.from_id=l.from_id "
+        "AND w.type='works_in' AND w.valid_until IS NULL "
+        "JOIN objects p ON p.id=w.to_id AND p.status='active' "
+        "WHERE l.type='produced' AND l.valid_until IS NULL AND l.to_id = ANY($1::uuid[])",
+        ids)}
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        text = " ".join(x for x in r["parts"] if x)
+        counts = _count_mentions(text, patterns) if text.strip() else {}
+        dominant = _pick_dominant(counts)
+        out.append({"id": r["id"], "created": r["created_at"], "text": text, "counts": counts,
+                    "dominant": dominant, "has_author": r["id"] in with_author})
+    return out
+
+
 async def abstention_survey(
-    pool: asyncpg.Pool, *, per_lane: int = 5, days: int = 7,
+    pool: asyncpg.Pool, *, per_lane: int = 5, days: int = 7, class2_per_lane: int = 10,
+    excerpts: bool = False,
 ) -> dict[str, Any]:
     """READ-ONLY. Why the miner proposes so little, in one glance, for the digest.
 
-    Per lane that has a candidate pool: how many abstentions are eligible, and for the next
-    `per_lane` of them in the order the miner takes them (oldest first) the mention class
-    (0, 1 or 2+ different projects named), the signal the current rule would pick, the
-    project it picks or why it abstains. `first_abstains` says whether the very object the
-    next tick takes would abstain, which is what stalls a lane: an abstained object is not
-    marked, so it is the next pick again. Plus the tick outcomes counted per day for the last
-    `days` days, and how many objects are hidden behind a still-outstanding Proposal.
+    Per lane that has a candidate pool: how many abstentions are eligible; the next
+    `per_lane` of them in the order ticks take them (after the lane's position, oldest
+    first) with the mention class (0, 1 or 2+ different projects named), the signal the
+    current rule would pick, and the project it picks or why it abstains; the class of ALL
+    eligible objects and what the rule would do with each (dominance, author tie-break or
+    abstain); and `class2_per_lane` evenly spaced objects that name two or more projects, the
+    hard cases the dominance rule is judged on (with `excerpts`, the first 240 characters of
+    the text the rule read). Plus the tick outcomes counted per day for the last `days` days,
+    and how many objects are hidden behind a still-outstanding Proposal.
     Writes nothing and calls no model."""
     names = {r["id"]: r["canonical"].removeprefix("repo:") for r in await pool.fetch(
         "SELECT id, canonical FROM objects WHERE type='SoftwareProject' AND status='active'")}
+    patterns = await _project_patterns(pool)
     lanes: list[dict[str, Any]] = []
     for lane in _LANES:
         if not lane.has_pool:
             continue
-        args = (lane.object_type, f"derivation_abstained_{lane.link_type}", lane.link_type)
-        eligible = int(await pool.fetchval("SELECT count(*) " + _ELIGIBLE_SQL, *args) or 0)
-        rows = await pool.fetch(
-            "SELECT o.id, o.created_at " + _ELIGIBLE_SQL + "ORDER BY o.created_at ASC LIMIT $4",
-            *args, per_lane)
+        scan = await _lane_scan(pool, lane, patterns)
+        by_id = {x["id"]: x for x in scan}
+        position = await get_cursor(pool, _position_key(lane))
         nxt: list[dict[str, Any]] = []
-        for r in rows:
-            counts, _text = await _mention_counts(pool, lane.text_fields, r["id"])
+        for r in await _eligible_in_pick_order(pool, lane, per_lane):
+            x = by_id.get(r["id"])
+            if x is None:
+                continue
             picked, _t, signal = await _dominant_project(pool, lane.text_fields, r["id"])
             if picked is not None:
                 reason = None
-            elif counts:
+            elif x["counts"]:
                 reason = "mentions are split and there is no author project"
             else:
                 reason = "no project is mentioned and there is no author project"
-            top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:3]
             nxt.append({
                 "object": str(r["id"]), "created": r["created_at"].date().isoformat(),
-                "mention_class": _mention_class(counts),
-                "mentions": {names.get(k, str(k)): v for k, v in top},
+                "mention_class": _mention_class(x["counts"]),
+                "mentions": _top_mentions(x["counts"], names),
                 "signal": signal, "picks": names.get(picked) if picked else None,
                 "abstain_reason": reason})
+        classes = {c: 0 for c in _MENTION_CLASSES}
+        fate = {"dominance": 0, "author_tiebreak": 0, "abstain": 0}
+        two_plus: list[dict[str, Any]] = []
+        for x in scan:
+            classes[_mention_class(x["counts"])] += 1
+            if x["dominant"] is not None:
+                fate["dominance"] += 1
+            elif x["has_author"]:
+                fate["author_tiebreak"] += 1
+            else:
+                fate["abstain"] += 1
+            if len(x["counts"]) >= 2:
+                two_plus.append(x)
+        step = max(1, len(two_plus) // class2_per_lane) if class2_per_lane else 1
+        samples: list[dict[str, Any]] = []
+        for x in two_plus[::step][:class2_per_lane]:
+            row: dict[str, Any] = {
+                "object": str(x["id"]), "created": x["created"].date().isoformat(),
+                "mentions": _top_mentions(x["counts"], names),
+                "signal": "dominance" if x["dominant"] is not None else (
+                    "author_tiebreak" if x["has_author"] else "none"),
+                "picks": names.get(x["dominant"]) if x["dominant"] is not None else None}
+            if excerpts:
+                row["excerpt"] = x["text"][:240]
+            samples.append(row)
         lanes.append({
-            "lane": f"{lane.object_type}:{lane.link_type}", "eligible": eligible,
+            "lane": f"{lane.object_type}:{lane.link_type}", "eligible": len(scan),
+            "position": position,
             "first_abstains": bool(nxt) and nxt[0]["picks"] is None,
             "next": nxt,
-            "next_abstaining": sum(1 for n in nxt if n["picks"] is None)})
+            "next_abstaining": sum(1 for n in nxt if n["picks"] is None),
+            "classes": classes, "if_taken": fate, "class2_samples": samples})
     today = datetime.now(UTC).date()
     outcomes: dict[str, dict[str, int]] = {}
     for back in range(days):

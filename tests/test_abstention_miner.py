@@ -18,7 +18,7 @@ from src.orchestrator.abstention_miner import (
     abstention_miner_tick,
     abstention_survey,
 )
-from src.orchestrator.monitor import set_cursor
+from src.orchestrator.monitor import get_cursor, set_cursor
 from src.orchestrator.proposals import propose
 
 _CURSOR_KEY = "abstention_miner:lane_index"
@@ -342,3 +342,82 @@ async def test_the_survey_writes_nothing(actions: Actions) -> None:
     before = await actions.pool.fetchval("SELECT count(*) FROM assertions")
     await abstention_survey(actions.pool)
     assert await actions.pool.fetchval("SELECT count(*) FROM assertions") == before
+
+
+async def _tick_decision_lane(actions: Actions) -> dict[str, object]:
+    await set_cursor(actions.pool, _CURSOR_KEY, str(_lane_index("Decision")))
+    return await abstention_miner_tick(actions)
+
+
+async def test_a_lane_moves_past_an_object_it_abstained_on(actions: Actions) -> None:
+    """The stall: an abstained object was the oldest eligible one on every later tick as
+    well, so the objects behind it were never reached."""
+    await actions.create_or_find_object("SoftwareProject", "repo:widgetfactory", "test")
+    silent = await _abstained_decision(actions, "says nothing about any project")
+    lone = await _abstained_decision(actions, "widgetfactory only")
+    first = await _tick_decision_lane(actions)
+    assert first["action"] == "skipped" and first["object"] == str(silent)
+    second = await _tick_decision_lane(actions)
+    assert second["object"] == str(lone) and second["action"] == "proposed", second
+
+
+async def test_the_position_wraps_to_the_oldest_when_nothing_is_left_after_it(
+    actions: Actions,
+) -> None:
+    only = await _abstained_decision(actions, "nothing to say")
+    a = await _tick_decision_lane(actions)
+    b = await _tick_decision_lane(actions)
+    assert a["object"] == b["object"] == str(only)       # one object: the second tick wrapped
+
+
+async def test_a_refusal_does_not_move_the_position(actions: Actions) -> None:
+    """A spent daily budget refuses the pick without having examined the object away, so the
+    lane must not burn through its whole queue in a day."""
+    await actions.create_or_find_object("SoftwareProject", "repo:widgetfactory", "test")
+    one = await _abstained_decision(actions, "widgetfactory one")
+    two = await _abstained_decision(actions, "widgetfactory two")
+    first = await _tick_decision_lane(actions)
+    assert first["action"] == "proposed" and first["object"] == str(one)
+    second = await _tick_decision_lane(actions)
+    assert second["action"] == "refused" and second["object"] == str(two)
+    key = "abstention_miner:position:Decision"
+    assert await get_cursor(actions.pool, key) == str(one)
+    third = await _tick_decision_lane(actions)
+    assert third["object"] == str(two)                   # still the same object, not skipped past
+
+
+async def test_the_survey_counts_every_class_and_samples_the_hard_cases(
+    actions: Actions,
+) -> None:
+    await actions.create_or_find_object("SoftwareProject", "repo:widgetfactory", "test")
+    await actions.create_or_find_object("SoftwareProject", "repo:sidecar", "test")
+    await _abstained_decision(actions, "nothing named")
+    await _abstained_decision(actions, "widgetfactory alone")
+    split = await _abstained_decision(actions, "widgetfactory and sidecar, once each")
+    clear = await _abstained_decision(actions, "widgetfactory widgetfactory sidecar")
+    lane = next(r for r in (await abstention_survey(
+        actions.pool, per_lane=10, class2_per_lane=10, excerpts=True))["lanes"]
+        if r["lane"] == "Decision:in_repo")
+    assert lane["classes"] == {"0": 1, "1": 1, "2+": 2}
+    assert lane["if_taken"] == {"dominance": 2, "author_tiebreak": 0, "abstain": 2}
+    samples = {r["object"]: r for r in lane["class2_samples"]}
+    assert set(samples) == {str(split), str(clear)}
+    assert samples[str(split)]["signal"] == "none" and samples[str(split)]["picks"] is None
+    assert samples[str(clear)]["picks"] == "widgetfactory"
+    assert samples[str(clear)]["excerpt"].startswith("widgetfactory widgetfactory")
+    plain = next(r for r in (await abstention_survey(actions.pool))["lanes"]
+                 if r["lane"] == "Decision:in_repo")
+    assert "excerpt" not in plain["class2_samples"][0]
+
+
+async def test_the_survey_lists_the_next_objects_from_the_lane_position(
+    actions: Actions,
+) -> None:
+    a = await _abstained_decision(actions, "first")
+    b = await _abstained_decision(actions, "second")
+    c = await _abstained_decision(actions, "third")
+    await set_cursor(actions.pool, "abstention_miner:position:Decision", str(a))
+    lane = next(r for r in (await abstention_survey(actions.pool, per_lane=3))["lanes"]
+                if r["lane"] == "Decision:in_repo")
+    assert [r["object"] for r in lane["next"]] == [str(b), str(c), str(a)]    # then wraps
+    assert lane["position"] == str(a)

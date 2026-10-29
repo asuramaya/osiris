@@ -261,6 +261,21 @@ async def reseed_binding(pool: asyncpg.Pool, *, agent_id: str, job_dir: str) -> 
     return str(seat)
 
 
+# The lineage's Agent rows are found first (MATERIALIZED, so the planner cannot flip the
+# join and walk every Seat's holds links), through the (type, canonical text_pattern_ops)
+# index; the few holds links of those agents are then the whole join.
+_HELD_SEAT_SQL = (
+    "WITH h AS MATERIALIZED (SELECT id, canonical FROM objects WHERE type='Agent' "
+    "AND (canonical=$1 OR canonical=$2 OR canonical LIKE $2 || '-%')) "
+    "SELECT h.canonical AS holder, t.canonical AS seat_id, "
+    " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=t.id "
+    "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+    "   AS handle "
+    "FROM h JOIN links l ON l.from_id=h.id JOIN objects t ON t.id=l.to_id "
+    "WHERE l.type='holds' AND t.type='Seat' AND t.status='active' "
+    "AND (l.valid_until IS NULL OR l.valid_until > now())")
+
+
 async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
     """The Seat this agent actively holds, with its display facts: the "who am I" half of
     the binding. orient/mount tell a bound agent which role it sits in, whether or not it
@@ -291,15 +306,7 @@ async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
     from src.orchestrator.agents import _generation
 
     base = _generation(agent_id)[0]
-    rows = await pool.fetch(
-        "SELECT f.canonical AS holder, t.canonical AS seat_id, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=t.id "
-        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS handle "
-        "FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
-        "WHERE (f.canonical=$1 OR f.canonical=$2 OR f.canonical LIKE $2 || '-%') "
-        "AND l.type='holds' AND t.type='Seat' AND t.status='active' "
-        "AND (l.valid_until IS NULL OR l.valid_until > now())", agent_id, base)
+    rows = await pool.fetch(_HELD_SEAT_SQL, agent_id, base)
     if not rows:
         return None
     if len({r["seat_id"] for r in rows}) > 1:

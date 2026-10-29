@@ -6197,3 +6197,20 @@ async def test_pause_seat_or_agent_refuses_an_ineligible_bare_name(
         actions, who="PauseGhostExtract", paused=True, reason="", actor="agent:pauser")
     assert "cannot pause" in out.get("error", "")
     assert "Address the seat directly" in out["error"]
+
+
+async def test_held_seat_does_not_claim_a_lookalike_lineage(actions: Actions) -> None:
+    seat = await ensure_seat(actions, house="osiris", handle="Lookalike", source="test")
+    await actions.create_or_find_object("Agent", "agent:lka0a1b2other", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:lka0a1b2other")
+
+    assert await held_seat(actions.pool, "agent:lka0a1b2-ii") is None
+
+
+async def test_held_seat_resolves_the_lineage_before_joining_links(actions: Actions) -> None:
+    """The lineage's Agents are a materialized first step, so the planner cannot flip the
+    join to walk every Seat's holds links (the index choice itself depends on table size and
+    is pinned in test_migration_0078)."""
+    plan = "\n".join(r[0] for r in await actions.pool.fetch(
+        "EXPLAIN " + seats_mod._HELD_SEAT_SQL, "agent:hs0a1b2c-ii", "agent:hs0a1b2c"))
+    assert "CTE h" in plan and "CTE Scan on h" in plan, plan

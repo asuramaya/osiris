@@ -73,6 +73,44 @@ async def account_mismatch(
     }
 
 
+_store_cache: dict[tuple[str, int], dict[str, int]] = {}
+
+
+async def store_account_mismatch(
+    pool: asyncpg.Pool, anchor_sid: str, *, current: str | None = None,
+) -> dict[str, Any] | None:
+    """`account_mismatch`, answered from the soul store instead of a file on disk, so a
+    resume can decide BEFORE writing the old-owner transcript anywhere. The count is kept
+    per (session, last ingested line) so the two places that ask do not scan twice."""
+    from src.ingest.soul_store import SoulStore
+
+    now = current or current_account_uuid()
+    if not now:
+        return None
+    last = await pool.fetchval(
+        "SELECT last_line_idx FROM soul_sessions WHERE harness='claude-code' "
+        "AND anchor_sid=$1", anchor_sid)
+    if last is None:
+        return None
+    key = (anchor_sid, int(last))
+    counts = _store_cache.get(key)
+    if counts is None:
+        counts = await SoulStore(pool).pattern_counts(anchor_sid, _OWNER)
+        _store_cache.clear()
+        _store_cache[key] = counts
+    if not counts:
+        return None
+    owner = max(counts, key=lambda k: counts[k])
+    if owner == now.lower():
+        return None
+    return {
+        "history_owner": owner, "current_account": now, "owner_lines": counts,
+        "detail": "history belongs to another Claude account; the harness will not load it "
+                  f"(transcript owned by {owner[:8]} on {counts[owner]} line(s), current "
+                  f"account {now[:8]})",
+    }
+
+
 def _turn_text(entry: dict[str, Any]) -> str:
     msg = entry.get("message")
     content = msg.get("content") if isinstance(msg, dict) else None
