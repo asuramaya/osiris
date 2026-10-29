@@ -41,7 +41,10 @@ import time
 # `_mail_bump_path()`, touched by mailbox.send_message). Only a LIVE render is cached, never the
 # stale-fallback or the no-answer line. The default paths mirror src/orchestrator/mail_bump.py
 # (a test pins them); the whole fast path fails open to a normal render on any trouble.
-_RENDER_TTL = 20.0
+# Longer than the 30 s refresh interval deploy installs (src/orchestrator/statusline_refresh.py;
+# a test pins the two): a timer-driven refresh must find the entry still fresh, or only the
+# harness's event redraws between ticks could ever hit it.
+_RENDER_TTL = 45.0
 _STDIN_TEXT: str | None = None
 _LIVE_RENDER = False
 

@@ -153,3 +153,10 @@ def test_the_installed_statusline_refreshes_every_thirty_seconds() -> None:
 
     doc, _ = merge_settings({}, Path("/home/x/code/osiris"))
     assert doc["statusLine"]["refreshInterval"] == 30
+
+
+def test_the_cache_outlives_the_refresh_interval_so_a_timer_refresh_can_hit() -> None:
+    from src.orchestrator.statusline_refresh import REFRESH_SECONDS
+
+    assert osiris_hook._RENDER_TTL > REFRESH_SECONDS
+    assert osiris_hook._RENDER_TTL == 45.0
