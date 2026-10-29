@@ -46,7 +46,7 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
               dm_active: int = 120, seat_cap: int = 0,
               dm_resume_model: str = "",
               extract_provider: str = "claude-cli", api_key: str = "",
-              wake_enabled: bool = True) -> SimpleNamespace:
+              wake_enabled: bool = True, stale_idle_mins: int = 30) -> SimpleNamespace:
     # grace defaults to 0 (disabled) so the rate-cap / lease tests exercise those bounds in
     # isolation; the wake-grace tests set it explicitly. sense="" → resume resolution looks at
     # ~/.claude/projects (no anchored transcript for the test ids there → mint), so the legacy
@@ -82,7 +82,8 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
                            osiris_claude_binary="claude", anthropic_api_key=api_key,
                            # wake defaults ON in tests so the delivery/authorization suite
                            # exercises the real send path; production ships it FROZEN (False).
-                           osiris_wake_enabled=wake_enabled)
+                           osiris_wake_enabled=wake_enabled,
+                           osiris_wake_stale_idle_mins=stale_idle_mins)
 
 
 async def _no_windows() -> list[dict[str, Any]]:
@@ -8014,3 +8015,266 @@ async def test_launch_still_refuses_a_live_harness_row_it_cannot_tie_to_another_
 
     assert d["status"] == "already-live"
     assert not spawned
+
+# ═══ THE WAKE GAP (thread b21fd390): a listed holder that is idle in fact ══════════════
+# `claude agents --json` keeps listing a session after its turn ended. A holder listed
+# idle/blocked/done whose transcript has had no turn for N minutes must be woken by a path
+# that starts a turn, never parked as queued-live-holder behind a next turn that is not
+# coming. A holder genuinely mid-turn, or one whose idleness cannot be proven, still queues.
+
+_SIGNED_LINE = ('{"type":"user","toolUseResult":'
+                '"{\\"sent\\":1,\\"from\\":\\"agent:abcd1234\\"}"}\n')
+
+
+def _turn_line(minutes_ago: float) -> str:
+    from datetime import timedelta
+
+    at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
+    return json.dumps({"type": "assistant", "timestamp": at.isoformat(),
+                       "message": {"content": "done"}}) + "\n"
+
+
+def _last_turn(sense: Path, minutes_ago: float) -> Path:
+    """The owner's transcript, still signed, whose newest real turn is `minutes_ago` old."""
+    t = sense / "-repo-demo" / f"{FULL_SID}.jsonl"
+    t.write_text(_SIGNED_LINE + _turn_line(minutes_ago))
+    return t
+
+
+def _listing(**row: Any) -> Any:
+    return _fake_agents_json([[{"sessionId": FULL_SID, "id": FULL_SID[:8],
+                                "cwd": "/repo/demo", **row}]])
+
+
+async def _a_job(ids: set[str]) -> dict[str, Any] | None:
+    return {"sessionId": FULL_SID, "short": "abcd1234", "_sock": "/x"}
+
+
+async def _no_sleep(_secs: float) -> None:
+    return None
+
+
+def _landing_nudge(transcript: Path, calls: list[str]) -> Any:
+    """A daemon reply that really starts a turn: the envelope lands as a user line."""
+    async def _nudge(job: dict[str, Any], text: str) -> bool:
+        calls.append(text)
+        with transcript.open("a") as f:
+            f.write(json.dumps({"type": "user", "message": {"content": text}}) + "\n")
+        return True
+    return _nudge
+
+
+def _silent_nudge(calls: list[str]) -> Any:
+    """The wake gap itself: the daemon says {ok:true} and no turn ever starts."""
+    async def _nudge(job: dict[str, Any], text: str) -> bool:
+        calls.append(text)
+        return True
+    return _nudge
+
+
+async def _dispatch_to_listed_holder(
+    actions: Actions, sense: Path, *, listing: Any, jobs: Any, nudge: Any,
+    spawn: Any, stale_idle_mins: int = 30, monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, str]:
+    from src.orchestrator import census
+    monkeypatch.setattr(census, "live_bodies_by_cwd", lambda **kw: {})
+    msg_id = await _dm_to_owner(actions)
+    return await dispatch_dm(
+        actions.pool, addressee="agent:abcd1234", msg_id=msg_id, sender="agent:sender",
+        settings=_settings(enabled=True, sense=str(sense), stale_idle_mins=stale_idle_mins),
+        spawn=spawn, windows=_no_windows, jobs=jobs, nudge=nudge, agents_json=listing,
+        sleep=_no_sleep)
+
+
+async def _wake_modes(actions: Actions) -> list[str]:
+    return [r["mode"] for r in await actions.pool.fetch(
+        "SELECT mode FROM agent_wakes ORDER BY id")]
+
+
+async def _never_spawn(*a: Any, **kw: Any) -> None:
+    raise AssertionError("a nudge that landed must not also fork a second process")
+
+
+async def test_a_listed_idle_holder_gone_quiet_is_nudged_and_the_turn_is_seen(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    t = _last_turn(sense, minutes_ago=45)
+    sent: list[str] = []
+    d = await _dispatch_to_listed_holder(
+        actions, sense, listing=_listing(status="idle", state="blocked"), jobs=_a_job,
+        nudge=_landing_nudge(t, sent), spawn=_never_spawn, monkeypatch=monkeypatch)
+    assert d["mode"] == "nudged-live-holder"
+    assert "blocked" in d["detail"] and "45 min" in d["detail"]
+    assert len(sent) == 1
+    assert await _wake_modes(actions) == ["dm-reply"]
+
+
+async def test_a_nudge_that_starts_no_turn_falls_through_to_a_resume(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seshat's shape: the daemon takes the envelope ({ok:true}) and the session, listed
+    state=blocked, never takes a turn. The resume is what starts one."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    _last_turn(sense, minutes_ago=600)
+    sent: list[str] = []
+    spawned: list[dict[str, Any]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        spawned.append(kw)
+
+    d = await _dispatch_to_listed_holder(
+        actions, sense, listing=_listing(status="idle", state="done"), jobs=_a_job,
+        nudge=_silent_nudge(sent), spawn=_spawn, monkeypatch=monkeypatch)
+    assert d["mode"] == "resumed"
+    assert "the nudge did not start a turn" in d["detail"]
+    assert spawned and spawned[0].get("resume_session") == FULL_SID
+    assert len(sent) == 1
+    assert await _wake_modes(actions) == ["dm-reply", "dm-resume"]
+
+
+async def test_a_listed_idle_holder_with_no_daemon_job_is_resumed(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    _last_turn(sense, minutes_ago=90)
+    spawned: list[dict[str, Any]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        spawned.append(kw)
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("no daemon job: there is nothing to nudge")
+
+    d = await _dispatch_to_listed_holder(
+        actions, sense, listing=_listing(status="idle", state="idle"), jobs=_no_job,
+        nudge=_boom, spawn=_spawn, monkeypatch=monkeypatch)
+    assert d["mode"] == "resumed" and spawned
+    assert await _wake_modes(actions) == ["dm-resume"]
+
+
+async def test_a_holder_under_the_threshold_still_queues(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ten minutes quiet is under the 30-minute line: the old outcome, unchanged."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    _last_turn(sense, minutes_ago=10)
+    d = await _dispatch_to_listed_holder(
+        actions, sense, listing=_listing(status="idle", state="blocked"), jobs=_no_job,
+        nudge=_never_spawn, spawn=_never_spawn, monkeypatch=monkeypatch)
+    assert d["mode"] == "queued-live-holder"
+    assert await _wake_modes(actions) == []
+
+
+async def test_a_holder_genuinely_mid_turn_queues_whatever_it_is_listed_as(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    _last_turn(sense, minutes_ago=0.2)
+    d = await _dispatch_to_listed_holder(
+        actions, sense, listing=_listing(status="idle", state="blocked"), jobs=_a_job,
+        nudge=_never_spawn, spawn=_never_spawn, monkeypatch=monkeypatch)
+    assert d["mode"] in ("queued-live-holder", "mid-turn")
+    assert await _wake_modes(actions) == []
+
+
+async def test_a_listed_state_that_is_not_idle_is_never_called_idle(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A quiet transcript alone proves nothing (a long tool call writes nothing): the
+    roster must also say idle, blocked or done. A row that says running stays queued."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    _last_turn(sense, minutes_ago=300)
+    spawned: list[Any] = []
+
+    async def _spawn(*a: Any, **kw: Any) -> None:
+        spawned.append(kw)
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("not provably idle: nothing is injected, nothing is forked")
+
+    d = await _dispatch_to_listed_holder(
+        actions, sense, listing=_listing(status="busy", state="running"), jobs=_no_job,
+        nudge=_boom, spawn=_spawn, monkeypatch=monkeypatch)
+    assert d["mode"] == "queued-live-holder" and not spawned
+
+
+async def test_a_transcript_with_no_readable_turn_is_never_called_idle(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The base fixture's transcript carries no timestamped turn: age is unknown, so the
+    holder is not proven idle and the old queued outcome stands."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    d = await _dispatch_to_listed_holder(
+        actions, sense, listing=_listing(status="idle", state="blocked"), jobs=_no_job,
+        nudge=_never_spawn, spawn=_never_spawn, monkeypatch=monkeypatch)
+    assert d["mode"] == "queued-live-holder"
+
+
+async def test_the_threshold_is_a_setting_and_zero_turns_it_off(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    _last_turn(sense, minutes_ago=45)
+    d = await _dispatch_to_listed_holder(
+        actions, sense, listing=_listing(status="idle", state="blocked"), jobs=_no_job,
+        nudge=_never_spawn, spawn=_never_spawn, stale_idle_mins=0, monkeypatch=monkeypatch)
+    assert d["mode"] == "queued-live-holder"
+
+
+async def test_a_second_dispatcher_does_not_wake_the_stale_holder_twice(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    t = _last_turn(sense, minutes_ago=45)
+    from src.orchestrator import census
+    monkeypatch.setattr(census, "live_bodies_by_cwd", lambda **kw: {})
+    msg_id = await _dm_to_owner(actions)
+    sent: list[str] = []
+    kw: dict[str, Any] = {
+        "settings": _settings(enabled=True, sense=str(sense)), "spawn": _never_spawn,
+        "windows": _no_windows, "jobs": _a_job, "nudge": _landing_nudge(t, sent),
+        "agents_json": _listing(status="idle", state="blocked"), "sleep": _no_sleep}
+    first = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                              sender="agent:sender", **kw)
+    second = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                               sender="agent:sender", **kw)
+    assert first["mode"] == "nudged-live-holder"
+    assert second["mode"] == "skipped-once-per-message"
+    assert len(sent) == 1
+
+
+async def test_wake_reaches_a_stale_listed_holder_by_a_path_that_starts_a_turn(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Through wake() itself: the manager's knock used to read status=queued with
+    queued-live-holder behind it; now the holder's transcript shows the turn."""
+    sense = await _stale_resumable_owner(actions, tmp_path, bind_seat=False)
+    t = _last_turn(sense, minutes_ago=40)
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:abcd1234", manager_agent="agent:hm-wakegap",
+        worker_handle="Wakegap", house="osiris")
+    await _office(actions, worker_seat, "/repo/demo")
+    from src.orchestrator import census
+    monkeypatch.setattr(census, "live_bodies_by_cwd", lambda **kw: {})
+    sent: list[str] = []
+    landing = _landing_nudge(t, sent)
+
+    async def _nudge(job: dict[str, Any], text: str) -> bool:
+        return await landing(job, text)
+
+    async def _fake_agents(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": FULL_SID, "id": FULL_SID[:8], "cwd": "/repo/demo",
+                 "status": "idle", "state": "blocked"}]
+
+    # wake() hands its own agents_json to nothing: dispatch_dm reads the real roster, so
+    # stand the roster in at the one place dispatch_dm falls back to.
+    monkeypatch.setattr(trigger_module, "_claude_agents_json", _fake_agents)
+    out = await trigger_module.wake_worker(
+        actions, caller="agent:hm-wakegap", target=worker_seat, message="wake up",
+        settings=_settings(enabled=True, sense=str(sense)), spawn=_never_spawn,
+        windows=_no_windows, jobs=_a_job, nudge=_nudge, sleep=_no_sleep,
+        landed_poll_attempts=1, landed_poll_delay_secs=0.0)
+    assert out["raw_mode"] == "nudged-live-holder"
+    assert out["status"] == "delivered"
+    assert len(sent) == 1 and "wake up" in sent[0]
