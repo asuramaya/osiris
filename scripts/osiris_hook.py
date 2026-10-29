@@ -626,6 +626,75 @@ def _fire_stage_a(hook: dict[str, Any], session_id: str, cwd: str, *, pct: int |
           timeout=_TIMEOUTS["stop_stage_a"])
 
 
+_MAIL_SEEN = ".osiris_mailseen"
+_MAIL_SEEN_KEEP = 200
+
+
+def _mail_seen_path(session_id: str) -> Path:
+    return Path.home() / ".claude" / "jobs" / session_id[:8] / _MAIL_SEEN
+
+
+def _announced_ids(session_id: str) -> set[int]:
+    try:
+        return {int(x) for x in _mail_seen_path(session_id).read_text().split()}
+    except (OSError, ValueError):
+        return set()
+
+
+def _remember_announced(session_id: str, ids: list[int]) -> None:
+    """Record the message ids a Stop block has named, so the continuation it forces can
+    tell an already-announced ask from one that arrived since. Best effort: a write
+    failure only means a repeat announcement, never a missed one."""
+    if not ids:
+        return
+    path = _mail_seen_path(session_id)
+    keep = sorted(_announced_ids(session_id) | {int(i) for i in ids})[-_MAIL_SEEN_KEEP:]
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(" ".join(str(i) for i in keep))
+    except OSError:
+        pass
+
+
+def _mail_block_reason(result: dict[str, Any], blocking: int) -> str:
+    """The Stop block's wording for `blocking` deliverable messages (ask + ungraded)."""
+    n = result.get("n", 0)
+    bands = result.get("bands") or {}
+    senders = result.get("senders") or []
+    who = f" (from {', '.join(senders[:4])})" if senders else ""
+    graded = []
+    if bands.get("ask"):
+        graded.append(f"{bands['ask']} ask(s) something of you")
+    if bands.get("fyi"):
+        graded.append(f"{bands['fyi']} fyi, not blocking (an ack settles at your own "
+                      "next turn)")
+    rest = n - sum(bands.values())
+    if graded and rest:
+        graded.append(f"{rest} ungraded")
+    shape = f" ({', '.join(graded)})" if graded else ""
+    project_display = result.get("project") or "an unresolved project"
+    return (f"Osiris: {blocking} deliverable message(s) for {project_display}"
+            f"{who}{shape}: call inbox(), act on what carries new work, SETTLE "
+            "each handled message (reply with send(reply_to=<id>) or ack with "
+            "inbox(ack=[ids])), then finish. If a message needs nothing, ack it.")
+
+
+def _unannounced_mail_reason(session_id: str, cwd: str) -> str | None:
+    """The block reason when the deliverable mail holds an ask/ungraded id no earlier
+    Stop block of this session has named, else None. Fails open like every Stop check."""
+    resp = _post(_URLS["stop"], {"phase": "deliverable", "cwd": cwd,
+                                  "session_id": session_id}, timeout=_TIMEOUTS["stop"])
+    if resp is None or resp.get("error"):
+        return None
+    result = resp.get("result") or resp
+    ids = [int(i) for i in result.get("blocking_ids") or []]
+    fresh = [i for i in ids if i not in _announced_ids(session_id)]
+    if not fresh:
+        return None
+    _remember_announced(session_id, ids)
+    return _mail_block_reason(result, len(fresh))
+
+
 def _cmd_stop(hook: dict[str, Any]) -> int:
     """Two-phase stop hook: deliverable check + offload ritual, plus the swap confession
     and Stage A/B/C courtesy pings (ported from osiris_stophook.py's own `main()`, same
@@ -638,7 +707,15 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
 
     if hook.get("stop_hook_active"):
         # We already forced a continuation once this turn: never loop on unsettleable
-        # mail (a message the agent cannot settle must never trap it a second time).
+        # mail (a message the agent cannot settle must never trap it a second time). But
+        # an ask that ARRIVED during that continuation was never announced, and the
+        # sender was told "mid-turn: its own turn's end surfaces the DM". So block once
+        # more for ids this hook has not yet announced; each id blocks at most once, so
+        # the loop guard still holds.
+        reason = _unannounced_mail_reason(session_id, cwd)
+        if reason:
+            print(json.dumps({"decision": "block", "reason": reason}))
+            return 0
         _fire_stage_a(hook, session_id, cwd, pct=None)
         return 0
 
@@ -678,26 +755,9 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
     bands = result.get("bands") or {}
     blocking = n - int(bands.get("fyi", 0))
     if blocking > 0:
-        senders = result.get("senders") or []
-        who = f" (from {', '.join(senders[:4])})" if senders else ""
-        graded = []
-        if bands.get("ask"):
-            graded.append(f"{bands['ask']} ask(s) something of you")
-        if bands.get("fyi"):
-            graded.append(f"{bands['fyi']} fyi, not blocking (an ack settles at your own "
-                          "next turn)")
-        rest = n - sum(bands.values())
-        if graded and rest:
-            graded.append(f"{rest} ungraded")
-        shape = f" ({', '.join(graded)})" if graded else ""
-        project_display = result.get("project") or "an unresolved project"
-        print(json.dumps({
-            "decision": "block",
-            "reason": (f"Osiris: {blocking} deliverable message(s) for {project_display}"
-                       f"{who}{shape}: call inbox(), act on what carries new work, SETTLE "
-                       "each handled message (reply with send(reply_to=<id>) or ack with "
-                       "inbox(ack=[ids])), then finish. If a message needs nothing, ack it."),
-        }))
+        _remember_announced(session_id, result.get("blocking_ids") or [])
+        print(json.dumps({"decision": "block",
+                          "reason": _mail_block_reason(result, blocking)}))
         return 0
 
     # No-regrow hygiene: every open kind='obligation' Thread this session's own identity

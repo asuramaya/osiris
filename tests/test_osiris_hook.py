@@ -54,16 +54,48 @@ def test_alarm_thresholds_match_the_one_authority() -> None:
 
 # --- stop_hook_active: never loop on unsettleable mail -----------------------------------
 
-def test_stop_hook_active_never_re_blocks(monkeypatch: Any) -> None:
+def test_stop_hook_active_never_re_blocks(monkeypatch: Any, tmp_path: Path) -> None:
     """The exact loop-guard the pre-port main() had (`if payload.get("stop_hook_active")`)
     and the new _cmd_stop was missing entirely before this fix: a session that already
     forced a continuation once this turn must always be allowed to stop, even with mail
-    still waiting or a swap unconfessed."""
+    still waiting (already announced) or a swap unconfessed."""
+    monkeypatch.setenv("HOME", str(tmp_path))
     calls: list[dict[str, Any]] = []
     monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: calls.append(data))
     assert _cmd_stop({"session_id": "abcdefgh", "stop_hook_active": True}) == 0
-    assert len(calls) == 1
-    assert calls[0]["phase"] == "stage_a"  # the courtesy ping still fires, best-effort
+    # the courtesy ping still fires after the (empty) mail check
+    assert [c["phase"] for c in calls] == ["deliverable", "stage_a"]
+
+
+def _mail(ids: list[int]) -> dict[str, Any]:
+    return {"result": {"n": len(ids), "bands": {"ask": len(ids), "fyi": 0},
+                       "senders": ["agent:thoth"], "project": "osiris", "blocking_ids": ids}}
+
+
+def test_an_ask_that_arrives_during_a_forced_continuation_still_blocks_once(
+    monkeypatch: Any, tmp_path: Path, capsys: Any,
+) -> None:
+    """THE MID-TURN LOSS: send() tells the sender 'mid-turn: its own turn's end surfaces the
+    DM'. The turn's first Stop was blocked for other reasons, so the continuation's Stop
+    arrives with stop_hook_active and used to return before looking at mail at all: an ask
+    that landed during the continuation was never announced and the worker went idle."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    state = {"mail": _mail([10])}
+    monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: (
+        state["mail"] if data["phase"] == "deliverable" else None))
+    # first Stop: ask 10 is announced and blocks
+    assert _cmd_stop({"session_id": "abcdefgh"}) == 0
+    assert json.loads(capsys.readouterr().out)["decision"] == "block"
+    # the continuation stops again with 10 still unsettled: the loop guard holds
+    assert _cmd_stop({"session_id": "abcdefgh", "stop_hook_active": True}) == 0
+    assert capsys.readouterr().out == ""
+    # a new ask 11 landed during the continuation: it blocks, exactly once
+    state["mail"] = _mail([10, 11])
+    assert _cmd_stop({"session_id": "abcdefgh", "stop_hook_active": True}) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["decision"] == "block" and "1 deliverable message" in out["reason"]
+    assert _cmd_stop({"session_id": "abcdefgh", "stop_hook_active": True}) == 0
+    assert capsys.readouterr().out == ""
 
 
 def test_no_session_id_is_a_clean_noop(monkeypatch: Any) -> None:

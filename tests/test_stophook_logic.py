@@ -46,7 +46,7 @@ async def test_compute_stop_deliverable_works_against_a_pool_not_just_a_connecti
 ) -> None:
     out = await compute_stop_deliverable(actions.pool, cwd="/nowhere", session_id="")
     assert out == {"n": 0, "senders": [], "window": None, "bands": {}, "project": None,
-                  "stale_obligations": []}
+                  "blocking_ids": [], "stale_obligations": []}
 
 
 async def test_compute_stop_offload_unresolvable_session_returns_none(
