@@ -8550,3 +8550,89 @@ async def test_a_launch_after_the_repair_goes_through(
         actions, caller="agent:renldm", target=seat,
         spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[]]))
     assert d["status"] == "launched", d
+
+# ═══ RESUME ACROSS CLAUDE ACCOUNTS: the harness will not load another account's history ═══
+
+_OLD_ACCT = "74d4ddbd-67aa-4830-aaee-388b128e19d5"
+_NEW_ACCT = "2e54b530-8738-4bee-86c9-56a49e200cd2"
+
+
+def _owned_turns(owner_lines: int, new_lines: int = 0) -> bytes:
+    signed = ('{"type":"user","ownerAccountUuid":"' + _OLD_ACCT + '","toolUseResult":'
+              '"{\\"sent\\":1,\\"from\\":\\"AGENT\\"}"}\n')
+    body = "".join(json.dumps({"type": "assistant" if i % 2 else "user",
+                               "ownerAccountUuid": _OLD_ACCT,
+                               "message": {"content": f"old turn {i}"}}) + "\n"
+                   for i in range(owner_lines))
+    body += "".join(json.dumps({"type": "assistant", "ownerAccountUuid": _NEW_ACCT,
+                                "message": {"content": "fresh"}}) + "\n"
+                    for _ in range(new_lines))
+    return (signed + body).encode()
+
+
+async def test_resume_seat_launches_fresh_from_the_store_when_the_history_is_another_accounts(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import resume_account
+    monkeypatch.setattr(resume_account, "current_account_uuid", lambda home=None: _NEW_ACCT)
+    sense, _truncated = await _lineage_holder_with_truncated_session(
+        actions, tmp_path, agent_id="agent:acctmis1")
+    t = sense / "-repo-demo" / f"{FULL_SID}.jsonl"
+    t.write_bytes(_owned_turns(30, new_lines=2).replace(b"AGENT", b"agent:acctmis1"))
+    seat, _m = await _managed_pair(
+        actions, worker_agent="agent:acctmis1", manager_agent="agent:hm-acctmis1",
+        worker_handle="AcctMis1", house="osiris")
+    await _office(actions, seat, "/tmp/acctmis1-test")
+
+    launched: list[dict[str, Any]] = []
+
+    async def _launch(actions_: Actions, **kw: Any) -> dict[str, Any]:
+        launched.append(kw)
+        return {"status": "launched", "mode": "fresh", "seat": kw["target"],
+                "detail": "fake launch"}
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a history the harness will not load must not be resumed")
+
+    monkeypatch.setattr(trigger_module, "launch_seat", _launch)
+    d = await trigger_module.resume_seat(
+        actions, caller="agent:hm-acctmis1", target=seat,
+        settings=_settings(enabled=True, sense=str(sense)),
+        resume_spawn=_boom, agents_json=_fake_agents_json([[]]),
+        clear_stale_record=_boom)
+    assert d["path"] == "fresh-launch-account-mismatch", d
+    assert "history belongs to another Claude account" in d["detail"]
+    assert d["account_mismatch"]["history_owner"] == _OLD_ACCT
+    assert len(launched) == 1
+    brief = launched[0]["message"]
+    assert "AcctMis1, launched FRESH" in brief and "old turn 29" in brief
+
+
+async def test_resume_seat_names_the_resumed_path_when_the_account_matches(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import resume_account
+    monkeypatch.setattr(resume_account, "current_account_uuid", lambda home=None: _OLD_ACCT)
+    sense, _truncated = await _lineage_holder_with_truncated_session(
+        actions, tmp_path, agent_id="agent:acctok1")
+    t = sense / "-repo-demo" / f"{FULL_SID}.jsonl"
+    t.write_bytes(_owned_turns(5).replace(b"AGENT", b"agent:acctok1"))
+    seat, _m = await _managed_pair(
+        actions, worker_agent="agent:acctok1", manager_agent="agent:hm-acctok1",
+        worker_handle="AcctOk1", house="osiris")
+    await _office(actions, seat, "/tmp/acctok1-test")
+    resumed: list[dict[str, Any]] = []
+
+    async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
+        resumed.append(kw)
+
+    async def _clear(job_dir_key: str) -> bool:
+        return False
+
+    d = await trigger_module.resume_seat(
+        actions, caller="agent:hm-acctok1", target=seat,
+        settings=_settings(enabled=True, sense=str(sense)),
+        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]),
+        clear_stale_record=_clear)
+    assert d["path"] == "resumed" and d["status"] == "launched"
+    assert resumed and resumed[0].get("resume_session") == FULL_SID
