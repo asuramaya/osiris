@@ -1671,6 +1671,10 @@ async def _lineage_resume_candidate(
         # return contract, which every other caller already depends on staying anchor_sid.
         full_sid = Path(soul_row["source_path"]).stem if soul_row else None
         if not full_sid or full_sid == anchor_sid:
+            # The recorded path names no full id (a stub once wrote it, or the file is
+            # gone): the store itself still knows the session's id from its own lines.
+            full_sid = await store.full_session_id(anchor_sid)
+        if not full_sid or full_sid == anchor_sid:
             # The winning discovered file's own stem is just the bare anchor - e.g. an
             # earlier rematerialize wrote its destination as f"{session}.jsonl" (the same
             # truncation bug, fixed below) and that stub, not a genuine harness transcript,
