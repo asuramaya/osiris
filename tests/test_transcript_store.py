@@ -844,3 +844,25 @@ async def test_rederive_resets_and_reeats_with_new_facts(
     oh = await store.overhead_of_session("claude-code", "beef0001")
     assert oh is not None
     assert oh["visible"]["total"] == 150  # the re-eat restored the full accounting
+
+
+async def test_a_transcript_is_read_off_the_event_loop() -> None:
+    """Reading and JSON-parsing a transcript on the loop froze the daemon (about 1 s here,
+    seconds for a long session) and every /heartbeat queued behind it. The read now runs in
+    a worker thread and hands back a plain list."""
+    import threading
+    from types import SimpleNamespace
+    from typing import Any
+
+    from src.ingest.transcript_store import _read_turns_off_loop
+
+    seen: list[int] = []
+
+    class _Adapter:
+        def read_turns(self, locator: Any, *, since_idx: int = 0) -> Any:
+            seen.append(threading.get_ident())
+            yield from (SimpleNamespace(turn_idx=i) for i in range(since_idx, since_idx + 3))
+
+    out = await _read_turns_off_loop(_Adapter(), object(), 2)  # type: ignore[arg-type]
+    assert [t.turn_idx for t in out] == [2, 3, 4]
+    assert seen and seen[0] != threading.get_ident()

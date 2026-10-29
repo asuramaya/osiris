@@ -203,12 +203,23 @@ def resolve_credence(
     for c in claims:
         groups.setdefault((c.object_id, c.name), []).append(c)
 
+    # One ancestor walk per source for the whole resolve: the descendant scan below asked for
+    # the same source's chain once per (claim, other claim) pair, quadratic in a group's size,
+    # and a digest over the real graph spent seconds of unbroken CPU there (frozen daemon).
+    chains: dict[str, set[str]] = {}
+
+    def ancestors_of(src: str) -> set[str]:
+        got = chains.get(src)
+        if got is None:
+            got = chains[src] = _ancestors(src, parent_of)
+        return got
+
     winners: list[CredenceWinner] = []
     disputes: list[Dispute] = []
     for (oid, name), group in groups.items():
         # Deepest-first: a node's descendants are scored before it, so its cap reads their
         # already-clamped effective confidence, so an inner relay's inflation can't leak upward.
-        order = sorted(group, key=lambda r: _depth(r.source_id, parent_of), reverse=True)
+        order = sorted(group, key=lambda r: len(ancestors_of(r.source_id)), reverse=True)
         eff_by_src: dict[str, float] = {}
         laundering: list[str] = []
         # source_id -> (value, confidence): the disagreeing positions on this fact, if any.
@@ -221,7 +232,7 @@ def resolve_credence(
                 descs = [
                     d for d in group
                     if d.source_id != r.source_id and _is_agent(d.source_id)
-                    and r.source_id in _ancestors(d.source_id, parent_of)
+                    and r.source_id in ancestors_of(d.source_id)
                 ]
                 if descs:  # r is an ancestor of an asserting subtree: a relay or a disputant
                     origin = max(descs, key=lambda d: eff_by_src.get(d.source_id, d.confidence))
