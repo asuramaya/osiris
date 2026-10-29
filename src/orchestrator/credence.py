@@ -84,6 +84,7 @@ current.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -401,4 +402,6 @@ async def credence_props(actions: Actions, oids: Sequence[Any]) -> CredenceResul
     agent_srcs = {c.source_id for c in claims if _is_agent(c.source_id)}
     parent_of = await _parent_forest(actions) if agent_srcs else {}
     looked = await _looked_map(actions, agent_srcs)
-    return resolve_credence(claims, parent_of, looked)
+    # pure CPU over every claim of the window (a quadratic walk on a busy day): off the loop,
+    # which would otherwise serve no other tool call while it runs
+    return await asyncio.to_thread(resolve_credence, claims, parent_of, looked)

@@ -6584,3 +6584,49 @@ async def test_claim_name_unaffected_when_no_anchor_matches_any_seat(
     result = await claim_name(actions, caller, "FreshName", source=caller)
     assert result.get("claimed") == "FreshName"
     assert "error" not in result
+
+
+async def test_fleet_rows_pick_the_same_winners_as_the_per_agent_lookups(
+    actions: Actions,
+) -> None:
+    """fleet() reads every active Agent's facts in one pass. The winners must be the ones the
+    old correlated lookups chose: highest-confidence-then-newest assertion per name, the
+    newest mount (cwd/job_dir) with the freshest last_seen, a live holds link (not an ended
+    one), and a spawned_by parent."""
+    from datetime import timedelta
+
+    from src import mcp_server as srv
+    from src.orchestrator import mounts
+
+    now = datetime.now(UTC)
+    child = await actions.create_or_find_object("Agent", "agent:flt0a1b2-ii", "t")
+    parent = await actions.create_or_find_object("Agent", "agent:flt0a1b2", "t")
+    await actions.assert_property(child, "source_model", "low", "s1", now, 0.5)
+    await actions.assert_property(child, "source_model", "high", "s2", now - timedelta(hours=1),
+                                  0.9)
+    await actions.assert_property(child, "project", "older", "s1", now - timedelta(hours=2), 0.9)
+    await actions.assert_property(child, "project", "newer", "s2", now, 0.9)
+    await actions.create_link(child, parent, "spawned_by", "t", now, 0.9)
+    old_seat = await actions.create_or_find_object("Seat", "seat:flt00001", "t")
+    live_seat = await actions.create_or_find_object("Seat", "seat:flt00002", "t")
+    ended = await actions.create_link(child, old_seat, "holds", "t", now, 0.9)
+    await actions.pool.execute(
+        "UPDATE links SET valid_until = now() - interval '1 hour' WHERE id = $1", ended)
+    await actions.create_link(child, live_seat, "holds", "t", now, 0.9)
+    await mounts.save_mount(actions.pool, job_dir="/j/old", agent_id="agent:flt0a1b2-ii",
+                            project="p", cwd="/old", model="m", session_key="k1")
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '1 day' WHERE job_dir='/j/old'")
+    await mounts.save_mount(actions.pool, job_dir="/j/new", agent_id="agent:flt0a1b2-ii",
+                            project="p", cwd="/new", model="m", session_key="k2")
+
+    rows = {r["canonical"]: r for r in await actions.pool.fetch(srv._FLEET_ROWS_SQL)}
+
+    got = rows["agent:flt0a1b2-ii"]
+    assert got["model"] == "high" and got["project"] == "newer"
+    assert got["parent"] == "agent:flt0a1b2"
+    assert got["bound_seat"] == "seat:flt00002"
+    assert got["cwd"] == "/new" and got["job_dir"] == "/j/new"
+    assert got["mount_seen"] is not None
+    bare = rows["agent:flt0a1b2"]
+    assert bare["model"] is None and bare["bound_seat"] is None and bare["cwd"] is None
