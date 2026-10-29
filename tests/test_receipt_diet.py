@@ -40,6 +40,24 @@ def _receipt_bytes(payload: object) -> int:
     return len(json.dumps(payload).encode("utf-8"))
 
 
+def _fixed_width_receipt_bytes(payload: dict) -> int:  # type: ignore[type-arg]
+    """Receipt size with the fields that vary run to run held at a fixed width: message and
+    thread ids come from a database sequence (1 to 7 in an isolated run, five digits after
+    a long test session) and `when` is an ISO timestamp whose microsecond part loses
+    trailing zeros. The same receipt measured 1,523 to 1,651 bytes depending on which
+    worker ran it. Ids are numbered 1 to 7 (the width of this fixture's own count: the sequence's
+    digit width is not a property of the receipt) and timestamps get their full 32
+    characters, so the measurement is a property of the receipt's shape alone."""
+    import copy
+
+    fixed = copy.deepcopy(payload)
+    for i, m in enumerate(fixed.get("messages", [])):
+        m["id"] = i + 1
+        m["thread"] = i + 1
+        m["when"] = "2026-10-29T00:00:00.000000+00:00"
+    return _receipt_bytes(fixed)
+
+
 async def test_inbox_seven_message_peek_prior_art_is_opt_in_and_measurably_smaller(
     actions: Actions, tmp_path: Path,  # noqa: ARG001 -- tmp_path unused, kept for parity
 ) -> None:
@@ -88,16 +106,17 @@ async def test_inbox_seven_message_peek_prior_art_is_opt_in_and_measurably_small
 
     assert len(before["messages"]) == 7
     assert len(after["messages"]) == 7
-    before_bytes = _receipt_bytes(before)
-    after_bytes = _receipt_bytes(after)
+    before_bytes = _fixed_width_receipt_bytes(before)
+    after_bytes = _fixed_width_receipt_bytes(after)
     assert after_bytes < before_bytes, (before_bytes, after_bytes)
     # every message that carried prior_art before still SAYS so after, just as a count
     before_with_pa = sum(1 for m in before["messages"] if m.get("prior_art"))
     after_with_count = sum(1 for m in after["messages"] if m.get("prior_art_count"))
     assert before_with_pa == after_with_count and before_with_pa > 0
     assert not any("prior_art" in m for m in after["messages"])
-    # RATCHET: measured exact AFTER value for this fixture (1523 bytes; BEFORE was 2234,
-    # a 31.8% cut from dropping the full prior_art array down to a per-message count).
+    # RATCHET: measured exact AFTER value for this fixture with its variable-width fields
+    # held fixed (1609 bytes; BEFORE was 2308, a 30% cut from dropping the full prior_art
+    # array down to a per-message count). The ceiling below is unchanged.
     # Raise only with a reason, never a reflex.
     assert after_bytes <= 1650, (
         f"seven-message peek receipt grew to {after_bytes} bytes, over the ratchet of "
@@ -474,3 +493,14 @@ async def test_get_status_surfaces_a_bare_handoff_pointer_not_the_full_text(
     assert out["handoff_pending"]["from"] == "agent:rdsh-ancestor"
     assert out["handoff_pending"]["refs"] == [str(did)[:8]]
     assert long_handoff not in json.dumps(out)  # pointer only, never the text itself
+
+
+def test_the_fixed_width_measure_ignores_id_digits_and_timestamp_trailing_zeros() -> None:
+    def receipt(mid: int, when: str) -> dict:  # type: ignore[type-arg]
+        return {"project": "p", "messages": [
+            {"id": mid, "from": "a", "body": "b", "when": when, "thread": mid}]}
+
+    short = receipt(3, "2026-10-29T18:40:16.7+00:00")
+    long = receipt(123456, "2026-10-29T18:40:16.725623+00:00")
+    assert _receipt_bytes(short) != _receipt_bytes(long)
+    assert _fixed_width_receipt_bytes(short) == _fixed_width_receipt_bytes(long)
