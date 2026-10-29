@@ -218,3 +218,19 @@ async def test_a_peek_resolves_an_existing_mount_row_and_mints_nothing(
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Agent'") == agents_before
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_mounts") == mounts_before
+
+
+async def test_deliverable_bands_names_the_ids_the_stop_gate_blocks_on(actions: Actions) -> None:
+    """The Stop hook remembers which ask ids it announced; fyi never blocks so never lists."""
+    agent = "agent:blk0a1b2-ii"
+    ask = await actions.pool.fetchval(
+        "INSERT INTO fleet_messages (from_agent, from_project, to_agent, body, grade) "
+        "VALUES ('agent:sender', 'osiris', $1, 'do it', 'ask') RETURNING id", agent)
+    await actions.pool.execute(
+        "INSERT INTO fleet_messages (from_agent, from_project, to_agent, body, grade) "
+        "VALUES ('agent:sender', 'osiris', $1, 'note', 'fyi')", agent)
+
+    bands = await deliverable_bands(actions.pool, "osiris", reader_agent=agent)
+
+    assert bands["ask"] == 1 and bands["fyi"] == 1
+    assert bands["blocking_ids"] == [ask]

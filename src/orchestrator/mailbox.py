@@ -896,7 +896,9 @@ async def deliverable_bands(
 
     q = ("SELECT count(*) AS n, array_agg(DISTINCT m.from_agent) AS senders, "
          "count(*) FILTER (WHERE m.grade = 'ask') AS asks, "
-         "count(*) FILTER (WHERE m.grade = 'fyi') AS fyis "
+         "count(*) FILTER (WHERE m.grade = 'fyi') AS fyis, "
+         "array_agg(m.id ORDER BY m.id) FILTER (WHERE m.grade IS DISTINCT FROM 'fyi') "
+         "AS blocking_ids "
          "FROM fleet_messages m "
          "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$agent "
          "WHERE " + _DELIVERABLE_TO_READER)
@@ -906,10 +908,11 @@ async def deliverable_bands(
         q, reader_agent, _norm(reader_project), lease_secs, _HOLD_GRACE_SECS,
         _generation(reader_agent)[0])
     if row is None:
-        return {"n": 0, "ask": 0, "fyi": 0, "senders": []}
+        return {"n": 0, "ask": 0, "fyi": 0, "senders": [], "blocking_ids": []}
     return {"n": int(row["n"] or 0), "ask": int(row["asks"] or 0),
             "fyi": int(row["fyis"] or 0),
-            "senders": [s for s in (row["senders"] or []) if s]}
+            "senders": [s for s in (row["senders"] or []) if s],
+            "blocking_ids": [int(i) for i in (row["blocking_ids"] or [])]}
 
 
 async def unread_split(

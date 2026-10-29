@@ -234,7 +234,7 @@ async def compute_stop_deliverable(
     row = await find_session_row(conn, session_id or "")
     if row is None or not row["agent_id"]:
         return {"n": 0, "senders": [], "window": None, "bands": {}, "project": None,
-               "stale_obligations": []}
+               "blocking_ids": [], "stale_obligations": []}
     project = await resolve_project(conn, str(row["agent_id"]), cwd)
     found = await deliverable_bands(
         conn, project or "", reader_agent=str(row["agent_id"]),
@@ -246,6 +246,9 @@ async def compute_stop_deliverable(
     return {
         "n": n, "senders": senders, "window": row["context_window_size"],
         "bands": bands, "project": project, "stale_obligations": stale_obligations,
+        # the ids the Stop gate blocks on (ask + ungraded, never fyi): the hook remembers
+        # which it has already announced, so a continuation can still block on a NEW one
+        "blocking_ids": found["blocking_ids"],
     }
 
 
