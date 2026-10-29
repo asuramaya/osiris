@@ -376,6 +376,34 @@ async def reject(
     return {"proposal": proposal, "status": "rejected", "reason": reason}
 
 
+async def sweep_expired(actions: Actions, *, actor: str = "miner:sweep") -> int:
+    """Move every Proposal that is still 'proposed' but past its own `expires_at` to a real
+    'expired' status, and return how many moved. Until now nothing did, so an expired
+    Proposal stayed 'proposed' for ever: it kept hiding its abstained object from the miner
+    (the object counts as having an outstanding Proposal) and every reader had to recompute
+    "past its date" for itself. accept() and reject() already refuse an expired Proposal, so
+    this changes what the graph says, not what anyone may do. Same supersession path as
+    reject(), and a Proposal that moved is no longer 'proposed', so a second call finds
+    nothing."""
+    rows = await actions.pool.fetch(
+        "SELECT o.id AS id, s.id AS status_id, "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='expires_at' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS expires_at "
+        "FROM objects o JOIN current_assertions s ON s.object_id=o.id AND s.name='status' "
+        "WHERE o.type='Proposal' AND s.value #>> '{}' = 'proposed'")
+    now = datetime.now(UTC)
+    moved = 0
+    for r in rows:
+        if r["expires_at"] is None or datetime.fromisoformat(r["expires_at"]) > now:
+            continue
+        await actions.supersede_assertion(
+            r["id"], "status", r["status_id"], "expired", actor, now, _CONFIDENCE_CAP,
+            f"expired at {r['expires_at']} with no decision", evidence_class=_EC, actor=actor)
+        moved += 1
+    return moved
+
+
 async def proposals_band(pool: asyncpg.Pool) -> dict[str, Any]:
     """Read-only: the operator desk's own proposals band, total count of live
     (status='proposed', not yet expired) Proposals, and up to three per owner, newest

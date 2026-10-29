@@ -43,9 +43,11 @@ itself: that is the caller's (the heartbeat wiring's) own job, so this module st
 independently testable without the alarm-thread machinery."""
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -57,6 +59,7 @@ from src.orchestrator.proposals import propose
 _MINER = "abstention"
 _ACTOR = "miner:abstention"
 _CURSOR_KEY = "abstention_miner:lane_index"
+_OUTCOMES_KEY_PREFIX = "abstention_miner:outcomes:"
 
 
 @dataclass(frozen=True)
@@ -89,28 +92,32 @@ async def _advance_lane_index(pool: asyncpg.Pool, idx: int) -> None:
     await set_cursor(pool, _CURSOR_KEY, str((idx + 1) % len(_LANES)))
 
 
+_ELIGIBLE_SQL = (
+    "FROM objects o "
+    "WHERE o.type=$1 AND o.status='active' "
+    "AND EXISTS (SELECT 1 FROM current_assertions ca WHERE ca.object_id=o.id "
+    "  AND ca.name=$2 AND NOT (ca.value ? 'resolved')) "
+    "AND NOT EXISTS ("
+    "  SELECT 1 FROM objects pr WHERE pr.type='Proposal' "
+    "  AND EXISTS (SELECT 1 FROM current_assertions ep WHERE ep.object_id=pr.id "
+    "    AND ep.name='evidence_pointer' AND ep.value ->> 'from_id' = o.id::text "
+    "    AND ep.value ->> 'link_type' = $3) "
+    "  AND EXISTS (SELECT 1 FROM current_assertions st WHERE st.object_id=pr.id "
+    "    AND st.name='status' AND st.value #>> '{}' = 'proposed')) ")
+
+
 async def _next_abstained_object(pool: asyncpg.Pool, lane: _Lane) -> uuid.UUID | None:
     """The OLDEST active object of this lane's own type carrying a LIVE (unresolved)
     `derivation_abstained_<link_type>` record, the exact predicate `propose()`'s own
     last-resort rule already requires (proposals.py's `_live_abstention_exists`, mirrored
     here as a set-scan rather than a single-object check), that does NOT already carry
-    an outstanding (`status='proposed'`, not expired for this check's purpose) Proposal
-    against the same (from_id, link_type) pair. Without this second exclusion, every tick
-    that lands on an exhausted budget or a slow-to-judge owner would just re-propose the
-    same top-of-queue object forever instead of ever reaching the next one."""
+    an outstanding (`status='proposed'`) Proposal against the same (from_id, link_type)
+    pair; an expired one is swept to 'expired' (proposals.py `sweep_expired`) first, so it
+    stops counting. Without this exclusion, every tick that lands on an exhausted budget or
+    a slow-to-judge owner would just re-propose the same top-of-queue object forever
+    instead of ever reaching the next one."""
     return await pool.fetchval(  # type: ignore[no-any-return]
-        "SELECT o.id FROM objects o "
-        "WHERE o.type=$1 AND o.status='active' "
-        "AND EXISTS (SELECT 1 FROM current_assertions ca WHERE ca.object_id=o.id "
-        "  AND ca.name=$2 AND NOT (ca.value ? 'resolved')) "
-        "AND NOT EXISTS ("
-        "  SELECT 1 FROM objects pr WHERE pr.type='Proposal' "
-        "  AND EXISTS (SELECT 1 FROM current_assertions ep WHERE ep.object_id=pr.id "
-        "    AND ep.name='evidence_pointer' AND ep.value ->> 'from_id' = o.id::text "
-        "    AND ep.value ->> 'link_type' = $3) "
-        "  AND EXISTS (SELECT 1 FROM current_assertions st WHERE st.object_id=pr.id "
-        "    AND st.name='status' AND st.value #>> '{}' = 'proposed')) "
-        "ORDER BY o.created_at ASC LIMIT 1",
+        "SELECT o.id " + _ELIGIBLE_SQL + "ORDER BY o.created_at ASC LIMIT 1",
         lane.object_type, f"derivation_abstained_{lane.link_type}", lane.link_type)
 
 
@@ -206,7 +213,7 @@ def _lanes_off(settings: Any) -> set[str]:
     return {p.strip() for p in re.split(r"[,\s]+", raw) if p.strip()}
 
 
-async def abstention_miner_tick(actions: Actions) -> dict[str, Any]:
+async def _tick(actions: Actions) -> dict[str, Any]:
     """One tick: advance the round-robin, look at the next lane, propose at most one
     candidate against its next eligible abstention, or do nothing. Never raises past a
     normal `{"action": ...}` result; `guarded_miner_tick` (the caller's own wrapper) is
@@ -248,3 +255,111 @@ async def abstention_miner_tick(actions: Actions) -> dict[str, Any]:
         confidence=0.4, owner="operator", miner=_MINER, actor=_ACTOR)
     action = "refused" if "error" in out else "proposed"
     return {"lane": lane.object_type, "object": str(obj_id), "action": action, **out}
+
+
+async def abstention_miner_tick(actions: Actions) -> dict[str, Any]:
+    """One tick (see `_tick`), after moving Proposals past their date to 'expired' so they
+    stop hiding their objects, and with its outcome counted for the day (`_note_outcome`),
+    because a tick that skipped or found nothing used to leave no trace at all."""
+    from src.orchestrator.proposals import sweep_expired
+
+    await sweep_expired(actions)
+    out = await _tick(actions)
+    if out.get("action") != "dark":
+        await _note_outcome(actions.pool, str(out.get("lane", "")), str(out.get("action", "")))
+    return out
+
+
+def _outcome_key(day: str) -> str:
+    return f"{_OUTCOMES_KEY_PREFIX}{day}"
+
+
+async def _note_outcome(pool: asyncpg.Pool, lane: str, action: str) -> None:
+    """Add one to today's `<lane>:<action>` counter. One JSON object per UTC day in the
+    cursor store, bumped by a single atomic upsert (no read-modify-write), so two ticks can
+    never lose a count."""
+    day = datetime.now(UTC).date().isoformat()
+    name = f"{lane}:{action}"
+    await pool.execute(
+        "INSERT INTO watermarks (key, cursor, updated_at) "
+        "VALUES ($1, jsonb_build_object($2::text, 1)::text, now()) "
+        "ON CONFLICT (key) DO UPDATE SET updated_at=now(), cursor=jsonb_set("
+        "  coalesce(watermarks.cursor::jsonb, '{}'::jsonb), ARRAY[$2::text], "
+        "  to_jsonb(coalesce((watermarks.cursor::jsonb ->> $2::text)::int, 0) + 1))::text",
+        _outcome_key(day), name)
+
+
+_MENTION_CLASSES = ("0", "1", "2+")
+
+
+def _mention_class(counts: dict[uuid.UUID, int]) -> str:
+    """How many DIFFERENT projects the text names: none, one, or two and more."""
+    return _MENTION_CLASSES[min(len(counts), 2)]
+
+
+async def abstention_survey(
+    pool: asyncpg.Pool, *, per_lane: int = 5, days: int = 7,
+) -> dict[str, Any]:
+    """READ-ONLY. Why the miner proposes so little, in one glance, for the digest.
+
+    Per lane that has a candidate pool: how many abstentions are eligible, and for the next
+    `per_lane` of them in the order the miner takes them (oldest first) the mention class
+    (0, 1 or 2+ different projects named), the signal the current rule would pick, the
+    project it picks or why it abstains. `first_abstains` says whether the very object the
+    next tick takes would abstain, which is what stalls a lane: an abstained object is not
+    marked, so it is the next pick again. Plus the tick outcomes counted per day for the last
+    `days` days, and how many objects are hidden behind a still-outstanding Proposal.
+    Writes nothing and calls no model."""
+    names = {r["id"]: r["canonical"].removeprefix("repo:") for r in await pool.fetch(
+        "SELECT id, canonical FROM objects WHERE type='SoftwareProject' AND status='active'")}
+    lanes: list[dict[str, Any]] = []
+    for lane in _LANES:
+        if not lane.has_pool:
+            continue
+        args = (lane.object_type, f"derivation_abstained_{lane.link_type}", lane.link_type)
+        eligible = int(await pool.fetchval("SELECT count(*) " + _ELIGIBLE_SQL, *args) or 0)
+        rows = await pool.fetch(
+            "SELECT o.id, o.created_at " + _ELIGIBLE_SQL + "ORDER BY o.created_at ASC LIMIT $4",
+            *args, per_lane)
+        nxt: list[dict[str, Any]] = []
+        for r in rows:
+            counts, _text = await _mention_counts(pool, lane.text_fields, r["id"])
+            picked, _t, signal = await _dominant_project(pool, lane.text_fields, r["id"])
+            if picked is not None:
+                reason = None
+            elif counts:
+                reason = "mentions are split and there is no author project"
+            else:
+                reason = "no project is mentioned and there is no author project"
+            top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:3]
+            nxt.append({
+                "object": str(r["id"]), "created": r["created_at"].date().isoformat(),
+                "mention_class": _mention_class(counts),
+                "mentions": {names.get(k, str(k)): v for k, v in top},
+                "signal": signal, "picks": names.get(picked) if picked else None,
+                "abstain_reason": reason})
+        lanes.append({
+            "lane": f"{lane.object_type}:{lane.link_type}", "eligible": eligible,
+            "first_abstains": bool(nxt) and nxt[0]["picks"] is None,
+            "next": nxt,
+            "next_abstaining": sum(1 for n in nxt if n["picks"] is None)})
+    today = datetime.now(UTC).date()
+    outcomes: dict[str, dict[str, int]] = {}
+    for back in range(days):
+        day = (today - timedelta(days=back)).isoformat()
+        raw = await get_cursor(pool, _outcome_key(day))
+        if raw:
+            try:
+                outcomes[day] = {str(k): int(v) for k, v in json.loads(raw).items()}
+            except (ValueError, TypeError, AttributeError):
+                continue
+    totals: dict[str, int] = {}
+    for per_day in outcomes.values():
+        for k, v in per_day.items():
+            totals[k] = totals.get(k, 0) + v
+    outstanding = int(await pool.fetchval(
+        "SELECT count(*) FROM objects pr WHERE pr.type='Proposal' AND EXISTS ("
+        "SELECT 1 FROM current_assertions st WHERE st.object_id=pr.id AND st.name='status' "
+        "AND st.value #>> '{}' = 'proposed')") or 0)
+    return {"lanes": lanes, "outcomes_by_day": outcomes, "outcomes_total": totals,
+            "outcomes_window_days": days, "proposals_outstanding": outstanding}
