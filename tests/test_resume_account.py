@@ -11,6 +11,7 @@ from src.orchestrator.resume_account import (
     current_account_uuid,
     history_owner_sync,
     last_turns,
+    store_account_mismatch,
     store_briefing,
 )
 
@@ -105,3 +106,21 @@ async def test_the_briefing_is_built_from_the_store_and_says_why(
     assert "LAST 4 TURNS" in brief and "[assistant] later" in brief
     assert "turn 28" in brief and "turn 3" not in brief   # bounded to the last turns
     assert len(brief) <= 7000
+
+
+async def test_the_account_question_is_answered_from_the_store_alone(
+    actions: Any, tmp_path: Path,
+) -> None:
+    """No file is needed: ingest, delete the transcript, and the store still says whose
+    history it is (this is what lets resume decide before it writes anything)."""
+    from src.ingest.soul_store import SoulStore
+
+    t = tmp_path / "beef1234-0000-4000-8000-000000000000.jsonl"
+    write_transcript(t, old_lines=8, new_lines=1)
+    await SoulStore(actions.pool).ingest_path(str(t), "beef1234")
+    t.unlink()
+    finding = await store_account_mismatch(actions.pool, "beef1234", current=NEW)
+    assert finding is not None
+    assert finding["history_owner"] == OLD and finding["owner_lines"][OLD] == 8
+    assert await store_account_mismatch(actions.pool, "beef1234", current=OLD) is None
+    assert await store_account_mismatch(actions.pool, "deadbeef", current=NEW) is None
