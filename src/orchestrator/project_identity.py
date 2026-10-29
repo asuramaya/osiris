@@ -1035,6 +1035,15 @@ async def _canonical_occurrences(
     return out
 
 
+async def _workspace_trust_note(pool: asyncpg.Pool, project_oid: Any) -> dict[str, Any]:
+    """Which governing seats' directories the harness does not trust (read-only; trust is the
+    operator's to grant). A moved project folder is a new path to the harness."""
+    from src.orchestrator.workspace_trust import governing_seat_dirs, hint, untrusted_dirs
+
+    bad = untrusted_dirs(await governing_seat_dirs(pool, project_oid))
+    return {"untrusted": bad, "hints": [hint(d) for d in bad]}
+
+
 async def rename_project(
     actions: Actions, *, project: str, new_name: str, because: str, actor: str,
     dry_run: bool = True, merge_into: bool = False,
@@ -1244,6 +1253,7 @@ async def rename_project(
                               and collide["status"] != "merged"
                               else None),
                 "manifest": manifest,
+                "workspace_trust": await _workspace_trust_note(actions.pool, row["id"]),
                 "note": "preview only; pass dry_run=False to actually rename"}
     now = datetime.now(UTC)
     # SINGULAR, NOT SAME-SOURCE-ONLY: an earlier live specimen showed a project's
@@ -1315,6 +1325,7 @@ async def rename_project(
            "old_name": old_name, "new_name": new_name,
            "canonical_migration": real_canonical_migration,
            "manifest": manifest,
+           "workspace_trust": await _workspace_trust_note(actions.pool, row["id"]),
            "current_name_after_write": current_name_after_write,
            "rename_confirmed": rename_confirmed,
            "mounts_moved": mounts_moved, "because": because,
