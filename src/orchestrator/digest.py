@@ -193,7 +193,7 @@ async def _activity(actions: Actions, since: datetime, limit: int = 50) -> list[
 
 
 async def _credence_streams(
-    actions: Actions, since: datetime
+    actions: Actions, since: datetime, timings: dict[str, int] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """One credence_props pass over objects more than one agent co-asserted in the window,
     split into its two upward streams: laundering (a relay carrying a fact above its origin
@@ -204,6 +204,7 @@ async def _credence_streams(
     # another agent source all-time. The archetypal laundering re-reports an older origin
     # (origin before the window, relay inside it); requiring both sources inside the window
     # would miss exactly that.
+    t0 = time.perf_counter()
     oids = [
         r["object_id"] for r in await actions.pool.fetch(
             "SELECT DISTINCT ca.object_id FROM current_assertions ca "
@@ -212,9 +213,17 @@ async def _credence_streams(
             "    WHERE c2.object_id = ca.object_id AND c2.name = ca.name "
             "      AND c2.source_id LIKE 'agent:%' AND c2.source_id <> ca.source_id)", since)
     ]
+    if timings is not None:
+        # the candidate query and the resolution are timed apart: a slow credence stream
+        # names which of the two it is (and how many objects it resolved)
+        timings["credence_oids"] = round((time.perf_counter() - t0) * 1000)
+        timings["credence_oid_count"] = len(oids)
     if not oids:
         return [], []
+    t1 = time.perf_counter()
     result = await credence_props(actions, oids, contested_only=True)
+    if timings is not None:
+        timings["credence_props"] = round((time.perf_counter() - t1) * 1000)
     laundering = [
         {"object_id": str(w.object_id), "name": w.name, "value": w.value,
          "laundering_sources": list(w.laundering)}
@@ -705,7 +714,7 @@ async def fleet_digest(
     roster = await _timed(timings, "roster", _roster(actions))
     activity = await _timed(timings, "activity", _activity(actions, effective_since))
     laundering, disputes = await _timed(
-        timings, "credence", _credence_streams(actions, effective_since))
+        timings, "credence", _credence_streams(actions, effective_since, timings))
     conversations = await _timed(
         timings, "conversations", _conversations(actions, effective_since))
     costs = await _timed(timings, "costs", _costs(actions, effective_since))

@@ -560,7 +560,7 @@ async def test_fleet_digest_names_the_wall_time_of_each_stream(actions: Actions)
 
     assert {"roster", "activity", "credence", "conversations", "costs", "bodies",
             "retrieval", "miner", "proposals", "abstention", "obligations",
-            "operator_inbox"} <= set(dg["timings_ms"])
+            "operator_inbox", "credence_oids", "credence_oid_count"} <= set(dg["timings_ms"])
     assert all(isinstance(v, int) and v >= 0 for v in dg["timings_ms"].values())
 
 
