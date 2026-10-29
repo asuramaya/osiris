@@ -1082,7 +1082,7 @@ def _statusline(
 ) -> str:
     """Render one statusline with `_post` stubbed and the cache redirected into tmp.
 
-    `project_hint` stands in for `read_project_label(cwd)`'s real filesystem pin-climb,
+    `project_hint` stands in for the hook's `_pin_value(cwd, 'project')` filesystem pin-climb,
     defaulted to a resolvable name so these tests exercise the cache's ordinary, keyed
     behavior; pass `None` to exercise the unresolved-project path instead (no `.osiris`
     pin anywhere up the tree, e.g. a bare seat-office container or an unpinned repo).
@@ -1096,8 +1096,8 @@ def _statusline(
     monkeypatch.setattr(osiris_hook, "_post",
                         lambda *a, **k: answer() if callable(answer) else answer)
     monkeypatch.setattr(osiris_hook, "_first_dead_unit", lambda **_kw: dead_unit)
-    import src.orchestrator.agents as agents_mod
-    monkeypatch.setattr(agents_mod, "read_project_label", lambda cwd: project_hint)
+    monkeypatch.setattr(osiris_hook, "_pin_value",
+                        lambda cwd, key: project_hint if key == "project" else None)
     import contextlib
     import io
     buf = io.StringIO()
