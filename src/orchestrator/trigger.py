@@ -4477,7 +4477,7 @@ async def resume_seat(
     actions: Actions, *, caller: str, target: str, message: str = "",
     model: str | None = None, settings: Settings | None = None,
     agents_json: Any = None, resume_spawn: Any = None,
-    clear_stale_record: Any = None,
+    clear_stale_record: Any = None, launch_spawn: Any = None,
 ) -> dict[str, Any]:
     """Continue a seat's own dormant session. This used to be `launch_seat`'s auto-resume
     branch and is now its own call: launch always mints fresh, resume always continues,
@@ -4591,6 +4591,28 @@ async def resume_seat(
     # Use the office, never the resume candidate's own repo field; see dispatch_dm's
     # own identical line for why.
     spawn_cwd = materialized_at or await _resume_office(pool, target_seat, fallback=office)
+    # Whose history is it? The harness refuses a transcript another account owns (it loads
+    # none of it), so continuing it would only start an amnesiac session under the old
+    # name. Say so plainly and launch fresh, seeded from the store, instead. The receipt's
+    # `path` names which road was taken.
+    from src.orchestrator.mounts import _harness_slug
+    from src.orchestrator.resume_account import account_mismatch, store_briefing
+    sense_root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+        else Path.home() / ".claude" / "projects"
+    finding = await account_mismatch(
+        sense_root / _harness_slug(spawn_cwd) / f"{session_id}.jsonl")
+    if finding is not None:
+        brief = await store_briefing(
+            pool, handle=handle, anchor_sid=session_id[:8], finding=finding,
+            project=await _governed_project_name(pool, target_seat))
+        launched = await launch_seat(
+            actions, caller=caller, target=target,
+            message=(f"{message.strip()}\n\n{brief}" if message.strip() else brief),
+            model=model, settings=settings, spawn=launch_spawn, agents_json=agents_json)
+        return {**launched, "path": "fresh-launch-account-mismatch",
+                "account_mismatch": finding, "resume_check": resume_log,
+                "detail": f"{finding['detail']}: launched a FRESH session seeded with a "
+                          "briefing built from the store. " + str(launched.get("detail", ""))}
     # The message lands before the spawn, deliberately unlike launch's fresh-mint lane
     # (which sends its brief after spawning): a fresh `--bg` body takes seconds to boot,
     # mount, and claim_name before its first inbox() call, so send-after-spawn there is
@@ -4616,7 +4638,7 @@ async def resume_seat(
                           f"instead of continuing {session_id[:8]}: a stopped record was "
                           "still on file; adopted as the seat's own continuation")
     out = {
-        "status": "launched", "mode": "resumed", "seat": target_seat,
+        "status": "launched", "mode": "resumed", "seat": target_seat, "path": "resumed",
         "session": session_id, "body_exists": True, "can_receive": True,
         "spawned_model": argv_model, "model_source": model_source, "attach": attach,
         "resume_check": resume_log,

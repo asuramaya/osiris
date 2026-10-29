@@ -1104,6 +1104,25 @@ class SoulStore:
                 )
         return 0
 
+    async def tail_lines(
+        self, anchor_sid: str, n: int, harness: str = _HARNESS,
+    ) -> list[bytes]:
+        """The last `n` raw lines of a session, oldest first, decrypted, read from the
+        store alone (hot rows, or the cold blob). Unverified: a tail for READING context,
+        never for rematerializing (`rematerialize_to_disk` owns the verified emit)."""
+        await ensure_dictionaries(self.pool)
+        fernet = _LazyFernet()
+        cold = await self._cold_row(harness, anchor_sid)
+        if cold is not None:
+            blob = bytes(cold["content_gzip"])
+            plain = fernet.decrypt(blob) if is_encrypted(blob) else blob
+            return _split_cold_content(gzip.decompress(plain))[-n:]
+        rows = await self.pool.fetch(
+            "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
+            "ORDER BY line_idx DESC LIMIT $3", harness, anchor_sid, n)
+        raws = [bytes(r["raw_line"]) for r in rows]
+        return [(open_line(fernet, rl) if is_encrypted(rl) else rl) for rl in reversed(raws)]
+
     async def full_session_id(
         self, anchor_sid: str, harness: str = _HARNESS,
     ) -> str | None:
