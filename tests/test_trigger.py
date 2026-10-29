@@ -8278,3 +8278,110 @@ async def test_wake_reaches_a_stale_listed_holder_by_a_path_that_starts_a_turn(
     assert out["raw_mode"] == "nudged-live-holder"
     assert out["status"] == "delivered"
     assert len(sent) == 1 and "wake up" in sent[0]
+
+
+# ═══ RESUME FROM THE STORE when the harness's own cleanup expired the transcript ═════════
+# Claude Code deletes transcripts it considers old; the soul store still holds them whole.
+# `osiris resume` used to answer "mounted but no transcript found on disk or in the store"
+# for exactly those sessions, because discovery only looked at disk.
+
+
+async def _store_only_holder(
+    actions: Actions, tmp_path: Path, agent_id: str, handle: str, office: str,
+) -> tuple[Path, str, str, str]:
+    """A holder whose session was ingested while its transcript still existed, after which
+    the file was deleted from disk (the cleanup). Returns (sense root, 8-char anchor,
+    worker seat, manager agent)."""
+    sense, truncated = await _lineage_holder_with_truncated_session(
+        actions, tmp_path, agent_id=agent_id)
+    manager = "agent:hm-" + handle.lower()
+    worker_seat, _m = await _managed_pair(
+        actions, worker_agent=agent_id, manager_agent=manager,
+        worker_handle=handle, house="osiris")
+    await _office(actions, worker_seat, office)
+    first = await trigger_module._lineage_resume_candidate(
+        actions.pool, agent_id, _settings(enabled=True, sense=str(sense)), repo=office,
+        seat_id=worker_seat, materialize=False)
+    assert isinstance(first, tuple)   # the ingest, while the file still existed
+    (sense / "-repo-demo" / f"{FULL_SID}.jsonl").unlink()
+    return sense, truncated, worker_seat, manager
+
+
+async def test_resume_candidate_comes_from_the_store_when_the_disk_file_is_gone(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    sense, _t, seat, _mgr = await _store_only_holder(
+        actions, tmp_path, "agent:gonedisk", "GoneDisk", "/tmp/gonedisk-test")
+    outcome = await trigger_module._lineage_resume_candidate(
+        actions.pool, "agent:gonedisk", _settings(enabled=True, sense=str(sense)),
+        repo="/tmp/gonedisk-test", seat_id=seat)
+    assert isinstance(outcome, tuple), outcome
+    candidate, _log = outcome
+    assert candidate[0] == FULL_SID
+    assert candidate[4] is not None   # emitted into the seat office
+    from src.orchestrator.mounts import _harness_slug
+    emitted = sense / _harness_slug(candidate[4]) / f"{FULL_SID}.jsonl"
+    assert emitted.is_file() and emitted.stat().st_size > 0
+
+
+async def test_a_bare_anchor_stub_on_disk_never_overwrites_the_stores_record(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The second-run symptom ("only a truncated/synthetic transcript"): a stub named by
+    the bare anchor must neither win nor change what the store recorded."""
+    sense, truncated, seat, _mgr = await _store_only_holder(
+        actions, tmp_path, "agent:stubwins", "StubWins", "/tmp/stubwins-test")
+    (sense / "-repo-demo" / f"{truncated}.jsonl").write_bytes(b"x" * 20)
+    before = await actions.pool.fetchrow(
+        "SELECT source_path, last_line_idx FROM soul_sessions WHERE anchor_sid=$1", truncated)
+    outcome = await trigger_module._lineage_resume_candidate(
+        actions.pool, "agent:stubwins", _settings(enabled=True, sense=str(sense)),
+        repo="/tmp/stubwins-test", seat_id=seat, materialize=False)
+    assert isinstance(outcome, tuple), outcome
+    assert outcome[0][0] == FULL_SID
+    after = await actions.pool.fetchrow(
+        "SELECT source_path, last_line_idx FROM soul_sessions WHERE anchor_sid=$1", truncated)
+    assert dict(after) == dict(before)
+
+
+async def test_the_full_id_is_read_from_the_stores_own_lines_when_the_path_lost_it(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.ingest.soul_store import SoulStore
+
+    _sense, truncated, _seat, _mgr = await _store_only_holder(
+        actions, tmp_path, "agent:lostpath", "LostPath", "/tmp/lostpath-test")
+    store = SoulStore(actions.pool)
+    assert await store.full_session_id(truncated) == FULL_SID   # from the recorded path
+    await actions.pool.execute(
+        "UPDATE soul_sessions SET source_path=$2 WHERE anchor_sid=$1",
+        truncated, f"/x/{truncated}.jsonl")
+    # the fixture's lines carry no sessionId, so there is nothing to read and no guess
+    assert await store.full_session_id(truncated) is None
+    assert await store.full_session_id("deadbeef") is None
+
+
+async def test_resume_seat_resumes_a_session_whose_disk_transcript_expired(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Through the real resume entry point: file deleted, store populated; the spawn gets
+    the full session id and the transcript is back on disk where the harness resumes."""
+    sense, _t, seat, manager = await _store_only_holder(
+        actions, tmp_path, "agent:expired1", "Expired1", "/tmp/expired1-test")
+    resumed: list[dict[str, Any]] = []
+
+    async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
+        resumed.append({"repo": repo, **kw})
+
+    async def _clear(job_dir_key: str) -> bool:
+        return False
+
+    d = await trigger_module.resume_seat(
+        actions, caller=manager, target=seat,
+        settings=_settings(enabled=True, sense=str(sense)),
+        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]),
+        clear_stale_record=_clear)
+    assert d["status"] == "launched" and d["session"] == FULL_SID, d
+    assert resumed and resumed[0].get("resume_session") == FULL_SID
+    from src.orchestrator.mounts import _harness_slug
+    assert (sense / _harness_slug(resumed[0]["repo"]) / f"{FULL_SID}.jsonl").is_file()

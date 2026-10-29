@@ -68,6 +68,13 @@ def _warn_soul_key_missing_once(exc: SoulKeyMissing) -> None:
         "rows are writing as LEGACY PLAINTEXT until this is fixed: %s", exc)
 
 
+def _anchor_of(job_dir: str | None) -> str | None:
+    """The 8-hex session anchor a `jobs/<sid>` address names, or None for any other shape."""
+    tail = (job_dir or "").rstrip("/").rsplit("/", 1)[-1]
+    head = tail.split("-")[0]
+    return head if len(head) == 8 and all(c in "0123456789abcdef" for c in head) else None
+
+
 class _LazyFernet:
     """Defers `get_soul_fernet()` until `.decrypt()` is actually called (THE FIRST
     KEY MUST COME FROM THE NORMAL CLI). Several read/verify paths below fetch a
@@ -1097,6 +1104,45 @@ class SoulStore:
                 )
         return 0
 
+    async def full_session_id(
+        self, anchor_sid: str, harness: str = _HARNESS,
+    ) -> str | None:
+        """The harness's full session id (the uuid `--resume` needs) for a session the store
+        holds, read from the store alone, never from a file on disk. First the recorded
+        `source_path` stem when it is longer than the anchor and starts with it; failing
+        that (a stub once overwrote the path), the `sessionId` the transcript's own first
+        lines carry. None when the store holds no such session or no line names one."""
+        row = await self.pool.fetchrow(
+            "SELECT source_path FROM soul_sessions WHERE harness=$1 AND anchor_sid=$2",
+            harness, anchor_sid)
+        if row is None:
+            return None
+        stem = Path(row["source_path"]).stem
+        if len(stem) > len(anchor_sid) and stem.startswith(anchor_sid):
+            return stem
+        await ensure_dictionaries(self.pool)
+        fernet = _LazyFernet()
+        cold = await self._cold_row(harness, anchor_sid)
+        if cold is not None:
+            blob = bytes(cold["content_gzip"])
+            plain = fernet.decrypt(blob) if is_encrypted(blob) else blob
+            raws = _split_cold_content(gzip.decompress(plain))[:50]
+        else:
+            rows = await self.pool.fetch(
+                "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
+                "AND line_idx < 50 ORDER BY line_idx ASC", harness, anchor_sid)
+            raws = [(open_line(fernet, rl) if is_encrypted(rl) else rl)
+                    for rl in (bytes(r["raw_line"]) for r in rows)]
+        for raw in raws:
+            try:
+                d = json.loads(raw)
+            except ValueError:
+                continue
+            sid = d.get("sessionId") if isinstance(d, dict) else None
+            if isinstance(sid, str) and len(sid) > len(anchor_sid) and sid.startswith(anchor_sid):
+                return sid
+        return None
+
     async def ensure_ingested(
         self, *, cwd: str | None, job_dir: str | None, root: Path | None = None,
     ) -> str | None:
@@ -1113,8 +1159,21 @@ class SoulStore:
             locator = adapter.discover(cwd=cwd, job_dir=job_dir, root=root)
             if locator is not None:
                 harness = getattr(locator, "harness", "claude-code")
+                if locator.session_id == locator.anchor_sid and await self.pool.fetchval(
+                        "SELECT 1 FROM soul_sessions WHERE harness=$1 AND anchor_sid=$2",
+                        harness, locator.anchor_sid):
+                    # A bare-anchor file (no full session id in its name) is a stub, never
+                    # a real harness transcript; the store already holds this session, so
+                    # the stub must not overwrite its recorded source or add lines to it.
+                    return str(locator.anchor_sid)
                 await self.ingest_path(locator.source_path, locator.anchor_sid, harness=harness)
                 return str(locator.anchor_sid)
+        if (anchor := _anchor_of(job_dir)) and await self.pool.fetchval(
+                "SELECT 1 FROM soul_sessions WHERE harness=$1 AND anchor_sid=$2",
+                _HARNESS, anchor):
+            # The transcript is gone from disk (the harness's own cleanup expires them)
+            # but the store holds the session whole: it is the record, so say so.
+            return anchor
         return None
 
     async def resume_diagnostics(
