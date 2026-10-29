@@ -122,3 +122,25 @@ async def test_warm_reports_whether_the_route_is_ready_and_never_raises(
     finally:
         semantics.set_embedder_for_tests(None)
     assert no_network == []
+
+
+async def test_only_the_background_pass_may_download_the_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """embed_pass fetches a missing Model2Vec model (the one allowed network step); a
+    request-path embed never does."""
+    from src.workers import arq_worker
+
+    fetched: list[str] = []
+    monkeypatch.setattr(semantics, "local_model_dir", lambda model: None)
+    monkeypatch.setattr(semantics, "fetch_model", lambda model: fetched.append(model) or "/x")
+    semantics.set_embedder_for_tests(semantics.Model2VecEmbedder("acme/tiny"))
+
+    class _Cascade:
+        actions = types.SimpleNamespace(pool=None)
+
+    try:
+        await arq_worker.embed_pass({"cascade": _Cascade()})
+    finally:
+        semantics.set_embedder_for_tests(None)
+    assert fetched == ["acme/tiny"]

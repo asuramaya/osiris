@@ -744,6 +744,15 @@ async def embed_pass(ctx: dict[str, Any]) -> int:
     if embedder is None:
         return 0
     actions: Actions = ctx["cascade"].actions
+    from src.orchestrator.semantics import Model2VecEmbedder, fetch_model, local_model_dir
+
+    if isinstance(embedder, Model2VecEmbedder) and local_model_dir(embedder.model) is None:
+        # The one place the model may be downloaded: a background pass, never a request.
+        try:
+            await asyncio.wait_for(asyncio.to_thread(fetch_model, embedder.model), 120.0)
+        except Exception as exc:  # noqa: BLE001 - offline or slow: the route stays closed
+            _log.warning("embed model fetch failed: %r", exc)
+            return 0
     try:
         report = await embed_backfill(actions.pool, embedder)
     except Exception as exc:  # a model hiccup must not kill the cron
