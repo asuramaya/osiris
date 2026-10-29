@@ -1104,6 +1104,41 @@ class SoulStore:
                 )
         return 0
 
+    async def pattern_counts(
+        self, anchor_sid: str, pattern: Any, harness: str = _HARNESS,
+    ) -> dict[str, int]:
+        """How many of a session's lines carry each value of `pattern`'s first group,
+        counted from the store alone (hot rows paged, or the cold blob), nothing written
+        anywhere. Empty when the store holds no such session."""
+        await ensure_dictionaries(self.pool)
+        fernet = _LazyFernet()
+        counts: dict[str, int] = {}
+
+        def _count(raws: list[bytes]) -> None:
+            for raw in raws:
+                m = pattern.search(raw)
+                if m:
+                    key = m.group(1).decode().lower()
+                    counts[key] = counts.get(key, 0) + 1
+
+        cold = await self._cold_row(harness, anchor_sid)
+        if cold is not None:
+            blob = bytes(cold["content_gzip"])
+            plain = fernet.decrypt(blob) if is_encrypted(blob) else blob
+            _count(_split_cold_content(gzip.decompress(plain)))
+            return counts
+        i = 0
+        while True:
+            rows = await self.pool.fetch(
+                "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
+                "AND line_idx >= $3 AND line_idx < $4 ORDER BY line_idx ASC",
+                harness, anchor_sid, i, i + _REMATERIALIZE_PAGE_LINES)
+            if not rows:
+                return counts
+            _count([(open_line(fernet, rl) if is_encrypted(rl) else rl)
+                    for rl in (bytes(r["raw_line"]) for r in rows)])
+            i += len(rows)
+
     async def tail_lines(
         self, anchor_sid: str, n: int, harness: str = _HARNESS,
     ) -> list[bytes]:
