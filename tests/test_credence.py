@@ -344,3 +344,21 @@ async def test_contested_only_gives_the_same_laundering_and_disputes_for_less_da
     assert [(d.name, d.positions) for d in part.disputes] == [
         (d.name, d.positions) for d in full.disputes]
     assert {w.name for w in part.winners} == {"claim_a", "claim_b"}  # the contested groups only
+
+
+async def test_credence_props_reports_the_wall_time_of_each_step(actions: Actions) -> None:
+    from datetime import UTC, datetime
+
+    from src.orchestrator.credence import credence_props
+
+    now = datetime.now(UTC)
+    thing = await actions.create_or_find_object("Reference", "ref:cst-timed", "t")
+    await actions.assert_property(thing, "claim", "a b", "agent:tmd00001", now, 0.5)
+    await actions.assert_property(thing, "claim", "a b", "agent:tmd00002", now, 0.6)
+    timings: dict[str, int] = {}
+
+    await credence_props(actions, [thing], contested_only=True, timings=timings)
+
+    assert timings["credence_claim_rows"] == 2 and timings["credence_agent_sources"] == 2
+    assert {"credence_claims", "credence_forest", "credence_looked", "credence_resolve",
+            "credence_forest_size"} <= set(timings)

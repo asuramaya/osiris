@@ -86,6 +86,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -389,6 +390,7 @@ async def property_signals(
 
 async def credence_props(
     actions: Actions, oids: Sequence[Any], *, contested_only: bool = False,
+    timings: dict[str, int] | None = None,
 ) -> CredenceResult:
     """The lineage-aware resolution over `oids`: winning_props with the upstream credence
     discipline layered on. Fetches the latest per-source assertions, the spawned_by forest, and
@@ -398,7 +400,12 @@ async def credence_props(
     sources. Laundering and disputes can only arise there (a clamp or a dispute needs an agent
     claim with an agent descendant in the same group), so a caller that reads only those two
     streams gets identical output without loading every other fact of every object; `winners`
-    then covers the contested groups alone."""
+    then covers the contested groups alone.
+
+    `timings`, when given, receives the wall ms of each step (claims, forest, looked, resolve)
+    and the sizes they worked on, so a slow resolution names its slow step."""
+    clock = time.perf_counter
+    t = clock()
     contested = (
         " AND (object_id, name) IN (SELECT object_id, name FROM current_assertions "
         "  WHERE object_id = ANY($1::uuid[]) AND source_id LIKE 'agent:%' "
@@ -412,9 +419,23 @@ async def credence_props(
               float(r["confidence"]), r["observed_at"])
         for r in rows
     ]
+    mark = clock()
     agent_srcs = {c.source_id for c in claims if _is_agent(c.source_id)}
     parent_of = await _parent_forest(actions) if agent_srcs else {}
+    forest_done = clock()
     looked = await _looked_map(actions, agent_srcs)
+    looked_done = clock()
     # pure CPU over every claim of the window (a quadratic walk on a busy day): off the loop,
     # which would otherwise serve no other tool call while it runs
-    return await asyncio.to_thread(resolve_credence, claims, parent_of, looked)
+    result = await asyncio.to_thread(resolve_credence, claims, parent_of, looked)
+    if timings is not None:
+        done = clock()
+        timings.update({
+            "credence_claims": round((mark - t) * 1000), "credence_claim_rows": len(claims),
+            "credence_forest": round((forest_done - mark) * 1000),
+            "credence_forest_size": len(parent_of),
+            "credence_looked": round((looked_done - forest_done) * 1000),
+            "credence_agent_sources": len(agent_srcs),
+            "credence_resolve": round((done - looked_done) * 1000),
+        })
+    return result
