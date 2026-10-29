@@ -3,7 +3,7 @@
     "type": "command",
     "command": "/home/asuramaya/code/osiris/.venv/bin/python /home/asuramaya/code/osiris/scripts/osiris_hook.py statusline",
     "padding": 0,
-    "refreshInterval": 10
+    "refreshInterval": 30
   },
   "worktree": {
     "baseRef": "head"

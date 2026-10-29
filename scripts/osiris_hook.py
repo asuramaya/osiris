@@ -318,6 +318,34 @@ def _post(url: str, data: dict[str, Any], *, timeout: int = 3) -> Any | None:
         return None
 
 
+def _pin_value(cwd: str | None, key: str) -> str | None:
+    """One key of the repo's `.osiris` pin (TOML), climbing from `cwd` to the true repo root,
+    standard library only. It mirrors src.orchestrator.agents._read_osiris_key (a test pins the
+    two together) without importing it: that module pulls in the whole ingest and settings
+    stack, which was most of what a status bar refresh cost. Same rules: `cwd` must exist; a
+    file that lacks the key does not stop the climb; a real `.git` directory (a worktree's
+    gitlink file does not) is the root; any read or parse error reads as no value."""
+    if not cwd:
+        return None
+    start = Path(cwd)
+    if not start.is_dir():
+        return None
+    import tomllib
+
+    for directory in (start, *start.parents):
+        pin = directory / ".osiris"
+        try:
+            if pin.is_file():
+                value = tomllib.loads(pin.read_text()).get(key)
+                if value:
+                    return str(value).strip()
+        except (OSError, ValueError):
+            return None
+        if (directory / ".git").is_dir():
+            break
+    return None
+
+
 def _cmd_statusline(hook: dict[str, Any]) -> int:
     global _LIVE_RENDER
     """Render the two-line Osiris chrome (ported from osiris_statusline.py's own `main()`):
@@ -328,10 +356,9 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
     ws = hook.get("workspace") or {}
     cwd = str(ws.get("current_dir") or ws.get("project_dir") or hook.get("cwd") or "")
     try:
-        from src.orchestrator.agents import read_project_label, read_project_model
-        project_hint = read_project_label(cwd)
-        intent_hint = read_project_model(cwd)
-    except Exception:  # noqa: BLE001, the chrome never breaks on a resolver import/read
+        project_hint = _pin_value(cwd, "project")
+        intent_hint = _pin_value(cwd, "model")
+    except Exception:  # noqa: BLE001, the chrome never breaks on a pin read
         project_hint = intent_hint = None
     model_raw = str((hook.get("model") or {}).get("id") or "")
     model_id = model_raw.split("[", 1)[0].strip()
@@ -449,8 +476,12 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
         sick_s = (f"{_RED}\u26a0 not sensing: {','.join(sick[:2])}{_RESET}" if sick else "")
         spend_s = ""
         try:
-            from src.ingest.providers import spend_is_metered
-            if spend_is_metered():
+            # The metering check imports the whole settings stack (a third of a CPU-second);
+            # it only matters when there is something to show, so ask it only then.
+            needs_check = bool(blind) or (cap > 0 and spent >= 0.6 * cap)
+            if needs_check:
+                from src.ingest.providers import spend_is_metered
+            if needs_check and spend_is_metered():
                 if blind:
                     spend_s = f"{_RED}\u26a0 {blind} unpriced call(s){_RESET}"
                 elif cap > 0 and spent >= 0.6 * cap:

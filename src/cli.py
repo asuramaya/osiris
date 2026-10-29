@@ -3948,6 +3948,17 @@ async def _real_check_whisper_probe() -> tuple[bool, str]:
         return await _synthetic_automount_probe(client)
 
 
+def _statusline_refresh_line(root: Path) -> str:
+    """`src.orchestrator.statusline_refresh.refresh_line`: sets the status bar's refresh interval in
+    every settings file osiris owns and returns the line deploy prints. Never raises."""
+    from src.orchestrator.statusline_refresh import refresh_line
+
+    try:
+        return refresh_line(root)
+    except Exception as exc:  # noqa: BLE001 - a settings hiccup must never crash deploy's report
+        return f"statusline refresh: skipped ({type(exc).__name__}: {exc})"
+
+
 def _ensure_mcp_approval_line() -> str:
     """`src.orchestrator.mcp_approval.approval_line`: merges `osiris` into the user-level
     `enabledMcpjsonServers` and returns the line deploy prints. Never raises past its own
@@ -4527,6 +4538,7 @@ async def cmd_deploy(
         # repos included) in the user-level settings, instead of Claude Code asking again
         # for each new checkout. Resolved by name at call time so tests can replace it.
         print(await asyncio.to_thread(_ensure_mcp_approval_line))
+        print(await asyncio.to_thread(_statusline_refresh_line, root))
 
         print(_run_install_script("scripts/install_prune_timers.sh", root))
 
