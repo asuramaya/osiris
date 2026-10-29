@@ -17,6 +17,7 @@ import contextlib
 import faulthandler
 import itertools
 import json
+import logging
 import signal
 import sys
 import time
@@ -110,6 +111,7 @@ from src.orchestrator.mailbox import (
     dim_brief as mailbox_dim,
 )
 from src.orchestrator.monitor import health_banner, organ_health
+from src.orchestrator.phase_clock import PhaseClock
 from src.orchestrator.smoke import smoke as run_smoke
 from src.orchestrator.sources import as_dicts, suggest
 from src.orchestrator.swaps import classify_swap, swap_banner
@@ -2649,6 +2651,7 @@ async def mount(
     # session) must never get to rename another lineage's real memory out from under it
     # before anyone has had a chance to notice the mint itself was wrong.
     mount_call_started_at = datetime.now(UTC)
+    clock = PhaseClock()
     pool = await _pool_get()
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
@@ -2862,8 +2865,10 @@ async def mount(
     # JSONL-fallback removal: ingest the current session's turns from whatever harness the
     # operator is running (Claude Code, Crush, etc.), then hand the model reading to
     # resolve_identity so non-Claude sessions mount resolved. Fails open inside the helper.
+    clock.mark("pre_identity")
     store_reading = await identity_reading(pool, cwd=cwd, job_dir=job_dir,
                                            transcript_path=transcript_path)
+    clock.mark("identity_reading")
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model,
                              claimed=claimed, fallback_seed=key,
                              store_reading=store_reading,
@@ -2963,6 +2968,7 @@ async def mount(
     # The first act seats you: a still-anonymous agent mounting from a seat's office is
     # the seat's next life; the mint happens at this act, never at the launch trigger.
     mount_mint_reason = None
+    clock.mark("resolve_and_seat_ledger")
     claimed_office = await handshake.office_claim(
         Actions(pool), cwd=cwd, agent_id=ident.agent_id)
     if claimed_office is not None:
@@ -2976,6 +2982,7 @@ async def mount(
     # unseated/visitor identity is an unconditional no-op (`held_seat` finds nothing to
     # match), safe to run even before the registered/visitor branch below decides whether
     # register_agent runs at all.
+    clock.mark("office_claim")
     await _resolve_project_seat_first(pool, ident)
     # The visitor gate, ported from automount(): automount() has never once minted an
     # unrecognized session from a bare greeting; a genuinely unmatched arrival gets a
@@ -2986,6 +2993,7 @@ async def mount(
     # adapted: mount() carries no seat_id/attach_token (that flow is a separate tool,
     # attach_seat); `claimed_office is not None` is its equivalent credentialed act, the
     # first authenticated action in a seat's own office.
+    clock.mark("project_seat_first")
     registered = bool(lived or viewed is not None or claimed_office is not None)
     if registered:
         agent_uuid = await register_agent(
@@ -3035,6 +3043,7 @@ async def mount(
                 session_id=Path(job_dir).name, actor=settings.osiris_actor)
         except Exception:  # noqa: BLE001 : the ledger is a bonus; the mount never dies of it
             pass
+    clock.mark("register_agent")
     if key is not None:
         _prune_agents()  # opportunistic: mount is where churn shows up
         _agents[key] = ident
@@ -3062,10 +3071,12 @@ async def mount(
             await mounts.save_mount(pool, job_dir=sa, agent_id=ident.agent_id,
                                     project=ident.project, cwd=cwd, model=ident.model,
                                     session_key=key)
+    clock.mark("save_mount")
     counts = (await unread_counts(pool, ident.project, reader_agent=ident.agent_id,
                                   lease_secs=lease) if ident.project else {"total": 0, "ask": 0})
     unread, asks = counts["total"], counts["ask"]
     # the desk, scoped: this seat's own unanswered briefs
+    clock.mark("unread_counts")
     op_unread = await mailbox.desk_briefs_from(pool, ident.agent_id)
     banner = swap_banner(classify_swap(
         ident.model_history, ident.model,
@@ -3083,9 +3094,11 @@ async def mount(
             pin_state = project_pin_state(ident)  # calm state, not an error: agents.py
             if pin_state:
                 pin_heal = {"state": "unset", "note": pin_state}
+    clock.mark("desk_banner_heal")
     seat = await handshake._seat_of(Actions(pool), ident.agent_id)
     # co-agent awareness at arrival: a live sibling in your own repo is the one blindness
     # that costs unrecoverable work (a stomped commit)
+    clock.mark("seat_of")
     co_agents = (await _co_agents(pool, ident.project, ident.agent_id)
                 if ident.project else None)
     # Held work, once per session: surfaced here, not on orient()'s primary path, same
@@ -3105,6 +3118,7 @@ async def mount(
     # "visitor": a real value gets its normal key, an absence gets its own key naming the
     # absence and what to do about it.
     proj_canonical = None
+    clock.mark("co_agents_held_work")
     if ident.project:
         # The canonical in its own field, same fix as get_status/orient (see get_status's
         # own comment): `project` is the current display name, `project_canonical` the
@@ -3191,6 +3205,7 @@ async def mount(
             "that inherited this session UUID, you are not the agent that retired: "
             "disclose that to the operator. If this is a deliberate reanimation, say so "
             "as well. This is always reported, never silent.")
+    clock.mark("project_canonical_receipt")
     away = await mounts.while_away(
         pool, ident.project, ident.agent_id, _prev_seen.get(ident.agent_id))
     # which agent acted under this identity, and how the conversation moved, since last seen
@@ -3285,6 +3300,10 @@ async def mount(
     # hunks, check foreign markers'); the `live` list says who is here, this says what to
     # do about it, the same identity-safety class as the banners above, not redundant
     # guidance. Stays in both modes here too, matching orient()'s own fix.
+    clock.mark("while_away_and_memory_custody")
+    logging.getLogger("osiris.mcp").info("mount phases: %s", clock.line())
+    if verbose:
+        out["phase_ms"] = clock.phases_ms()
     return out if verbose else _terse(
         out, ("cwd_corrected", "note"), ("note",))
 
