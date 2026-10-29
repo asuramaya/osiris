@@ -23,6 +23,13 @@ re-running the exact check that already gave up. Agent is registered with an EMP
 by design never guessing a project from a name alone, so it proposes nothing, ever, until
 a real signal is designed for it.
 
+THE STOPLIST (2026-10-29): a project whose name is also a seat or agent name, a person's
+name or an ordinary word counts only when it is mentioned the way a repository is (`repo:x`,
+a path ending `/x`, "x repo"); the bare word there is the author or the sentence (live: a
+thread that said it was filed elsewhere was matched to the project named for its author).
+Decided at read time against the live seats and people (`_ambiguous_names`), nothing listed
+by hand but a small generic word list.
+
 THE LANE SIGNAL (a later ruling, 2026-09-11): the FIRST DAY's own telemetry measured the
 original "exactly one project mentioned" gate against real next-in-queue text and found
 it almost never true (6, 8, 0, 0 candidates), so real text was either silent or
@@ -156,21 +163,79 @@ _WORD_RE_CACHE: dict[str, re.Pattern[str]] = {}
 _DOMINANCE_FACTOR = 2
 
 
-async def _project_patterns(pool: asyncpg.Pool) -> list[tuple[uuid.UUID, re.Pattern[str], str]]:
-    """Every LIVE SoftwareProject's whole-word, case-insensitive name pattern:
+# Plain words a repository could be named for, so that the word in a sentence is not evidence of
+# the repository. A SMALL generic list, never repo names: whether a project name collides with
+# one is decided at read time, against the live project list.
+_ORDINARY_WORDS = frozenset((
+    "api app apps base bridge build cloud code common config console core data demo desk "
+    "docs engine example framework gateway hub internships kernel lab library link main model "
+    "monitor neo network node pipeline platform plugin portal probe project prototype proxy "
+    "recon registry relay runtime sandbox scanner server service shared signal site spec "
+    "starter store stream studio sync system test tests tool tools toolkit tracker utils "
+    "vector web worker workspace").split())
+
+
+async def _ambiguous_names(pool: asyncpg.Pool, project_names: list[str]) -> set[str]:
+    """The lower-case project names whose bare word is NOT evidence of the project: it is also
+    a seat's or an agent's own name or handle, a person's name (the local part of a `dev:` or
+    `person:` identity), or an ordinary word. Read live, so a new seat that shares a project's
+    name is covered the day it is claimed, with nothing listed by hand."""
+    lowered = [n.lower() for n in project_names]
+    found = {n for n in lowered if n in _ORDINARY_WORDS}
+    for row in await pool.fetch(
+            "SELECT DISTINCT lower(a.value #>> '{}') AS n FROM current_assertions a "
+            "JOIN objects o ON o.id=a.object_id "
+            "WHERE o.type IN ('Seat','Agent') AND a.name IN ('name','handle') "
+            "AND lower(a.value #>> '{}') = ANY($1::text[])", lowered):
+        found.add(row["n"])
+    for row in await pool.fetch(
+            "SELECT DISTINCT lower(split_part(split_part(canonical, ':', 2), '@', 1)) AS n "
+            "FROM objects WHERE canonical ~ '^(dev|person):' AND status='active'"):
+        if row["n"] in lowered:
+            found.add(row["n"])
+    return found
+
+
+_STRICT_RE_CACHE: dict[str, re.Pattern[str]] = {}
+
+
+def _strict_pattern(name: str) -> re.Pattern[str]:
+    """A mention that is shaped like a repository: `repo:name`, a path ending in `/name`, or
+    "name repo". The only kind that counts for a name that is also a person, a seat or a word.
+    A home directory (`/home/name`, `/Users/name`) or a GitHub owner (`github.com/name`) is
+    the person, not a repository."""
+    pattern = _STRICT_RE_CACHE.get(name)
+    if pattern is None:
+        e = re.escape(name)
+        pattern = re.compile(
+            rf"(?:repo:|(?<!home)(?<!Users)(?<!github\.com)[/\\]){e}\b"
+            rf"|\b{e}(?:'s)?[ -](?:repo|repository|codebase)\b", re.IGNORECASE)
+        _STRICT_RE_CACHE[name] = pattern
+    return pattern
+
+
+async def _project_patterns(
+    pool: asyncpg.Pool,
+) -> list[tuple[uuid.UUID, re.Pattern[str], str]]:
+    """Every LIVE SoftwareProject's name pattern: whole-word and case-insensitive,
     word-boundary-anchored so a short project name never matches inside an unrelated longer
-    word (e.g. "os" inside "cosmos")."""
+    word (e.g. "os" inside "cosmos"). A name that is also a seat, an agent, a person or an
+    ordinary word (`_ambiguous_names`) gets the repo-shaped pattern instead, since the bare
+    word there is far more often the author or the sentence than the repository."""
+    rows = [(p["id"], p["canonical"].removeprefix("repo:").strip()) for p in await pool.fetch(
+        "SELECT id, canonical FROM objects WHERE type='SoftwareProject' AND status='active'")]
+    rows = [(pid, name) for pid, name in rows if name]
+    ambiguous = await _ambiguous_names(pool, [name for _, name in rows])
     out: list[tuple[uuid.UUID, re.Pattern[str], str]] = []
-    for p in await pool.fetch(
-            "SELECT id, canonical FROM objects WHERE type='SoftwareProject' AND status='active'"):
-        name = p["canonical"].removeprefix("repo:").strip()
-        if not name:
+    for pid, name in rows:
+        if name.lower() in ambiguous:
+            out.append((pid, _strict_pattern(name), name.lower()))
             continue
         pattern = _WORD_RE_CACHE.get(name)
         if pattern is None:
             pattern = re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)
             _WORD_RE_CACHE[name] = pattern
-        out.append((p["id"], pattern, name.lower()))
+        out.append((pid, pattern, name.lower()))
     return out
 
 
@@ -450,7 +515,11 @@ async def abstention_survey(
             x = by_id.get(r["id"])
             if x is None:
                 continue
-            picked, _t, signal = await _dominant_project(pool, lane.text_fields, r["id"])
+            picked, signal = x["dominant"], "dominance"
+            if picked is None and x["has_author"]:
+                picked, signal = await _author_works_in(pool, r["id"]), "author_tiebreak"
+            if picked is None:
+                signal = "none"
             if picked is not None:
                 reason = None
             elif x["counts"]:
