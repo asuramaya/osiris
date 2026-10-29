@@ -394,6 +394,17 @@ bigger pool would not make a render faster; it would only let more of them run a
 Reducing the queries a render makes (the real-session path adds about 480 ms to the
 anonymous one) is the cheapest lever on every number that follows.
 
+**Why it was slow, found 2026-10-29.** Most of the cost was Postgres JIT compilation, not
+query work. The mail predicate behind both routes is costed by the planner at about 16
+million (a hashed subplan multiplied per row), far past `jit_above_cost` (100,000), so
+Postgres spent 257 ms of one 305 ms execution compiling it and 48 ms running it; the same
+query with JIT off takes 52 ms. Every pool now sets `jit = off` (`src/db/pool.py`).
+Measured on the live database, one connection running a render and a turn-end back to
+back, backend CPU per pair fell from 2.1 s to 0.68 s, and interleaved wall time per
+real-session render went from a 950 ms median to 460 ms and per turn-end from 700 ms to
+165 ms. Migration 0077 adds two indexes behind the same routes. The latency tables above
+are the figures from before this change; re-measure after it deploys.
+
 Throughput ceiling per route if each request holds one connection for its whole
 latency (`pool_size / p50`; an upper bound on what the pool can serve, since a request
 that holds its connection for less than its full latency would go faster, and a

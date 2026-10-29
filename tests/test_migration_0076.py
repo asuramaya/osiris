@@ -44,9 +44,8 @@ async def _run(actions: Actions, statements: list[str]) -> None:
         await actions.pool.execute(sql)
 
 
-async def test_the_chain_ends_at_0076_and_the_extension_is_there(actions: Actions) -> None:
-    assert await actions.pool.fetchval(
-        "SELECT version_num FROM alembic_version") == "0076"
+async def test_the_chain_has_reached_0076_and_the_extension_is_there(actions: Actions) -> None:
+    assert int(await actions.pool.fetchval("SELECT version_num FROM alembic_version")) >= 76
     assert await _installed(actions)
 
 

@@ -94,3 +94,17 @@ async def test_acquire_wait_stats_measures_real_contention(pg_dsn: str) -> None:
         assert stats["max_ms"] >= 150  # the contended acquire, well under the 200ms hold
     finally:
         await pool.close()
+
+
+async def test_create_pool_turns_jit_off(pg_dsn: str) -> None:
+    """The mail predicate behind /heartbeat is costed far past jit_above_cost, and JIT
+    compiled it for 257 of its 305 ms (measured on the live box, 2026-10-29). Every pool
+    runs with JIT off; this holds with and without an application name."""
+    for name in (None, "osiris-test-jit"):
+        pool = await create_pool(pg_dsn, min_size=1, max_size=1, application_name=name)
+        try:
+            assert await pool.fetchval("SELECT current_setting('jit')") == "off"
+            if name:
+                assert await pool.fetchval("SELECT current_setting('application_name')") == name
+        finally:
+            await pool.close()
