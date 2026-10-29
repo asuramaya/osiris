@@ -143,6 +143,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         # ensure_type's keep-prior-on-omission contract makes this safe to run on
         # every boot, idempotent, never blanking an already-richer Type.
         await seed_catalog(Actions(app.state.pool))
+        from src.orchestrator.semantics import warm_in_background
+
+        warm_in_background(app.state.pool)   # first search after a restart is not the cold one
         # manifests = file helpers + search-engine dorking + osint4all suggest sources
         searches = search_manifests()
         app.state.manifests = {**load_manifests(_HELPERS_DIR), **searches, **suggest_manifests()}
