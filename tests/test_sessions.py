@@ -1142,8 +1142,9 @@ def test_dormant_history_note_names_the_resume_command_when_resumable() -> None:
         "last_touched": "2026-08-02T17:57:18+00:00",
         "resumable": True, "resume_command": "claude --resume abc123",
     })
-    assert "claude --resume abc123" in note
-    assert "It IS resumable" in note
+    assert "It IS resumable" in note and "osiris resume <seat>" in note
+    # the old claim that `claude --bg` ignores --resume is false (verified on 2.1.316)
+    assert "silently ignores" not in note and "by hand" not in note
 
 
 def test_dormant_history_note_names_not_resumable_when_over_ceiling() -> None:

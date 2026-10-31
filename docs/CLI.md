@@ -144,7 +144,7 @@ make sense on a fresh install); bare `osiris seed` runs the full process. Idempo
 either way: a second run never duplicates a composition or a room, it only heals
 forward.
 
-## `osiris launch <handle> [--model] [--debug]`
+## `osiris launch <handle> [--model] [--fresh] [--verbose] [--debug]`
 
 Gives a seat a running process. **Default mode: `claude --bg`**, the harness's own
 background-session surface. Every process this creates is visible in the operator's
@@ -186,6 +186,20 @@ bounded-poll honesty discipline, never a bare `launched: true`:
   for the spawned process to appear, then reports it confirmed, with a pointer to find
   it in `claude agents` under the reported handle, plus the harness's own session id
   when the roster carries one.
+
+**What it prints.** At most three short lines: what happened and, only if needed, one
+next step as a command to copy. A seat that is not trusted by Claude Code yet gets one
+line: `<dir> is not trusted by Claude Code yet: run  cd ~/<dir> && claude  , accept, then
+launch again.` Granting trust stays the operator's act; osiris never writes it. The model,
+session ids, why a step was skipped, and any old-transcript note are behind `--verbose`.
+
+**A seat with an earlier session is continued, not shadowed.** When the seat has a
+session `osiris resume` could continue (same candidate walk and identity gate), launch
+continues it (`claude --bg --resume`, verified live on Claude Code 2.1.316) and says so
+in one line. `--fresh` starts a new session on purpose. `osiris resume` speaks in the
+same voice: one line on success, one line and one next step on a refusal (nothing to
+resume, a session it cannot confirm is the seat's own, another account's history,
+Claude Code refusing to start it), the gate's numbers behind `--verbose`.
 
 If a live process already holds the handle, `launch` returns that instead of starting
 a second one: it never launches a second process onto a seat that's already occupied.

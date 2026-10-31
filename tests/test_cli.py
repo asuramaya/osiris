@@ -1277,8 +1277,8 @@ async def test_cmd_launch_harness_spawns_and_confirms(
     # What must still hold is the same thing the old assertion was protecting: launch says
     # nothing about resume machinery it did not run.
     out_text = buf.getvalue()
-    assert "spawned" in out_text and "claude --bg" in out_text
-    assert "resumed" not in out_text          # launch never speaks of resuming, either way
+    assert "freshbg is running" in out_text and "in claude agents" in out_text
+    assert "resumed" not in out_text          # nothing to resume, so launch says nothing of it
     assert "min_tail_bytes" not in out_text and "ceiling=" not in out_text
 
 
@@ -1365,8 +1365,9 @@ async def test_cmd_launch_harness_confesses_dormant_history_to_stderr(
     with redirect_stderr(buf):
         out = await _cmd_launch_harness("workeraa-cli", model=None, pool=actions.pool,
                                         wake_default=None, spawn=_spawn,
-                                        agents_json=_agents_json)
+                                        agents_json=_agents_json, verbose=True)
     assert out == 0
+    # the transcript's size and date are --verbose material (the default voice stays short)
     assert "20.3MB" in buf.getvalue()
     assert "2026-08-02T17:57:18+00:00" in buf.getvalue()
 
@@ -1406,7 +1407,7 @@ async def test_cmd_launch_harness_gives_up_honestly_when_never_visible(
                                         agents_json=_agents_json, sleep=_no_sleep)
     assert out == 0
     assert len(slept) == 8  # the full bounded poll, never an indefinite wait
-    assert "not yet visible" in buf.getvalue()
+    assert "not in claude agents yet" in buf.getvalue()
 
 
 # ═══ cmd_resume's own RESUME lane (task #136, 2026-08-05, split into
@@ -1521,14 +1522,8 @@ async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
     assert call.get("model") == "claude-sonnet-5"
     assert "private" in call["prompt"] and "seat" in call["prompt"]  # _DM_RESUME_PROMPT itself
     out_text = buf.getvalue()
-    assert "resumed session" in out_text and _RESUME_SID[:8] in out_text
-    # THE HONEST MESSAGE, updated for the persistent lane ():
-    # no defensive "a harness fact, not a bug" framing, and no longer claims the
-    # resumed body is invisible to `claude agents`, it isn't, anymore.
-    assert "a harness fact, not a bug" not in out_text
-    assert "idles after this turn rather than exiting" in out_text
-    assert "send it mail, it wakes on the next dispatch" in out_text
-    assert "claude attach" in out_text
+    assert "cliresume resumed" in out_text and _RESUME_SID[:8] in out_text
+    assert "a harness fact, not a bug" not in out_text  # no defensive framing, ever
 
 
 async def test_cmd_resume_harness_clears_a_stale_stopped_record_before_spawning(
@@ -1563,11 +1558,13 @@ async def test_cmd_resume_harness_clears_a_stale_stopped_record_before_spawning(
         out = await _cmd_resume_harness(
             "clicleartest", model="claude-sonnet-5", pool=actions.pool, wake_default=None,
             agents_json=_agents_json, resume_spawn=_resume_spawn,
-            settings=_resume_settings(sense), clear_stale_record=_clear_stale_record)
+            settings=_resume_settings(sense), clear_stale_record=_clear_stale_record,
+            verbose=True)
 
     assert out == 0
     assert order == ["clear", "spawn"]  # clear runs BEFORE the spawn, never after
-    assert "cleared a stale stopped record" in err_buf.getvalue()  # the NOTE goes to stderr
+    # the note is --verbose material; the default voice is one short line
+    assert "cleared a stale stopped record" in err_buf.getvalue()
 
 
 async def test_cmd_resume_harness_resumes_a_zero_hop_candidate_with_no_signed_testimony(
@@ -1643,9 +1640,9 @@ async def test_cmd_launch_harness_falls_through_with_a_named_reason_when_not_res
 
     assert out == 1  # refused, never spawns anything, fresh or otherwise
     out_text = buf.getvalue()
-    assert "nothing resumable" in out_text
-    assert "compaction boundary itself" in out_text
-    assert "min_tail_bytes=1000" in out_text
+    assert "nothing to resume" in out_text and "osiris launch clicompact" in out_text
+    # the gate's own numbers and reason are for --verbose
+    assert "compaction boundary itself" not in out_text and "min_tail_bytes" not in out_text
 
 
 async def _resumable_seat_no_signed_testimony(
@@ -1737,9 +1734,9 @@ async def test_cmd_launch_harness_refuses_outright_one_hop_back_with_no_signed_t
 
     assert out == 1  # refused, not the ordinary success-with-fresh-spawn path
     err = buf.getvalue()
-    assert "refusing" in err
-    assert _RESUME_SID in err
-    assert "claude -p --resume" in err and _RESUME_SID in err.split("claude -p --resume")[1]
+    assert "can't be confirmed as its own" in err
+    assert _RESUME_SID[:8] in err and "osiris launch clihopback" in err
+    assert "claude -p --resume" not in err  # never "go run it by hand"
 
 
 # ═══ tree_cwd (task #135/#136, 2026-08-03): `osiris launch` had drifted
@@ -7705,8 +7702,8 @@ async def test_cmd_launch_harness_sees_a_live_body_of_the_same_lineage_at_anothe
                                spawn=_spawn, agents_json=_empty)
     assert out == 0
     assert spawned == []
-    assert "already-live" in out_buf.getvalue()
-    assert "agent:1ineage1" in err_buf.getvalue()
+    assert "already running" in out_buf.getvalue()
+    assert err_buf.getvalue() == ""  # how it was seen is --verbose
 
     # NEGATIVE CONTROL: the same row gone stale is no twin, the launch proceeds
     await actions.pool.execute(
@@ -7877,8 +7874,8 @@ async def test_cmd_resume_says_so_and_launches_fresh_when_the_history_is_another
         clear_stale_record=_boom)
     assert rc == 0
     err = capsys.readouterr().err
-    assert "history belongs to another Claude account; the harness will not load it" in err
-    assert "fresh-launch-account-mismatch" in err
+    assert "another Claude account" in err and "briefing" in err
+    assert "fresh-launch-account-mismatch" not in err  # the path name is --verbose
     assert len(launches) == 1 and launches[0]["handle"] == "cliacct"
     assert "cli old turn 19" in launches[0]["message"]
     # decided from the store BEFORE rematerializing: no old-owner transcript was written
@@ -7920,7 +7917,8 @@ async def test_launch_fails_honestly_when_the_harness_refuses_the_spawn(
                                    sleep=_no_sleep)
     cap = capsys.readouterr()
     assert rc == 1
-    assert "Workspace not trusted" in cap.err and "spawned" not in cap.out
+    assert "refusedbg is not trusted by Claude Code yet" in cap.err
+    assert "&& claude" in cap.err and "launch again" in cap.err and cap.out == ""
 
 
 async def test_launch_succeeds_when_the_named_session_shows_up_in_the_roster(
@@ -7944,7 +7942,7 @@ async def test_launch_succeeds_when_the_named_session_shows_up_in_the_roster(
                                    wake_default=None, spawn=_spawn, agents_json=_agents,
                                    sleep=_no_sleep)
     assert rc == 0
-    assert "confirmed: find it in `claude agents`" in capsys.readouterr().out
+    assert "okbg is running" in capsys.readouterr().out
 
 
 async def test_launch_fails_when_the_harness_named_a_session_that_never_appears(
@@ -7965,4 +7963,4 @@ async def test_launch_fails_when_the_harness_named_a_session_that_never_appears(
                                    sleep=_no_sleep)
     err = capsys.readouterr().err
     assert rc == 1
-    assert "FAILED" in err and "deadbeef" in err and "Nothing is running" in err
+    assert "did not start" in err and "deadbeef" in err and "claude logs deadbeef" in err
