@@ -131,6 +131,13 @@ def _run_restic_backup(
                 if init.returncode != 0:
                     return (f"restic init failed: "
                             f"{init.stderr.decode(errors='replace').strip()}")
+        from src.orchestrator import restic_locks
+
+        # a run killed mid-flight leaves a lock; clear stale ones, and say plainly who holds
+        # the repository when an exclusive lock is live (shared locks do not stop a backup)
+        outcome = restic_locks.clear_stale_locks(env, blocking_only_exclusive=True)
+        if outcome.busy:
+            return outcome.busy
         backup = subprocess.run(
             ["restic", "backup", str(source), "--exclude=*.tmp"],
             env=env, capture_output=True, timeout=_RESTIC_TIMEOUT_SECONDS, check=False)

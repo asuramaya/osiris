@@ -47,6 +47,30 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
+def _check_clear_of_locks(repo_url: str, env: dict[str, str]) -> str | None:
+    """Before a `restic check`: clear stale repository locks (a run killed mid-flight leaves
+    one behind, and every later check then fails on it) and name a live one plainly. Returns a
+    failure string only when the repository is busy or its locks cannot be read; what was
+    cleared is parked for the drill receipt."""
+    from src.orchestrator import restic_locks
+
+    outcome = restic_locks.clear_stale_locks(env)
+    if outcome.note:
+        restic_locks.add_note(repo_url, outcome.note)
+    return outcome.busy
+
+
+def _lock_failure(repo_url: str, env: dict[str, str], proc: Any) -> str | None:
+    """A check that failed on a lock appearing after the pre-check: re-read the locks and say
+    who holds the repository (or None when the output was not a lock failure)."""
+    from src.orchestrator import restic_locks
+
+    if not restic_locks.is_lock_failure(f"{proc.stdout}\n{proc.stderr}"):
+        return None
+    return _check_clear_of_locks(repo_url, env) or (
+        "repository was locked during the check; the stale lock was cleared, retry the drill")
+
+
 def run_drill(repo_url: str, *, scratch: Path | None = None) -> str | None:
     """Returns a failure string, or None on success. Cleans up the scratch directory
     in every case (`finally`), same discipline as osiris_pitr_drill.py's own
@@ -65,10 +89,14 @@ def run_drill(repo_url: str, *, scratch: Path | None = None) -> str | None:
     scratch = scratch or Path(tempfile.mkdtemp(prefix="osiris-offbox-drill-"))
     env = {**os.environ, "RESTIC_REPOSITORY": repo_url, "RESTIC_PASSWORD": password.decode()}
     try:
+        busy = _check_clear_of_locks(repo_url, env)
+        if busy:
+            return busy
         check = subprocess.run(["restic", "check"], env=env, capture_output=True,
                                text=True, timeout=600)
         if check.returncode != 0:
-            return f"restic check failed:\n{check.stdout}\n{check.stderr}"
+            return (_lock_failure(repo_url, env, check)
+                    or f"restic check failed:\n{check.stdout}\n{check.stderr}")
 
         restore = subprocess.run(
             ["restic", "restore", "latest", "--target", str(scratch)],
@@ -222,10 +250,14 @@ def run_bounded_drill(
     budget = _Budget(budget_secs)
     rng = rng or random.Random()
     try:
+        busy = _check_clear_of_locks(repo_url, env)
+        if busy:
+            return busy
         check = _restic(["check", f"--read-data-subset={READ_DATA_SUBSET}"], env, budget,
                         "the repository check finished")
         if check.returncode != 0:
-            return f"restic check failed:\n{check.stdout}\n{check.stderr}"
+            return (_lock_failure(repo_url, env, check)
+                    or f"restic check failed:\n{check.stdout}\n{check.stderr}")
         recovery, dump, samples = _pick_samples(env, budget, rng)
         wanted = ([recovery] if recovery else []) + [p for p, _ in samples]
         if not wanted and not dump:
