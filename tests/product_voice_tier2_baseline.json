@@ -3,6 +3,6 @@
   "src/cli.py": 44,
   "src/ingest": 6,
   "src/mcp_server.py": 3,
-  "src/orchestrator": 84,
-  "tests": 11
+  "src/orchestrator": 88,
+  "tests": 16
 }

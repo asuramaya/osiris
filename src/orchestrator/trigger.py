@@ -3599,7 +3599,8 @@ async def _resolve_launch_project(
         read_project_label(office))
     charter_repos = await charter_of(pool, seat_id)
     if len(charter_repos) == 1:
-        if (candidate is not None and candidate != charter_repos[0]
+        if (candidate is not None
+                and candidate.lower() != charter_repos[0].lower()
                 and not await _same_project(pool, candidate, charter_repos[0])):
             return {"project": None, "refuse": {
                 "charter_project": charter_repos[0], "resolved_project": candidate}}
