@@ -749,6 +749,17 @@ async def _duplicate_suspect_siblings(pool: asyncpg.Pool, canonical: str,
     return sorted(siblings, key=lambda s: s["canonical"])
 
 
+def _bucket_key(bucket_map: dict[str, str], canonical: str) -> str:
+    """The key of `bucket_map` that names this canonical: the exact spelling when present,
+    else the one key that differs only by case (a pin of `Lilguy` is the project stored as
+    `repo:lilguy`). Two keys that differ only by case stay unresolved: the exact string is
+    returned and the caller's miss stands."""
+    if canonical in bucket_map:
+        return canonical
+    hits = [k for k in bucket_map if k.lower() == canonical.lower()]
+    return hits[0] if len(hits) == 1 else canonical
+
+
 async def _pin_name_resolution_note(pool: asyncpg.Pool, pin_value: str,
                                     ) -> dict[str, Any] | None:
     """A pin's `project` field is the canonical suffix by system-wide contract: every
@@ -962,10 +973,10 @@ async def roster(
         duplicate_siblings = None
         name_resolution = None
         if pin_state == "declared" and pin.value:
-            triage_bucket = bucket_map.get(f"repo:{pin.value}", "no-such-project")
+            pin_canonical = _bucket_key(bucket_map, f"repo:{pin.value}")
+            triage_bucket = bucket_map.get(pin_canonical, "no-such-project")
             if triage_bucket == "duplicate_suspect":
-                duplicate_siblings = await _duplicate_suspect_siblings(
-                    pool, f"repo:{pin.value}")
+                duplicate_siblings = await _duplicate_suspect_siblings(pool, pin_canonical)
             elif triage_bucket == "no-such-project":
                 name_resolution = await _pin_name_resolution_note(pool, pin.value)
         live_cwd = None
@@ -986,7 +997,7 @@ async def roster(
         # silence, not conflict.
         if pin_state != "declared" or not chartered:
             pin_charter_agreement = "n/a"
-        elif pin.value in chartered:
+        elif (pin.value or "").lower() in {c.lower() for c in chartered}:
             pin_charter_agreement = "agree"
         else:
             pin_charter_agreement = "disagree"

@@ -103,6 +103,20 @@ async def _resolve_software_project(pool: asyncpg.Pool, ref: str) -> asyncpg.Rec
         raise AmbiguousProjectRef(ref, sorted(str(r["canonical"]) for r in rows))
     if rows:
         return rows[0]
+    # Case is not identity: a label typed or pinned as `Lilguy` is the project whose stored
+    # canonical is `repo:lilguy`. Tried only after the exact lookup found nothing (an exact
+    # spelling always wins), and answering with the stored canonical, whatever its case.
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, o.status FROM objects o "
+        "WHERE o.type='SoftwareProject' AND o.status='active' "
+        "AND (lower(o.canonical)=lower($1) OR lower((SELECT a.value #>> '{}' "
+        "  FROM current_assertions a WHERE a.object_id=o.id AND a.name='name' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)) = lower($2))",
+        "repo:" + re.sub(r"(?i)^repo:", "", ref), re.sub(r"(?i)^repo:", "", ref))
+    if len(rows) > 1:
+        raise AmbiguousProjectRef(ref, sorted(str(r["canonical"]) for r in rows))
+    if rows:
+        return rows[0]
     # A RETIRED CANONICAL (object_aliases: a rename migrated the canonical) still names
     # the SAME object: found, and flagged `resolved_via_alias` so no caller is surprised
     # that the label it typed is no longer the object's own canonical.
