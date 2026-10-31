@@ -3,10 +3,24 @@
 `claude --bg` refuses a directory the user has not trusted ("Workspace not trusted. Run
 `claude` in <dir> once and accept the trust prompt, then retry.") and a seat launched
 there never exists. The harness keeps that choice in `~/.claude.json` under
-`projects[<path>].hasTrustDialogAccepted`. Measured against the installed harness: a
-directory is trusted when it, or ANY ancestor directory, has `hasTrustDialogAccepted:
-true`, even when its own entry says false or is missing (a fresh directory under a
-trusted parent spawns fine; one under none of them is refused).
+`projects[<path>].hasTrustDialogAccepted`.
+
+The rule, measured on the installed harness with fresh directories under a trusted
+`/home/asuramaya/code` (entries read before and after; the harness wrote none):
+
+  * a directory that is NOT inside a git repository is trusted when it or ANY ancestor has
+    `hasTrustDialogAccepted: true` (plain dir, dir with `.claude/settings.local.json`, dir
+    with a `.osiris` pin: all accepted);
+  * a directory inside a git repository is judged by the REPOSITORY, not its ancestors: a
+    fresh `git init` directory under the same trusted parent was REFUSED, and so was the same
+    plus `.claude/worktrees` and a pin. A repository is trusted by its own entry (or the
+    directory's own); a linked worktree (`.git` is a file) is trusted through its main
+    repository's entry, so a worktree with no entry of its own is accepted when the main
+    repo is trusted, as is any subdirectory of a trusted worktree.
+
+An earlier version of this module applied the first rule to every directory, so it called
+`/home/asuramaya/code/handlingtheloop` (a git repository with no entry of its own) trusted
+while the harness refused it.
 
 This module only reads. Trust is the operator's to grant, by running `claude` once in the
 directory and accepting the prompt; osiris never writes it.
@@ -32,14 +46,43 @@ def load_projects(home: Path | None = None) -> dict[str, Any] | None:
     return projects if isinstance(projects, dict) else None
 
 
+def _git_roots(path: Path) -> list[Path] | None:
+    """The git repository roots that govern `path`, or None when it is not inside one: the
+    nearest directory holding `.git`, and, when that `.git` is a FILE (a linked worktree),
+    the main repository's root as well. An unreadable worktree pointer counts as the
+    worktree root alone."""
+    for cand in (path, *path.parents):
+        marker = cand / ".git"
+        if marker.is_dir():
+            return [cand]
+        if marker.is_file():
+            roots = [cand]
+            try:
+                text = marker.read_text()
+                gitdir = Path(text.split("gitdir:", 1)[1].strip().splitlines()[0])
+                common = (gitdir / (gitdir / "commondir").read_text().strip()).resolve()
+                if common.name == ".git":
+                    roots.append(common.parent)
+            except (OSError, IndexError, ValueError):
+                pass
+            return roots
+    return None
+
+
 def is_trusted(path: str, projects: dict[str, Any]) -> bool:
-    """True when `path` or any ancestor has `hasTrustDialogAccepted: true`."""
-    here = Path(path)
-    for candidate in (here, *here.parents):
+    """Whether the harness accepts `path` (see the module docstring for the measured rule):
+    inside a git repository, only the repository's own root (or the path itself) counts;
+    outside one, the path or any ancestor."""
+
+    def accepted(candidate: Path) -> bool:
         entry = projects.get(str(candidate))
-        if isinstance(entry, dict) and entry.get("hasTrustDialogAccepted") is True:
-            return True
-    return False
+        return isinstance(entry, dict) and entry.get("hasTrustDialogAccepted") is True
+
+    here = Path(path)
+    roots = _git_roots(here)
+    if roots is not None:
+        return accepted(here) or any(accepted(r) for r in roots)
+    return any(accepted(c) for c in (here, *here.parents))
 
 
 def untrusted_dirs(paths: Sequence[str | None], home: Path | None = None) -> list[str]:
