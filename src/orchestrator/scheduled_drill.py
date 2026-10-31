@@ -86,8 +86,13 @@ async def run_due_drills(
             fail = await asyncio.to_thread(run_drill, url)
         except Exception as exc:  # noqa: BLE001 - one target's drill must not sink the tick
             fail = f"{type(exc).__name__}: {exc}"
-        record_restore_drill(url, ok=fail is None, error=fail)
-        out.append({"name": name, "ok": fail is None, **({"error": fail} if fail else {})})
+        from src.orchestrator.restic_locks import pop_notes
+
+        notes = pop_notes(url)
+        note = "; ".join(notes) if notes else None
+        record_restore_drill(url, ok=fail is None, error=fail, note=note)
+        out.append({"name": name, "ok": fail is None, **({"error": fail} if fail else {}),
+                    **({"note": note} if note else {})})
     return out
 
 

@@ -48,7 +48,9 @@ def _read_restore_drill_receipts() -> dict[str, Any]:
         return {}
 
 
-def _write_restore_drill_receipt(repo_url: str, *, ok: bool, error: str | None) -> None:
+def _write_restore_drill_receipt(
+    repo_url: str, *, ok: bool, error: str | None, note: str | None = None,
+) -> None:
     """Same merge discipline as offload_runner._write_receipt: a failed drill never
     clobbers an earlier real `last_passed_at` with None, it only ever adds
     `last_attempt_at`/`last_error` alongside whatever last actually passed. The
@@ -61,6 +63,7 @@ def _write_restore_drill_receipt(repo_url: str, *, ok: bool, error: str | None) 
     existing = receipts.get(repo_url, {})
     now = datetime.now(UTC).isoformat()
     existing["last_attempt_at"] = now
+    existing["last_note"] = note  # what the attempt did on the way, e.g. a stale lock cleared
     if ok:
         existing["last_passed_at"] = now
         existing["last_error"] = None
@@ -70,10 +73,12 @@ def _write_restore_drill_receipt(repo_url: str, *, ok: bool, error: str | None) 
     path.write_text(json.dumps(receipts, indent=2))
 
 
-def record_restore_drill(repo_url: str, *, ok: bool, error: str | None) -> None:
+def record_restore_drill(
+    repo_url: str, *, ok: bool, error: str | None, note: str | None = None,
+) -> None:
     """Public write entry point for the scheduled drill (`scheduled_drill`), same merge
     discipline as the manual drill's own receipt."""
-    _write_restore_drill_receipt(repo_url, ok=ok, error=error)
+    _write_restore_drill_receipt(repo_url, ok=ok, error=error, note=note)
 
 
 def restore_drill_receipts() -> dict[str, Any]:
