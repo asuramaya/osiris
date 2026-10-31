@@ -187,9 +187,9 @@ def test_already_live_reads_as_a_state_not_a_refusal() -> None:
 
     from src.cli import _resolve_and_guard_launch
     src = inspect.getsource(_resolve_and_guard_launch)
-    assert "already-live" in src, "the already-live verdict word is gone"
-    # the diagnostic goes to stderr so a pipe carries only the verdict
-    idx = src.index("already-live")
+    assert "already_running" in src, "the already-running verdict is gone"
+    # the diagnostic goes to stderr (and only with --verbose) so a pipe carries only the verdict
+    idx = src.index("already_running")
     assert "stderr" in src[idx:idx + 400], "the how-we-know line must not pollute stdout"
 
 

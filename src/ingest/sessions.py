@@ -640,15 +640,13 @@ def dormant_history_confession(
     at the caller with the full picture); the freshest match across all of them is
     reported, never just the first one found.
 
-    This is disclosure, not prevention, on purpose. `claude --bg` manages its own session
-    id and silently ignores both `--session-id` and `--resume`/`--continue` (confirmed by
-    real spawns: a fresh, unrelated session every time, no warning printed at all, worse
-    than `--session-id`'s at least-it-warns behavior). Nothing on this side of the spawn
-    call can make the harness's own spare-process pool actually hand the new session this
-    file. That is a genuine Claude-Code-internal gap, meant to be flagged rather than
-    worked around; this function's own job narrows to naming the one thing still true and
-    useful: whether a human (or another lane entirely) could resume it by hand, and the
-    exact command.
+    This is disclosure, not prevention, on purpose. A FRESH `claude --bg` manages its own
+    session id and ignores `--session-id`: nothing on this side of the spawn call can make
+    the harness hand a brand-new session an old file. Continuing an old session is a
+    different spawn, `claude --bg --resume <id>`, which works (verified live on Claude Code
+    2.1.316: same background id, same transcript file); `osiris resume`, and `osiris
+    launch` for a seat that has a resumable session, take that road. This function's own
+    job is to name what is sitting at the office and whether the resume gates allow it.
 
     Resumable means the same gates `resume_verdict` enforces (shared with trigger.py's own
     resume path; one decision, never two hand-synchronized copies): a minimum floor on
@@ -707,9 +705,9 @@ def dormant_history_note(info: dict[str, Any]) -> str:
     """The rendered one-line report for `dormant_history_confession`'s own result, shared
     so the CLI lane and the MCP launch() tool say the identical sentence rather than
     drifting into two wordings for one fact. Names the resume command by hand when both
-    gates allow it: `osiris launch` cannot itself resume through the harness-native `--bg`
-    lane, a proven, real Claude-Code-internal gap, so handing the human the right command
-    is what's actually achievable.
+    gates allow it. (The earlier claim here, that `claude --bg` silently ignores --resume,
+    stopped being true: `claude --bg --resume <id>` continues the session, verified live on
+    Claude Code 2.1.316, and `osiris resume` and the CLI `osiris launch` both ride it.)
 
     The not-resumable case is worded as an upgrade, not a denial, correcting an earlier
     cost-framed draft: a resume does not return that session, it returns the last compaction
@@ -722,10 +720,8 @@ def dormant_history_note(info: dict[str, Any]) -> str:
             f"touched {info['last_touched']}. launch cannot see or control whether the "
             f"harness hands the fresh session that same file; naming it, not blocking it.")
     if info.get("resumable") and info.get("resume_command"):
-        return (f"{base} It IS resumable (`osiris launch` itself cannot do this: `claude "
-                f"--bg` silently ignores --resume/--continue, a proven harness gap, not "
-                f"osiris's to fix): run `{info['resume_command']}` by hand to bring back "
-                f"that session instead of a different one wearing its name.")
+        return (f"{base} It IS resumable: `osiris resume <seat>` continues that session "
+                f"instead of starting a different one in its name.")
     reason = info.get("not_resumable_reason") or ""
     if "compaction boundary itself" in reason:
         return (f"{base} NOT resumable, and that is an UPGRADE, not a denial: it closed "

@@ -324,6 +324,13 @@ CLI_ONLY_PARAMS = {
         "unreachable from a terminal.",
     ("launch", "debug"): "the PTY-broker fallback lane is an operational/incident choice; "
         "the MCP tool only ever spawns the harness-native default substrate",
+    ("launch", "verbose"): "how much a terminal prints; the MCP tool returns one structured "
+        "receipt either way",
+    ("launch", "fresh"): "the operator's terminal choice to start a new session when the seat "
+        "has a continuable one; the MCP launch tool always starts a fresh session (continuing "
+        "is the separate resume tool)",
+    ("resume", "verbose"): "how much a terminal prints; the MCP tool returns one structured "
+        "receipt either way",
     ("mint-seat", "manager"): "MCP infers the manager from the caller's own held seat by "
         "design (\"there is no override param\", mint_seat's own MCP docstring); a raw "
         "terminal holds no seat of its own to infer it from",

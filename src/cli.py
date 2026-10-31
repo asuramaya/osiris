@@ -119,6 +119,7 @@ from typing import Any
 
 import asyncpg
 
+from src import launch_voice as voice
 from src.config.settings import Settings
 from src.manager.client import default_socket_path, manager_call
 
@@ -1404,6 +1405,7 @@ def _collapse_resume_log(log: list[str]) -> str:
 
 async def _resolve_and_guard_launch(
     handle: str, *, pool: asyncpg.Pool, agents_json: AgentsJson, verb: str,
+    verbose: bool = False,
 ) -> tuple[dict[str, Any], str] | int:
     """`osiris resume`'s OWN GUARDS NOW: `osiris launch` always mints fresh, `osiris
     resume` always continues, no flag, no automatic guess, the VERB is the property.
@@ -1501,10 +1503,11 @@ async def _resolve_and_guard_launch(
         # does. Neither is a failure and neither should shout. The DIAGNOSTIC (how we
         # know) goes to stderr so `osiris launch X | ...` stays clean; the VERDICT stays
         # on stdout, and now names which of the two things happened.
-        print(f"already-live: {handle}. A session is already there, nothing started")
-        print(f"osiris {verb}: seen via {', '.join(seen_via)}", file=sys.stderr)
+        print(voice.already_running(verb, handle))
+        if verbose:
+            print(f"osiris {verb}: seen via {', '.join(seen_via)}", file=sys.stderr)
         return 0
-    if twin["stale_harness_row"] is not None:
+    if twin["stale_harness_row"] is not None and verbose:
         # A DEAD ROW THE TWIN GUARD SAW AND IGNORED: `claude agents --json` still lists
         # this seat's OLD body (failed state, dead pid), never trusted as a twin, but
         # named here so a human running `osiris launch` by hand sees the harness's own
@@ -1516,10 +1519,41 @@ async def _resolve_and_guard_launch(
     return facts, launch_cwd
 
 
+async def _launch_resumes_instead(
+    handle: str, facts: dict[str, Any], launch_cwd: str, *, pool: asyncpg.Pool,
+    settings: Settings | None,
+) -> bool:
+    """Does this seat have an earlier session that `osiris resume` would continue? Same
+    candidate walk and identity gate resume itself runs, read-only here (nothing is
+    spawned). A launch used to start a different session wearing the seat's name and then
+    tell the person to resume the old one by hand; now it just continues the old one."""
+    from src.config.settings import get_settings
+    from src.orchestrator.agents import _generation
+    from src.orchestrator.seats import seat_receipt
+    from src.orchestrator.trigger import _lineage_resume_candidate, _resume_guard
+
+    st = settings or get_settings()
+    holder = ((await seat_receipt(pool, facts["seat_id"])) or {}).get("holder")
+    if not holder:
+        return False
+    outcome = await _lineage_resume_candidate(
+        pool, holder, st, repo=launch_cwd, seat_id=facts["seat_id"])
+    resume = outcome[0] if isinstance(outcome, tuple) else None
+    if resume is None:
+        return False
+    gate, _refusal = await _resume_guard(
+        pool, (resume[0], resume[1], resume[2], resume[3]), _generation(holder)[0],
+        seat_id=facts["seat_id"], st=st, hop=resume[5], launch_cwd=launch_cwd)
+    return gate is None
+
+
 async def _cmd_launch_harness(
     handle: str, *, model: str | None, pool: asyncpg.Pool, wake_default: str | None,
     spawn: SpawnClaudeBg, agents_json: AgentsJson,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep, message: str = "",
+    verbose: bool = False, fresh: bool = False, settings: Settings | None = None,
+    resume_spawn: ResumeSpawn | None = None,
+    clear_stale_record: ClearStaleRecord | None = None,
 ) -> int:
     """THE DEFAULT LANE, following trigger.launch_seat's own flip: `claude --bg` +
     `claude agents --json`, the harness's own front-end surface. Every body this creates
@@ -1569,6 +1603,17 @@ async def _cmd_launch_harness(
 
     from src.config.settings import get_settings
     st = get_settings()
+    launch_cwd = facts.get("tree_cwd") or office
+    # A seat with an earlier session that can be continued is continued, not shadowed by a
+    # new one. `--fresh` starts a new session on purpose; a briefing-seeded launch (the
+    # other-account fallback inside resume) is already the fresh half of that decision.
+    if not fresh and not message and await _launch_resumes_instead(
+            handle, facts, launch_cwd, pool=pool, settings=settings):
+        return await _cmd_resume_harness(
+            handle, model=model, pool=pool, wake_default=wake_default,
+            agents_json=agents_json, resume_spawn=resume_spawn or spawn,
+            settings=settings, clear_stale_record=clear_stale_record, launch_spawn=spawn,
+            verbose=verbose, verb="launch")
     out = await launch_seat(
         Actions(pool), caller="operator", target=handle, model=model, settings=st,
         substrate="harness", spawn=spawn, agents_json=agents_json,
@@ -1576,30 +1621,34 @@ async def _cmd_launch_harness(
 
     status = out.get("status")
     if status == "already-live":
-        print(f"already-live: {handle}. A session is already there, nothing started")
+        print(voice.already_running("launch", handle))
         seen_via = out.get("seen_via")
-        if seen_via:
+        if seen_via and verbose:
             print(f"osiris launch: seen via {', '.join(seen_via)}", file=sys.stderr)
         return 0
     if status != "launched":
-        print(f"osiris launch: refused: {out.get('detail', status)}", file=sys.stderr)
+        detail = str(out.get("detail", status))
+        if status == "refused-spawn" and voice.is_untrusted(detail):
+            print(voice.untrusted_line("launch", launch_cwd, detail), file=sys.stderr)
+        else:
+            print(f"osiris launch: refused: {detail}", file=sys.stderr)
         return 1
 
     dormant = out.get("dormant_history")
-    if dormant is not None:
+    if dormant is not None and verbose:
         from src.ingest.sessions import dormant_history_note
         print(f"osiris launch: {handle!r}: {dormant_history_note(dormant)}",
               file=sys.stderr)
 
     window = out.get("window")
-    print(f"osiris launch: spawned {window!r} via claude --bg, requested model="
-          f"{out.get('spawned_model') or '(claude CLI default)'}")
+    if verbose:
+        print(f"osiris launch: spawned {window!r} via claude --bg, requested model="
+              f"{out.get('spawned_model') or '(claude CLI default)'}")
 
     if out.get("can_receive"):
-        print(f"  confirmed: find it in `claude agents` as {window!r}")
+        print(voice.running("launch", handle, window))
         return 0
 
-    launch_cwd = facts.get("tree_cwd") or office
     spawned_id = out.get("spawned_id")
     alive_row: dict[str, Any] | None = None
     for _ in range(8 if not spawned_id else 15):
@@ -1616,18 +1665,14 @@ async def _cmd_launch_harness(
     if alive_row is None and spawned_id:
         # The harness itself named the session ("backgrounded · <id>") and it never
         # showed up: a body that does not exist, not one that is slow. Say so.
-        print(f"osiris launch: FAILED. The harness reported background session "
-              f"{spawned_id} for {handle!r} but it never appeared in `claude agents` "
-              "within 15 s. Nothing is running for this seat. Check `claude logs "
-              f"{spawned_id}`.", file=sys.stderr)
+        print(voice.never_appeared("launch", handle, str(spawned_id)), file=sys.stderr)
         return 1
     if alive_row is None:
-        print("  not yet visible in `claude agents --json`. It may still be booting or "
-              "self-binding; re-check with `osiris fleet` in a few seconds.")
+        print(voice.started_not_visible("launch", handle))
         return 0
-    session_id = alive_row.get("sessionId")
-    print(f"  confirmed: find it in `claude agents` as {window!r}"
-          + (f" (session {session_id})" if session_id else ""))
+    print(voice.running("launch", handle, window))
+    if verbose and alive_row.get("sessionId"):
+        print(f"  session {alive_row.get('sessionId')}")
     return 0
 
 
@@ -1727,10 +1772,14 @@ async def cmd_launch(
     handle: str, *, model: str | None, pool: asyncpg.Pool | None = None,
     manager: ManagerCall = _default_manager, wake_default: str | None = None,
     debug: bool = False, spawn: SpawnClaudeBg | None = None,
-    agents_json: AgentsJson | None = None,
+    agents_json: AgentsJson | None = None, verbose: bool = False, fresh: bool = False,
+    settings: Settings | None = None, resume_spawn: ResumeSpawn | None = None,
+    clear_stale_record: ClearStaleRecord | None = None,
 ) -> int:
-    """Bodies a seat: ALWAYS a fresh, persistent `claude --bg` mint (see the
-    launch/resume verb split and `_cmd_launch_harness`'s own docstring for why).
+    """Bodies a seat: a persistent `claude --bg` session. When the seat has an earlier
+    session that can be continued, launch continues it (what `osiris resume` does) instead
+    of starting a different one in its name; `fresh=True` (`--fresh`) starts a new one
+    regardless (see `_cmd_launch_harness`).
     `debug=True` (the CLI's `--debug`) keeps the original osiris PTY-broker
     lane alive as an explicit fallback for an incident or a build with no `claude --bg`,
     attachable via `osiris attach`, which the default lane's body is not.
@@ -1764,7 +1813,10 @@ async def cmd_launch(
                                          wake_default=wake_default)
         return await _cmd_launch_harness(handle, model=model, pool=pool,
                                          wake_default=wake_default, spawn=spawn,
-                                         agents_json=agents_json)
+                                         agents_json=agents_json, verbose=verbose,
+                                         fresh=fresh, settings=settings,
+                                         resume_spawn=resume_spawn,
+                                         clear_stale_record=clear_stale_record)
     finally:
         if owns_pool:
             await pool.close()
@@ -1776,7 +1828,7 @@ async def _cmd_resume_harness(
     handle: str, *, model: str | None, pool: asyncpg.Pool, wake_default: str | None,
     agents_json: AgentsJson, resume_spawn: ResumeSpawn, settings: Settings | None = None,
     clear_stale_record: ClearStaleRecord | None = None,
-    launch_spawn: SpawnClaudeBg | None = None,
+    launch_spawn: SpawnClaudeBg | None = None, verbose: bool = False, verb: str = "resume",
 ) -> int:
     """A PERSISTENT `--bg --resume` TURN, superseding the old one-shot `-p --resume`
     lane: same `_lineage_resume_candidate` + `_resume_guard` + `resume_spawn` primitives,
@@ -1814,7 +1866,7 @@ async def _cmd_resume_harness(
     clear_stale_record = clear_stale_record or _clear_stale_stopped_record
 
     pre = await _resolve_and_guard_launch(
-        handle, pool=pool, agents_json=agents_json, verb="resume")
+        handle, pool=pool, agents_json=agents_json, verb=verb, verbose=verbose)
     if isinstance(pre, int):
         return pre
     facts, launch_cwd = pre
@@ -1849,10 +1901,9 @@ async def _cmd_resume_harness(
             # refuses too (below); osiris resume never mints, whatever the registry finding
             # is. "resident-unknown" gets the SHARPER message naming the exact resume
             # command a human can run to confirm the session themselves.
-            print(f"osiris resume: refusing. {handle!r} has a possibly-resumable "
-                  f"session {resume[0][:8]} but {refusal}. Run `claude -p --resume "
-                  f"{resume[0]}` by hand to confirm it yourself; osiris will not resume "
-                  "a session it merely couldn't verify.", file=sys.stderr)
+            print(voice.cannot_verify(verb, handle, resume[0]), file=sys.stderr)
+            if verbose:
+                print(f"  why: {refusal}", file=sys.stderr)
             return 1
         if gate is not None:
             resume_log = [*resume_log, f"{gate} guard refused it: {refusal}"]
@@ -1861,10 +1912,11 @@ async def _cmd_resume_harness(
         # NEVER FALLS THROUGH TO FRESH (the whole point of the launch/resume split):
         # `osiris launch` mints fresh; `osiris resume` either resumes or
         # refuses, cleanly, nothing spawned either way.
-        print(f"osiris resume: {handle!r} has nothing resumable. "
-              f"{_collapse_resume_log(resume_log)} (gate: "
-              f"min_tail_bytes={st.osiris_resume_min_tail_bytes}, ceiling="
-              f"{st.osiris_resume_ceiling_bytes}b)", file=sys.stderr)
+        print(voice.nothing_to_resume(handle), file=sys.stderr)
+        if verbose:
+            print(f"  why: {_collapse_resume_log(resume_log)} (gate: "
+                  f"min_tail_bytes={st.osiris_resume_min_tail_bytes}, ceiling="
+                  f"{st.osiris_resume_ceiling_bytes}b)", file=sys.stderr)
         return 1
 
     resumed_session_id, materialized_at = resume[0], resume[4]
@@ -1885,16 +1937,18 @@ async def _cmd_resume_harness(
     finding = await store_account_mismatch(pool, resumed_session_id[:8])
     if finding is not None:
         from src.orchestrator.trigger import _spawn_claude_bg
-        print(f"osiris resume: {handle!r}: {finding['detail']}. Launching a FRESH session "
-              "seeded with a briefing built from the store instead (path: "
-              "fresh-launch-account-mismatch).", file=sys.stderr)
+        print(voice.other_account(verb, handle), file=sys.stderr)
+        if verbose:
+            print(f"  why: {finding['detail']} (path: fresh-launch-account-mismatch)",
+                  file=sys.stderr)
         brief = await store_briefing(
             pool, handle=handle, anchor_sid=resumed_session_id[:8], finding=finding,
             project=await _governed_project_name(
                 pool, facts["seat_id"], cwd=facts["anchor_cwd"]))
         return await _cmd_launch_harness(
             handle, model=model, pool=pool, wake_default=wake_default,
-            spawn=launch_spawn or _spawn_claude_bg, agents_json=agents_json, message=brief)
+            spawn=launch_spawn or _spawn_claude_bg, agents_json=agents_json, message=brief,
+            verbose=verbose, fresh=True)
     cleared = await clear_stale_record(resumed_session_id[:8])
     try:
         await resume_spawn(spawn_cwd, prompt=_DM_RESUME_PROMPT,
@@ -1902,8 +1956,12 @@ async def _cmd_resume_harness(
                            model=resolved_model,
                            allowed_tools=st.osiris_wake_allowed_tools or None)
     except OSError as exc:
-        print(f"osiris resume: FAILED. The harness refused to start {handle!r}: {exc}. "
-              "Nothing is running for this seat.", file=sys.stderr)
+        if voice.is_untrusted(exc):
+            print(voice.untrusted_line(verb, spawn_cwd, exc), file=sys.stderr)
+        else:
+            print(voice.would_not_start(verb, handle, exc), file=sys.stderr)
+            if verbose:
+                print(f"  why: {exc}", file=sys.stderr)
         return 1
     # WHAT THE HARNESS ACTUALLY STARTED: a stopped record still on file makes
     # `--bg --resume` start a COPY under a new id. Read the body back and say so, and
@@ -1912,32 +1970,23 @@ async def _cmd_resume_harness(
     adoption = await _adopt_resumed_body(
         pool, agents_json=agents_json, office=spawn_cwd, requested_sid=resumed_session_id,
         holder=str(holder), project=facts.get("house"))
-    if adoption.get("copied"):
-        print(f"osiris resume: note: the harness started a copy (session "
+    if verbose and adoption.get("copied"):
+        print(f"  note: the harness started a copy (session "
               f"{str(adoption['session_id'])[:8]}) instead of continuing "
               f"{resumed_session_id[:8]}: a stopped background record was still on file. "
-              f"(`osiris stop` now removes it; `claude rm {resumed_session_id[:8]}` clears "
-              f"one by hand.) Adopted as {holder}'s own continuation: its ledger and "
-              "registry now name this seat's lineage.", file=sys.stderr)
-    elif adoption.get("session_id") is None:
-        print("osiris resume: note: no session appeared at the seat directory within the "
-              "check window. `claude agents --json` is the witness, not this result.",
-              file=sys.stderr)
-    if cleared:
-        print(f"osiris resume: cleared a stale stopped record for "
-              f"{resumed_session_id[:8]} before spawning. This pre-empts the copy quirk, "
-              "not just adopts it.", file=sys.stderr)
-    print(f"osiris resume: path: resumed. resumed session {resumed_session_id[:8]} at {spawn_cwd}. "
-          f"Walked {resume[5]} generation(s) back to find it "
-          f"({_collapse_resume_log(resume_log)}). Runs persistently under `claude --bg "
-          f"--resume`: it idles after this turn rather than exiting, and shows up in "
-          f"`claude agents` as {name!r}. To reach it again: send it mail, it wakes on "
-          f"the next dispatch; or `claude attach` the session yourself.")
+              f"Adopted as {holder}'s own continuation.", file=sys.stderr)
+    if verbose and cleared:
+        print(f"  note: cleared a stale stopped record for {resumed_session_id[:8]} "
+              "before spawning.", file=sys.stderr)
+    print(voice.resumed(verb, handle, resumed_session_id))
+    if not adoption.get("copied") and adoption.get("session_id") is None:
+        print("  not in claude agents yet; check `osiris fleet` in a few seconds.")
+    if verbose:
+        print(f"  at {spawn_cwd}; {_collapse_resume_log(resume_log)}")
     stamped_model = facts.get("intended_model")
     if stamped_model and resolved_model != stamped_model:
-        print(f"  MODEL MISMATCH: spawned on {resolved_model!r} but the seat's own "
-              f"stamped intended_model is {stamped_model!r}. Never silent.",
-              file=sys.stderr)
+        print(f"  model: started on {resolved_model!r}, the seat records "
+              f"{stamped_model!r}.", file=sys.stderr)
     return 0
 
 
@@ -1945,7 +1994,7 @@ async def cmd_resume(
     handle: str, *, model: str | None = None, pool: asyncpg.Pool | None = None,
     wake_default: str | None = None, agents_json: AgentsJson | None = None,
     resume_spawn: ResumeSpawn | None = None, settings: Settings | None = None,
-    launch_spawn: SpawnClaudeBg | None = None,
+    launch_spawn: SpawnClaudeBg | None = None, verbose: bool = False,
 ) -> int:
     """Continue a seat's last session PERSISTENTLY via `claude --bg --resume`: idles
     after this turn rather than exiting, visible in `claude agents`, reachable again by
@@ -1979,7 +2028,7 @@ async def cmd_resume(
         return await _cmd_resume_harness(handle, model=model, pool=pool,
                                          wake_default=wake_default, agents_json=agents_json,
                                          resume_spawn=resume_spawn, settings=settings,
-                                         launch_spawn=launch_spawn)
+                                         launch_spawn=launch_spawn, verbose=verbose)
     finally:
         if owns_pool:
             await pool.close()
@@ -8270,13 +8319,20 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_launch = sub.add_parser("launch", description=_d(
         "Give a seat a live, persistent process (a `claude --bg` process): it will show "
-        "up in `claude agents` and can be attached to later. To continue a seat's most "
-        "recent session instead of starting a new persistent one, use `osiris resume`."),
+        "up in `claude agents` and can be attached to later. If the seat has an earlier "
+        "session that can be continued, launch continues it; `--fresh` starts a new one "
+        "anyway."),
                               epilog="example: osiris launch Atlas")
     p_launch.add_argument("handle", help="the seat's handle to launch a process for")
     p_launch.add_argument("--model", default=None,
                           help="the model to launch with. Defaults to the seat's own "
                                "recorded model, else the fleet's default")
+    p_launch.add_argument("--fresh", action="store_true",
+                          help="start a new session even if the seat has an earlier one "
+                               "that could be continued (by default launch continues it)")
+    p_launch.add_argument("--verbose", action="store_true",
+                          help="say everything: model, session ids, why a step was "
+                               "skipped. The default is at most three short lines")
     p_launch.add_argument("--debug", action="store_true",
                           help="use the PTY-broker launch path instead of the default "
                                "`claude --bg`, for troubleshooting or on a build with "
@@ -8292,6 +8348,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_resume.add_argument("--model", default=None,
                           help="the model to resume with. Defaults to the seat's own "
                                "recorded model, else the fleet's default")
+    p_resume.add_argument("--verbose", action="store_true",
+                          help="say everything: which session, how far back it was "
+                               "found, why a step was skipped. The default is at most "
+                               "three short lines")
 
     p_stop = sub.add_parser("stop", description=_d(
         "End a seat's live process, the inverse of `osiris launch`. Stops the seat's "
@@ -9793,9 +9853,10 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_offload_runner(
             args.action, vault=args.vault, as_json=args.as_json))
     if args.command == "launch":
-        return asyncio.run(cmd_launch(args.handle, model=args.model, debug=args.debug))
+        return asyncio.run(cmd_launch(args.handle, model=args.model, debug=args.debug,
+                                      verbose=args.verbose, fresh=args.fresh))
     if args.command == "resume":
-        return asyncio.run(cmd_resume(args.handle, model=args.model))
+        return asyncio.run(cmd_resume(args.handle, model=args.model, verbose=args.verbose))
     if args.command == "stop":
         return asyncio.run(cmd_stop(args.handle, reason=args.reason, as_json=args.as_json))
     if args.command == "status":
