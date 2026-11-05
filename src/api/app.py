@@ -1920,6 +1920,18 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
                 "done": sum(1 for r in results if r["ok"]), "asked": len(results),
                 "by": "operator"}
 
+    @app.post("/proposals/reopen")
+    async def proposals_reopen(
+        body: ProposalReopenBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        """UNDO a rejection from the desk: the human's own click, signed analyst:operator,
+        through proposals.reopen (same supersession path as the rejection; the history stays
+        and the rejection's reason is marked withdrawn)."""
+        from src.orchestrator.proposal_queue import reopen_one
+        res = await reopen_one(p, "analyst:operator", body.ref, body.reason)
+        return {"ok": res["ok"], "ref": body.ref, "by": "operator",
+                **({"error": res["error"]} if "error" in res else {})}
+
     @app.post("/act")
     async def act(body: ActBody, p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
         """THE GENERIC ACTION-BINDING INVOCATION: any composition-rendered row carrying
@@ -2571,6 +2583,12 @@ class ProposalJudgeBody(BaseModel):
     decision: str
     refs: list[str]
     reason: str = ""
+
+
+class ProposalReopenBody(BaseModel):
+    """The operator undoing a rejection he did not mean, from the desk."""
+    ref: str
+    reason: str = "undone from the desk"
 
 
 class DeskSettleBody(BaseModel):
