@@ -31,7 +31,7 @@ STEP_ORDER = (
     "key_set_up", "services_restarted", "recovery_enrolled", "recovery_verified",
     "recovery_copy_off_box", "data_encrypted", "backup_password_set",
     "offload_target_present", "offload_run", "offload_current", "wal_backlog",
-    "workspace_trust", "restore_test_passed", "key_tpm_sealed",
+    "workspace_trust", "seat_capture", "restore_test_passed", "key_tpm_sealed",
 )
 
 
@@ -203,6 +203,17 @@ def _wal_backlog_step(backlog: dict[str, Any] | None, limit_gb: int) -> dict[str
     return _step("wal_backlog", label, "done", None, None)
 
 
+def _seat_capture_step(captured: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """Seats held by a dead stranger while their real lineage is around: every message to such
+    a seat goes to a holder that will never read it. The fix is one rehold command per seat."""
+    label = "Seats held by their own sessions"
+    if not captured:
+        return _step("seat_capture", label, "done", None, None, optional=True)
+    return _step("seat_capture", label, "needs_attention",
+                 "; ".join(f"{c['seat']}: {c['command']}" for c in captured), None,
+                 mode="hands", optional=True)
+
+
 def compute_readiness_steps(
     *, soul_key: dict[str, Any], restic_key: dict[str, Any],
     offload_targets: list[dict[str, Any]], restore_drill_receipts: dict[str, Any],
@@ -210,6 +221,7 @@ def compute_readiness_steps(
     stale_offload: list[dict[str, Any]] | None = None, stale_days: int = 7,
     wal_backlog: dict[str, Any] | None = None, wal_limit_gb: int = 50,
     untrusted_workspaces: list[str] | None = None,
+    captured_seats: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """`stale_offload`: offload_staleness.stale_offload_targets's list for this box, computed by
     the caller from the receipts and the `backup.offload_stale_days` limit (`stale_days`).
@@ -340,6 +352,8 @@ def compute_readiness_steps(
     steps.append(_wal_backlog_step(wal_backlog, wal_limit_gb))
 
     steps.append(_workspace_trust_step(untrusted_workspaces))
+
+    steps.append(_seat_capture_step(captured_seats))
 
     steps.append(_restore_test_step(enabled_targets, restore_drill_receipts))
 

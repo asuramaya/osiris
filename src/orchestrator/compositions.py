@@ -1763,7 +1763,11 @@ async def seat_holder_census(pool: asyncpg.Pool) -> dict[str, Any]:
     pre-Seat-object holder (older than the Seat-object convention) can legitimately
     have none of these and still be exactly who the seat's own `holds` edge says. This
     surfaces it for a human's eyes, the same conservative "flag, verify, never auto-
-    fold" discipline every other census in this module already holds itself to."""
+    fold" discipline every other census in this module already holds itself to.
+
+    CAPTURED: the holder is a dead stranger and the seat's real lineage was seen within a
+    week (`seats.seat_capture`, which also carries the exact rehold command). Checked
+    first, since a captured seat's holder would otherwise read as merely unprovenanced."""
     from src.orchestrator.mounts import borrowed_job_dir_owner
 
     rows = await pool.fetch(
@@ -1772,9 +1776,16 @@ async def seat_holder_census(pool: asyncpg.Pool) -> dict[str, Any]:
         "JOIN objects s ON s.id=hl.to_id AND s.type='Seat' AND s.status='active' "
         "JOIN objects hf ON hf.id=hl.from_id AND hf.type='Agent' "
         "WHERE hl.type='holds' AND (hl.valid_until IS NULL OR hl.valid_until > now())")
+    from src.orchestrator.seats import seat_capture
+
     borrowed: list[dict[str, Any]] = []
     unprovenanced: list[dict[str, Any]] = []
+    captured: list[dict[str, Any]] = []
     for r in rows:
+        cap = await seat_capture(pool, r["seat"])
+        if cap is not None:
+            captured.append({"seat": r["seat"], **cap})
+            continue
         owner = await borrowed_job_dir_owner(pool, r["holder"])
         if owner is not None:
             borrowed.append({"seat": r["seat"], "holder": r["holder"], "borrowed_from": owner})
@@ -1785,7 +1796,7 @@ async def seat_holder_census(pool: asyncpg.Pool) -> dict[str, Any]:
             "LIMIT 1", r["holder"])
         if not has_provenance:
             unprovenanced.append({"seat": r["seat"], "holder": r["holder"]})
-    return {"borrowed": borrowed, "unprovenanced": unprovenanced}
+    return {"borrowed": borrowed, "unprovenanced": unprovenanced, "captured": captured}
 
 
 async def traceability_census(pool: asyncpg.Pool) -> dict[str, Any]:
@@ -3243,6 +3254,12 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         # borrowed slug. See seat_holder_census's own docstring for both halves.
         holder_result = await seat_holder_census(pool)
         land("seat-holders", "warn", [
+            {"subject": r["seat"],
+             "detail": f"held by {r['holder']}, a dead stranger, while its real lineage "
+                       f"{r['real_lineage']} was seen this week; put it back with: "
+                       f"{r['command']}"}
+            for r in holder_result["captured"]
+        ] + [
             {"subject": r["seat"],
              "detail": f"holder {r['holder']} is not a real identity: it is "
                        f"{r['borrowed_from']}'s own live job_dir slug, borrowed. "

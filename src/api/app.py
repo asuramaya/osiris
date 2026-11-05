@@ -1773,17 +1773,19 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         from src.orchestrator.seats import roster as seat_roster
 
         try:
-            untrusted = sorted({d for r in (await seat_roster(p))["seats"]
-                                for d in r["workspace_trust"]["untrusted"]})
+            roster_rows = (await seat_roster(p))["seats"]
+            untrusted = sorted({d for r in roster_rows for d in r["workspace_trust"]["untrusted"]})
+            captured = [{"seat": r["seat"], **r["captured"]} for r in roster_rows
+                        if r.get("captured")]
         except Exception:  # noqa: BLE001 - the stepper never fails over this extra
-            untrusted = []
+            untrusted, captured = [], []
         steps = compute_readiness_steps(
             soul_key=soul_key, restic_key=restic_key, offload_targets=offload_targets,
             restore_drill_receipts=restore_drill_receipts(),
             services_restarted=services_restarted, stale_offload=stale,
             stale_days=stale_days, wal_backlog=backlog,
             wal_limit_gb=int(overlay.osiris_wal_backlog_gb),
-            untrusted_workspaces=untrusted)
+            untrusted_workspaces=untrusted, captured_seats=captured)
         from src.orchestrator.disk_brake import brake_state
 
         try:
