@@ -54,6 +54,11 @@ def first_sentence(text: object, limit: int = 160) -> str:
     return out
 
 
+def tree_restored(verb: str, line: str) -> str:
+    """One line when a seat's worktree had been removed and was put back."""
+    return f"osiris {verb}: " + line.replace(str(Path.home()), "~", 1) + "."
+
+
 def running(verb: str, handle: str, window: str | None) -> str:
     where = f" ('{window}' in claude agents)" if window else ""
     return f"osiris {verb}: {handle} is running{where}."

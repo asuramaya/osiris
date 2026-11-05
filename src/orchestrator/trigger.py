@@ -3949,15 +3949,18 @@ async def _launch_target_setup(
 
     tree_cwd = facts["tree_cwd"]
     launch_cwd = office
+    tree_note = ""
     if tree_cwd:
-        if not _tree_exists(tree_cwd):
-            return {"status": "refused-no-tree",
-                    "detail": f"{handle} ({target_seat}) names tree_cwd={tree_cwd!r} but it "
-                              "does not exist on disk. osiris expects the harness (or a "
-                              "human, via EnterWorktree) to have created it before launch; "
-                              "it never provisions one itself. Fix it with: bind_seat_tree("
-                              f"seat_id={target_seat!r}, tree_cwd='<the real directory>', "
-                              "because='...')"}
+        if not _tree_exists(tree_cwd) or not _is_git_tree(tree_cwd):
+            from src.orchestrator.tree_restore import restore_tree
+            restored = await asyncio.to_thread(restore_tree, tree_cwd)
+            tree_note = restored.line if restored.restored else ""
+            if not restored.ok:
+                return {"status": "refused-no-tree",
+                        "detail": f"{handle} ({target_seat}): {restored.line}. Fix it "
+                                  "with: bind_seat_tree("
+                                  f"seat_id={target_seat!r}, tree_cwd='<the real directory>', "
+                                  "because='...')"}
         fabricated = await fabricated_tree_verdict(pool, target_seat, tree_cwd)
         if fabricated is not None:
             repo, real_path = fabricated
@@ -4015,7 +4018,7 @@ async def _launch_target_setup(
 
     return {"target_seat": target_seat, "handle": handle, "house": house, "office": office,
             "tree_cwd": tree_cwd, "launch_cwd": launch_cwd, "attach": attach, "anchor": anchor,
-            "current_holder": current_holder, "facts": facts}
+            "current_holder": current_holder, "facts": facts, "tree_note": tree_note}
 
 
 async def _deliver_brief_to_live_seat(
@@ -4121,6 +4124,7 @@ async def launch_seat(
     office, tree_cwd = setup["office"], setup["tree_cwd"]
     launch_cwd, attach, anchor = setup["launch_cwd"], setup["attach"], setup["anchor"]
     current_holder, facts = setup["current_holder"], setup["facts"]
+    tree_note = setup.get("tree_note") or ""
 
     st = settings or get_settings()
     lane = (substrate or st.osiris_launch_substrate or "harness").strip().lower()
@@ -4453,6 +4457,8 @@ async def launch_seat(
             f"{stamped_model!r}: never silent")
     if brief_id is not None:
         out["brief_message_id"] = brief_id
+    if tree_note:
+        out["tree_restored"] = tree_note
     return out
 
 
@@ -4585,6 +4591,7 @@ async def resume_seat(
     target_seat, handle = setup["target_seat"], setup["handle"]
     launch_cwd, attach = setup["launch_cwd"], setup["attach"]
     office, facts = setup["office"], setup["facts"]
+    tree_note = setup.get("tree_note") or ""
 
     st = settings or get_settings()
     argv_model, model_source = await _resolve_launch_model(
@@ -4696,6 +4703,8 @@ async def resume_seat(
         out["model_mismatch"] = (
             f"spawned on {argv_model!r} but the seat's own stamped intended_model "
             f"is {stamped_model!r}: never silent")
+    if tree_note:
+        out["tree_restored"] = tree_note
     return out
 
 

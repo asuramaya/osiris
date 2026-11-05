@@ -1453,15 +1453,17 @@ async def _resolve_and_guard_launch(
         return 1
     launch_cwd = office
     if tree_cwd:
-        if not _tree_exists(tree_cwd):
-            print(f"osiris {verb}: {handle!r} names tree_cwd={tree_cwd!r} but it does not "
-                  "exist on disk. Osiris expects the harness, or a human via "
-                  "EnterWorktree, to have created it before launch; it never provisions "
-                  "one itself. Fix it with: bind_seat_tree(seat_id="
-                  f"{facts['seat_id']!r}, tree_cwd='<the real directory>', because='...') "
-                  "via the osiris MCP tools, or by creating it at that exact path.",
-                  file=sys.stderr)
-            return 1
+        if not _tree_exists(tree_cwd) or not (Path(tree_cwd) / ".git").exists():
+            from src.orchestrator.tree_restore import restore_tree
+            restored = await asyncio.to_thread(restore_tree, tree_cwd)
+            if restored.restored:
+                print(voice.tree_restored(verb, restored.line))
+            elif not restored.ok:
+                print(f"osiris {verb}: {handle!r}: {restored.line}. Fix it with: "
+                      f"bind_seat_tree(seat_id={facts['seat_id']!r}, "
+                      "tree_cwd='<the real directory>', because='...') via the osiris "
+                      "MCP tools, or by creating it at that exact path.", file=sys.stderr)
+                return 1
         # THE FABRICATED-TREE CASE: launch could land the agent in the wrong cwd via a
         # mint-time ~/code/<handle> with no git tree while the charter governs a real tree
         # elsewhere. Same check launch_seat runs (one implementation); refused BY NAME
@@ -1639,6 +1641,9 @@ async def _cmd_launch_harness(
         from src.ingest.sessions import dormant_history_note
         print(f"osiris launch: {handle!r}: {dormant_history_note(dormant)}",
               file=sys.stderr)
+
+    if out.get("tree_restored"):
+        print(voice.tree_restored("launch", str(out["tree_restored"])))
 
     window = out.get("window")
     if verbose:
