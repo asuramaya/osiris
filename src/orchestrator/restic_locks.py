@@ -127,7 +127,12 @@ def clear_stale_locks(
     local_host = local_host or socket.gethostname()
     try:
         locks = read_locks(env, restic)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except subprocess.TimeoutExpired as exc:
+        # the repository did not answer a lock listing in time; every call after it would wait
+        # just as long (a slow or unreachable link), so say so now instead of probing again
+        return LockOutcome(busy=f"repository not reachable: restic {exc.cmd[1]} timed out "
+                                f"after {exc.timeout:.0f}s (a slow or unreachable link)")
+    except OSError as exc:
         locks = f"{type(exc).__name__}: {exc}"
     if isinstance(locks, str):
         # The listing failed (a wrong password, an unreachable repository): that is the next

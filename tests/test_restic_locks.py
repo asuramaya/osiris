@@ -30,6 +30,8 @@ def save():
 
 cmd = args[0] if args else ""
 if cmd == "list" and args[1] == "locks":
+    if state.get("list_sleep"):
+        save(); import time; time.sleep(state["list_sleep"])
     if state.get("list_fails"):
         save(); print("Fatal: wrong password or no key found", file=sys.stderr); sys.exit(1)
     print("\\n".join(state["locks"]))
@@ -263,3 +265,22 @@ def test_a_backup_names_a_live_exclusive_holder(fake: Fake, tmp_path: Path) -> N
 
     assert failure is not None and failure.startswith("repository busy (lock by other-box/8")
     assert fake.read().get("backups", 0) == 0
+
+
+def test_a_lock_listing_that_times_out_ends_the_call_without_a_second_wait(
+    fake: Fake, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unreachable repository answers nothing: the lock listing's bound fires, and the backup
+    says so at once instead of waiting the same time again on the probe (and never initialises)."""
+    monkeypatch.setattr(restic_locks, "CALL_TIMEOUT_SECONDS", 1)
+    fake.state["list_sleep"] = 4
+    fake._write()
+    source = tmp_path / "vault"
+    source.mkdir()
+
+    failure = offload_runner._run_restic_backup(
+        repository="fake", password=b"x", source=source)
+
+    assert failure is not None and failure.startswith("repository not reachable: restic list")
+    assert "timed out after 1s" in failure
+    assert fake.commands() == ["list"]  # no snapshots, no init, no backup
