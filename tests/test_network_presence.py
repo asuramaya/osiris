@@ -26,6 +26,37 @@ def _receipts_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OSIRIS_RESTIC_PASSWORD", "a-test-password")
 
 
+@pytest.fixture(autouse=True)
+def _no_probe_memory() -> None:
+    network_presence._answer_cache.clear()
+
+
+class _Probe:
+    """Fake neighbour table and TCP connect: records what was asked."""
+
+    def __init__(self, neigh: str | None, connects: bool) -> None:
+        self.neigh, self.connects = neigh, connects
+        self.neigh_asked: list[str] = []
+        self.connect_asked: list[tuple[str, int]] = []
+
+    def state(self, address: str) -> str | None:
+        self.neigh_asked.append(address)
+        return self.neigh
+
+    def connect(self, address: str, port: int) -> bool:
+        self.connect_asked.append((address, port))
+        return self.connects
+
+
+def _probe(monkeypatch: pytest.MonkeyPatch, neigh: str | None = "REACHABLE",
+           connects: bool = True, port: int = 22) -> _Probe:
+    fake = _Probe(neigh, connects)
+    monkeypatch.setattr(network_presence, "_neighbour_state", fake.state)
+    monkeypatch.setattr(network_presence, "_tcp_answers", fake.connect)
+    monkeypatch.setattr(network_presence, "_ssh_port", lambda host: port)
+    return fake
+
+
 def _route(monkeypatch: pytest.MonkeyPatch, text: str | None,
            nets: Any = None) -> list[str]:
     """Fake `ip route get`: records the address it was asked about."""
@@ -39,6 +70,7 @@ def _route(monkeypatch: pytest.MonkeyPatch, text: str | None,
     monkeypatch.setattr(network_presence, "_run_ip_route_get", _fake)
     # the interface's own subnets: unknown unless a test says (never ask the real `ip`)
     monkeypatch.setattr(network_presence, "_dev_networks", lambda dev: nets)
+    _probe(monkeypatch)
     return asked
 
 
@@ -96,6 +128,81 @@ def test_not_being_able_to_tell_leaves_the_old_behaviour(monkeypatch: pytest.Mon
     assert lan_presence(_target())["present"] is True
     monkeypatch.setattr(network_presence, "resolve_address", lambda host: None)
     assert lan_presence(_target())["present"] is True  # the name did not resolve
+
+
+def test_on_link_but_silent_is_away(monkeypatch: pytest.MonkeyPatch) -> None:
+    """THE DOCK SPECIMEN: a manual 192.168.4.67/24 on the wired interface makes any cable look
+    like the home subnet, yet nothing at 192.168.4.198 answers."""
+    _route(monkeypatch, AT_HOME, nets=[ipaddress.ip_network("192.168.4.0/24")])
+    fake = _probe(monkeypatch, neigh="FAILED", connects=False)
+    out = lan_presence(_target())
+    assert out["present"] is False
+    assert out["reason"] == "not reachable on the local network (no answer from 192.168.4.198)"
+    assert out["address"] == NAS and out["dev"] == "wlp0s20f3"
+    assert fake.connect_asked == [(NAS, 22)]  # a FAILED entry does not stand in for a try
+
+
+def test_a_reachable_neighbour_entry_is_an_answer_without_a_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _route(monkeypatch, AT_HOME)
+    fake = _probe(monkeypatch, neigh="REACHABLE", connects=False)
+    assert lan_presence(_target())["present"] is True
+    assert fake.neigh_asked == [NAS] and fake.connect_asked == []
+
+
+def test_a_stale_or_missing_entry_is_settled_by_a_connect_to_the_ssh_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _route(monkeypatch, AT_HOME)
+    fake = _probe(monkeypatch, neigh="STALE", connects=True, port=2222)
+    assert lan_presence(_target())["present"] is True
+    assert fake.connect_asked == [(NAS, 2222)]
+    network_presence._answer_cache.clear()
+    fake = _probe(monkeypatch, neigh=None, connects=False, port=2222)
+    assert lan_presence(_target())["present"] is False
+
+
+def test_one_probe_serves_the_several_looks_of_a_tick(monkeypatch: pytest.MonkeyPatch) -> None:
+    _route(monkeypatch, AT_HOME)
+    fake = _probe(monkeypatch, neigh=None, connects=True)
+    for _ in range(3):
+        assert lan_presence(_target())["present"] is True
+    assert fake.connect_asked == [(NAS, 22)]
+
+
+def test_the_probe_memory_expires(monkeypatch: pytest.MonkeyPatch) -> None:
+    _route(monkeypatch, AT_HOME)
+    fake = _probe(monkeypatch, neigh=None, connects=True)
+    clock = [1000.0]
+    monkeypatch.setattr(network_presence.time, "monotonic", lambda: clock[0])
+    assert lan_presence(_target())["present"] is True
+    clock[0] += network_presence._ANSWER_CACHE_SECS + 1
+    fake.connects = False
+    assert lan_presence(_target())["present"] is False
+    assert len(fake.connect_asked) == 2
+
+
+def test_nothing_is_probed_when_the_route_already_says_away_or_the_check_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for text in (AWAY, VIA_GATEWAY, ""):
+        _route(monkeypatch, text)
+        fake = _probe(monkeypatch)
+        assert lan_presence(_target())["present"] is False
+        assert fake.neigh_asked == [] and fake.connect_asked == []
+    _route(monkeypatch, AT_HOME)
+    fake = _probe(monkeypatch, neigh=None, connects=False)
+    assert lan_presence(_target(allow_tunnel=True))["present"] is True
+    assert fake.neigh_asked == [] and fake.connect_asked == []
+
+
+def test_a_public_address_is_never_probed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _route(monkeypatch, "8.8.8.8 dev wlp0s20f3 src 192.168.4.57\n")
+    monkeypatch.setattr(network_presence, "resolve_address", lambda host: "8.8.8.8")
+    fake = _probe(monkeypatch, neigh=None, connects=False)
+    assert lan_presence(_target())["present"] is True
+    assert fake.connect_asked == []
 
 
 def test_an_on_link_route_in_the_same_subnet_is_home(monkeypatch: pytest.MonkeyPatch) -> None:
