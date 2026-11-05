@@ -538,7 +538,9 @@ async def test_backup_status_degrades_a_missing_vault_without_blanking_other_sec
     # touches the vault directory at all).
     assert data["offbox"]["wired"] is True
     assert data["offbox"]["offload_targets"] == []  # no rows written in this test's own DB
-    assert data["pitr_drill"]["wired_to_a_timer"] is False
+    # the real timer's state is read, never assumed: this box has systemd or it does not
+    assert isinstance(data["pitr_drill"]["wired_to_a_timer"], bool)
+    assert data["pitr_drill"]["unit"] == "osiris-pitr-drill.timer"
 
 
 async def test_backup_status_timers_carry_their_shipped_schedule(
@@ -676,3 +678,35 @@ async def test_upstream_readers_reachable_via_the_saved_composition_mirror(
     res = await run_composition(actions.pool, "upstream-readers", upstream)
     assert len(res["items"]) == 1
     assert res["items"][0]["canonical"] == "repo:mirror-written"
+
+
+async def test_backup_status_reports_the_pitr_drill_timer_from_its_real_state(
+    actions: Actions, tmp_path, _use_test_dsn: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import compositions
+
+    await seed_default_compositions(actions.pool)
+    live: dict[str, str] = {"active_state": "active", "next_elapse": "Sun 2026-11-08 05:30:00"}
+
+    async def _state(unit: str) -> dict[str, str]:
+        return live if unit == "osiris-pitr-drill.timer" else {}
+
+    monkeypatch.setattr(compositions, "_backup_timer_live_state", _state)
+    args = {"vault": str(tmp_path / "v"), "backups": str(tmp_path / "b")}
+    res = await run_spec(actions.pool, {"op": "function", "name": "backup_status",
+                                        "args": args}, None)
+    assert res["items"]["pitr_drill"]["wired_to_a_timer"] is True
+    assert res["items"]["pitr_drill"]["schedule"] == "Sun *-*-* 05:30:00"
+    assert "manual-only" not in res["items"]["pitr_drill"]["note"]
+
+    live.clear()
+    live["active_state"] = "inactive"
+    res = await run_spec(actions.pool, {"op": "function", "name": "backup_status",
+                                        "args": args}, None)
+    assert res["items"]["pitr_drill"]["wired_to_a_timer"] is False
+
+    live.clear()
+    res = await run_spec(actions.pool, {"op": "function", "name": "backup_status",
+                                        "args": args}, None)
+    assert res["items"]["pitr_drill"]["wired_to_a_timer"] is False
+    assert "unreadable" in res["items"]["pitr_drill"]["note"]

@@ -169,6 +169,33 @@ async def test_the_tick_copies_the_recovery_file_before_any_backup_runs(
                                       {"dest": "nas", "ok": True}]
 
 
+async def test_a_target_that_has_ever_offloaded_is_never_allowed_to_init(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The tick tells the backup whether it may initialise: not for a target that already
+    holds a successful offload (its repository exists, a failed probe is a transient error)."""
+    seen: list[dict[str, object]] = []
+
+    def _backup(**kw: object) -> str | None:
+        seen.append(kw)
+        return None
+
+    monkeypatch.setattr(offload_runner, "_run_restic_backup", _backup)
+    await write_backup_settings(
+        actions.pool, actor="operator", because="x",
+        offload_targets=[
+            {"name": "nas", "kind": "restic", "path_or_url": "sftp:nas:/r",
+             "schedule": "*-*-* 03:00:00", "enabled": True},
+            {"name": "fresh", "kind": "restic", "path_or_url": "sftp:fresh:/r",
+             "schedule": "*-*-* 03:00:00", "enabled": True}])
+    offload_runner._write_receipt("nas", {"last_successful_offload": "2026-10-11T00:00:00+00:00"})
+
+    await offload_runner.run_offload_tick(actions.pool, vault=tmp_path)
+
+    by_repo = {str(kw["repository"]): kw["init_if_needed"] for kw in seen}
+    assert by_repo == {"sftp:nas:/r": False, "sftp:fresh:/r": True}
+
+
 async def test_the_recovery_copies_still_happen_when_the_backup_password_is_missing(
     actions: Actions, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
