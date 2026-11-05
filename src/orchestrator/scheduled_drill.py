@@ -86,8 +86,16 @@ async def run_due_drills(
             fail = await asyncio.to_thread(run_drill, url)
         except Exception as exc:  # noqa: BLE001 - one target's drill must not sink the tick
             fail = f"{type(exc).__name__}: {exc}"
+        from src.orchestrator.network_presence import is_unreachable_error
         from src.orchestrator.restic_locks import pop_notes
 
+        if is_unreachable_error(fail):
+            # The network had no way to the target (away from home, a tunnel down): the drill
+            # could not run, which says nothing about the backup. A skip, never a failed
+            # attempt: no error receipt, no retry window, so the next tick tries again.
+            pop_notes(url)
+            out.append({"name": name, "skipped": "target not reachable from this network"})
+            continue
         notes = pop_notes(url)
         note = "; ".join(notes) if notes else None
         record_restore_drill(url, ok=fail is None, error=fail, note=note)
