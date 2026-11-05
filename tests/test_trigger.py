@@ -6524,7 +6524,7 @@ async def test_launch_refuses_a_tree_cwd_that_does_not_exist_on_disk(
         actions, caller="agent:tm01", target=worker_seat,
         spawn=_fake_spawn([]), agents_json=_fake_agents_json([[]]))
     assert d["status"] == "refused-no-tree"
-    assert ghost_tree in d["detail"] and "never provisions" in d["detail"]
+    assert ghost_tree in d["detail"] and "will not make it" in d["detail"]
 
 
 async def test_launch_spawns_into_tree_cwd_not_office_pty_lane(
