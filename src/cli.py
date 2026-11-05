@@ -5906,6 +5906,67 @@ async def cmd_proposal(
     return 0
 
 
+# --- proposals (judge the miner's list in one pass) ----------------------------------------------
+
+async def cmd_proposals(
+    words: list[str], *, reason: str = "", verbose: bool = False, as_json: bool = False,
+    actor: str = _CONSOLE_ACTOR, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris proposals [accept|reject] [numbers|all]: the miner's pending proposals as one
+    short numbered line each, and one pass to accept or reject any of them. Every decision
+    goes through the existing `proposal` accept/reject action (same audit trail, same
+    refusals); this adds the list and the batch, no write path of its own."""
+    from src.orchestrator import proposal_queue as pq
+
+    decision = words[0].lower() if words and words[0].lower() in ("accept", "reject") else ""
+    targets = words[1:] if decision else words
+    if not decision and targets:
+        print("osiris proposals: say accept or reject, e.g. osiris proposals accept 1 3",
+              file=sys.stderr)
+        return 1
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=2,
+                                     application_name="osiris-cli:proposals")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris proposals: could not reach postgres at {settings.database_url}: "
+                  f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        items = await pq.pending(pool)
+        if not decision:
+            if as_json:
+                import json as _json
+                print(_json.dumps(items))
+            else:
+                print("\n".join(pq.list_lines(items, verbose=verbose)))
+            return 0
+        if not targets:
+            print(f"osiris proposals: {decision} which? e.g. osiris proposals {decision} "
+                  "1 3, or all", file=sys.stderr)
+            return 1
+        numbers = pq.parse_numbers(targets, len(items))
+        if isinstance(numbers, str):
+            print(f"osiris proposals: {numbers}", file=sys.stderr)
+            return 1
+        by_number = {it["number"]: it for it in items}
+        results = await pq.judge(pool, actor, decision, [by_number[n]["ref"] for n in numbers],
+                                 reason=reason)
+    finally:
+        if owns_pool:
+            await pool.close()
+    print("\n".join(pq.result_lines(items, numbers, results, decision)))
+    return 0 if all(r["ok"] for r in results) else 1
+
+
 # --- rebind-seat / correct-pin-value -------------------------------------------------------------
 #
 # A SEAT SELF-RECONCILING, FROM A TERMINAL: reconciling a seat runs exactly
@@ -8005,7 +8066,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         only), establish-office (deprecated alias for establish-seat-dir,
                         one release only),
                         create-project, rename-project, retire-project, fork-project,
-                        set-project-tag, proposal, settings, backup-settings,
+                        set-project-tag, proposal, proposals, settings, backup-settings,
                         retire-assertion, retire-link, retire-object, cite,
                         declare-machine-identity, correct-agent-house (deprecated alias
                         for correct-agent-project, one release only)
@@ -9104,6 +9165,23 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog="example: osiris proposal accept --proposal-ref proposal:1234...\n"
                "example: osiris proposal reject --proposal-ref proposal:1234... "
                "--reason 'wrong shortlist'")
+
+    p_proposals = sub.add_parser("proposals", description=_d(
+        "Judge the miner's pending proposals in one pass. With no arguments, lists them: "
+        "one short numbered line each (what is being filed, where, and the signal). Then "
+        "`accept 1 3 4`, `reject 2`, or `accept all`. Each decision goes through the "
+        "existing proposal accept/reject action, so the audit trail is the same."),
+        epilog="example: osiris proposals\nexample: osiris proposals accept 1 3 4\n"
+               "example: osiris proposals reject 2 --reason 'wrong project'")
+    p_proposals.add_argument("words", nargs="*",
+                             help="[accept|reject] [numbers, ranges like 2-4, or all]")
+    p_proposals.add_argument("--reason", default="",
+                             help="why, for a rejection (the miner reads it back); "
+                                  "defaults to a short standard line")
+    p_proposals.add_argument("--verbose", action="store_true",
+                             help="add the type, miner, lapse date and proposal ref")
+    p_proposals.add_argument("--json", action="store_true", dest="as_json",
+                             help="machine-readable: the pending list as one JSON line")
     p_proposal.add_argument("action", choices=("propose", "accept", "reject"))
     p_proposal.add_argument("--from-id", default=None,
                             help="propose only: the abstaining object's canonical or uuid")
@@ -9852,6 +9930,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "offload-runner":
         return asyncio.run(cmd_offload_runner(
             args.action, vault=args.vault, as_json=args.as_json))
+    if args.command == "proposals":
+        return asyncio.run(cmd_proposals(  # unbounded-wait-ok: asyncio.run of a CLI command
+            args.words, reason=args.reason, verbose=args.verbose, as_json=args.as_json))
     if args.command == "launch":
         return asyncio.run(cmd_launch(args.handle, model=args.model, debug=args.debug,
                                       verbose=args.verbose, fresh=args.fresh))

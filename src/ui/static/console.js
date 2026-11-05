@@ -1665,7 +1665,58 @@ async function renderSettingsSectionDesk() {
   catch (e) { container.innerHTML = '<div class="o-empty">Could not load the operator desk.</div>'; return; }
   try { merges = await fetch('/merge-candidates').then(function(r){ return r.json(); }); }
   catch (e) { merges = []; }
-  container.innerHTML = renderDeskHtml(desk) + renderMergeCandidatesHtml(merges);
+  var proposals;
+  try { proposals = await fetch('/proposals').then(function(r){ return r.json(); }); }
+  catch (e) { proposals = { items: [] }; }
+  container.innerHTML = renderProposalsHtml(proposals) + renderDeskHtml(desk) +
+    renderMergeCandidatesHtml(merges);
+}
+// The miner's pending proposals: one line each with Accept and Reject, plus Accept all. Every
+// click goes to /proposals/judge by the proposal's own ref (never its position in the list),
+// which runs the existing accept/reject action as the operator.
+function renderProposalsHtml(data) {
+  var items = (data && data.items) || [];
+  if (!items.length) return '';
+  var rows = items.map(function(it) {
+    return '<div class="proposal-row" style="display:flex;gap:8px;align-items:baseline;' +
+      'padding:6px 0;border-bottom:1px solid var(--border)">' +
+      '<span class="o-faint" style="min-width:1.5em">' + esc(String(it.number)) + '</span>' +
+      '<span style="flex:1" title="' + esc(it.title) + '">' + esc(it.title) +
+      ' <span class="o-faint">&rarr; ' + esc(it.target) +
+      (it.signal ? ' (' + esc(it.signal) + ')' : '') + '</span></span>' +
+      '<button class="iconbtn" data-ref="' + esc(it.ref) + '" onclick="judgeProposal(this, \'accept\')">' +
+      'Accept</button>' +
+      '<button class="iconbtn" data-ref="' + esc(it.ref) + '" onclick="judgeProposal(this, \'reject\')">' +
+      'Reject</button></div>';
+  }).join('');
+  var first = items[0].days_left;
+  return '<h4 style="font-size:11px;text-transform:uppercase;color:var(--muted);margin:12px 0 4px">' +
+    'Proposals to judge (' + items.length + ')</h4>' +
+    '<div class="o-faint" style="margin-bottom:4px">The first lapses ' +
+    (first === 0 ? 'today' : 'in ' + first + (first === 1 ? ' day' : ' days')) + '.</div>' +
+    rows +
+    '<div style="margin-top:8px"><button class="iconbtn" onclick="judgeAllProposals()">' +
+    'Accept all</button></div>';
+}
+async function postProposalJudgement(decision, refs) {
+  var res = await fetch('/proposals/judge', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ decision: decision, refs: refs }),
+  }).then(function(r){ return r.json(); });
+  if (res.error) { setStatus('Could not ' + decision + ': ' + res.error); return; }
+  var verb = decision === 'accept' ? 'Accepted' : 'Rejected';
+  setStatus(verb + ' ' + res.done + (res.done < res.asked ? ' of ' + res.asked : '') + '.');
+  renderSettingsSectionDesk();
+}
+function judgeProposal(btn, decision) {
+  return postProposalJudgement(decision, [btn.getAttribute('data-ref')]);
+}
+function judgeAllProposals() {
+  var refs = Array.prototype.map.call(
+    document.querySelectorAll('.proposal-row [data-ref]'),
+    function(b) { return b.getAttribute('data-ref'); });
+  var unique = refs.filter(function(r, i) { return refs.indexOf(r) === i; });
+  return postProposalJudgement('accept', unique);
 }
 function deskCardHtml(c, band) {
   var foldNote = c.thread_folded

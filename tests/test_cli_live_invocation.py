@@ -93,6 +93,7 @@ from src.cli import (
     cmd_practices,
     cmd_promote,
     cmd_proposal,
+    cmd_proposals,
     cmd_rebind_seat,
     cmd_reconcile_merge,
     cmd_reconcile_seat_identity,
@@ -332,6 +333,7 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
     "declare-machine-identity": lambda a: cmd_declare_machine_identity(
         "nobody@example.com", "no-such-project-anywhere", because="test",
         actor="operator", pool=a.pool),
+    "proposals": lambda a: cmd_proposals([], pool=a.pool),
     "proposal": lambda a: cmd_proposal(
         "propose", candidate="not valid json{", pool=a.pool),
     # settings get: get_setting refuses BEFORE any write on an unregistered key

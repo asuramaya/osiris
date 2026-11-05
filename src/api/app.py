@@ -1894,6 +1894,32 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
                 **({"skipped": out["skipped"]} if out["skipped"] else {}),
                 "note": "dismissed by the human's own click"}
 
+    @app.get("/proposals")
+    async def proposals_pending(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        """The miner's pending proposals, numbered soonest-to-lapse first (the same list
+        `osiris proposals` prints). A read: nothing is judged here."""
+        from src.orchestrator.proposal_queue import pending
+        items = await pending(p)
+        return {"count": len(items), "items": items}
+
+    @app.post("/proposals/judge")
+    async def proposals_judge(
+        body: ProposalJudgeBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        """ACCEPT or REJECT proposals from the desk. The human's own click, signed
+        analyst:operator, through the existing proposal accept/reject action (same audit
+        trail and refusals as `osiris proposals` and the MCP tool). Acts on stable proposal
+        refs, never list positions, so a list that changed since it was drawn cannot make a
+        click land on a different proposal."""
+        from src.orchestrator.proposal_queue import judge
+        if body.decision not in ("accept", "reject"):
+            return {"error": "decision must be accept or reject"}
+        results = await judge(p, "analyst:operator", body.decision, body.refs[:200],
+                              reason=body.reason)
+        return {"decision": body.decision, "results": results,
+                "done": sum(1 for r in results if r["ok"]), "asked": len(results),
+                "by": "operator"}
+
     @app.post("/act")
     async def act(body: ActBody, p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
         """THE GENERIC ACTION-BINDING INVOCATION: any composition-rendered row carrying
@@ -2538,6 +2564,13 @@ class ThreadTriageBody(BaseModel):
     because: str | None = None
     owner: str | None = None
     days: int = 30
+
+
+class ProposalJudgeBody(BaseModel):
+    """The operator accepting or rejecting the miner's proposals from the desk: his click."""
+    decision: str
+    refs: list[str]
+    reason: str = ""
 
 
 class DeskSettleBody(BaseModel):

@@ -95,6 +95,8 @@ JSON_COMMANDS = frozenset({
     # mirrors soul-key's own status/init shape; offload-runner
     # is the timer's own ExecStart, safe to run by hand.
     "restic-key", "offload-runner",
+    # the miner's proposals list for a script
+    "proposals",
 })
 
 
