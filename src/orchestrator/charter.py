@@ -322,18 +322,11 @@ async def charter_for(
     the record must say whose hand moved it, applied identically here); the result
     carries both `because` and who declared it.
 
-    BLIND TO LEGACY AGENT-ORIGIN GOVERNS EDGES, BY CONSTRUCTION (a known, unresolved
-    blocker: `migrate_charter_to_seat` has not run for some seats, whose governs edges
-    still sit on an old Agent-origin link while their Seat reads zero). This delegates
-    straight to `set_charter`, which only ever reads/writes governs links FROM a Seat
-    object; it cannot see, heal, or interact with an Agent-origin row at all, so calling
-    `charter_for` on an unmigrated seat is safe from THAT angle: it never touches the
-    legacy rows, never orphans them further. It does NOT solve the reverse risk, named
-    here so nobody finds it by accident rather than fixed (out of scope for this piece):
-    if `migrate_charter_to_seat` runs LATER on a seat `charter_for` already declared for,
-    that function computes its target set purely from the legacy Agent-origin union,
-    with no awareness of a charter already declared post-rekey: it could heal away what
-    `charter_for` just wrote. A real, separate gap in the migration itself, still open."""
+    BLIND TO LEGACY AGENT-ORIGIN GOVERNS EDGES, BY CONSTRUCTION: this delegates straight to
+    `set_charter`, which only ever reads/writes governs links FROM a Seat object, so it never
+    sees, heals or touches an old Agent-origin row. (The one-time verb that migrated those rows
+    onto the seat was removed on the operator's ruling: it replaced a charter wholesale and could
+    erase one written through here.)"""
     from src.orchestrator.seats import _resolve_active_seat, held_seat, manager_of_seat
 
     because = (because or "").strip()
@@ -395,93 +388,3 @@ async def charter_for(
         if ruling_id is not None:
             out["ruling"] = str(ruling_id)
     return out
-
-
-async def migrate_charter_to_seat(
-    actions: Actions, *, dry_run: bool = True, only_seats: set[str] | None = None,
-) -> dict[str, Any]:
-    """THE ONE-TIME MIGRATION: before this, `governs` originated from whichever Agent
-    generation happened to declare it, and a successor re-declaring couldn't heal an
-    ancestor's grant (`invalidate_link` needs the exact from_id), so a lineage's
-    EFFECTIVE charter (what orient()/charter()'s lineage-walk showed) could silently
-    accumulate repos nobody meant to keep. This walks every ACTIVE Agent-origin `governs`
-    link, resolves each Agent to the Seat its lineage currently holds (`held_seat`, the
-    same lineage-aware resolution orient()/mount() already trust: the presented id, its
-    bare root, or any `-<suffix>` generation), and for each seat re-declares the UNION of
-    everything its lineage ever actively declared as a fresh Seat-origin charter, through
-    `set_charter` itself, the same validated, idempotent write path a live seat would use,
-    then heals every migrated Agent-origin link (compensating event, never deleted).
-
-    DRY-RUN REPORTS THE PLAN AND WRITES NOTHING. Idempotent: a second run finds no active
-    Agent-origin `governs` links left (the first pass healed them all) and is a no-op.
-
-    An Agent whose OWN lineage holds no seat right now (never attached/claimed, or
-    reassigned/retired since it declared) is reported in `unresolved`, NEVER guessed: its
-    links are left untouched, a named residual, distinct from a propose-and-approve batch:
-    this heals a rekey, it does not clean up what was declared, however it looks.
-
-    NEVER HEALS AWAY A POST-REKEY CHARTER (charter_for's own docstring named this gap,
-    still open until now): `set_charter` REPLACES a seat's whole charter: anything not in
-    the list passed to it gets invalidated. If a seat already declared its OWN Seat-origin
-    charter (via `charter()`/`charter_for`) before this migration ever ran on it, computing
-    the target set from legacy Agent-origin links ALONE and handing that straight to
-    `set_charter` would heal away the seat's own later, more-authoritative declaration, a
-    live seat's own word, destroyed by a one-time cleanup of dead links it never asked to
-    run again. So each seat's migrated set is the UNION of the legacy Agent-origin repos
-    being healed with whatever `charter_of` already reads back for it right now, additive
-    only, never a replacement of a charter the seat itself already stands behind."""
-    from src.orchestrator.seats import held_seat
-
-    rows = await actions.pool.fetch(
-        "SELECT a.canonical AS agent_id, p.canonical AS repo "
-        "FROM links l "
-        "JOIN objects a ON a.id=l.from_id AND a.type='Agent' "
-        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
-        "WHERE l.type='governs' AND (l.valid_until IS NULL OR l.valid_until > now()) "
-        "ORDER BY a.canonical, p.canonical"
-    )
-    by_seat: dict[str, dict[str, Any]] = {}
-    unresolved: list[dict[str, str]] = []
-    for row in rows:
-        agent_id = row["agent_id"]
-        repo = row["repo"].removeprefix("repo:")
-        bound = await held_seat(actions.pool, agent_id)
-        if bound is None:
-            unresolved.append({"agent_id": agent_id, "repo": repo,
-                               "note": "no seat currently held by this agent's lineage, "
-                                       "left untouched"})
-            continue
-        seat_id = str(bound["seat_id"])
-        if only_seats is not None and seat_id not in only_seats:
-            continue
-        entry = by_seat.setdefault(seat_id, {"seat_id": seat_id, "repos": set(), "pairs": []})
-        entry["repos"].add(repo)
-        entry["pairs"].append((agent_id, repo))
-    for v in by_seat.values():
-        already_declared = set(await charter_of(actions.pool, v["seat_id"]))
-        v["already_declared"] = sorted(already_declared - v["repos"])
-        v["repos"] |= already_declared
-    plan = [{"seat_id": v["seat_id"], "repos": sorted(v["repos"]),
-             "from_agents": sorted({p[0] for p in v["pairs"]}),
-             "already_declared": v["already_declared"]} for v in by_seat.values()]
-    applied = 0
-    rejected_total: list[dict[str, Any]] = []
-    if not dry_run:
-        now = datetime.now(UTC)
-        for v in by_seat.values():
-            out = await set_charter(actions, v["seat_id"], sorted(v["repos"]),
-                                    actor="migration:governs-seat-key")
-            if out.get("rejected"):
-                rejected_total.append({"seat_id": v["seat_id"], "rejected": out["rejected"]})
-            for agent_id, repo in v["pairs"]:
-                agent_oid = await actions.pool.fetchval(
-                    "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", agent_id)
-                proj_oid = await actions.pool.fetchval(
-                    "SELECT id FROM objects WHERE canonical=$1 AND type='SoftwareProject'",
-                    f"repo:{repo}")
-                if agent_oid is not None and proj_oid is not None:
-                    await actions.invalidate_link(agent_oid, proj_oid, "governs",
-                                                  "migration:governs-seat-key", now)
-            applied += 1
-    return {"plan": plan, "unresolved": unresolved, "applied": not dry_run,
-            "seats_migrated": applied, "rejected": rejected_total}
