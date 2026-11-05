@@ -1001,8 +1001,14 @@ def _turn_fresh_sync(root: Path, sid: str, active_secs: int, job_dir: str = "") 
     through to the wake path": the safe default either way (waking a genuinely-busy
     agent costs a redundant nudge; failing to wake a genuinely-idle one is the worse
     failure), never a claim this function could not actually verify."""
-    age = _last_turn_age_sync(root, sid, job_dir)
-    return age is not None and age < active_secs
+    age, ended = _turn_state_sync(root, sid, job_dir)
+    # A turn that has ENDED is not in flight however recent its last line: the harness
+    # writes `turn_duration` after the final message and the Stop hook has already run, so
+    # nothing is left to surface a DM at "its own turn's end". The live specimen (mail
+    # 15848, 2026-10-29): the addressee's turn ended at 16:57:56, the DM arrived at
+    # 16:58:41, 49 s after its last line, inside the 120 s window, and was answered
+    # 'mid-turn' for a seat that was idle. It sat unread for 89 minutes.
+    return age is not None and age < active_secs and not ended
 
 
 def _last_turn_age_sync(root: Path, sid: str, job_dir: str = "") -> float | None:
@@ -1010,24 +1016,39 @@ def _last_turn_age_sync(root: Path, sid: str, job_dir: str = "") -> float | None
     in session `sid`'s transcript, or None when there is no transcript, it cannot be read,
     or its tail holds no timestamped turn. None is "cannot say", never "long idle": a caller
     that must prove idleness treats it as unproven. The rules are `_turn_fresh_sync`'s own."""
+    return _turn_state_sync(root, sid, job_dir)[0]
+
+
+def _turn_state_sync(root: Path, sid: str, job_dir: str = "") -> tuple[float | None, bool]:
+    """(`_last_turn_age_sync`'s age, whether that turn has ENDED). Ended means the newest
+    record that says anything about the turn is the harness's `turn_duration` marker (written
+    once, after the last message and the Stop hook), not a `user`/`assistant` line. Other
+    `system` lines (a resume's housekeeping, `away_summary`, a hook summary) say nothing
+    about whether a turn is running and are skipped; a `user` line after the marker (a new
+    prompt, an injected mail, a Stop block's continuation) starts a new turn and is newer
+    than it. Unreadable or marker-less is not ended: only a seen marker proves it."""
     if not sid:
-        return None
+        return None, False
     t = locate_current_transcript(root, job_dir or f"jobs/{sid}", anchored_only=True)
     if t is None:
-        return None
+        return None, False
     try:
         size = t.stat().st_size
         with t.open("rb") as f:
             f.seek(max(0, size - 65_536))
             tail = f.read().decode("utf-8", errors="replace")
     except OSError:
-        return None
+        return None, False
+    ended = False
     for line in reversed(tail.splitlines()):
         try:
             d = json.loads(line)
         except ValueError:
             continue
         if not isinstance(d, dict):
+            continue
+        if d.get("type") == "system" and d.get("subtype") == "turn_duration":
+            ended = True
             continue
         # A real turn only (the reboot specimen): a daemon resume appends its own
         # fresh-timestamped housekeeping line, `type: system`, no different in shape from
@@ -1048,8 +1069,8 @@ def _last_turn_age_sync(root: Path, sid: str, job_dir: str = "") -> float | None
             at = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
         except ValueError:
             continue
-        return (datetime.now(UTC) - at).total_seconds()
-    return None
+        return (datetime.now(UTC) - at).total_seconds(), ended
+    return None, False
 
 
 ResidentVerdict = Literal["match", "mismatch", "unknown"]
