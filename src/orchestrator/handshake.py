@@ -535,6 +535,23 @@ async def bridged_seat(actions: Actions, *, bridge_session_id: str) -> str | Non
     return max(same, key=lambda c: _generation(c)[1], default=base)
 
 
+async def _seat_has_a_real_holder(pool: Any, seat_id: str, agent_id: str) -> bool:
+    """True when `seat_id` is held by an agent of ANOTHER lineage than `agent_id` that is live
+    now or has ever mounted. A vacant seat, a seat already held by this lineage, and a seat
+    whose holder never ran at all (a binding that points at nothing) are all free to take."""
+    from src.orchestrator.agents import _generation
+    from src.orchestrator.mounts import agent_liveness
+    from src.orchestrator.seats import seat_occupancy
+
+    occ = await seat_occupancy(pool, seat_id)
+    holder = occ["holder"]
+    if not holder or _generation(holder)[0] == _generation(agent_id)[0]:
+        return False
+    if occ["live"]:
+        return True
+    return bool((await agent_liveness(pool, holder))["ever_mounted"])
+
+
 async def mechanical_seat_mount(
     actions: Actions, *, cwd: str, project: str | None, agent_id: str, actor: str,
 ) -> dict[str, Any] | None:
@@ -587,6 +604,14 @@ async def mechanical_seat_mount(
         if existing is None:
             return None
         minted = True
+    if not minted and await _seat_has_a_real_holder(actions.pool, existing["seat_id"], agent_id):
+        # A VISITOR, NOT AN OWNER: the tree names this seat, but the seat already has a
+        # holder with a real past, and this fresh session has no lineage of its own to
+        # succeed it with. Taking the seat here is how a disposable probe once captured a
+        # live seat (every send and wake to the real lineage then failed). Naming a seat
+        # in a pin makes a session a visitor to it; the holder's own return, a deliberate
+        # claim, or `rehold` is how a seat changes hands.
+        return None
     try:
         await bind_holder(actions, seat_id=existing["seat_id"], agent_id=agent_id,
                           source=actor)

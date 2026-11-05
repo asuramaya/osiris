@@ -6214,3 +6214,136 @@ async def test_held_seat_resolves_the_lineage_before_joining_links(actions: Acti
     plan = "\n".join(r[0] for r in await actions.pool.fetch(
         "EXPLAIN " + seats_mod._HELD_SEAT_SQL, "agent:hs0a1b2c-ii", "agent:hs0a1b2c"))
     assert "CTE h" in plan and "CTE Scan on h" in plan, plan
+
+
+# --- seat capture: a fresh session in a seat's tree is a visitor, not the new holder --------
+
+async def _idle_lineage(actions: Actions, agent_id: str, job_dir: str, days: float = 2) -> None:
+    """A real lineage that mounted and has been quiet for a while: not live, but not gone."""
+    await actions.create_or_find_object("Agent", agent_id, "test")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent_id, project="osiris",
+                     cwd="/w/osiris", model="claude-fable-5", session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - make_interval(secs => $2) "
+        "WHERE job_dir=$1", job_dir, days * 86400)
+
+
+async def _tree_pinned_to(tmp_path: Path, name: str, handle: str) -> Path:
+    cwd = tmp_path / name
+    cwd.mkdir()
+    (cwd / ".osiris").write_text(f'project = "osiris"\nseat = "{handle}"\n')
+    return cwd
+
+
+async def test_a_fresh_session_in_a_seats_tree_does_not_take_a_seat_with_a_real_holder(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The capture: a throwaway session started in the seat's checkout became the seat's
+    holder, and every message to the real lineage then failed. It is a visitor."""
+    seat = await ensure_seat(actions, house="osiris", handle="Capt1", source="test")
+    await _idle_lineage(actions, "agent:capt1-real", "/jobs/capt1real")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:capt1-real")
+    cwd = await _tree_pinned_to(tmp_path, "capt1tree", "Capt1")
+
+    out = await automount(actions, session_id="capt1probe0001", cwd=str(cwd),
+                          actor="test", root=tmp_path)
+
+    assert "mechanical_seat_mount" not in out
+    assert await _active_holds(actions, "agent:capt1-real", seat["seat_id"])
+    assert not await _active_holds(actions, out["agent"], seat["seat_id"])
+    assert (await seats_mod.seat_facts(actions.pool, seat["seat_id"]))["tree_cwd"] != str(cwd)
+
+
+async def test_a_fresh_session_still_takes_a_vacant_seat_in_its_tree(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    seat = await ensure_seat(actions, house="osiris", handle="Capt2", source="test")
+    cwd = await _tree_pinned_to(tmp_path, "capt2tree", "Capt2")
+
+    out = await automount(actions, session_id="capt2fresh0001", cwd=str(cwd),
+                          actor="test", root=tmp_path)
+
+    assert out["mechanical_seat_mount"]["handle"] == "Capt2"
+    assert await _active_holds(actions, out["agent"], seat["seat_id"])
+
+
+async def test_a_fresh_session_replaces_a_holder_that_never_ran_at_all(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A binding that points at an agent with no mount, no transcript and no anchor is a
+    dangling reference, not someone sitting in the seat."""
+    seat = await ensure_seat(actions, house="osiris", handle="Capt3", source="test")
+    await actions.create_or_find_object("Agent", "agent:capt3-ghost", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:capt3-ghost")
+    cwd = await _tree_pinned_to(tmp_path, "capt3tree", "Capt3")
+
+    out = await automount(actions, session_id="capt3fresh0001", cwd=str(cwd),
+                          actor="test", root=tmp_path)
+
+    assert out["mechanical_seat_mount"]["handle"] == "Capt3"
+    assert await _active_holds(actions, out["agent"], seat["seat_id"])
+
+
+async def _captured_seat(actions: Actions, handle: str, *, real_days: float = 2) -> str:
+    """A seat taken by a stranger: the real lineage held it first, then a bare agent."""
+    seat = await ensure_seat(actions, house="osiris", handle=handle, source="test")
+    real = f"agent:{handle.lower()}-real"
+    await _idle_lineage(actions, real, f"/jobs/{handle.lower()}real", days=real_days)
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=real)
+    await actions.create_or_find_object("Agent", f"agent:{handle.lower()}stranger", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=f"agent:{handle.lower()}stranger")
+    return seat["seat_id"]
+
+
+async def test_seat_capture_names_the_dead_stranger_and_the_rehold_command(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import roster, seat_capture
+
+    seat_id = await _captured_seat(actions, "Capt4")
+    cap = await seat_capture(actions.pool, seat_id)
+    assert cap is not None
+    assert cap["holder"] == "agent:capt4stranger" and cap["real_lineage"] == "agent:capt4-real"
+    assert cap["command"].startswith(f"osiris rehold {seat_id} --agent agent:capt4-real ")
+    row = next(r for r in (await roster(actions.pool))["seats"] if r["seat"] == seat_id)
+    assert row["captured"] == cap
+
+
+async def test_seat_capture_stays_silent_when_the_seat_is_fine(actions: Actions) -> None:
+    from src.orchestrator.seats import seat_capture
+
+    # a live holder is not a dead one
+    live_seat = await _captured_seat(actions, "Capt5")
+    await save_mount(actions.pool, job_dir="/jobs/capt5stranger",
+                     agent_id="agent:capt5stranger", project="osiris", cwd="/w/x",
+                     model="claude-fable-5", session_key=None)
+    assert await seat_capture(actions.pool, live_seat) is None
+    # a holder with a story of its own (a named heir) is not a stranger
+    named_seat = await _captured_seat(actions, "Capt6")
+    sid = await actions.create_or_find_object("Agent", "agent:capt6stranger", "test")
+    await actions.assert_property(sid, "handle", "Capt6", "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    assert await seat_capture(actions.pool, named_seat) is None
+    # a real lineage not seen for weeks is not one to put back
+    old_seat = await _captured_seat(actions, "Capt7", real_days=30)
+    assert await seat_capture(actions.pool, old_seat) is None
+    # a seat nobody ever held
+    vacant = await ensure_seat(actions, house="osiris", handle="Capt8", source="test")
+    assert await seat_capture(actions.pool, vacant["seat_id"]) is None
+
+
+async def test_the_seat_holder_lint_and_the_readiness_step_carry_the_command(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.compositions import seat_holder_census
+    from src.orchestrator.readiness import _seat_capture_step
+
+    seat_id = await _captured_seat(actions, "Capt9")
+    census = await seat_holder_census(actions.pool)
+    hit = next(r for r in census["captured"] if r["seat"] == seat_id)
+    assert hit["real_lineage"] == "agent:capt9-real"
+    assert all(r["seat"] != seat_id for r in census["unprovenanced"])
+    step = _seat_capture_step([hit])
+    assert step["status"] == "needs_attention" and hit["command"] in step["reason"]
+    assert _seat_capture_step([])["status"] == "done"
+    assert _seat_capture_step(None)["status"] == "done"

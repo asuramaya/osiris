@@ -1013,6 +1013,7 @@ async def roster(
             "seat": seat_id, "handle": facts["handle"], "house": facts["house"],
             "manager": manager_handle,
             "occupancy": occ["state"], "holder": occ["holder"],
+            "captured": await seat_capture(pool, seat_id, occ),
             "anchor_cwd": anchor, "tree_cwd": facts["tree_cwd"], "live_cwd": live_cwd,
             "probed_anchor_cwd": probed_anchor,
             "office_exists": _dir_exists(effective_anchor),
@@ -2246,6 +2247,56 @@ async def bind_holder(
                                   evidence_class=_EC)
     return {"seat_id": seat_id, "old_holder": prior[0][1] if prior else None,
             "new_holder": agent_id}
+
+
+_CAPTURE_RECENT_DAYS = 7
+
+
+async def seat_capture(
+    pool: asyncpg.Pool, seat_id: str, occ: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Is this seat held by a DEAD STRANGER while its real lineage is still around? Read-only.
+
+    The shape (a disposable probe session once took a live seat): the seat's current holder
+    is not live now, is of another lineage than the seat's previous holder, carries no
+    story of its own (never minted, never named, never succeeded anything), and the previous
+    holder's lineage was seen within the last week. Then every message to the seat reaches
+    a holder that will never read it, and the real lineage is the one to put back. Returns
+    `{"holder", "real_lineage", "command"}` (the exact rehold command) or None when the seat
+    is vacant, held by a live agent, held by the lineage it was already in, or has no recent
+    earlier holder to put back. Never writes: moving a seat stays a deliberate `rehold`."""
+    from src.orchestrator.agents import _generation
+    from src.orchestrator.mounts import agent_liveness
+
+    occ = occ or await seat_occupancy(pool, seat_id)
+    holder = occ["holder"]
+    if not holder or occ["live"]:
+        return None
+    base = _generation(holder)[0]
+    if await pool.fetchval(
+            "SELECT 1 FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+            "WHERE o.canonical=$1 AND a.name IN ('minted_because', 'handle', 'succeeded_from') "
+            "LIMIT 1", holder):
+        return None
+    earlier = [r["canonical"] for r in await pool.fetch(
+        "SELECT f.canonical, max(l.valid_until) AS ended FROM links l "
+        "JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' AND f.type='Agent' "
+        "AND l.valid_until IS NOT NULL AND l.valid_until <= now() "
+        "GROUP BY f.canonical ORDER BY ended DESC", seat_id)]
+    real = next((a for a in earlier if _generation(a)[0] != base), None)
+    if real is None:
+        return None
+    seen = (await agent_liveness(pool, real))["last_seen"]
+    if seen is None:
+        return None
+    if (datetime.now(UTC) - datetime.fromisoformat(seen)).days >= _CAPTURE_RECENT_DAYS:
+        return None
+    return {
+        "holder": holder, "real_lineage": real,
+        "command": f'osiris rehold {seat_id} --agent {real} '
+                   '--because "taken by a disposable session; return it to its real '
+                   'lineage" --apply'}
 
 
 async def rehold_seat(
