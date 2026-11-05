@@ -283,7 +283,7 @@ async def _run_offload_tick_locked(
     from src.orchestrator import recovery_copies
     from src.orchestrator.backup_settings import get_backup_settings
     from src.orchestrator.backup_validation import check_local_target_presence
-    from src.orchestrator.network_presence import lan_presence
+    from src.orchestrator.network_presence import is_unreachable_error, lan_presence
     from src.orchestrator.restic_credential import ResticPasswordMissing, get_restic_password
 
     settings = await get_backup_settings(pool)
@@ -345,6 +345,14 @@ async def _run_offload_tick_locked(
                                   "last_error": None, "last_skip_reason": None,
                                   "skipped_since": None, "stale_notified_clock": None})
             results.append({"name": name, "ok": True})
+        elif is_unreachable_error(fail):
+            # The network had no way to the target (away from home, a tunnel down): the
+            # backup could not run, which says nothing about the repository. A quiet skip,
+            # the same as the presence check's own: it never clobbers a real last success
+            # and adds no last_error for the readiness view to report.
+            reason = "target not reachable from this network"
+            _note_skip(name, reason, now)
+            results.append({"name": name, "skipped": reason})
         else:
             # a 'restic' target's own unreachability surfaces here identically to a
             # genuine backup failure: this runner has no separate network-reachable

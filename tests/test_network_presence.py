@@ -213,6 +213,45 @@ async def test_the_tick_skips_a_tunnel_target_quietly_and_keeps_its_last_success
     assert receipt["last_error"] is None  # and is not reported as a failure
 
 
+async def test_the_tick_treats_no_route_to_host_as_a_quiet_skip_and_keeps_the_last_success(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE INCIDENT'S OTHER HALF: the presence check said home, restic could not reach the
+    NAS. That is away, not a failed backup: no last_error, the last success untouched."""
+    await _nas(actions)
+    offload_runner._write_receipt(
+        "nas", {"last_successful_offload": "T1", "last_attempt_at": "T1", "last_error": None})
+    monkeypatch.setattr(
+        offload_runner, "_run_restic_backup",
+        lambda **kw: "unable to open repository: ssh: connect to host 192.168.4.198 port 22: "
+                     "No route to host")
+    _route(monkeypatch, AT_HOME)
+
+    out = await offload_runner.run_offload_tick(actions.pool)
+
+    assert out["targets"] == [{"name": "nas",
+                               "skipped": "target not reachable from this network"}]
+    receipt = offload_runner.offload_receipts()["nas"]
+    assert receipt["last_skip_reason"] == "target not reachable from this network"
+    assert receipt["last_successful_offload"] == "T1"
+    assert receipt["last_error"] is None and receipt["last_attempt_at"] == "T1"
+
+
+async def test_the_tick_still_records_a_real_backup_failure(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _nas(actions)
+    monkeypatch.setattr(offload_runner, "_run_restic_backup",
+                        lambda **kw: "Fatal: repository contains errors")
+    _route(monkeypatch, AT_HOME)
+
+    out = await offload_runner.run_offload_tick(actions.pool)
+
+    assert out["targets"][0]["ok"] is False
+    assert offload_runner.offload_receipts()["nas"]["last_error"] == (
+        "Fatal: repository contains errors")
+
+
 async def test_the_tick_uploads_at_home_and_clears_the_skip_reason(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
