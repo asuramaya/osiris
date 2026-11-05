@@ -141,6 +141,49 @@ def _isolate_credential_stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     # into this test's own backend resolution (test_soul_crypto.py's own fixture, same
     # reasoning: a controlled input, not whatever happens to be installed right now).
     monkeypatch.setattr(soul_crypto, "_installed_user_unit_env_value", lambda _name: None)
+    # The NAS target below points at a closed port, but restic's REST backend RETRIES a refused
+    # connection rather than failing, so the first restic call to it (the lock listing) runs
+    # until the runner's own 30 s bound kills it, once per tick: this one test took 140 s.
+    # Shorten that bound for the REST target only, never remove it: the failure under test, "an
+    # unreachable target is recorded and skipped, never raised", is exactly the bound firing.
+    # (A local repository keeps the real bound: unlocking one takes a second or two of key
+    # derivation, and a short bound there would be a flake.)
+    import subprocess
+
+    from src.orchestrator import restic_locks
+
+    real_clear = restic_locks.clear_stale_locks
+
+    def _fast_for_rest(env: dict[str, str], **kw: Any) -> restic_locks.LockOutcome:
+        if env.get("RESTIC_REPOSITORY", "").startswith("rest:"):
+            def _short(args: list[str], e: dict[str, str]) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(["restic", *args], env=e, capture_output=True, text=True,
+                                      timeout=2, check=False)
+            kw["restic"] = _short
+        return real_clear(env, **kw)
+
+    monkeypatch.setattr(restic_locks, "clear_stale_locks", _fast_for_rest)
+
+    # The host credential store: seven real `systemd-creds` calls cost 10 s of this test's 20
+    # (decrypt alone is 1.7 s each). The real binary's round trips are proved in
+    # test_systemd_credential.py and test_restic_credential.py; this test proves the SEQUENCE, so
+    # the subprocess boundary is replaced by a reversible stand-in that keeps what the sequence
+    # depends on: the plaintext round-trips, and a blob only decrypts under the name it was
+    # sealed with.
+    import base64
+
+    from src.ingest import systemd_credential
+
+    def _fake_creds(args: list[str], *, input_bytes: bytes) -> bytes:
+        name = next(a.removeprefix("--name=") for a in args if a.startswith("--name="))
+        if args[0] == "encrypt":
+            return b"fake-creds:" + name.encode() + b":" + base64.b64encode(input_bytes)
+        head, _, body = input_bytes.removeprefix(b"fake-creds:").partition(b":")
+        if head.decode() != name:
+            raise RuntimeError(f"systemd-creds decrypt failed: sealed as {head.decode()!r}")
+        return base64.b64decode(body)
+
+    monkeypatch.setattr(systemd_credential, "run_systemd_creds", _fake_creds)
 
 
 def _last_json_line(captured_out: str) -> dict[str, Any]:
@@ -234,11 +277,11 @@ async def test_first_run_acceptance_sequence(
 
     # THE NAS: kind=restic, off-box, no mountpoint to check. A REAL sftp target has
     # no server in a hermetic test; substituted with a REST-backend URL pointing at a
-    # closed local port (127.0.0.1:1, connection refused near-instantly, no DNS
-    # lookup, no timeout wait) so the runner's own "reachability failure is treated
-    # identically to an absent mountpoint: skip, record, never raise" law (offload_
-    # runner.py's own module docstring) is exercised with a REAL, fast subprocess
-    # failure rather than a monkeypatched one.
+    # closed local port (127.0.0.1:1, no DNS lookup; restic retries the refused connection, so
+    # the failure is the runner's own bound firing, shortened by the fixture above) so the
+    # runner's own "reachability failure is treated identically to an absent mountpoint:
+    # skip, record, never raise" law (offload_runner.py's own module docstring) is exercised
+    # with a REAL subprocess failure rather than a monkeypatched one.
     rc = await cmd_backup_settings(
         "write", offload_add="nas", offload_kind="restic",
         offload_target="rest:http://127.0.0.1:1/repo", offload_schedule="Sun 04:00:00",
@@ -268,7 +311,7 @@ async def test_first_run_acceptance_sequence(
     tick1_out = _last_json_line(capsys.readouterr().out)
     by_name = {t["name"]: t for t in tick1_out["targets"]}
     assert by_name["docked-drive"]["ok"] is True
-    assert by_name["nas"]["ok"] is False  # a real, fast connection-refused failure
+    assert by_name["nas"]["ok"] is False  # a real unreachable-target failure (the bound firing)
     assert "nas" in by_name and "error" in by_name["nas"]
 
     receipts = offload_runner_module.offload_receipts()
