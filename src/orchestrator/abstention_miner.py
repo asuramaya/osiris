@@ -117,6 +117,8 @@ _ELIGIBLE_SQL = (
     "WHERE o.type=$1 AND o.status='active' "
     "AND EXISTS (SELECT 1 FROM current_assertions ca WHERE ca.object_id=o.id "
     "  AND ca.name=$2 AND NOT (ca.value ? 'resolved')) "
+    "AND NOT EXISTS (SELECT 1 FROM links ll WHERE ll.from_id=o.id AND ll.type=$3 "
+    "  AND (ll.valid_until IS NULL OR ll.valid_until > now())) "
     "AND NOT EXISTS ("
     "  SELECT 1 FROM objects pr WHERE pr.type='Proposal' "
     "  AND EXISTS (SELECT 1 FROM current_assertions ep WHERE ep.object_id=pr.id "

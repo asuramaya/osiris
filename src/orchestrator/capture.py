@@ -665,6 +665,64 @@ async def backfill_lineage_repo_links(
            "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
 
 
+async def backfill_stale_in_repo_abstentions(
+    actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """Retires every live `derivation_abstained_in_repo` record on an object that already has
+    a live `in_repo` link to an active project: the question the record asks ("which project?")
+    was answered, so the record is a stale confession, not a gap. Measured live: 600 of the
+    roughly 810 such records were of this kind (579 Decisions, 21 Threads), each with exactly
+    one live link, written by the same agent that also linked the object; they kept the
+    abstention miner proposing a project for objects that already had one.
+
+    The retirement is the same one a successful mint does: the abstention is superseded by
+    `{"link_type": "in_repo", "resolved": True, "resolved_to": <the project>}` through the
+    cross-source route (`_supersede_stale_in_repo_abstention`). Nothing about the link itself
+    changes, and an object with TWO OR MORE live links to different projects is reported and
+    left alone (which one answered the question is not for a sweep to pick). Objects with no
+    live link are not touched: those abstentions are real gaps.
+
+    DRY RUN IS THE DEFAULT and returns the counts per type and a sample. `dry_run=False`
+    REQUIRES a non-blank `because`. Idempotent: a retired record is no longer live."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "backfilling without a because is an un-audited repair: cite "
+                         "the evidence/ruling that authorizes it"}
+    pool = actions.pool
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, o.type, "
+        "  array_agg(DISTINCT p.canonical) AS projects "
+        "FROM objects o "
+        "JOIN assertions a ON a.object_id=o.id AND a.name='derivation_abstained_in_repo' "
+        "  AND NOT (a.value ? 'resolved') "
+        "  AND NOT EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes=a.id) "
+        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+        "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' AND p.status='active' "
+        "WHERE o.status='active' GROUP BY o.id, o.canonical, o.type ORDER BY o.type, o.canonical")
+    observed = datetime.now(UTC)
+    by_type: dict[str, int] = {}
+    ambiguous: list[dict[str, Any]] = []
+    sample: list[dict[str, Any]] = []
+    retired = 0
+    for r in rows:
+        if len(r["projects"]) != 1:
+            ambiguous.append({"id": r["canonical"], "projects": sorted(r["projects"])})
+            continue
+        repo = r["projects"][0].removeprefix("repo:")
+        by_type[r["type"]] = by_type.get(r["type"], 0) + 1
+        if len(sample) < 8:
+            sample.append({"id": r["canonical"], "type": r["type"], "project": repo})
+        if not dry_run:
+            await _supersede_stale_in_repo_abstention(
+                actions, r["id"], repo, actor, observed,
+                f"backfill_stale_in_repo_abstentions: this object already has a live "
+                f"in_repo link to {repo!r}, so the abstention was answered")
+            retired += 1
+    return {"dry_run": dry_run, "scanned": len(rows), "to_retire": sum(by_type.values()),
+            "retired": retired, "by_type": by_type, "left_alone_ambiguous": ambiguous,
+            "sample": sample, "because": because if not dry_run else None}
+
+
 async def backfill_lineage_repo_links_at_write_time(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:

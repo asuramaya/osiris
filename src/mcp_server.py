@@ -6919,13 +6919,13 @@ async def backfill(
     only_bases: list[str] | None = None, limit: int | None = None,
     newest_first: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Repair tool, dispatched over `target`. Eight structurally distinct backfills (no
+    """Repair tool, dispatched over `target`. Nine structurally distinct backfills (no
     shared logic underneath, only a shared call shape), delegated to
     `src.orchestrator.backfill.run_backfill`, the same function the CLI's
     `osiris backfill` command and the UI's Repairs panel call.
     There is only ever one implementation of this dispatch. Dry run is the default for every
     target; `dry_run=False` requires `because` (except `agent_project_links`, which
-    predates that convention). All eight are idempotent.
+    predates that convention). All nine are idempotent.
 
     `target=`: "bootstrap_orphan_references" (links an orphaned `ref:osiris`-stamped
     Reference to the SoftwareProject its own canonical prefix names) |
@@ -6940,11 +6940,11 @@ async def backfill(
     placeholder) | "operator_charter" (mints a
     `governs` link from `person:operator` to every active SoftwareProject it doesn't
     already govern, so the operator stays chartered over everything) |
+    "stale_in_repo_abstentions" (retires an in_repo abstention on a linked object) |
     "provenance_possible_upstream" (back-stamps `possible_upstream` onto
     historical Decision/Thread writes via each write's transcript record. `limit`/
-    `newest_first` are consulted by this target only. Runs in the background because a
-    large transcript can take a long time to process; returns a job
-    id at once, and the result is recorded as a thread annotation when done)."""
+    `newest_first` are consulted by this target only. Runs in the background and
+    returns a job id; the result lands as a thread annotation)."""
     from src.orchestrator.backfill import BACKFILL_TARGETS
 
     if target not in BACKFILL_TARGETS:
