@@ -183,8 +183,8 @@ async def test_declared_charter_reads_both_seat_and_agent_origin_governs(
     actions: Actions, tmp_path,
 ) -> None:
     """A prior ruling re-keyed governs onto the Seat (schema + code),
-    but migrate_charter_to_seat is dry-run-only as of this build, so every LIVE governs
-    edge today is still Agent-typed. This tier must see BOTH shapes, not just the one the
+    but no migration of the old edges was ever applied (the verb was removed), so a LIVE governs
+    edge may still be Agent-typed. This tier must see BOTH shapes, not just the one the
     schema now prefers, or it goes blind on the exact data the real graph currently
     holds."""
     office = tmp_path / "office"

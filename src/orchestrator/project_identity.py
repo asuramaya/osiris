@@ -202,8 +202,8 @@ async def _seat_lineage_bases(pool: asyncpg.Pool, seat_oid: Any) -> list[str]:
     """Every Agent lineage BASE that has ever held this seat (any generation, healed or
     active, `holds` link history): write-attribution and the still-live Agent-origin
     governs edges both need this: a seat's holder churns across successions, but its
-    authored history, and (until migrate_charter_to_seat actually runs) its charter, stay
-    keyed on whichever generation was live when each was asserted."""
+    authored history, and its legacy Agent-origin charter edges, stay keyed on whichever
+    generation was live when each was asserted."""
     from src.orchestrator.agents import _generation
 
     rows = await pool.fetch(
