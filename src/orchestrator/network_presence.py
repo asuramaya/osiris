@@ -17,6 +17,10 @@ and "not a tunnel" was read as "home". A target that opts in with `allow_tunnel:
 the check. Not being able to ask at all (no `ip` binary, an address that will not resolve)
 leaves the old behaviour in place: try, and let the real transfer report what it finds.
 A public address keeps the old rule (only a tunnel is away): "home" has no meaning for it.
+On-link is necessary, not sufficient (a dock's manually configured 192.168.4.x address made any
+cable look like home while the NAS was not there): the target must also ANSWER, by a neighbour
+entry the kernel has just confirmed or one TCP connect to its ssh port within two seconds,
+cached for thirty seconds so a tick's several looks cost one probe.
 
 The only lookups are the ones that give the address a name: `ssh -G` (reads ssh config, no
 connection) and the resolver."""
@@ -26,6 +30,7 @@ import ipaddress
 import re
 import socket
 import subprocess
+import time
 from typing import Any
 
 TUNNEL_DEVICE_PREFIXES = ("tailscale", "wg", "tun", "tap", "utun", "ppp", "zt")
@@ -114,6 +119,66 @@ def _dev_networks(dev: str) -> list[ipaddress.IPv4Network | ipaddress.IPv6Networ
     return nets or None
 
 
+def _ssh_port(alias: str) -> int:
+    """The port ssh would use for `alias` (its config's Port), 22 when it cannot say."""
+    try:
+        out = subprocess.run(
+            ["ssh", "-G", alias], capture_output=True, text=True, timeout=_LOOKUP_TIMEOUT_SECS,
+            check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return 22
+    for line in out.splitlines():
+        if line.startswith("port "):
+            try:
+                return int(line.split(None, 1)[1])
+            except ValueError:
+                return 22
+    return 22
+
+
+_ANSWER_TIMEOUT_SECS = 2.0
+_ANSWER_CACHE_SECS = 30.0
+_answer_cache: dict[tuple[str, int], tuple[float, bool]] = {}
+
+
+def _neighbour_state(address: str) -> str | None:
+    """The kernel's neighbour-table state for `address` (REACHABLE, STALE, FAILED, ...), or
+    None when there is no entry or `ip` cannot be asked."""
+    try:
+        proc = subprocess.run(
+            ["ip", "neigh", "show", address], capture_output=True, text=True,
+            timeout=_LOOKUP_TIMEOUT_SECS, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = proc.stdout.strip().splitlines() if proc.returncode == 0 else []
+    return lines[0].split()[-1].upper() if lines and lines[0].split() else None
+
+
+def _tcp_answers(address: str, port: int) -> bool:
+    """Whether something accepts a connection at `address`:`port` within the timeout."""
+    try:
+        with socket.create_connection((address, port), timeout=_ANSWER_TIMEOUT_SECS):
+            return True
+    except OSError:
+        return False
+
+
+def target_answers(address: str, port: int) -> bool:
+    """Whether the target answers on the local network, cheaply and bounded: a neighbour entry
+    the kernel has just confirmed (REACHABLE) is an answer; anything else (no entry, STALE, a
+    FAILED left over from before) is settled by one TCP connect to its ssh port within two
+    seconds, which also makes the kernel ask again. Cached for a short while so one tick's
+    several looks cost one probe."""
+    key = (address, port)
+    now = time.monotonic()
+    hit = _answer_cache.get(key)
+    if hit is not None and now - hit[0] < _ANSWER_CACHE_SECS:
+        return hit[1]
+    ok = _neighbour_state(address) == "REACHABLE" or _tcp_answers(address, port)
+    _answer_cache[key] = (now, ok)
+    return ok
+
+
 def is_tunnel(dev: str | None, table: str | None) -> bool:
     if table in TUNNEL_ROUTE_TABLES:
         return True
@@ -159,6 +224,11 @@ def lan_presence(target: dict[str, Any]) -> dict[str, Any]:
             return {"present": False, "address": address, "dev": where["dev"],
                     "reason": f"not on the local network ({where['dev']} is not on the "
                               f"subnet of {address})"}
+        # On-link is necessary, not sufficient: a manually configured address on a wired
+        # interface makes any cable look like the home subnet. The target must answer.
+        if not target_answers(address, _ssh_port(host)):
+            return {"present": False, "address": address, "dev": where["dev"],
+                    "reason": f"not reachable on the local network (no answer from {address})"}
     return {"present": True, "reason": None, "dev": where["dev"]}
 
 
