@@ -111,40 +111,90 @@ def offload_receipts() -> dict[str, Any]:
     return _read_receipts()
 
 
+# What restic prints when there is positively no repository at the location. Matched narrowly and
+# only together with the absence of any sign that the failure was something else: a repository
+# that exists but could not be read (a slow link, a lock, a wrong password, a dropped session)
+# must NEVER be initialised over.
+_MISSING_REPO = ("repository does not exist", "is there a repository at the following location")
+_MISSING_CONFIG = ("unable to open config file",)
+_MISSING_WHY = ("no such file or directory", "does not exist", "file does not exist",
+                "not exist")
+_NOT_MISSING = (
+    "timed out", "timeout", "i/o timeout", "connection", "no route", "network", "dial",
+    "broken pipe", "ssh:", "permission denied", "authentication", "handshake",
+    "wrong password", "no key found", "locked", "unable to create lock", "unexpected eof",
+    "host key", "name resolution", "unreachable",
+)
+
+
+def repository_is_missing(output: str) -> bool:
+    """True only when restic's own output says the repository does not exist, and nothing in it
+    points at a transient or access failure instead."""
+    text = output.lower()
+    if any(sign in text for sign in _NOT_MISSING):
+        return False
+    if any(sign in text for sign in _MISSING_REPO):
+        return True
+    return (any(sign in text for sign in _MISSING_CONFIG)
+            and any(sign in text for sign in _MISSING_WHY))
+
+
+def _one_line(raw: bytes) -> str:
+    lines = [ln.strip() for ln in raw.decode(errors="replace").splitlines() if ln.strip()]
+    return lines[-1][:240] if lines else "no output"
+
+
+_PROBE_TIMEOUT_SECONDS = 30  # restic snapshots and init: a slow link must not hang the tick
+
+
 def _run_restic_backup(
     *, repository: str, password: bytes, source: Path, init_if_needed: bool = True,
 ) -> str | None:
     """Returns a failure string, or None on success, same return convention as
-    `osiris_offbox_restore_drill.run_drill`. `restic init` runs once per
-    repository, idempotently, the same guard `osiris_offbox_backup.sh` already
-    uses (`restic snapshots` failing first is how an uninitialized repo is told
-    apart from a genuinely unreachable one: an unreachable one fails `init` too,
-    caught the same way as any other restic failure below, never a special case)."""
+    `osiris_offbox_restore_drill.run_drill`.
+
+    `restic init` is reachable only when `restic snapshots` positively says the repository does
+    not exist (`repository_is_missing`) AND the caller allows it (`init_if_needed`; the tick
+    turns it off for a target that has ever offloaded successfully). A timeout, a lock, a network
+    or an authentication failure records its own error and skips the target: initialising over
+    a repository that merely could not be read is how a slow link once tried to re-create the
+    NAS repository (restic refused, but only because the config file was there)."""
+    from src.orchestrator import restic_locks
+
     env = {**os.environ, "RESTIC_REPOSITORY": repository, "RESTIC_PASSWORD": password.decode()}
     try:
-        if init_if_needed:
-            probe = subprocess.run(
-                ["restic", "snapshots"], env=env, capture_output=True, timeout=30, check=False)
-            if probe.returncode != 0:
-                init = subprocess.run(
-                    ["restic", "init"], env=env, capture_output=True, timeout=30, check=False)
-                if init.returncode != 0:
-                    return (f"restic init failed: "
-                            f"{init.stderr.decode(errors='replace').strip()}")
-        from src.orchestrator import restic_locks
-
-        # a run killed mid-flight leaves a lock; clear stale ones, and say plainly who holds
-        # the repository when an exclusive lock is live (shared locks do not stop a backup)
+        # a run killed mid-flight leaves a lock; clear stale ones first (a stale exclusive lock
+        # would otherwise make the probe below fail), and say plainly who holds the repository
+        # when an exclusive lock is live (shared locks do not stop a backup)
         outcome = restic_locks.clear_stale_locks(env, blocking_only_exclusive=True)
         if outcome.busy:
             return outcome.busy
+        probe = subprocess.run(
+            ["restic", "snapshots"], env=env, capture_output=True,
+            timeout=_PROBE_TIMEOUT_SECONDS, check=False)
+        if probe.returncode != 0:
+            detail = (probe.stdout + b"\n" + probe.stderr).decode(errors="replace")
+            if not repository_is_missing(detail):
+                return f"restic snapshots failed, not initializing: {_one_line(probe.stderr)}"
+            if not init_if_needed:
+                return ("the repository looks missing but this target has offloaded before; "
+                        "not initializing over it (is the target reachable?)")
+            init = subprocess.run(
+                ["restic", "init"], env=env, capture_output=True,
+                timeout=_PROBE_TIMEOUT_SECONDS, check=False)
+            if init.returncode != 0:
+                return f"restic init failed: {init.stderr.decode(errors='replace').strip()}"
         backup = subprocess.run(
             ["restic", "backup", str(source), "--exclude=*.tmp"],
             env=env, capture_output=True, timeout=_RESTIC_TIMEOUT_SECONDS, check=False)
         if backup.returncode != 0:
             return f"restic backup failed: {backup.stderr.decode(errors='replace').strip()}"
         return None
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except subprocess.TimeoutExpired as exc:
+        step = exc.cmd[1] if isinstance(exc.cmd, list) and len(exc.cmd) > 1 else "restic"
+        return (f"restic {step} timed out after {exc.timeout:.0f}s (a slow or unreachable "
+                "link); nothing was initialized")
+    except OSError as exc:
         return f"{type(exc).__name__}: {exc}"
 
 
@@ -285,8 +335,11 @@ async def _run_offload_tick_locked(
     for target in present:
         name = target.get("name", "<unnamed>")
         repository = target.get("path_or_url", "")
+        # a target that has ever offloaded has a repository: never initialise over it
+        ever_offloaded = bool((_read_receipts().get(name) or {}).get("last_successful_offload"))
         fail = await asyncio.to_thread(
-            _run_restic_backup, repository=repository, password=password, source=source)
+            _run_restic_backup, repository=repository, password=password, source=source,
+            init_if_needed=not ever_offloaded)
         if fail is None:
             _write_receipt(name, {"last_successful_offload": now, "last_attempt_at": now,
                                   "last_error": None, "last_skip_reason": None,

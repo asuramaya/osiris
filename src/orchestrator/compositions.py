@@ -5237,9 +5237,18 @@ async def _fn_backup_status(
         "offload_targets": offload_targets,
         "repositories": (settings or {}).get("offbox_repositories", []) or [],
     }
-    pitr_section = {
-        "wired_to_a_timer": False,
-        "note": "scripts/osiris_pitr_drill.py: manual-only today, no receipt persisted",
+    # The weekly point-in-time restore drill has its own timer; report what systemd says about
+    # it (the same live read the backup timers use), not a constant. No receipt is persisted.
+    pitr_unit = "osiris-pitr-drill.timer"
+    pitr_live = await _backup_timer_live_state(pitr_unit)
+    pitr_section: dict[str, Any] = {
+        "wired_to_a_timer": pitr_live.get("active_state") == "active",
+        "unit": pitr_unit,
+        "schedule": _backup_timer_calendar(pitr_unit),
+        **pitr_live,
+        "note": ("scripts/osiris_pitr_drill.py runs from its weekly timer; no receipt persisted"
+                 if pitr_live else
+                 "timer state unreadable here (no systemd); no receipt persisted"),
     }
 
     # THE DISK/WAL BRAKE: whether the bulk-rewrite jobs are paused right now, and why
