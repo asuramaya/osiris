@@ -110,7 +110,7 @@ def test_section_registry_embeds_the_shared_settings_renderer() -> None:
 # --- section 4: OPERATOR DESK -----------------------------------------------------------
 
 def test_section_desk_reads_both_the_desk_json_door_and_merge_candidates() -> None:
-    body = _CONSOLE_JS.split("async function renderSettingsSectionDesk() {", 1)[1][:600]
+    body = _CONSOLE_JS.split("async function renderSettingsSectionDesk() {", 1)[1][:1200]
     assert "fetch('/operator/desk')" in body
     assert "fetch('/merge-candidates')" in body
     assert "renderMergeCandidatesHtml(merges)" in body

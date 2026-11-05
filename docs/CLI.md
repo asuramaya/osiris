@@ -206,6 +206,20 @@ a second one: it never launches a second process onto a seat that's already occu
 In the default mode that process is reachable via `claude agents`/`claude resume`,
 never `osiris attach` (that's for the `--debug` PTY mode only).
 
+## `osiris proposals [accept|reject] [numbers|all]`
+
+Judge the miner's pending proposals in one pass. Bare, it lists them, soonest to lapse
+first, one short numbered line each: what is being filed, where the miner would file it,
+and the signal. Then `osiris proposals accept 1 3 4`, `reject 2` (add `--reason '...'`;
+the miner reads it back), or `accept all`. Ranges work (`2-4`). A number out of range
+acts on nothing. Every decision goes through the existing `proposal` accept/reject action
+(`osiris proposal` and the MCP tool use the same one), so the audit trail and the
+refusals are unchanged; this adds the list and the batch, no write path of its own. The
+console's Settings, Operator Desk shows the same list with Accept, Reject and Accept all
+buttons, acting on the proposal's own ref so a list that changed since it was drawn
+cannot make a click land on a different one. `--verbose` adds the type, miner, lapse date
+and ref; `--json` prints the list for a script.
+
 ## `osiris fleet [--full]`
 
 The same `fleet()` MCP tool answers, called over the wire (a small MCP client, not a

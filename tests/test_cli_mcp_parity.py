@@ -45,6 +45,9 @@ _CLI_ONLY_GLOBAL = frozenset({"actor"})
 # alias for `merge` kept working for muscle memory and deliberately never advertised,
 # not a live act left to reconcile, so it belongs here too, not in a rename.
 NO_MCP_EQUIVALENT = {
+    "proposals": "the operator's one-pass list-and-judge over the miner's pending proposals; "
+        "every decision goes through the existing `proposal` accept/reject action (which the "
+        "MCP tool already exposes), so there is no second write path to mirror",
     "attach": "a human's own terminal act (attach to a live PTY session), no agent "
              "equivalent",
     "boot-status": "operator devops read across the fleet's own compiled bodies",
