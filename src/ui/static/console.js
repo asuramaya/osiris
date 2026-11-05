@@ -1675,13 +1675,35 @@ async function renderSettingsSectionDesk() {
 // The miner's pending proposals: one line each with Accept and Reject, plus Accept all. Every
 // click goes to /proposals/judge by the proposal's own ref (never its position in the list),
 // which runs the existing accept/reject action as the operator.
+var JUST_JUDGED = [];  // this page's own recent rejections, so a slip can be undone
+function justJudgedHtml() {
+  if (!JUST_JUDGED.length) return '';
+  return '<div style="margin-top:8px">' + JUST_JUDGED.map(function(j) {
+    return '<div class="o-faint" style="display:flex;gap:8px;align-items:baseline;padding:2px 0">' +
+      '<span style="flex:1">Rejected: ' + esc(j.title) + '</span>' +
+      '<button class="iconbtn" data-ref="' + esc(j.ref) + '" onclick="undoProposal(this)">' +
+      'Undo</button></div>';
+  }).join('') + '</div>';
+}
+async function undoProposal(btn) {
+  var ref = btn.getAttribute('data-ref');
+  var res = await fetch('/proposals/reopen', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ref: ref }),
+  }).then(function(r){ return r.json(); });
+  if (!res.ok) { setStatus('Could not undo: ' + (res.error || 'refused')); return; }
+  JUST_JUDGED = JUST_JUDGED.filter(function(j) { return j.ref !== ref; });
+  setStatus('Back in the list.');
+  renderSettingsSectionDesk();
+}
 function renderProposalsHtml(data) {
   var items = (data && data.items) || [];
-  if (!items.length) return '';
+  if (!items.length) return justJudgedHtml();
+  items.forEach(function(it) { titlesByRef[it.ref] = it.title; });
   var rows = items.map(function(it) {
     return '<div class="proposal-row" style="display:flex;gap:8px;align-items:baseline;' +
       'padding:6px 0;border-bottom:1px solid var(--border)">' +
-      '<span class="o-faint" style="min-width:1.5em">' + esc(String(it.number)) + '</span>' +
+      '<span class="o-faint" style="min-width:3.5em;font-family:var(--font-mono)">' + esc(it.handle) + '</span>' +
       '<span style="flex:1" title="' + esc(it.title) + '">' + esc(it.title) +
       ' <span class="o-faint">&rarr; ' + esc(it.target) +
       (it.signal ? ' (' + esc(it.signal) + ')' : '') + '</span></span>' +
@@ -1697,14 +1719,20 @@ function renderProposalsHtml(data) {
     (first === 0 ? 'today' : 'in ' + first + (first === 1 ? ' day' : ' days')) + '.</div>' +
     rows +
     '<div style="margin-top:8px"><button class="iconbtn" onclick="judgeAllProposals()">' +
-    'Accept all</button></div>';
+    'Accept all</button></div>' + justJudgedHtml();
 }
+var titlesByRef = {};
 async function postProposalJudgement(decision, refs) {
   var res = await fetch('/proposals/judge', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ decision: decision, refs: refs }),
   }).then(function(r){ return r.json(); });
   if (res.error) { setStatus('Could not ' + decision + ': ' + res.error); return; }
+  if (decision === 'reject') {
+    (res.results || []).forEach(function(r) {
+      if (r.ok && titlesByRef[r.ref]) JUST_JUDGED.push({ ref: r.ref, title: titlesByRef[r.ref] });
+    });
+  }
   var verb = decision === 'accept' ? 'Accepted' : 'Rejected';
   setStatus(verb + ' ' + res.done + (res.done < res.asked ? ' of ' + res.asked : '') + '.');
   renderSettingsSectionDesk();

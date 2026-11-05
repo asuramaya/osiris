@@ -376,6 +376,65 @@ async def reject(
     return {"proposal": proposal, "status": "rejected", "reason": reason}
 
 
+async def reopen(
+    actions: Actions, *, proposal: str, reason: str, actor: str, ruling: str | None = None,
+) -> dict[str, Any]:
+    """Put a REJECTED Proposal back to 'proposed' when the operator confirms the rejection
+    was a mistake. Same supersession path as reject() (the history stays: the rejection and
+    this reversal are both rows), and the rejection's own reason is superseded by a
+    'withdrawn' marker so nothing reads it as a live rejection. The budget throttle counts a
+    Proposal by its CURRENT status, so a reopened one stops counting as a rejection at once.
+
+    Authority: the operator's own hands (`console`, `analyst:operator`, `operator`), or an
+    actor that names a `ruling` (an existing Decision) that authorizes it. Anything else
+    refuses. Refused on anything but 'rejected': an accepted Proposal already minted a link
+    this cannot take back (retire the link instead), and a 'proposed' one has nothing to
+    reopen; refused on an expired one, like accept() and reject()."""
+    from src.orchestrator.seats import _OPERATOR_ACTORS
+
+    if not reason.strip():
+        return {"error": "reason is required: a reopen is testimony, never a silent flip"}
+    if actor not in _OPERATOR_ACTORS:
+        known = False
+        if ruling:
+            known = bool(await actions.pool.fetchval(
+                "SELECT 1 FROM objects WHERE type='Decision' AND (canonical = $1 "
+                "OR canonical LIKE $1 || '%') LIMIT 1", ruling))
+        if not known:
+            return {"error": "only the operator, or an actor naming the ruling that "
+                             "authorizes it, can reopen a rejected proposal"}
+    row = await _proposal_row(actions.pool, proposal)
+    if row is None:
+        return {"error": f"no such Proposal: {proposal!r}"}
+    if row["status"] == "accepted":
+        return {"error": f"{proposal} was accepted and minted a link; reopening cannot "
+                         "undo that (retire the link instead)"}
+    if row["status"] != "rejected":
+        return {"error": f"{proposal} is {row['status']!r}, not 'rejected': nothing to "
+                         "reopen"}
+    if datetime.fromisoformat(row["expires_at"]) <= datetime.now(UTC):
+        return {"error": f"{proposal} expired at {row['expires_at']}: nothing to reopen"}
+    now = datetime.now(UTC)
+    conf = confidence_for(EvidenceClass.SELF_DECLARED)
+    await actions.supersede_assertion(
+        row["id"], "status", row["status_assertion_id"], "proposed", actor, now, conf,
+        f"reopened by {actor}: {reason}", evidence_class="self_declared", actor=actor)
+    old = await actions.pool.fetchrow(
+        "SELECT a.id, a.value #>> '{}' AS value FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name='reject_reason' "
+        "ORDER BY a.observed_at DESC LIMIT 1", row["id"])
+    if old is not None:
+        await actions.supersede_assertion(
+            row["id"], "reject_reason", old["id"], f"withdrawn: {old['value']}", actor, now,
+            conf, f"the rejection was withdrawn by {actor}: {reason}",
+            evidence_class="self_declared", actor=actor)
+    await actions.assert_property(row["id"], "reopened_by", actor, actor, now, conf,
+                                  evidence_class="self_declared", actor=actor)
+    await actions.assert_property(row["id"], "reopen_reason", reason, actor, now, conf,
+                                  evidence_class="self_declared", actor=actor)
+    return {"proposal": proposal, "status": "proposed", "reopened": True, "reason": reason}
+
+
 async def sweep_expired(actions: Actions, *, actor: str = "miner:sweep") -> int:
     """Move every Proposal that is still 'proposed' but past its own `expires_at` to a real
     'expired' status, and return how many moved. Until now nothing did, so an expired
