@@ -3,6 +3,7 @@ to it leaves through a local interface. Away from home the NAS still answers, bu
 and a full upload over a tunnel is what must not happen."""
 from __future__ import annotations
 
+import ipaddress
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,8 @@ from src.orchestrator.network_presence import is_tunnel, lan_presence, route_int
 NAS = "192.168.4.198"
 AT_HOME = f"{NAS} dev wlp0s20f3 src 192.168.4.57 uid 1000\n    cache\n"
 AWAY = f"{NAS} dev tailscale0 table 52 src 100.101.102.103 uid 1000\n    cache\n"
+# public wifi, the Tailscale route gone: the private address falls to the default gateway
+VIA_GATEWAY = f"{NAS} via 172.20.20.1 dev wlp0s20f3 src 172.20.20.5 uid 1000\n    cache\n"
 
 
 @pytest.fixture(autouse=True)
@@ -23,7 +26,8 @@ def _receipts_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OSIRIS_RESTIC_PASSWORD", "a-test-password")
 
 
-def _route(monkeypatch: pytest.MonkeyPatch, text: str | None) -> list[str]:
+def _route(monkeypatch: pytest.MonkeyPatch, text: str | None,
+           nets: Any = None) -> list[str]:
     """Fake `ip route get`: records the address it was asked about."""
     asked: list[str] = []
 
@@ -33,6 +37,8 @@ def _route(monkeypatch: pytest.MonkeyPatch, text: str | None) -> list[str]:
 
     monkeypatch.setattr(network_presence, "resolve_address", lambda host: NAS)
     monkeypatch.setattr(network_presence, "_run_ip_route_get", _fake)
+    # the interface's own subnets: unknown unless a test says (never ask the real `ip`)
+    monkeypatch.setattr(network_presence, "_dev_networks", lambda dev: nets)
     return asked
 
 
@@ -51,8 +57,9 @@ def test_the_host_of_an_sftp_repository_is_found_in_each_spelling() -> None:
 
 
 def test_a_tunnel_is_told_by_its_interface_name_or_its_routing_table() -> None:
-    assert route_interface(AWAY) == {"dev": "tailscale0", "table": "52"}
-    assert route_interface(AT_HOME) == {"dev": "wlp0s20f3", "table": None}
+    assert route_interface(AWAY) == {"dev": "tailscale0", "table": "52", "via": None}
+    assert route_interface(AT_HOME) == {"dev": "wlp0s20f3", "table": None, "via": None}
+    assert route_interface(VIA_GATEWAY)["via"] == "172.20.20.1"
     for dev in ("tailscale0", "wg0", "tun0", "tap1", "utun3", "ppp0", "zt1"):
         assert is_tunnel(dev, None) is True
     assert is_tunnel("wlp0s20f3", None) is False
@@ -87,10 +94,89 @@ def test_allow_tunnel_false_still_checks(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_not_being_able_to_tell_leaves_the_old_behaviour(monkeypatch: pytest.MonkeyPatch) -> None:
     _route(monkeypatch, None)  # no `ip` binary
     assert lan_presence(_target())["present"] is True
-    _route(monkeypatch, "")  # no route at all
-    assert lan_presence(_target())["present"] is True
     monkeypatch.setattr(network_presence, "resolve_address", lambda host: None)
     assert lan_presence(_target())["present"] is True  # the name did not resolve
+
+
+def test_an_on_link_route_in_the_same_subnet_is_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    _route(monkeypatch, AT_HOME, nets=[ipaddress.ip_network("192.168.4.0/24")])
+    assert lan_presence(_target())["present"] is True
+
+
+def test_a_route_through_a_gateway_is_away_even_though_it_is_not_a_tunnel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE INCIDENT (2026-11-05 10:00-10:17, public wifi): the Tailscale route dropped and the
+    private address went to the default gateway, which the old check read as home."""
+    _route(monkeypatch, VIA_GATEWAY)
+    out = lan_presence(_target())
+    assert out["present"] is False
+    assert out["reason"] == ("not on the local network (the route to 192.168.4.198 goes via "
+                             "172.20.20.1 on wlp0s20f3)")
+    assert out["via"] == "172.20.20.1" and out["address"] == NAS
+
+
+def test_an_interface_whose_subnet_does_not_hold_the_address_is_away(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _route(monkeypatch, AT_HOME, nets=[ipaddress.ip_network("172.20.20.0/22")])
+    out = lan_presence(_target())
+    assert out["present"] is False and "not on the local network" in str(out["reason"])
+
+
+def test_no_route_at_all_is_away(monkeypatch: pytest.MonkeyPatch) -> None:
+    _route(monkeypatch, "")  # `ip` ran and found no route (network unreachable)
+    out = lan_presence(_target())
+    assert out["present"] is False and out["reason"] == f"no route to {NAS}"
+
+
+def test_allow_tunnel_still_overrides_a_gateway_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked = _route(monkeypatch, VIA_GATEWAY)
+    assert lan_presence(_target(allow_tunnel=True))["present"] is True
+    assert asked == []
+
+
+def test_a_public_address_through_the_default_gateway_is_still_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Home means nothing for a public address: only a tunnel makes it absent."""
+    _route(monkeypatch, "8.8.8.8 via 172.20.20.1 dev wlp0s20f3 src 172.20.20.5\n")
+    monkeypatch.setattr(network_presence, "resolve_address", lambda host: "8.8.8.8")
+    assert lan_presence(_target())["present"] is True
+
+
+def test_unreachable_failures_are_told_apart_from_a_bad_repository() -> None:
+    from src.orchestrator.network_presence import is_unreachable_error
+
+    assert is_unreachable_error("ssh: connect to host 192.168.4.198 port 22: No route to host")
+    assert is_unreachable_error("connect: Network is unreachable")
+    assert not is_unreachable_error("Fatal: repository contains errors")
+    assert not is_unreachable_error(None)
+
+
+async def test_a_drill_that_hits_no_route_to_host_records_a_skip_not_a_failed_drill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import scheduled_drill, soul_key
+
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(soul_key, "record_restore_drill",
+                        lambda url, **kw: recorded.append({"url": url, **kw}))
+    monkeypatch.setattr(soul_key, "restore_drill_receipts", lambda: {})
+    monkeypatch.setattr(scheduled_drill, "drill_due", lambda *a, **k: True)
+
+    def _drill(url: str) -> str | None:
+        return "ssh: connect to host 192.168.4.198 port 22: No route to host"
+
+    out = await scheduled_drill.run_due_drills([_target()], {"nas": {}}, run_drill=_drill)
+    assert out == [{"name": "nas", "skipped": "target not reachable from this network"}]
+    assert recorded == []  # no failed-attempt receipt, so no six-hour retry window either
+
+    def _bad(url: str) -> str | None:
+        return "repository contains errors"
+
+    out = await scheduled_drill.run_due_drills([_target()], {"nas": {}}, run_drill=_bad)
+    assert out[0]["ok"] is False and recorded and recorded[0]["ok"] is False
 
 
 def test_only_sftp_targets_are_checked(monkeypatch: pytest.MonkeyPatch) -> None:
