@@ -16,6 +16,10 @@ things it remembers to skip):
   is fully merged into origin/main, with a clean tree (no modified or untracked file), idle past
   the limit, with no process inside. The branch is deleted with `git branch -d`, which itself
   refuses an unmerged branch. A worktree git refuses to remove stays.
+  A worktree (and so its branch) that an active seat names as its tree_cwd, or that a live
+  mount uses as its cwd, is kept and reported "kept: bound to seat X": removing it left the
+  seat's next launch with a missing directory. When the bindings cannot be read, every
+  worktree is kept: a clean-up that cannot see who is using a tree removes none.
 - Docker: only dangling images, build cache older than the limit, and ANONYMOUS volumes (a
   64-hex name) that no container, running or stopped, references. Never `docker system prune`,
   never `docker volume prune`, never a named volume: the database's own volume is named and
@@ -33,9 +37,11 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 SCRATCH_ROOT = Path("/var/tmp/osiris-scratch")
 TEST_TMP_PARENTS = (Path("/var/tmp"), Path("/tmp"))
@@ -269,9 +275,67 @@ def worktree_idle_since(path: Path, runner: Runner, repo: Path) -> float:
     return newest
 
 
+Bound = Sequence[tuple[Path, str]]  # (a path a seat or a live mount uses, who uses it)
+_LIVE_MOUNT_MINUTES = 15  # src.orchestrator.mounts.LIVENESS_WINDOW_MINUTES, kept standalone
+
+
+def load_bound(dsn: str | None = None) -> Bound | None:
+    """Every directory an active seat names as its tree_cwd, plus the cwd of every mount seen
+    in the last quarter hour, read from the graph. None when it cannot be read (the caller
+    then keeps every worktree). Read-only."""
+    import asyncio
+
+    async def _read() -> Bound:
+        import asyncpg
+        from src.config.settings import get_settings
+
+        conn = await asyncpg.connect(dsn or get_settings().database_url, timeout=15)
+        try:
+            seats = await conn.fetch(
+                "SELECT (SELECT a2.value #>> '{}' FROM current_assertions a2 "
+                "         WHERE a2.object_id=o.id AND a2.name='handle' "
+                "         ORDER BY a2.confidence DESC, a2.observed_at DESC LIMIT 1) AS handle, "
+                "       a.value #>> '{}' AS tree "
+                "FROM objects o JOIN current_assertions a "
+                "  ON a.object_id=o.id AND a.name='tree_cwd' "
+                "WHERE o.type='Seat' AND o.status='active'")
+            mounts = await conn.fetch(
+                "SELECT agent_id, cwd FROM agent_mounts WHERE cwd IS NOT NULL "
+                "AND last_seen > now() - make_interval(mins => $1)", _LIVE_MOUNT_MINUTES)
+        finally:
+            await conn.close()
+        out: list[tuple[Path, str]] = []
+        for r in seats:
+            if r["tree"]:
+                out.append((Path(r["tree"]), f"bound to seat {r['handle'] or '(unnamed)'}"))
+        for r in mounts:
+            out.append((Path(r["cwd"]), f"in use by live mount {r['agent_id']}"))
+        return out
+
+    try:
+        return asyncio.run(asyncio.wait_for(_read(), timeout=30))
+    except Exception:  # unreadable for ANY reason means "keep everything"
+        return None
+
+
+def _kept_reason(path: Path, bound: Bound | None) -> str | None:
+    """Why `path` must stay, or None. A binding at the tree or anywhere inside it counts."""
+    if bound is None:
+        return "seat bindings could not be read"
+    real = path.resolve()
+    for used, who in bound:
+        try:
+            u = used.resolve()
+        except OSError:
+            continue
+        if u == real or real in u.parents:
+            return who
+    return None
+
+
 def plan_worktrees(
     *, repo: Path, worktrees_dir: Path, now: float, max_idle_days: float, apply: bool,
-    cwds: list[Path], runner: Runner, report: Report,
+    cwds: list[Path], runner: Runner, report: Report, bound: Bound | None = (),
 ) -> None:
     code, _ = runner(["git", "fetch", "-q", "origin"], repo)  # best effort: a stale view only
     del code                                                   # ever keeps more, never less
@@ -302,6 +366,10 @@ def plan_worktrees(
             continue
         if _inside(path, cwds):
             report.skipped.append(f"{path}: a running process is working inside it")
+            continue
+        kept = _kept_reason(path, bound)
+        if kept is not None:
+            report.skipped.append(f"{path}: kept: {kept}")
             continue
         size = tree_bytes(path)
         act = Action("worktree", str(path), size)
@@ -387,7 +455,8 @@ def build_report(
     now: float | None = None, scratch_root: Path = SCRATCH_ROOT,
     test_tmp_parents: tuple[Path, ...] = TEST_TMP_PARENTS, repo: Path = REPO,
     worktrees_dir: Path = WORKTREES_DIR, cwds: list[Path] | None = None,
-    runner: Runner = run,
+    runner: Runner = run, bound: Bound | None = (),
+    read_bound: bool = False,
 ) -> Report:
     report = Report(apply=apply)
     now = time.time() if now is None else now
@@ -396,9 +465,11 @@ def build_report(
     plan_scratch(roots, now=now, max_age_days=scratch_days, apply=apply, cwds=cwds,
                  report=report)
     if repo.is_dir():
+        if read_bound:
+            bound = load_bound()
         plan_worktrees(repo=repo, worktrees_dir=worktrees_dir, now=now,
                        max_idle_days=worktree_days, apply=apply, cwds=cwds,
-                       runner=runner, report=report)
+                       runner=runner, report=report, bound=bound)
     if not skip_docker:
         plan_docker(apply=apply, build_cache_days=build_cache_days, runner=runner,
                     report=report)
@@ -442,7 +513,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     report = build_report(
         apply=args.apply, scratch_days=args.scratch_days, worktree_days=args.worktree_days,
-        build_cache_days=args.build_cache_days, skip_docker=args.skip_docker)
+        build_cache_days=args.build_cache_days, skip_docker=args.skip_docker,
+        read_bound=True)
     if args.json:
         print(json.dumps({"apply": report.apply, "freed_bytes": report.freed(),
                           "actions": [asdict(a) for a in report.actions],
