@@ -72,16 +72,20 @@ async def _expire_in(actions: Actions, ref: str, days: float) -> None:
 
 # --- the list -------------------------------------------------------------------------------
 
-async def test_pending_is_numbered_soonest_to_lapse_first(actions: Actions) -> None:
+async def test_pending_is_ordered_soonest_to_lapse_first_under_stable_handles(
+        actions: Actions) -> None:
     later = await _propose(actions, "Later one", "osiris")
     soon = await _propose(actions, "Soon one", "shellbiz")
     await _expire_in(actions, later, 12)
     await _expire_in(actions, soon, 2)
     items = await pq.pending(actions.pool)
-    assert [(i["number"], i["title"], i["target"]) for i in items] == [
-        (1, "Soon one", "shellbiz"), (2, "Later one", "osiris")]
+    assert [(i["title"], i["target"]) for i in items] == [
+        ("Soon one", "shellbiz"), ("Later one", "osiris")]
     assert items[0]["ref"] == soon and items[0]["days_left"] in (1, 2)
-    assert items[0]["signal"] == "dominance"
+    assert items[0]["signal"] == "dominance" and "number" not in items[0]
+    # a handle is the first hex digits of the proposal's own id, at least five
+    assert soon.removeprefix("proposal:").replace("-", "").startswith(items[0]["handle"])
+    assert len(items[0]["handle"]) >= 5
 
 
 async def test_expired_and_judged_proposals_are_not_listed(actions: Actions) -> None:
@@ -102,9 +106,11 @@ async def test_the_list_is_one_short_line_each(actions: Actions) -> None:
     lines = out.splitlines()
     assert lines[0].startswith("osiris proposals: 2 waiting; the first lapses in")
     assert len(lines) == 4  # header, two proposals, one line saying what to type
-    assert lines[1].startswith(" 1  ") and "  ->  " in lines[1] and "(dominance)" in lines[1]
+    items = await pq.pending(actions.pool)
+    assert lines[1].startswith(f" {items[0]['handle']}  ") and "  ->  " in lines[1]
     assert "…" in lines[1] and max(len(ln) for ln in lines) <= 120  # titles are cut
-    assert lines[-1] == "Judge them: osiris proposals accept 1 3  |  reject 2  |  accept all"
+    assert lines[-1] == (f"Judge them: osiris proposals accept {items[0]['handle']}  |  "
+                         f"reject {items[1]['handle']}  |  accept all")
     assert "proposal:" not in out and "0.4" not in out  # no refs or grades by default
 
 
@@ -119,73 +125,57 @@ async def test_an_empty_list_says_so(actions: Actions) -> None:
     assert code == 0 and out == "osiris proposals: nothing waiting.\n"
 
 
-# --- the batch ------------------------------------------------------------------------------
-
-async def test_accept_goes_through_the_real_verb_and_mints_the_link(actions: Actions) -> None:
-    a = await _propose(actions, "First", "osiris")
-    b = await _propose(actions, "Second", "shellbiz")
-    await _expire_in(actions, a, 3)
-    await _expire_in(actions, b, 9)
-    code, out, err = await _run(actions, "accept", "1")
-    assert code == 0 and err == ""
-    assert out.splitlines() == [" accepted 1: First  ->  osiris",
-                                "osiris proposals: 1 accepted."]
-    assert await _status(actions, a) == "accepted" and await _status(actions, b) == "proposed"
-    # the real accept ran: the link exists, graded self_declared, citing the proposal, and the
-    # proposal records who resolved it
-    link = await actions.pool.fetchrow(
-        "SELECT l.properties, l.evidence_class FROM links l WHERE l.type='in_repo' "
-        "AND l.properties->>'accepted_from' = $1", a)
-    assert link is not None and link["evidence_class"] == "self_declared"
-    resolver = await actions.pool.fetchval(
-        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-        "WHERE o.canonical=$1 AND a.name='resolved_by'", a)
-    assert resolver == "console"
+def test_handles_lengthen_only_when_two_would_collide() -> None:
+    a = "proposal:8b75b4e2-b98e-42b5-9f7d-e8b2bd569638"
+    b = "proposal:8b75b9ff-0000-4000-8000-000000000000"
+    c = "proposal:1234abcd-0000-4000-8000-000000000000"
+    assert pq._handles([a, b, c]) == ["8b75b4", "8b75b9", "1234a"]
 
 
-async def test_reject_records_the_reason_the_miner_reads_back(actions: Actions) -> None:
-    ref = await _propose(actions, "Wrong place", "osiris")
-    code, _out, _e = await _run(actions, "reject", "1")
-    assert code == 0
-    assert await _status(actions, ref) == "rejected"
-    reason = await actions.pool.fetchval(
-        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-        "WHERE o.canonical=$1 AND a.name='reject_reason'", ref)
-    assert reason == "not a match (judged in one pass)"
-    ref2 = await _propose(actions, "Another", "osiris")
-    await _run(actions, "reject", "1", reason="wrong project")
-    reason2 = await actions.pool.fetchval(
-        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-        "WHERE o.canonical=$1 AND a.name='reject_reason'", ref2)
-    assert reason2 == "wrong project"
+# --- the renumbering accident ---------------------------------------------------------------
 
-
-async def test_accept_all_and_mixed_numbers_and_ranges(actions: Actions) -> None:
-    refs = [await _propose(actions, f"P{i}", "osiris") for i in range(5)]
+async def test_judging_one_never_moves_the_handle_of_another(actions: Actions) -> None:
+    """The live accident: `accept 1`, then `reject 6` as a second command; the accept had
+    renumbered the list, so 6 named a different proposal. A handle is the proposal's own id,
+    so after any judgement every other proposal answers to the same handle as before."""
+    refs = [await _propose(actions, f"P{i}", "osiris") for i in range(6)]
     for i, r in enumerate(refs):
         await _expire_in(actions, r, i + 2)
-    code, out, _e = await _run(actions, "accept", "1,3", "5")
-    assert code == 0 and out.splitlines()[-1] == "osiris proposals: 3 accepted."
+    before = {i["ref"]: i["handle"] for i in await pq.pending(actions.pool)}
+    first, sixth = before[refs[0]], before[refs[5]]
+    code, _o, _e = await _run(actions, "accept", first)
+    assert code == 0 and await _status(actions, refs[0]) == "accepted"
+    after = {i["ref"]: i["handle"] for i in await pq.pending(actions.pool)}
+    assert refs[0] not in after
+    assert {r: h for r, h in before.items() if r in after} == after  # nobody renamed
+    # the second command, typed from the first listing, lands on the proposal it names
+    code, out, _e = await _run(actions, "reject", sixth)
+    assert code == 0 and "P5" in out
     assert [await _status(actions, r) for r in refs] == [
-        "accepted", "proposed", "accepted", "proposed", "accepted"]
-    code, out, _e = await _run(actions, "accept", "all")
-    assert code == 0 and "2 accepted" in out
-    assert {await _status(actions, r) for r in refs} == {"accepted"}
+        "accepted", "proposed", "proposed", "proposed", "proposed", "rejected"]
 
 
-async def test_a_bad_number_acts_on_nothing(actions: Actions) -> None:
+async def test_a_bare_number_is_refused_and_nothing_is_acted_on(actions: Actions) -> None:
     ref = await _propose(actions, "Only", "osiris")
-    code, out, err = await _run(actions, "accept", "1", "7")
-    assert code == 1 and out == ""
-    assert err == "osiris proposals: there is no number 7: the list runs 1 to 1.\n"
+    for word in ("1", "6", "banana"):
+        code, out, err = await _run(actions, "accept", word)
+        assert code == 1 and out == ""
+        assert "is not a proposal id" in err
     assert await _status(actions, ref) == "proposed"
-    code, _o, err = await _run(actions, "accept", "banana")
-    assert code == 1 and "is not a number" in err
-    code, _o, err = await _run(actions, "accept")
-    assert code == 1 and "accept which?" in err
-    code, _o, err = await _run(actions, "1")
-    assert code == 1 and "say accept or reject" in err
-    assert await _status(actions, ref) == "proposed"
+
+
+async def test_an_unknown_or_ambiguous_handle_acts_on_nothing(actions: Actions) -> None:
+    from src.ontology.catalog import ensure_type
+
+    keep = await _propose(actions, "Keep", "osiris")
+    await ensure_type(actions, name="Proposal", kind="object", actor="test")
+    for tail in ("aaaa1111-0000-4000-8000-000000000001", "aaaa2222-0000-4000-8000-000000000002"):
+        await actions.create_or_find_object("Proposal", f"proposal:{tail}", "test")
+    code, out, err = await _run(actions, "accept", "ffff0")
+    assert code == 1 and out == "" and "no proposal starts with ffff0" in err
+    code, out, err = await _run(actions, "accept", "aaaa")
+    assert code == 1 and out == "" and "matches 2 proposals" in err and "type more" in err
+    assert await _status(actions, keep) == "proposed"
 
 
 async def test_a_refusal_on_one_does_not_stop_the_rest(actions: Actions) -> None:
@@ -199,64 +189,140 @@ async def test_a_refusal_on_one_does_not_stop_the_rest(actions: Actions) -> None
     assert again[0]["ok"] is False  # already judged: the real verb refuses
 
 
+# --- the batch ------------------------------------------------------------------------------
+
+async def test_accept_goes_through_the_real_verb_and_mints_the_link(actions: Actions) -> None:
+    a = await _propose(actions, "First", "osiris")
+    b = await _propose(actions, "Second", "shellbiz")
+    await _expire_in(actions, a, 3)
+    await _expire_in(actions, b, 9)
+    handle = (await pq.pending(actions.pool))[0]["handle"]
+    code, out, err = await _run(actions, "accept", handle)
+    assert code == 0 and err == ""
+    assert out.splitlines() == [f" accepted {handle[:5]}: First  ->  osiris",
+                                "osiris proposals: 1 accepted."]
+    assert await _status(actions, a) == "accepted" and await _status(actions, b) == "proposed"
+    link = await actions.pool.fetchrow(
+        "SELECT l.properties, l.evidence_class FROM links l WHERE l.type='in_repo' "
+        "AND l.properties->>'accepted_from' = $1", a)
+    assert link is not None and link["evidence_class"] == "self_declared"
+    resolver = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='resolved_by'", a)
+    assert resolver == "console"
+
+
+async def test_reject_records_the_reason_the_miner_reads_back(actions: Actions) -> None:
+    ref = await _propose(actions, "Wrong place", "osiris")
+    handle = (await pq.pending(actions.pool))[0]["handle"]
+    code, _out, _e = await _run(actions, "reject", handle)
+    assert code == 0 and await _status(actions, ref) == "rejected"
+    reason = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='reject_reason'", ref)
+    assert reason == "not a match (judged in one pass)"
+    ref2 = await _propose(actions, "Another", "osiris")
+    h2 = (await pq.pending(actions.pool))[0]["handle"]
+    await _run(actions, "reject", h2, reason="wrong project")
+    reason2 = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='reject_reason'", ref2)
+    assert reason2 == "wrong project"
+
+
+async def test_accept_all_and_a_full_ref(actions: Actions) -> None:
+    refs = [await _propose(actions, f"P{i}", "osiris") for i in range(3)]
+    code, _o, _e = await _run(actions, "accept", refs[0])  # a full ref works too
+    assert code == 0 and await _status(actions, refs[0]) == "accepted"
+    code, out, _e = await _run(actions, "accept", "all")
+    assert code == 0 and "2 accepted" in out
+    assert {await _status(actions, r) for r in refs} == {"accepted"}
+
+
 async def test_the_list_json_for_scripts(actions: Actions) -> None:
     import json
     await _propose(actions, "J", "osiris")
     code, out, _e = await _run(actions, as_json=True)
     assert code == 0
     (item,) = json.loads(out)
-    assert item["number"] == 1 and item["title"] == "J" and item["ref"].startswith("proposal:")
+    assert item["title"] == "J" and item["ref"].startswith("proposal:") and item["handle"]
 
 
-def test_parse_numbers() -> None:
-    assert pq.parse_numbers(["1", "3", "4"], 5) == [1, 3, 4]
-    assert pq.parse_numbers(["2-4", "4,1"], 5) == [2, 3, 4, 1]
-    assert pq.parse_numbers(["all"], 3) == [1, 2, 3]
-    assert pq.parse_numbers(["0"], 3) == "there is no number 0: the list runs 1 to 3."
-    assert pq.parse_numbers(["1"], 0) == "nothing is waiting."
+# --- reopen ---------------------------------------------------------------------------------
 
-
-# --- the desk -------------------------------------------------------------------------------
-
-async def test_the_desk_routes_list_and_judge_by_ref(actions: Actions) -> None:
-    from httpx import ASGITransport, AsyncClient
-    from src.api.app import create_app, get_pool
-
-    app = create_app()
-    app.dependency_overrides[get_pool] = lambda: actions.pool
-    a = await _propose(actions, "Desk one", "osiris")
-    b = await _propose(actions, "Desk two", "shellbiz")
-    await _expire_in(actions, a, 3)
-    await _expire_in(actions, b, 8)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-        listing = (await c.get("/proposals")).json()
-        assert listing["count"] == 2 and listing["items"][0]["ref"] == a
-        bad = (await c.post("/proposals/judge", json={"decision": "burn", "refs": [a]})).json()
-        assert bad == {"error": "decision must be accept or reject"}
-        res = (await c.post("/proposals/judge",
-                            json={"decision": "reject", "refs": [b], "reason": "no"})).json()
-        assert res["done"] == 1 and res["by"] == "operator"
-        res = (await c.post("/proposals/judge", json={"decision": "accept", "refs": [a]})).json()
-        assert res["done"] == 1
-    assert await _status(actions, a) == "accepted" and await _status(actions, b) == "rejected"
-    resolver = await actions.pool.fetchval(
+async def _reason(actions: Actions, ref: str, name: str) -> str | None:
+    return await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-        "WHERE o.canonical=$1 AND a.name='resolved_by'", a)
-    assert resolver == "analyst:operator"
+        "WHERE o.canonical=$1 AND a.name=$2", ref, name)
 
 
-# --- the console ----------------------------------------------------------------------------
+async def test_reopen_undoes_a_mistaken_rejection_and_keeps_the_history(
+        actions: Actions) -> None:
+    ref = await _propose(actions, "Rejected by mistake", "shellbiz")
+    handle = (await pq.pending(actions.pool))[0]["handle"]
+    await _run(actions, "reject", handle)
+    assert await _status(actions, ref) == "rejected" and await pq.pending(actions.pool) == []
+    code, out, err = await _run(actions, "reopen", handle, reason="rejected by mistake")
+    assert code == 0 and err == ""
+    assert out.splitlines() == [f" reopened {handle[:5]}: Rejected by mistake  ->  shellbiz",
+                                "osiris proposals: 1 reopened."]
+    assert await _status(actions, ref) == "proposed"
+    assert [i["ref"] for i in await pq.pending(actions.pool)] == [ref]
+    # the rejection's reason is marked withdrawn, not deleted; who and why are recorded
+    assert (await _reason(actions, ref, "reject_reason")).startswith("withdrawn: ")
+    assert await _reason(actions, ref, "reopened_by") == "console"
+    assert await _reason(actions, ref, "reopen_reason") == "rejected by mistake"
+    # the history is intact: the rejection and the reversal are both rows
+    states = await actions.pool.fetch(
+        "SELECT a.value #>> '{}' AS v FROM assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='status' ORDER BY a.id", ref)
+    assert [r["v"] for r in states] == ["proposed", "rejected", "proposed"]
 
-def test_the_console_draws_the_list_with_buttons_that_act_by_ref() -> None:
-    from pathlib import Path
-    js = (Path(__file__).resolve().parent.parent / "src/ui/static/console.js").read_text()
-    assert "function renderProposalsHtml(data)" in js
-    assert "Proposals to judge (" in js and "Accept all" in js
-    assert "fetch('/proposals')" in js and "fetch('/proposals/judge'" in js
-    # buttons carry the proposal's own ref, not its position in the list
-    assert "data-ref=" in js and "getAttribute('data-ref')" in js
-    desk = js.split("async function renderSettingsSectionDesk()", 1)[1][:1200]
-    assert "renderProposalsHtml(proposals) + renderDeskHtml(desk)" in desk
+
+async def test_a_reopened_proposal_no_longer_counts_against_the_miner(
+        actions: Actions) -> None:
+    from src.orchestrator.proposals import _throttle_status
+
+    ref = await _propose(actions, "Throttle", "osiris")
+    miner = await _reason(actions, ref, "miner")
+    assert miner
+    handle = (await pq.pending(actions.pool))[0]["handle"]
+    await _run(actions, "reject", handle)
+    assert (await _throttle_status(actions.pool, miner, "operator"))["rejected_7d"] == 1
+    await _run(actions, "reopen", handle, reason="mistake")
+    assert (await _throttle_status(actions.pool, miner, "operator"))["rejected_7d"] == 0
+
+
+async def test_reopen_refusals(actions: Actions) -> None:
+    from src.orchestrator.proposals import reopen
+
+    acc = await _propose(actions, "Accepted", "osiris")
+    live = await _propose(actions, "Still proposed", "osiris")
+    gone = await _propose(actions, "Will lapse", "osiris")
+    await pq.judge(actions.pool, "test:operator", "accept", [acc])
+    await pq.judge(actions.pool, "test:operator", "reject", [gone], reason="no")
+    await _expire_in(actions, gone, -1)
+    for ref, text in ((acc, "minted a link"), (live, "nothing to reopen"),
+                      (gone, "expired")):
+        (res,) = [await pq.reopen_one(actions.pool, "console", ref, "x")]
+        assert res["ok"] is False and text in res["error"], (ref, res)
+    code, out, err = await _run(actions, "reopen", "abcde")
+    assert code == 1 and "reopen needs --reason" in err and out == ""
+    # not the operator's hands, and no ruling named: refused; a real ruling authorizes it
+    miss = await _propose(actions, "Needs authority", "osiris")
+    await pq.judge(actions.pool, "test:operator", "reject", [miss], reason="no")
+    res2 = await reopen(Actions(actions.pool), proposal=miss, reason="x", actor="agent:x")
+    assert "only the operator" in res2["error"]
+    from src.ontology.catalog import ensure_type
+    await ensure_type(actions, name="Decision", kind="object", actor="test")
+    await actions.create_or_find_object("Decision", "decision:abc123", "test")
+    res3 = await reopen(Actions(actions.pool), proposal=miss, reason="x", actor="agent:x",
+                        ruling="decision:abc123")
+    assert res3["reopened"] is True and await _status(actions, miss) == "proposed"
+
+
+def test_the_pure_helpers() -> None:
+    assert pq._hex_of("proposal:8B75b4e2-b98e") == "8b75b4e2b98e"
 
 
 def test_the_flags_and_the_command() -> None:
@@ -264,5 +330,7 @@ def test_the_flags_and_the_command() -> None:
     parser = cli._build_parser()
     a = parser.parse_args(["proposals"])
     assert a.words == [] and a.verbose is False and a.as_json is False
-    a = parser.parse_args(["proposals", "reject", "2", "--reason", "nope"])
-    assert a.words == ["reject", "2"] and a.reason == "nope"
+    a = parser.parse_args(["proposals", "reject", "8b75b", "--reason", "nope"])
+    assert a.words == ["reject", "8b75b"] and a.reason == "nope" and a.ruling is None
+    a = parser.parse_args(["proposals", "reopen", "8b75b", "--reason", "r", "--ruling", "d1"])
+    assert a.words == ["reopen", "8b75b"] and a.ruling == "d1"

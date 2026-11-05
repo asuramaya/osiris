@@ -1,18 +1,17 @@
 """One-pass judging of the miner's proposals.
 
 A Proposal is a miner's suggestion (this object belongs in that project) that a person
-accepts or rejects. Judging them one at a time through the `proposal` verb meant a ref to
-copy and a call to make per item, and eight sat unjudged. This module is the list and the
-batch: `pending()` returns the live proposals as short, numbered, human-labelled rows, and
-`judge()` accepts or rejects any set of them. It writes nothing of its own: every decision
-goes through `proposals.accept` / `proposals.reject` (via the same `proposal` action the
-MCP tool and `osiris proposal` use), so the audit trail, the evidence grade and the
-refusals are exactly theirs.
+accepts or rejects. This module is the list and the batch: `pending()` returns the live
+proposals as short, labelled rows, and `judge()` accepts or rejects any set of them. It
+writes nothing of its own: every decision goes through `proposals.accept` /
+`proposals.reject` (via the same `proposal` action the MCP tool and `osiris proposal` use),
+so the audit trail, the evidence grade and the refusals are exactly theirs.
 
-Numbering is by expiry, soonest first, so the one that will lapse next is always number 1
-and a newly mined proposal joins the end. The CLI shows numbers; the desk and `judge()` act
-on the stable proposal ref, so a list that changes between looking and clicking can never
-hit the wrong one.
+Each proposal is shown and addressed by a short STABLE handle: the first hex digits of its
+own id (at least five, longer only when two pending ones would collide). It never changes
+when other proposals are judged, so a command can only ever land on the proposal it names.
+(An earlier version numbered the rows 1..n; accepting one renumbered the rest, and a second
+command meant for one proposal rejected another.) Rows are ordered by expiry, soonest first.
 """
 from __future__ import annotations
 
@@ -59,9 +58,85 @@ def _as_dict(value: object) -> dict[str, Any]:
     return {}
 
 
+_MIN_HANDLE = 5
+
+
+def _hex_of(ref: str) -> str:
+    """The id inside a proposal ref, dashes and prefix removed, lower case."""
+    return ref.split(":", 1)[-1].replace("-", "").lower()
+
+
+def _handles(refs: list[str]) -> list[str]:
+    """The shortest prefix of each ref's id, at least five digits, that no other listed
+    ref shares."""
+    ids = [_hex_of(r) for r in refs]
+    out: list[str] = []
+    for mine in ids:
+        n = _MIN_HANDLE
+        while n < len(mine) and any(o != mine and o.startswith(mine[:n]) for o in ids):
+            n += 1
+        out.append(mine[:n])
+    return out
+
+
+async def resolve(pool: asyncpg.Pool, words: list[str],
+                  items: list[dict[str, Any]]) -> tuple[list[str], str]:
+    """Words to proposal refs: `all` (every pending one), a handle, or a full ref. Returns
+    (refs, complaint). A handle is looked up among EVERY proposal, so a judged one is found
+    and refused by the real verb rather than reported as unknown; one that matches several
+    is refused naming them; nothing is acted on until every word resolves."""
+    refs: list[str] = []
+    for word in words:
+        if word.lower() == "all":
+            refs.extend(it["ref"] for it in items)
+            continue
+        digits = _hex_of(word)
+        if len(digits) < 4 or any(c not in "0123456789abcdef" for c in digits):
+            return [], (f"'{word}' is not a proposal id: ids look like "
+                        f"{items[0]['handle'] if items else '8b75b'} (see osiris proposals).")
+        rows = await pool.fetch(
+            "SELECT canonical FROM objects WHERE type = 'Proposal' AND "
+            "replace(replace(canonical, 'proposal:', ''), '-', '') LIKE $1 || '%'", digits)
+        if not rows:
+            return [], f"no proposal starts with {digits}."
+        if len(rows) > 1:
+            names = ", ".join(_hex_of(r["canonical"])[:8] for r in rows[:4])
+            return [], f"{digits} matches {len(rows)} proposals ({names}); type more of it."
+        if rows[0]["canonical"] not in refs:
+            refs.append(rows[0]["canonical"])
+    return refs, ""
+
+
+async def describe(pool: asyncpg.Pool, ref: str) -> dict[str, Any] | None:
+    """Title and target of any proposal, judged or not (for the line that reports it)."""
+    row = await _proposal_row(pool, ref)
+    if row is None:
+        return None
+    cand = _as_dict(row["candidate"])
+    if cand.get("kind") == "link":
+        _t, title, _c = await _name_of(pool, cand.get("from_id"))
+        _t2, target, _c2 = await _name_of(pool, cand.get("to_id"))
+        return {"title": title, "target": target.removeprefix("repo:"),
+                "status": row["status"]}
+    return {"title": _label(cand.get("canonical")), "target": "(new)",
+            "status": row["status"]}
+
+
+async def reopen_one(pool: asyncpg.Pool, actor: str, ref: str, reason: str,
+                     *, ruling: str | None = None) -> dict[str, Any]:
+    """Undo a mistaken rejection through `proposals.reopen`: {"ref","ok","error"?}."""
+    from src.actions.core import Actions
+    from src.orchestrator.proposals import reopen
+
+    res = await reopen(Actions(pool), proposal=ref, reason=reason, actor=actor,
+                       ruling=ruling)
+    return {"ref": ref, "ok": "error" not in res,
+            **({"error": str(res["error"])} if "error" in res else {})}
+
+
 async def pending(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     """Live proposals (status 'proposed', not yet past their expiry), soonest to expire
-    first, each with the number it is shown under and everything a person needs to judge
+    first, each with the stable handle it is shown under and everything a person needs to judge
     it: the thing being filed, where the miner would file it, and the signal it went on."""
     now = datetime.now(UTC)
     refs = await pool.fetch(
@@ -94,8 +169,8 @@ async def pending(pool: asyncpg.Pool) -> list[dict[str, Any]]:
             "owner": row["owner"] if isinstance(row["owner"], str) else "",
             "expires_at": expires.isoformat(), "days_left": max((expires - now).days, 0)})
     rows.sort(key=lambda x: (x["expires_at"], x["ref"]))
-    for i, item in enumerate(rows, 1):
-        item["number"] = i
+    for item, handle in zip(rows, _handles([r["ref"] for r in rows]), strict=True):
+        item["handle"] = handle
     return rows
 
 
@@ -124,76 +199,49 @@ async def judge(
 
 # --- what a person reads and types ---------------------------------------------------------
 
-def parse_numbers(words: list[str], count: int) -> list[int] | str:
-    """`1 3 4`, `1,3`, `2-4` and `all` as a list of numbers within 1..count, in the order
-    given and without repeats; or a one-line complaint when a word is not a number in range.
-    Nothing is acted on until every word parses."""
-    picked: list[int] = []
-    for word in words:
-        if word.lower() == "all":
-            picked.extend(range(1, count + 1))
-            continue
-        for part in word.split(","):
-            if not part:
-                continue
-            try:
-                if "-" in part:
-                    lo, hi = (int(x) for x in part.split("-", 1))
-                    nums = list(range(lo, hi + 1))
-                else:
-                    nums = [int(part)]
-            except ValueError:
-                return f"'{part}' is not a number from the list (or 'all')."
-            for n in nums:
-                if not 1 <= n <= count:
-                    return (f"there is no number {n}: the list runs 1 to {count}."
-                            if count else "nothing is waiting.")
-                picked.append(n)
-    ordered: list[int] = []
-    for n in picked:
-        if n not in ordered:
-            ordered.append(n)
-    return ordered
-
-
 def _plural(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
 
 def list_lines(items: list[dict[str, Any]], *, verbose: bool = False) -> list[str]:
-    """The list: a header, one line each, one line saying what to type."""
+    """The list: a header, one line each (handle, what, where, signal), and one line saying
+    what to type, written with real handles from the list."""
     if not items:
         return ["osiris proposals: nothing waiting."]
     soonest = items[0]["days_left"]
     when = "today" if soonest == 0 else f"in {_plural(soonest, 'day')}"
     lines = [f"osiris proposals: {len(items)} waiting; the first lapses {when}."]
-    width = len(str(len(items)))
+    width = max(len(it["handle"]) for it in items)
     for it in items:
-        line = f" {it['number']:>{width}}  {it['title']}  ->  {it['target']}"
+        line = f" {it['handle']:<{width}}  {it['title']}  ->  {it['target']}"
         if it["signal"]:
             line += f"  ({it['signal']})"
         if verbose:
             line += (f"  [{it['type'] or 'object'} {it['link']}; {it['miner'] or 'miner'}; "
                      f"lapses {it['expires_at'][:10]}; {it['ref']}]")
         lines.append(line)
-    lines.append("Judge them: osiris proposals accept 1 3  |  reject 2  |  accept all")
+    h = [it["handle"] for it in items]
+    second = h[1] if len(h) > 1 else h[0]
+    lines.append(f"Judge them: osiris proposals accept {h[0]}  |  reject {second}  |  "
+                 "accept all")
     return lines
 
 
-def result_lines(items: list[dict[str, Any]], numbers: list[int],
-                 results: list[dict[str, Any]], decision: str) -> list[str]:
-    """One line per decision, then a summary. `numbers` and `results` run in step."""
-    by_number = {it["number"]: it for it in items}
-    verb = "accepted" if decision == "accept" else "rejected"
+def result_lines(titles: dict[str, dict[str, Any]], refs: list[str],
+                 results: list[dict[str, Any]], verb: str) -> list[str]:
+    """One line per decision, then a summary. `verb` is the past tense ('accepted',
+    'rejected', 'reopened'); `titles` maps ref to its title/target when known."""
     lines: list[str] = []
     done = 0
-    for n, res in zip(numbers, results, strict=True):
-        it = by_number[n]
+    for ref, res in zip(refs, results, strict=True):
+        handle = _hex_of(ref)[:_MIN_HANDLE]
+        info = titles.get(ref)
         if res["ok"]:
             done += 1
-            lines.append(f" {verb} {n}: {it['title']}  ->  {it['target']}")
+            lines.append(f" {verb} {handle}: {info['title']}  ->  {info['target']}"
+                         if info else f" {verb} {handle}")
         else:
-            lines.append(f" refused {n}: {res['error'].split(': ')[-1].split('. ')[0]}")
+            lines.append(f" refused {handle}: {res['error'].split(': ')[-1].split('. ')[0]}")
     failed = len(results) - done
     lines.append(f"osiris proposals: {done} {verb}"
                  + (f", {failed} refused." if failed else "."))

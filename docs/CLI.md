@@ -206,19 +206,31 @@ a second one: it never launches a second process onto a seat that's already occu
 In the default mode that process is reachable via `claude agents`/`claude resume`,
 never `osiris attach` (that's for the `--debug` PTY mode only).
 
-## `osiris proposals [accept|reject] [numbers|all]`
+## `osiris proposals [accept|reject|reopen] [id ...|all]`
 
 Judge the miner's pending proposals in one pass. Bare, it lists them, soonest to lapse
-first, one short numbered line each: what is being filed, where the miner would file it,
-and the signal. Then `osiris proposals accept 1 3 4`, `reject 2` (add `--reason '...'`;
-the miner reads it back), or `accept all`. Ranges work (`2-4`). A number out of range
-acts on nothing. Every decision goes through the existing `proposal` accept/reject action
-(`osiris proposal` and the MCP tool use the same one), so the audit trail and the
-refusals are unchanged; this adds the list and the batch, no write path of its own. The
-console's Settings, Operator Desk shows the same list with Accept, Reject and Accept all
-buttons, acting on the proposal's own ref so a list that changed since it was drawn
-cannot make a click land on a different one. `--verbose` adds the type, miner, lapse date
-and ref; `--json` prints the list for a script.
+first, one short line each under a **stable id** (the first hex digits of the proposal's
+own id, at least five, longer only if two pending ones would collide): what is being
+filed, where the miner would file it, and the signal. Then `osiris proposals accept 8b75b
+3c2d1`, `reject 3c2d1` (add `--reason '...'`; the miner reads it back), or `accept all`.
+An id never changes when other proposals are judged, so a command can only land on the
+proposal it names; a bare number, an id that matches nothing, or one that matches several
+acts on nothing. (The first version numbered the rows 1..n, and accepting one renumbered
+the rest: a second command meant for one proposal rejected another.)
+
+`osiris proposals reopen <id> --reason '...'` puts a REJECTED proposal back to proposed
+when the operator confirms the rejection was a mistake. Same supersession path as the
+rejection (both stay in the history); the rejection's reason is marked withdrawn, and the
+miner's budget stops counting it (the throttle counts by current status). Operator only,
+or an actor that names the authorizing decision with `--ruling`; refused on an accepted
+proposal (it already minted a link: retire the link), on one still proposed, and on an
+expired one.
+
+Every decision goes through the existing `proposal` accept/reject action, so the audit
+trail and the refusals are unchanged. The console's Settings, Operator Desk shows the
+same list with Accept, Reject and Accept all buttons (acting on the proposal's own ref),
+and an Undo beside each rejection made on that page. `--verbose` adds the type, miner,
+lapse date and ref; `--json` prints the list for a script.
 
 ## `osiris fleet [--full]`
 
