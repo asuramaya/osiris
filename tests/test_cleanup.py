@@ -362,11 +362,82 @@ def test_the_report_totals_and_renders(tmp_path: Path) -> None:
     assert "scratch" in text
 
 
-def test_main_prints_json_and_is_a_dry_run_by_default(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+def test_main_prints_json_and_is_a_dry_run_by_default(tmp_path: Path, capsys, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(c, "load_bound", lambda dsn=None: None)  # never reach a database here
     assert c.main(["--json", "--skip-docker", "--scratch-days", "100000",
                    "--worktree-days", "100000"]) == 0
     out = capsys.readouterr().out
     assert '"apply": false' in out
+
+
+# --- a tree a seat is bound to is never removed -----------------------------------------------
+
+def _bound_report(repo: Path, bound: object, *, apply: bool = True) -> c.Report:
+    report = c.Report(apply=apply)
+    c.plan_worktrees(repo=repo, worktrees_dir=repo / ".claude" / "worktrees", now=time.time(),
+                     max_idle_days=3, apply=apply, cwds=[], runner=c.run, report=report,
+                     bound=bound)  # type: ignore[arg-type]
+    return report
+
+
+def test_a_tree_bound_to_a_seat_stays_with_its_branch_and_an_unbound_one_goes(
+    repo: Path,
+) -> None:
+    mine = _worker(repo, "bound-work", merged=True)
+    other = _worker(repo, "loose-work", merged=True)
+    report = _bound_report(repo, [(mine, "bound to seat Thoth")])
+    assert mine.exists() and "bound-work" in _branches(repo)
+    assert not other.exists() and "loose-work" not in _branches(repo)
+    assert any(s.endswith("kept: bound to seat Thoth") and str(mine) in s
+               for s in report.skipped)
+
+
+def test_a_live_mount_working_inside_a_tree_keeps_it(repo: Path) -> None:
+    wt = _worker(repo, "mounted", merged=True)
+    sub = wt / "src"
+    sub.mkdir()
+    report = _bound_report(repo, [(sub, "in use by live mount agent:abc")])
+    assert wt.exists() and "mounted" in _branches(repo)
+    assert any("kept: in use by live mount agent:abc" in s for s in report.skipped)
+
+
+def test_a_binding_beside_the_tree_does_not_keep_it(repo: Path) -> None:
+    wt = _worker(repo, "neighbour", merged=True)
+    _bound_report(repo, [(wt.with_name("neighbour-two"), "bound to seat X")])
+    assert not wt.exists()
+
+
+def test_when_the_bindings_cannot_be_read_no_worktree_is_removed(repo: Path) -> None:
+    wt = _worker(repo, "unknown", merged=True)
+    report = _bound_report(repo, None)
+    assert wt.exists() and "unknown" in _branches(repo)
+    assert any("kept: seat bindings could not be read" in s for s in report.skipped)
+
+
+def test_an_unreachable_database_reads_as_unknown_not_as_nothing_bound() -> None:
+    assert c.load_bound("postgresql://nobody:x@127.0.0.1:1/none") is None
+
+
+async def test_the_graph_read_returns_seat_trees_and_live_mounts(
+    actions, pg_dsn: str, tmp_path: Path,  # type: ignore[no-untyped-def]
+) -> None:
+    import asyncio
+
+    from src.orchestrator.mounts import save_mount
+    from src.orchestrator.seats import bind_seat_tree, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="cleanbound",
+                             anchor_cwd=str(tmp_path / "office"), source="test")
+    await bind_seat_tree(actions, seat_id=seat["seat_id"], tree_cwd=str(tmp_path / "tree"),
+                         actor="operator", because="test: cleanup must see this binding")
+    await save_mount(actions.pool, job_dir="/x/jobs/cleanlive", agent_id="agent:cleanlive",
+                     project="osiris", cwd=str(tmp_path / "mounted"), model=None,
+                     session_key=None)
+    got = await asyncio.to_thread(c.load_bound, pg_dsn)
+    assert got is not None
+    by_path = {str(p): who for p, who in got}
+    assert by_path[str(tmp_path / "tree")] == "bound to seat cleanbound"
+    assert by_path[str(tmp_path / "mounted")] == "in use by live mount agent:cleanlive"
 
 
 # --- the units -----------------------------------------------------------------------------
