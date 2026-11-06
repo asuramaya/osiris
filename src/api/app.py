@@ -174,9 +174,16 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
                 "place, the console still binds")
         graph_refresher = asyncio.create_task(
             _snapshot_cache(app).run_refresher(app.state.pool, app.state.shutting_down))
+        # THE SIGNAL, NOT THE LIFESPAN, ENDS THE STREAMS: uvicorn waits for open requests BEFORE
+        # it runs the lifespan shutdown below, so a flag set only there came too late to end the
+        # SSE loops it was written for (src/shutdown_signal.py). Set it when SIGTERM arrives.
+        from src.shutdown_signal import chain_shutdown_signal
+
+        restore_signals = chain_shutdown_signal(app.state.shutting_down.set)
         try:
             yield
         finally:
+            restore_signals()
             app.state.shutting_down.set()
             graph_refresher.cancel()
             with suppress(asyncio.CancelledError):

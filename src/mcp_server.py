@@ -12780,7 +12780,13 @@ def main() -> None:
 
         get_soul_fernet()
         asyncio.run(_boot_check())
-        mcp.run(transport=transport)  # type: ignore[arg-type]
+        # Our own uvicorn run, not mcp.run(): the SDK's hides its Server, so its long-lived
+        # SSE/streamable responses outlasted every restart (src/shutdown_signal.py).
+        from src.shutdown_signal import serve_http
+
+        asgi_app = mcp.streamable_http_app() if transport == "streamable-http" else mcp.sse_app()
+        asyncio.run(serve_http(asgi_app, host=s.osiris_mcp_host, port=s.osiris_mcp_port,
+                               log_level=mcp.settings.log_level))
     else:
         mcp.run()
 

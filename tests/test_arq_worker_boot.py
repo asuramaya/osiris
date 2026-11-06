@@ -24,6 +24,12 @@ def _patch_record_job(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(arq_worker, "record_job", _noop)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_boot_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    # the module lock binds to the first event loop that contends it; every test has its own loop
+    monkeypatch.setattr(arq_worker, "_boot_lock", asyncio.Lock())
+
+
 def _fake_ctx(*, boot_serialize_until: float | None) -> dict[str, Any]:
     return {
         "cascade": SimpleNamespace(actions=SimpleNamespace(pool=object())),
@@ -45,6 +51,53 @@ async def test_watched_serializes_concurrent_calls_inside_the_boot_window() -> N
     await asyncio.gather(wrapped(ctx), wrapped(ctx))
     # serialized: the first call's "end" lands before the second call's "start"
     assert order == ["start", "end", "start", "end"]
+
+
+async def test_a_waiter_behind_a_long_holder_skips_instead_of_timing_out(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(arq_worker, "_BOOT_LOCK_WAIT_S", 0.05)
+    ran: list[str] = []
+
+    async def long_job(ctx: dict[str, Any]) -> int:
+        await asyncio.sleep(0.3)
+        ran.append("long")
+        return 1
+
+    async def light_job(ctx: dict[str, Any]) -> int:
+        ran.append("light")
+        return 1
+
+    long_w = arq_worker.watched(long_job, every=60)
+    light_w = arq_worker.watched(light_job, every=60)
+    ctx = _fake_ctx(boot_serialize_until=time.monotonic() + 3600.0)
+    task = asyncio.create_task(long_w(ctx))
+    await asyncio.sleep(0.01)
+    assert await light_w(ctx) == 0  # gave up, no error
+    assert await task == 1
+    assert ran == ["long"]  # the light job never ran; it is not a failure
+
+
+async def test_a_heavy_job_never_holds_the_boot_lock() -> None:
+    order: list[str] = []
+
+    async def heavy_job(ctx: dict[str, Any]) -> int:
+        order.append("heavy")
+        await asyncio.sleep(0.2)
+        return 1
+
+    async def light_job(ctx: dict[str, Any]) -> int:
+        order.append("light")
+        return 1
+
+    heavy_w = arq_worker.watched(heavy_job, every=60, heavy=True)
+    light_w = arq_worker.watched(light_job, every=60)
+    ctx = _fake_ctx(boot_serialize_until=time.monotonic() + 0.1)
+    heavy_t = asyncio.create_task(heavy_w(ctx))
+    await asyncio.sleep(0.01)
+    assert await light_w(ctx) == 1  # not queued behind the heavy job
+    assert not arq_worker._boot_lock.locked()
+    assert await heavy_t == 1  # ran once the window elapsed
+    assert order == ["light", "heavy"]
 
 
 async def test_watched_runs_concurrently_past_the_boot_window() -> None:

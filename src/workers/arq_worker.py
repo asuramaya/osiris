@@ -148,6 +148,12 @@ async def _boot_memtrace(window_s: float) -> None:
 # serialize_s of process start (checked against ctx["boot_serialize_until"], stamped once
 # in startup()) — a scheduled tick past that deadline never touches this lock at all.
 _boot_lock = asyncio.Lock()
+# How long a job may queue for `_boot_lock` before it gives the tick up. Measured 2026-11-04
+# 23:30: neighborhood_pass held the lock ~150 s and soul_encrypt_heartbeat (job timeout 120 s)
+# died of TimeoutError waiting behind it. A skipped boot run is harmless -- the cron fires again
+# on its own cadence -- so a waiter that would outlast the wait SKIPS (return 0, nothing recorded
+# as an error) instead of failing at its job timeout.
+_BOOT_LOCK_WAIT_S = 45.0
 
 
 async def startup(ctx: dict[str, Any]) -> None:
@@ -1668,7 +1674,7 @@ async def graph_layout_heartbeat(ctx: dict[str, Any]) -> int:
     return placed
 
 
-def watched(fn: Any, *, every: int) -> Any:
+def watched(fn: Any, *, every: int, heavy: bool = False) -> Any:
     """THE SEAM WHERE A JOB CANNOT LIE ABOUT ITS OWN HEALTH.
 
     The session-miner failed every tick for ten hours and nothing knew, because it CAUGHT its own
@@ -1688,13 +1694,30 @@ def watched(fn: Any, *, every: int) -> Any:
     run_at_startup jobs that used to fire concurrently in the same ~3s window now queue
     one at a time instead. Past that deadline the check is a cheap monotonic comparison
     and the lock is never touched — a scheduled tick's steady-state cost is unchanged.
+
+    TWO BOUNDS ON THE BOOT QUEUE (restart hygiene, 2026-11-05): a waiter gives the lock up
+    after `_BOOT_LOCK_WAIT_S` and SKIPS the tick (its job timeout is no longer spent in the
+    queue), and a `heavy=True` job (one measured to run for minutes) never takes the lock at
+    all -- it sleeps out the boot window and runs after it, so it cannot starve the light jobs
+    queued behind it. It still runs at startup, just after the window.
     """
     @functools.wraps(fn)
     async def run(ctx: dict[str, Any]) -> int:
         deadline = ctx.get("boot_serialize_until")
         if deadline is not None and time.monotonic() < deadline:
-            async with _boot_lock:
+            if heavy:
+                await asyncio.sleep(max(0.0, deadline - time.monotonic()))
                 return await _run_watched(fn, ctx, every)
+            try:
+                await asyncio.wait_for(_boot_lock.acquire(), timeout=_BOOT_LOCK_WAIT_S)
+            except TimeoutError:
+                _log.info("%s skipped: boot queue still busy after %.0fs", fn.__name__,
+                          _BOOT_LOCK_WAIT_S)
+                return 0
+            try:
+                return await _run_watched(fn, ctx, every)
+            finally:
+                _boot_lock.release()
         return await _run_watched(fn, ctx, every)
     return run
 
@@ -1818,8 +1841,8 @@ class WorkerSettings:
              timeout=300, run_at_startup=True),
         # rung 4 walks nightly in the quiet hour: echo-folding is free, summaries are
         # budgeted (≤3/pass, stalest-first) and skip-unchanged by fingerprint
-        cron(watched(neighborhood_pass, every=86400), hour={9}, minute={10}, timeout=480,
-             run_at_startup=True),
+        cron(watched(neighborhood_pass, every=86400, heavy=True), hour={9}, minute={10},
+             timeout=480, run_at_startup=True),
         # the mailbox alarm clock: wake an agent for a project with unread mail — bounded by a
         # per-project rate cap, and a no-op unless osiris_trigger_enabled (the kill switch).
         cron(watched(trigger_mail, every=60), minute=set(range(0, 60)), second={45},
