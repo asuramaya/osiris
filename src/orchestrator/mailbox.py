@@ -144,6 +144,19 @@ def _norm(project: str) -> str:
     return project.removeprefix("repo:").strip()
 
 
+def _is_automated(from_agent: str) -> bool:
+    """A scheduled job or a system process, never an agent or a person."""
+    return from_agent.startswith(("cron:", "system:"))
+
+
+def _rolling_key(body: str) -> str:
+    """What makes two notices from one job the same notice: the words before the first colon
+    (`retention`, `OBLIGATION HYGIENE NUDGE`, `MCP LIVENESS`), or the first 40 characters when
+    there is no early colon."""
+    head, sep, _ = body[:61].partition(":")
+    return head if sep and head.strip() else body[:40]
+
+
 # THE SEND-CALL ADDRESSING GUARD'S OWN VOCABULARY: a leading vocative (e.g.
 # 'name: spin down...', 'name, spin down...') or an @handle anywhere in the body: the
 # two shapes a human types when they mean a specific seat, not the room at large. This
@@ -730,12 +743,34 @@ async def send_message(
                    else {}),
                 **({"threads_stamped": stamped} if stamped else {}),
                 **({"addressee_resolved": addressee_resolved} if addressee_resolved else {})}
+    # THE OPERATOR'S DESK IS NOT A LOG: a scheduled job or system process reporting to the
+    # operator posts ONE current notice, not one more unread message per run (measured: about
+    # 2,000 unread, almost all automated and ungraded). The notice is graded (a fyi unless it
+    # asks for a decision or a hand), and it replaces that job's older unread notice with the
+    # same key; the older rows stay in the record, marked read and moot with the reason, and the
+    # new body says how many it replaces. Agents and people are never touched by this.
+    rolled: list[int] = []
+    if to_p == OPERATOR_ADDR and to_a is None and _is_automated(from_agent):
+        if grade is None:
+            grade = "ask" if desk_kind in ("decision", "hands") else "fyi"
+        key = _rolling_key(body)
+        rolled = [r["id"] for r in await pool.fetch(
+            "SELECT id FROM fleet_messages WHERE from_agent=$1 AND to_project=$2 "
+            "AND to_agent IS NULL AND read_at IS NULL AND moot_at IS NULL "
+            "AND left(body, $4) = $3 ORDER BY id", from_agent, to_p, key, len(key))]
+        if rolled:
+            body = f"{body}\n\n(replaces {len(rolled)} earlier unread notice(s) from this job)"
     mid = await pool.fetchval(
         "INSERT INTO fleet_messages (from_agent, from_project, to_project, to_agent, body, "
         "reply_to, thread_id, desk_kind, grade) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) "
         "RETURNING id",
         from_agent, from_project, to_p, to_a, body, reply_to, thread, desk_kind, grade)
     stamped = await _stamp_threads()
+    if rolled:
+        await pool.execute(
+            "UPDATE fleet_messages SET read_at=now(), moot_at=now(), moot_by=$2, "
+            "moot_note=$3 WHERE id = ANY($1::bigint[]) AND read_at IS NULL",
+            rolled, from_agent, f"replaced by a newer notice from the same job (#{mid})")
     # GRAPH EDGES: write Message object + links so mail is traversable in the graph.
     # STRUCTURALLY GUARDED: fix the mechanism, not the symptom. This block once
     # produced five regressions from five unguarded raw create_or_find_object calls,
@@ -820,6 +855,7 @@ async def send_message(
 
     _touch_mail_bump()  # the status bar's short cache must not hide this message
     return {"id": mid, "to": to_p, "to_agent": to_a, "thread_id": thread, "dedup": False,
+            **({"replaced": rolled} if rolled else {}),
             **({} if graphed else {"graphed": False}),
             **({"seat": seat, "lineage_head": lineage} if to_a else {}),
             **({"holder": holder} if to_a and to_a.startswith("seat:") else {}),
@@ -1276,6 +1312,57 @@ def classify_brief(body: str, desk_kind: str | None) -> str:
                               "authorization", "authorize", "refill", "your word")):
         return "hands"
     return "fyi"
+
+
+async def settle_automated_desk_backlog(
+    pool: asyncpg.Pool, *, actor: str, dry_run: bool = True, because: str | None = None,
+    older_than_days: int = 1,
+) -> dict[str, Any]:
+    """The operator's desk backlog that no one should have to read: unread notices from
+    scheduled jobs and system processes (`cron:*`, `system:*`), older than a day, that are
+    not an ask, not a decision or a hand, and not written by an agent or a person. Each
+    stays in the record, marked read and moot with the reason; nothing is deleted.
+
+    Never touched, and counted as kept: an `ask`, a `decision` or `hands` brief, anything an
+    agent or a person wrote, and anything newer than `older_than_days`. DRY RUN IS THE
+    DEFAULT and returns the counts per sender; `dry_run=False` REQUIRES a non-blank
+    `because`. Idempotent: a settled row is no longer unread."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "settling the operator's desk without a because is an un-audited "
+                         "repair: cite who authorized it"}
+    rows = await pool.fetch(
+        "SELECT from_agent, count(*) AS n, min(created_at) AS oldest, max(created_at) AS newest, "
+        "array_agg(id) AS ids FROM fleet_messages "
+        "WHERE to_project=$1 AND to_agent IS NULL AND read_at IS NULL AND moot_at IS NULL "
+        "AND (from_agent LIKE 'cron:%' OR from_agent LIKE 'system:%') "
+        "AND created_at < now() - make_interval(days => $2) "
+        "AND COALESCE(grade, '') <> 'ask' "
+        "AND COALESCE(desk_kind, '') NOT IN ('decision', 'hands') "
+        "GROUP BY from_agent ORDER BY n DESC", OPERATOR_ADDR, older_than_days)
+    by_sender = {r["from_agent"]: r["n"] for r in rows}
+    kept = await pool.fetchrow(
+        "SELECT count(*) FILTER (WHERE from_agent NOT LIKE 'cron:%' "
+        "  AND from_agent NOT LIKE 'system:%') AS written_by_an_agent_or_person, "
+        "count(*) FILTER (WHERE (from_agent LIKE 'cron:%' OR from_agent LIKE 'system:%') "
+        "  AND (grade = 'ask' OR desk_kind IN ('decision', 'hands'))) AS asks_and_decisions, "
+        "count(*) FILTER (WHERE (from_agent LIKE 'cron:%' OR from_agent LIKE 'system:%') "
+        "  AND created_at >= now() - make_interval(days => $2) "
+        "  AND COALESCE(grade, '') <> 'ask' "
+        "  AND COALESCE(desk_kind, '') NOT IN ('decision', 'hands')) AS newer_than_the_cutoff "
+        "FROM fleet_messages WHERE to_project=$1 AND to_agent IS NULL AND read_at IS NULL "
+        "AND moot_at IS NULL", OPERATOR_ADDR, older_than_days)
+    settled = 0
+    if not dry_run:
+        ids = [i for r in rows for i in r["ids"]]
+        if ids:
+            res = await pool.execute(
+                "UPDATE fleet_messages SET read_at=now(), moot_at=now(), moot_by=$2, "
+                "moot_note=$3 WHERE id = ANY($1::bigint[]) AND read_at IS NULL",
+                ids, actor, f"settled by the automated-backlog cleanup: {because}")
+            settled = int(res.split()[-1])
+    return {"dry_run": dry_run, "to_settle": sum(by_sender.values()), "settled": settled,
+            "by_sender": by_sender, "kept": dict(kept) if kept else {},
+            "older_than_days": older_than_days, "because": because if not dry_run else None}
 
 
 async def dim_brief(

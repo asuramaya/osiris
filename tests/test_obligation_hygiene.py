@@ -222,9 +222,10 @@ async def test_a_project_owned_obligation_is_flagged_and_the_nudge_names_it(
 
     out = await hygiene_execute(actions, execute=True, now=NOW)
     sent = next(r for r in out["nudged"] if r["thread_id"] == str(t))["sent"]
-    assert "error" not in sent
+    assert "error" not in sent and sent["batched"] is True    # one summary per run
     body = await actions.pool.fetchval(
-        "SELECT body FROM fleet_messages WHERE id=$1", sent["id"])
+        "SELECT body FROM fleet_messages WHERE from_agent='cron:obligation_hygiene_heartbeat' "
+        "AND to_project='operator' ORDER BY id DESC LIMIT 1")
     assert "project-owned" in body
     assert "threads()" in body
 
