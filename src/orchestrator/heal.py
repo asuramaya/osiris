@@ -154,25 +154,33 @@ async def heal_husks(
         out["note"] = "REHEARSAL: nothing written; pass apply=True to heal"
         return out
 
-    for step in plan:
-        h, oid = step["husk"], verified[step["husk"]]
-        for k, v in (("false_mint", "true"), ("retired", "true"), ("retired_by", _SRC),
-                     ("false_mint_because",
-                      "actless machine mint at an onboarding boundary: the two boundary "
-                      "observers raced each other and both fired; healed at the operator's "
-                      "word, 2026-07-14")):
-            await actions.assert_property(oid, k, v, _SRC, now, _CONF,
-                                          evidence_class=_DO.value)
-        if step["estate_to"]:
-            await actions.pool.execute(
-                "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
-                step["estate_to"], h)
-            await actions.pool.execute(
-                "UPDATE agent_mounts SET agent_id=$1 WHERE agent_id=$2", step["estate_to"], h)
-    for u in unwinds:
-        head_oid = await _oid(actions, u["head_restored"])
-        if head_oid is not None:
-            await actions.assert_property(head_oid, "succeeded_by", "", _SRC, now, _CONF,
-                                          evidence_class=_DO.value)
+    # ONE TRANSACTION for the whole apply: the flag stamps, the mail and mount moves and the
+    # tail unwinds either all land or none do. Written as separate statements, an
+    # interruption between a husk's flag and its lineage's pointer unwind left the flag
+    # standing with the ancestor still pointing at the husk, a state that reads as healed to
+    # anything that trusts the flag and that no later step can finish safely once real
+    # generations are minted on top (the "half-healed phantom" class).
+    async with actions.atomic() as a:
+        for step in plan:
+            h, oid = step["husk"], verified[step["husk"]]
+            for k, v in (("false_mint", "true"), ("retired", "true"), ("retired_by", _SRC),
+                         ("false_mint_because",
+                          "actless machine mint at an onboarding boundary: the two boundary "
+                          "observers raced each other and both fired; healed at the "
+                          "operator's word, 2026-07-14")):
+                await a.assert_property(oid, k, v, _SRC, now, _CONF,
+                                        evidence_class=_DO.value)
+            if step["estate_to"]:
+                await a.execute(
+                    "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 "
+                    "AND read_at IS NULL", step["estate_to"], h)
+                await a.execute(
+                    "UPDATE agent_mounts SET agent_id=$1 WHERE agent_id=$2",
+                    step["estate_to"], h)
+        for u in unwinds:
+            head_oid = await _oid(a, u["head_restored"])
+            if head_oid is not None:
+                await a.assert_property(head_oid, "succeeded_by", "", _SRC, now, _CONF,
+                                        evidence_class=_DO.value)
     out["applied"] = True
     return out
