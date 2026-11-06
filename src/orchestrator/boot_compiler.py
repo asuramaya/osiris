@@ -323,7 +323,7 @@ def scaffold_boot_file(
 
 
 async def _mirror_agents_md(
-    office: Path, wrapped: str, *, adopt: bool, handle: str,
+    office: Path, wrapped: str, *, adopt: bool, handle: str, dry_run: bool = False,
 ) -> dict[str, Any]:
     """AGENTS.md's own recompile: the vendor-neutral mirror of whatever `reissue_office`
     just did to CLAUDE.md, same wrapped content, same marker-safety/adopt discipline
@@ -340,7 +340,8 @@ async def _mirror_agents_md(
     contract this module exists to protect."""
     path = office / "AGENTS.md"
     if not path.exists():
-        path.write_text(wrapped)
+        if not dry_run:
+            path.write_text(wrapped)
         return {"changed": True, "note": "written (first compile)"}
     text = path.read_text()
     if adopt and _has_any_markers(text):
@@ -370,11 +371,19 @@ async def _mirror_agents_md(
             new_text = text.rstrip("\n") + "\n\n" + wrapped
     else:
         b_start, _b_end, _e_start, e_end, _old_version = locate_managed_section(text)
-        new_text = text[:b_start] + wrapped + text[e_end:]
+        new_text = text[:b_start] + wrapped + _after_marker(text, e_end)
     if new_text == text:
         return {"changed": False, "note": "no change: already matches"}
-    path.write_text(new_text)
+    if not dry_run:
+        path.write_text(new_text)
     return {"changed": True, "note": "recompiled"}
+
+
+def _after_marker(text: str, e_end: int) -> str:
+    """What follows the end marker, minus the one newline that `wrap_managed` already
+    supplies after it: splicing the raw tail would add a blank line on every reissue."""
+    tail = text[e_end:]
+    return tail[1:] if tail.startswith("\n") else tail
 
 
 def _has_any_markers(text: str) -> bool:
@@ -528,8 +537,47 @@ async def migrate_identity_to_charter(
     return result
 
 
+def _managed_span(text: str) -> str:
+    """The text from a file's begin marker to its end marker, or "" when it has none."""
+    try:
+        b_start, _b_end, _e_start, e_end, _v = locate_managed_section(text)
+    except MarkerError:
+        return ""
+    return text[b_start:e_end]
+
+
+def managed_sections_changed(old_text: str, new_text: str) -> list[str]:
+    """The managed section's headings whose text differs between two renderings of an
+    office file, in document order: a heading present on only one side counts, and a
+    moved version stamp on the begin marker is reported as `(template stamp)`. Only the
+    span between the markers is compared, so hand-written text outside it can never show
+    up here."""
+    def split(span: str) -> dict[str, str]:
+        out: dict[str, str] = {}
+        head = "(preamble)"
+        buf: list[str] = []
+        for line in span.splitlines():
+            if line.startswith("<!-- osiris:compiled:"):
+                continue
+            if line.startswith("#"):
+                out[head] = "\n".join(buf)
+                head, buf = line.lstrip("# ").strip() or "(untitled)", []
+            else:
+                buf.append(line)
+        out[head] = "\n".join(buf)
+        return out
+    old, new = split(_managed_span(old_text)), split(_managed_span(new_text))
+    names = [*new, *(k for k in old if k not in new)]
+    changed = [k for k in names if old.get(k) != new.get(k) and (old.get(k) or new.get(k))]
+    old_v, new_v = _MARKER_BEGIN_RE.search(old_text), _MARKER_BEGIN_RE.search(new_text)
+    if (old_v.group(1) if old_v else None) != (new_v.group(1) if new_v else None):
+        changed.append("(template stamp)")
+    return changed
+
+
 async def reissue_office(
     actions: Actions, *, seat_id: str, because: str, actor: str, adopt: bool = False,
+    dry_run: bool = False, migrate_identity: bool = True,
 ) -> dict[str, Any]:
     """Recompile a seat's managed section, the fourth compile point, fired on demand
     when law changes or a live fact (a peer bond, a manager reassignment) needs to
@@ -571,7 +619,13 @@ async def reissue_office(
     guess. Genuinely foreign content, no office-shaped header anywhere, no markers at
     all: the old append behavior stands, nothing resembles a managed section, so
     nothing is safe to replace, and the whole file is preserved with the fresh section
-    appended at the end."""
+    appended at the end.
+
+    `dry_run=True` computes the whole result and writes nothing: no file, no testimony,
+    no identity move. It adds `sections_changed`, the managed section's headings whose
+    text would differ. `migrate_identity=False` skips the identity migration, which moves
+    hand-written text out of the office; the unattended reissue (`reissue_stale_offices`)
+    passes it so that a tick touches the managed span and nothing else."""
     if not because.strip():
         return {"error": "because is required: a reissue is testimony, same as a rename"}
     from src.orchestrator.charter import charter_of
@@ -605,8 +659,10 @@ async def reissue_office(
     # compiled markers, so it can never race or conflict with the compiled-section
     # rewrite that follows. A true no-op (non-tree-bound, already migrated, nothing to
     # move) writes nothing and changes nothing about what follows.
-    identity_migration = await migrate_identity_to_charter(
-        actions, seat_id=seat_id, because=because, actor=actor, dry_run=False)
+    identity_migration: dict[str, Any] = (
+        await migrate_identity_to_charter(
+            actions, seat_id=seat_id, because=because, actor=actor, dry_run=dry_run)
+        if migrate_identity else {"migrated": False, "note": "skipped by the caller"})
     text = orders_path.read_text()
 
     if adopt and _has_any_markers(text):
@@ -683,16 +739,32 @@ async def reissue_office(
             new_text = text.rstrip("\n") + "\n\n" + wrapped
     else:
         b_start, _b_end, _e_start, e_end, _old_version = locate_managed_section(text)
-        new_text = text[:b_start] + wrapped + text[e_end:]
+        new_text = text[:b_start] + wrapped + _after_marker(text, e_end)
 
     # AGENTS.md, VENDOR-NEUTRAL (see this module's own section above
     # `_mirror_agents_md`): mirrored regardless of whether CLAUDE.md itself changed this
     # call. An office whose CLAUDE.md already matched but whose AGENTS.md has never been
     # written (every pre-existing office in this fleet, at the moment this piece
     # shipped) still needs it written the first time a reissue happens to pass through.
-    agents_md = await _mirror_agents_md(office, wrapped, adopt=adopt, handle=handle)
+    agents_md = await _mirror_agents_md(office, wrapped, adopt=adopt, handle=handle,
+                                        dry_run=dry_run)
 
+    if dry_run:
+        return {"seat": seat_id, "handle": handle, "version": version, "because": because,
+                "changed": new_text != text, "dry_run": True,
+                "sections_changed": managed_sections_changed(text, new_text),
+                "note": "dry run: nothing written", "agents_md": agents_md}
     if new_text == text:
+        # THE STAMP FOLLOWS THE FILE: a section that already matches the live template but
+        # carries an older stamp would otherwise read as drifted forever.
+        stamped = await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a "
+            "WHERE a.object_id=$1 AND a.name='boot_compiled_version' "
+            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", row["id"])
+        if stamped != version:
+            await actions.assert_property(row["id"], "boot_compiled_version", version,
+                                          actor, datetime.now(UTC), _CONF,
+                                          evidence_class=_EC)
         return {"seat": seat_id, "handle": handle, "version": version,
                 "because": because, "changed": False,
                 "note": "no change: the compiled section already matches",
@@ -999,6 +1071,67 @@ async def apply_boot_drift_nudge_sweep(actions: Actions, *, actor: str) -> dict[
                 errors.append({"seat_id": seat_id, "error": f"{type(exc).__name__}: {exc}"})
     return {"gaps": len(gaps), "nudged": nudged, "updated": updated,
             "superseded": superseded, "closed": closed, "errors": errors}
+
+
+def reissue_houses(spec: str) -> frozenset[str] | None:
+    """The `osiris_boot_reissue_houses` setting as a filter: None means every house,
+    an empty set means off, otherwise the named houses."""
+    names = {n.strip() for n in spec.split(",") if n.strip()}
+    return None if "*" in names else frozenset(names)
+
+
+async def reissue_stale_offices(
+    actions: Actions, *, actor: str, houses: frozenset[str] | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """Recompile the managed section of every active seat whose last compiled template is
+    older than the live one, and nothing else about its office. `houses` limits it to
+    those houses' seats (None = every house, an empty set = nobody).
+
+    Touches only the span between the managed markers (and the same span in AGENTS.md):
+    the identity migration, which moves hand-written text, is skipped, and a seat whose
+    markers are damaged is reported under `refused`, never repaired. Idempotent: a seat
+    already on the live template is not a gap, so a second run finds nothing. `dry_run`
+    (the default) writes nothing and reports `would_change` per seat with the headings
+    that would differ. A live run returns `updated` (the receipt) and, last, runs the
+    nudge sweep so the obligations for the seats just refreshed close in the same call."""
+    gaps = await boot_drift_gaps(actions.pool)
+    if houses is not None:
+        gaps = [g for g in gaps if g["house"] in houses]
+    version = template_version()
+    would_change: list[dict[str, Any]] = []
+    updated: list[dict[str, Any]] = []
+    refused: list[dict[str, str]] = []
+    unchanged: list[str] = []
+    for g in gaps:
+        because = (f"boot template moved on (v{g['stamped_version']} to v{version}): the "
+                   "managed section is osiris-owned text, kept current by "
+                   "reissue_stale_offices")
+        try:
+            out = await reissue_office(
+                actions, seat_id=g["seat_id"], because=because, actor=actor,
+                dry_run=dry_run, migrate_identity=False)
+        except Exception as exc:  # one seat's failure must not stop its siblings
+            refused.append({"seat": g["handle"], "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        if "error" in out:
+            refused.append({"seat": g["handle"], "error": str(out["error"])})
+            continue
+        if not out["changed"] and not (out.get("agents_md") or {}).get("changed"):
+            unchanged.append(g["handle"])
+            continue
+        row = {"seat": g["handle"], "house": g["house"],
+               "from": g["stamped_version"], "to": version,
+               "sections": out.get("sections_changed", []),
+               "agents_md": bool((out.get("agents_md") or {}).get("changed"))}
+        (would_change if dry_run else updated).append(row)
+    result: dict[str, Any] = {
+        "dry_run": dry_run, "template_version": version, "stale": len(gaps),
+        "would_change": would_change, "updated": updated, "refused": refused,
+        "unchanged": unchanged}
+    if not dry_run:
+        result["nudges"] = await apply_boot_drift_nudge_sweep(actions, actor=actor)
+    return result
 
 
 async def sweep_stacked_office_headers(

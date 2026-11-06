@@ -442,6 +442,10 @@ class Settings(BaseSettings):
     # not an ancestor of the main line. Idempotent on summary text; never blocks a deploy,
     # never gates anything.
     osiris_landing_audit_enabled: bool = False
+    # Which houses' seats the heartbeat keeps on the current boot template by recompiling
+    # their managed section when it is stale (reissue_stale_offices). Comma-separated house
+    # names; "*" means every house; empty turns it off. Only the managed span is rewritten.
+    osiris_boot_reissue_houses: str = "osiris"
     # The obligation hygiene no-regrow rule's own switch: after 7 idle days, a nudge goes
     # to the obligation's own owner (or the operator, when the owner is a project name or
     # resolves to no live agent); after 7 more days of silence past that, a

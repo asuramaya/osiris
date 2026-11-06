@@ -45,6 +45,7 @@ THREAD_VALID_PAYLOADS: dict[str, dict[str, Any]] = {
     "annotate": {"ref": "371fbbac", "note": "a progress note"},
     "correct_summary": {"ref": "371fbbac", "corrected_summary": "a better headline"},
     "reclassify": {"ref": "371fbbac", "kind": "obligation"},
+    "file": {"ref": "371fbbac", "repo": "osiris"},
 }
 
 
@@ -53,7 +54,7 @@ async def test_thread_schema_is_a_well_formed_discriminated_union() -> None:
     jsonschema.Draft7Validator.check_schema(schema)
     assert schema["type"] == "object"
     branches = schema["oneOf"]
-    assert len(branches) == 4, "one branch per thread action, update this count and " \
+    assert len(branches) == 5, "one branch per thread action, update this count and " \
         "the ACTION TABLE docstring together if the action set changes"
     actions = {b["properties"]["action"]["const"] for b in branches}
     assert actions == set(THREAD_VALID_PAYLOADS), (

@@ -58,7 +58,7 @@ def _mail_bump_path() -> str:
     return os.path.expanduser(os.environ.get("OSIRIS_MAIL_BUMP_FILE") or "~/.osiris/mail-bump")
 
 
-def _render_key(hook: dict) -> tuple[str, str] | None:
+def _render_key(hook: dict[str, Any]) -> tuple[str, str] | None:
     """(session file name, signature of the inputs the line is drawn from); None when there
     is no session to key on."""
     sid = str(hook.get("session_id") or "")
@@ -79,7 +79,7 @@ def _render_key(hook: dict) -> tuple[str, str] | None:
     return f"{slug}.json", signature
 
 
-def _render_cache_read(hook: dict) -> str | None:
+def _render_cache_read(hook: dict[str, Any]) -> str | None:
     key = _render_key(hook)
     if key is None:
         return None
@@ -101,7 +101,7 @@ def _render_cache_read(hook: dict) -> str | None:
         return None
 
 
-def _render_cache_write(hook: dict, out: str) -> None:
+def _render_cache_write(hook: dict[str, Any], out: str) -> None:
     key = _render_key(hook)
     if key is None or not out:
         return
