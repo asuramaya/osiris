@@ -1429,3 +1429,105 @@ async def test_the_sweep_never_touches_a_thread_that_is_not_its_own(
             "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
             "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", tid)
         assert status == "open"
+
+
+# ═══ THE STALE-OFFICE REISSUE ═════════════════════════════════════════════════════
+
+
+async def _stale_office(actions: Actions, tmp_path: Path, house: str, handle: str,
+                        boss: str) -> tuple[str, Path, str]:
+    """A minted office whose managed span reads as an older template: one line altered
+    inside the markers, the begin marker's version and the seat's stamp both old. Hand
+    text is appended after the markers. Returns (seat_id, CLAUDE.md path, hand text)."""
+    await ensure_seat(actions, house=house, handle=boss, source="test")
+    minted = await mint_seat(actions, manager=boss, handle=handle,
+                             office_root=tmp_path / "seats", actor="agent:test")
+    seat_id = minted["seat_id"]
+    path = tmp_path / "seats" / handle.lower() / "CLAUDE.md"
+    text = path.read_text()
+    text = text.replace(f"v={template_version()}", "v=oldstamp0000", 1)
+    text = text.replace("## Ending a turn", "## Ending a turn (old wording)", 1) \
+        if "## Ending a turn" in text else text
+    hand = "\n## MY OWN NOTES\nkeep this exactly\n"
+    path.write_text(text + hand)
+    await _stamp(actions, seat_id, "oldstamp0000")
+    return seat_id, path, hand
+
+
+async def test_reissue_stale_offices_dry_run_reports_and_writes_nothing(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.boot_compiler import reissue_stale_offices
+
+    seat_id, path, _ = await _stale_office(actions, tmp_path, "staleh1", "StaleOne", "StaleBoss1")
+    before = path.read_text()
+    out = await reissue_stale_offices(actions, actor="agent:test",
+                                      houses=frozenset({"staleh1"}), dry_run=True)
+    assert path.read_text() == before
+    (row,) = [r for r in out["would_change"] if r["seat"] == "StaleOne"]
+    assert "(template stamp)" in row["sections"]
+    assert row["from"] == "oldstamp0000" and row["to"] == template_version()
+    assert out["updated"] == []
+    assert [g for g in await boot_drift_gaps(actions.pool) if g["seat_id"] == seat_id]
+
+
+async def test_reissue_stale_offices_touches_only_the_managed_span_and_closes_the_nudge(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.boot_compiler import reissue_stale_offices
+
+    seat_id, path, hand = await _stale_office(
+        actions, tmp_path, "staleh2", "StaleTwo", "StaleBoss2")
+    await apply_boot_drift_nudge_sweep(actions, actor="agent:test")
+    assert (await _open_drift_nudges(actions.pool)).get(seat_id)
+    out = await reissue_stale_offices(actions, actor="agent:test",
+                                      houses=frozenset({"staleh2"}), dry_run=False)
+    assert [u["seat"] for u in out["updated"]] == ["StaleTwo"]
+    after = path.read_text()
+    assert after.endswith(hand)  # the seat's own text, byte for byte
+    assert f"v={template_version()}" in after and "oldstamp0000" not in after
+    assert not [g for g in await boot_drift_gaps(actions.pool) if g["seat_id"] == seat_id]
+    assert not (await _open_drift_nudges(actions.pool)).get(seat_id)  # resolved itself
+    again = await reissue_stale_offices(actions, actor="agent:test",
+                                        houses=frozenset({"staleh2"}), dry_run=False)
+    assert again["updated"] == [] and again["stale"] == 0  # idempotent
+
+
+async def test_reissue_stale_offices_skips_other_houses_and_refuses_damaged_markers(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.boot_compiler import reissue_houses, reissue_stale_offices
+
+    _, other_path, _ = await _stale_office(actions, tmp_path, "staleh3", "StaleThree", "StaleBoss3")
+    _, bad_path, _ = await _stale_office(actions, tmp_path, "staleh4", "StaleFour", "StaleBoss4")
+    bad_path.write_text(bad_path.read_text() + "\n<!-- osiris:compiled:end -->\n")
+    other_before = other_path.read_text()
+    out = await reissue_stale_offices(actions, actor="agent:test",
+                                      houses=frozenset({"staleh4"}), dry_run=False)
+    assert other_path.read_text() == other_before  # outside the scope: untouched
+    assert [r["seat"] for r in out["refused"]] == ["StaleFour"]
+    assert out["updated"] == []
+    assert reissue_houses("*") is None
+    assert reissue_houses("") == frozenset()
+    assert reissue_houses("osiris, alfred") == frozenset({"osiris", "alfred"})
+
+
+async def test_reissue_stamp_follows_a_file_that_already_matches(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A section already on the live template but carrying an older stamp would read as
+    drifted forever; the reissue refreshes the stamp even when the text is unchanged."""
+    await ensure_seat(actions, house="staleh5", handle="StaleBoss5", source="test")
+    minted = await mint_seat(actions, manager="StaleBoss5", handle="StaleFive",
+                             office_root=tmp_path / "seats", actor="agent:test")
+    await reissue_office(actions, seat_id=minted["seat_id"], because="settle the text",
+                         actor="agent:test", migrate_identity=False)
+    await _stamp(actions, minted["seat_id"], "oldstamp0000")
+    pth = tmp_path / "seats" / "stalefive" / "CLAUDE.md"
+    snap = pth.read_text()
+    out = await reissue_office(actions, seat_id=minted["seat_id"], because="stamp check",
+                               actor="agent:test", migrate_identity=False)
+    assert pth.read_text() == snap  # and no blank line piles up per reissue
+    assert out["changed"] is False
+    assert not [g for g in await boot_drift_gaps(actions.pool)
+                if g["seat_id"] == minted["seat_id"]]

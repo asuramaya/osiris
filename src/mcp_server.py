@@ -10666,6 +10666,10 @@ THREAD_INPUT_SCHEMA: dict[str, Any] = {
             "action": _action_const("reclassify"), "ref": _s(), "kind": _s(),
             "because": _opt_s(), "owner": _opt_s(), "arc": _opt_s(), **_SUBAGENT_TRIO,
         }, ["action", "ref", "kind"]),
+        _dispatcher_action_schema({
+            "action": _action_const("file"), "ref": _s(), "repo": _s(),
+            "because": _opt_s(), **_SUBAGENT_TRIO,
+        }, ["action", "ref", "repo"]),
     ],
 }
 _HAND_BUILT_SCHEMAS["thread"] = THREAD_INPUT_SCHEMA
@@ -10675,6 +10679,7 @@ _THREAD_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "annotate": (["ref", "note", "corrected_summary", "because"], ["ref", "note"]),
     "correct_summary": (["ref", "corrected_summary", "because"], ["ref", "corrected_summary"]),
     "reclassify": (["ref", "kind", "because", "owner", "arc"], ["ref", "kind"]),
+    "file": (["ref", "repo", "because"], ["ref", "repo"]),
 }
 
 
@@ -10682,7 +10687,7 @@ async def _thread_action_impl(
     ref: str | list[str], action: str, *, because: str | None, artifact: str | None,
     dry_run: bool, note: str | None, corrected_summary: str | None, kind: str | None,
     owner: str | None, arc: str | None, ctx: Context | None,
-    subagent_id: str | None, subagent_type: str | None,
+    subagent_id: str | None, subagent_type: str | None, repo: str | None = None,
 ) -> dict[str, Any]:
     """Shared body behind `thread`, `thread_action`, and four hidden single-purpose
     aliases (resolve_thread/annotate_thread/correct_thread_summary/reclassify_thread):
@@ -10815,8 +10820,40 @@ async def _thread_action_impl(
                 label = ", ".join(r["canonical"] for r in rows) or "(no project)"
                 out["arc"] = capture._arc_out_of_scope_note(label)
         return out
+    if action == "file":
+        assert isinstance(ref, str)
+        assert repo is not None
+        name = repo.removeprefix("repo:").strip()
+        try:
+            capture._validate_repo_name(name, repo)
+        except ValueError as e:
+            return {"error": str(e)}
+        proj = await capture._resolve_repo(pool, name)
+        if proj is None:
+            return {"error": f"no project named {name!r} exists: filing never mints one. "
+                             "Pass an existing project's name"}
+        tid = await capture._find_thread(pool, ref)
+        if tid is None:
+            return {"error": f"no thread matches {ref!r}"}
+        before = [r["canonical"] for r in await pool.fetch(
+            "SELECT o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
+            "WHERE l.from_id=$1 AND l.type='in_repo' "
+            "AND (l.valid_until IS NULL OR l.valid_until > now())", tid)]
+        target = await pool.fetchval("SELECT canonical FROM objects WHERE id=$1", proj)
+        if target in before:
+            return {"id": str(tid), "repo": target, "status": "already filed",
+                    "filed_under": before}
+        await capture.link_repo(Actions(pool), tid, target, datetime.now(UTC),
+                                source=actor)
+        out = {"id": str(tid), "repo": target, "status": "filed",
+               "filed_under": [*before, target]}
+        if because:
+            await capture.annotate_thread(
+                Actions(pool), str(tid), f"filed under {target}: {because.strip()}",
+                source=actor)
+        return out
     return {"error": f"unknown action {action!r}: one of resolve/annotate/"
-                     "correct_summary/reclassify"}
+                     "correct_summary/reclassify/file"}
 
 
 @mcp.tool()
@@ -10824,52 +10861,45 @@ async def thread(
     ref: str | list[str], action: str, because: str | None = None,
     artifact: str | None = None, dry_run: bool = True, note: str | None = None,
     corrected_summary: str | None = None, kind: str | None = None,
-    owner: str | None = None, arc: str | None = None,
+    owner: str | None = None, arc: str | None = None, repo: str | None = None,
     subagent_id: str | None = None,
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None
 ) -> dict[str, Any]:
-    """Acts on an existing Thread: one tool, four `action`s. `open_thread` stays
-    separate since it mints a new Thread; every action here only ever acts on one
-    that already exists.
+    """Acts on an existing Thread: one tool, five `action`s. `open_thread` stays
+    separate since it mints.
 
     ACTION TABLE, action: what it does (required params beyond action):
       resolve: close it (ref, because is a short reason, not a completion essay).
         `artifact` points at what actually closed it (a commit hash, decision id,
         file:line, or `repo:<name>@<hash>` to disambiguate a short hash that
-        collides across two or more ingested repos' commits; a bare hash otherwise
-        resolves against every ingested repo's commits, unscoped, so a fix in one
-        project can close a thread in another). It is kept as `resolved_artifact`;
-        when it names a graph object, a `resolved_by` edge is minted too.
-        Re-resolving is allowed (the latest closure witness wins, earlier
-        reasoning stays in history). A LIST `ref` closes a batch: `because` becomes
-        mandatory, `dry_run` defaults to true and previews without writing (pass
-        `dry_run=False` explicitly to actually close the batch), and the whole
-        batch refuses if any ref does not resolve to exactly one thread. `dry_run`
-        has no effect for a single `ref` (the single-ref primitive
-        `capture.resolve_thread` has never taken one, and passing `dry_run=True`
-        on a bare ref still resolves it for real): disclosed here since the schema
-        itself offers the param uniformly for both shapes.
+        collides across repos; a bare hash resolves against every ingested repo's
+        commits). It is kept as `resolved_artifact`; when it names a graph object,
+        a `resolved_by` edge is minted too. Re-resolving is allowed (the latest
+        closure witness wins). A LIST `ref` closes a batch: `because` becomes
+        mandatory, `dry_run` defaults to true and previews (pass `dry_run=False` to
+        close), and the whole batch refuses if any ref does not resolve to exactly
+        one thread. `dry_run` has no effect for a single `ref`, which resolves for
+        real.
       annotate: add `note` without closing it or touching `summary`/`status` (ref,
-        note); each call appends independently, never supersedes an earlier note.
-        Optional `corrected_summary`/`because` fix the headline in the same call,
-        same as correct_summary below.
+        note); each call appends. Optional `corrected_summary`/`because` fix the
+        headline in the same call.
       correct_summary: replace the headline in place via `corrected_summary` (ref,
-        corrected_summary; `summary` itself, the dedup key, is never touched);
-        re-calling supersedes the prior correction rather than piling up notes.
-        `because` optional.
+        corrected_summary; `summary`, the dedup key, is never touched); re-calling
+        supersedes the prior correction. `because` optional.
       reclassify: set `kind` ('obligation'/'question'/'task') without changing
-        status (ref, kind); untouched means not resolved. `because` records your
-        reasoning, `owner` optionally claims it in the same act, `arc` backfills
-        open_thread's own closed taxonomy onto an already-open thread
-        (osiris-scoped, dropped and named elsewhere).
+        status (ref, kind). `because` records your reasoning, `owner` claims it in
+        the same act, `arc` backfills open_thread's closed taxonomy onto an open
+        thread (osiris-scoped).
+      file: put a thread under an existing project (ref, repo; `because` optional,
+        kept as a note). Adds the project link only; an unknown project is refused.
 
     `ref` is a Thread UUID, canonical, short-id prefix, or summary substring (a
-    list only for `action='resolve'`'s own batch mode)."""
+    list only for resolve's batch)."""
     return await _thread_action_impl(
         ref, action, because=because, artifact=artifact, dry_run=dry_run, note=note,
         corrected_summary=corrected_summary, kind=kind, owner=owner, arc=arc, ctx=ctx,
-        subagent_id=subagent_id, subagent_type=subagent_type)
+        subagent_id=subagent_id, subagent_type=subagent_type, repo=repo)
 
 
 @mcp.tool(meta={

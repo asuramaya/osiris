@@ -1023,6 +1023,8 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     diagnosed from the log alone, never re-guessed."""
     from src.orchestrator.boot_compiler import (
         apply_boot_drift_nudge_sweep,
+        reissue_houses,
+        reissue_stale_offices,
         sweep_stacked_office_headers,
     )
     from src.orchestrator.capture import apply_provenance_sweep_heartbeat
@@ -1030,6 +1032,7 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     from src.orchestrator.house_hygiene import apply_ghost_house_sweep
     from src.orchestrator.migration_0060 import apply_migration_0060
     from src.orchestrator.project_hygiene import apply_project_hygiene_sweep
+    from src.orchestrator.settings_service import settings_with_overlay
 
     actions: Actions = ctx["cascade"].actions
     timings: dict[str, float] = {}
@@ -1088,6 +1091,16 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     if provenance_minted or any(k.endswith("_error") for k in provenance.get("lanes", {})):
         _log.info("provenance sweep heartbeat: %s", provenance)
 
+    reissue_scope = reissue_houses(
+        (await settings_with_overlay(actions.pool)).osiris_boot_reissue_houses)
+    refreshed: dict[str, Any] = {}
+    if reissue_scope is None or reissue_scope:
+        refreshed = await _timed("boot_reissue", reissue_stale_offices(
+            actions, actor="cron:classification_laws_heartbeat",
+            houses=reissue_scope, dry_run=False))
+        if refreshed.get("updated") or refreshed.get("refused"):
+            _log.info("boot reissue sweep: %s", {
+                k: refreshed[k] for k in ("updated", "refused")})
     drift = await _timed("boot_drift_nudge", apply_boot_drift_nudge_sweep(
         actions, actor="cron:classification_laws_heartbeat"))
     drift_changed = sum(len(drift.get(k, []))
@@ -1099,7 +1112,7 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
               {k: round(v, 2) for k, v in timings.items()})
 
     return (acted + retired + ghosts_retired + dropped + bound + healed_offices
-           + provenance_minted + drift_changed)
+           + provenance_minted + drift_changed + len(refreshed.get("updated", [])))
 
 
 async def landing_audit_heartbeat(ctx: dict[str, Any]) -> int:
