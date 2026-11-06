@@ -6919,13 +6919,10 @@ async def backfill(
     only_bases: list[str] | None = None, limit: int | None = None,
     newest_first: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Repair tool, dispatched over `target`. Nine structurally distinct backfills (no
-    shared logic underneath, only a shared call shape), delegated to
-    `src.orchestrator.backfill.run_backfill`, the same function the CLI's
-    `osiris backfill` command and the UI's Repairs panel call.
-    There is only ever one implementation of this dispatch. Dry run is the default for every
-    target; `dry_run=False` requires `because` (except `agent_project_links`, which
-    predates that convention). All nine are idempotent.
+    """Repair tool, dispatched over `target`: ten distinct backfills, run through
+    `src.orchestrator.backfill.run_backfill`, the same function the CLI's `osiris backfill`
+    and the UI's Repairs panel call. Dry run is the default for every target;
+    `dry_run=False` requires `because` (except `agent_project_links`). All are idempotent.
 
     `target=`: "bootstrap_orphan_references" (links an orphaned `ref:osiris`-stamped
     Reference to the SoftwareProject its own canonical prefix names) |
@@ -6941,6 +6938,7 @@ async def backfill(
     `governs` link from `person:operator` to every active SoftwareProject it doesn't
     already govern, so the operator stays chartered over everything) |
     "stale_in_repo_abstentions" (retires an in_repo abstention on a linked object) |
+    "automated_desk_backlog" (settles old cron/system notices on the desk) |
     "provenance_possible_upstream" (back-stamps `possible_upstream` onto
     historical Decision/Thread writes via each write's transcript record. `limit`/
     `newest_first` are consulted by this target only. Runs in the background and

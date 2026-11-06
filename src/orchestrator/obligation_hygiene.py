@@ -36,6 +36,7 @@ phantom_fold_reap, landing_audit, tree_ingest_alarm). That is a deliberate, name
 exception, not an oversight."""
 from __future__ import annotations
 
+import contextlib
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -468,6 +469,7 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
 
 async def _nudge_owner(
     pool: asyncpg.Pool, owner: str | None, *, actor: str, body: str,
+    desk_batch: list[str] | None = None,
 ) -> dict[str, Any]:
     """Resolves via the owner-resolution sequence (`resolve_owner_target`), then sends
     against that verdict: a DM when a rung resolved (one send, except a live peer_of pair
@@ -475,7 +477,11 @@ async def _nudge_owner(
     nudge, since a peer pair is shared ownership, never a coin flip), the operator's desk
     (with the failing rung's own reason appended) otherwise. A race between resolution and
     send (the target goes cold in between) still falls back to the desk rather than losing
-    the nudge outright."""
+    the nudge outright.
+
+    `desk_batch`: when given, a nudge that falls back to the operator's desk is not sent
+    one by one; its text is added to this list and the caller sends ONE summary for the run
+    (the desk used to receive a message per idle thread, 680 of them)."""
     from src.orchestrator.mailbox import send_message
 
     verdict = await resolve_owner_target(pool, owner)
@@ -488,9 +494,19 @@ async def _nudge_owner(
             return sent[0] if len(sent) == 1 else {"sent_to": targets, "receipts": sent}
         except ValueError as exc:
             verdict = {"channel": "desk", "target": None, "reason": str(exc)}
+    if desk_batch is not None:
+        desk_batch.append(f"{body} (no reachable owner: {verdict['reason']})")
+        return {"channel": "desk", "batched": True}
     return await send_message(
         pool, from_agent=actor, from_project="osiris", to_project="operator",
         body=f"{body}\n\n(owner-address fallback: {verdict['reason']})", desk_kind="fyi")
+
+
+def _desk_summary(head: str, lines: list[str], *, limit: int = 8) -> str:
+    """One notice for a whole run: the count, then the first few items, then how many more."""
+    shown = "\n".join(f"- {line}" for line in lines[:limit])
+    more = f"\n(+{len(lines) - limit} more)" if len(lines) > limit else ""
+    return f"{head}: {len(lines)}\n{shown}{more}"
 
 
 async def hygiene_execute(
@@ -522,6 +538,7 @@ async def hygiene_execute(
         return plan
 
     nudged: list[dict[str, Any]] = []
+    desk_batch: list[str] = []
     for item in plan["would_nudge"]:
         tid = uuid.UUID(item["thread_id"])
         project_note = (
@@ -535,7 +552,8 @@ async def hygiene_execute(
             f"operator's desk after {N2_SILENCE_DAYS} more days of silence. Never "
             f"auto-resolved.")
         try:
-            sent = await _nudge_owner(actions.pool, item["owner"], actor=actor, body=body)
+            sent = await _nudge_owner(actions.pool, item["owner"], actor=actor, body=body,
+                                      desk_batch=desk_batch)
         except Exception as exc:  # noqa: BLE001, a mail hiccup must not skip the marker
             sent = {"error": f"{type(exc).__name__}: {exc}"}
         await actions.assert_property(
@@ -545,7 +563,16 @@ async def hygiene_execute(
             tid, "hygiene_stage", "nudged", actor, now, 0.9, evidence_class=_HYGIENE_EC)
         nudged.append({**item, "sent": sent})
 
+    if desk_batch:
+        from src.orchestrator.mailbox import send_message as _send
+        with contextlib.suppress(Exception):  # the markers above stand even if mail fails
+            await _send(actions.pool, from_agent=actor, from_project="osiris",
+                        to_project="operator", desk_kind="fyi",
+                        body=_desk_summary("OBLIGATION HYGIENE NUDGE (owner not reachable)",
+                                           desk_batch))
+
     staled: list[dict[str, Any]] = []
+    stale_lines: list[str] = []
     for item in plan["would_stale_candidate"]:
         tid = uuid.UUID(item["thread_id"])
         await actions.assert_property(
@@ -556,14 +583,18 @@ async def hygiene_execute(
             f"(owner={item['owner']!r}, {_quote_summary(item)}) drew a nudge and "
             f"{N2_SILENCE_DAYS}+ more days of silence since. NEVER auto-resolved: a "
             f"human call on whether it's still real.")
+        stale_lines.append(body)
+        staled.append({**item, "desk_brief": {"batched": True}})
+    if stale_lines:
         try:
             from src.orchestrator.mailbox import send_message
-            sent = await send_message(
+            await send_message(
                 actions.pool, from_agent=actor, from_project="osiris",
-                to_project="operator", body=body, desk_kind="fyi")
+                to_project="operator", desk_kind="fyi",
+                body=_desk_summary("OBLIGATION STALE-CANDIDATE", stale_lines))
         except Exception as exc:  # noqa: BLE001, the marker must land even if mail fails
-            sent = {"error": f"{type(exc).__name__}: {exc}"}
-        staled.append({**item, "desk_brief": sent})
+            for row in staled:
+                row["desk_brief"] = {"error": f"{type(exc).__name__}: {exc}"}
 
     plan.update({
         "nudged": nudged, "staled": staled,
