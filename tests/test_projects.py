@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from src.actions.core import Actions
@@ -125,7 +126,13 @@ async def test_retire_project_refuses_a_live_mount(actions: Actions) -> None:
     await _stub_project(actions, "repo:live-mount", "live-mount")
     await save_mount(actions.pool, job_dir="/j/1", agent_id="agent:x", project="live-mount",
                      cwd="/w/live-mount", model="claude-fable-5", session_key=None, alive=True)
-    out = await retire_project(actions, project="live-mount", actor="agent:test", because="reap")
+    async def _listed(**kw: Any) -> list[dict[str, Any]]:
+        # a genuinely live mount has a body the harness list shows at its directory
+        return [{"name": "[OS] live", "cwd": "/w/live-mount", "id": "11aa22bb",
+                 "sessionId": "11aa22bb-0000", "status": "busy", "state": "working"}]
+
+    out = await retire_project(actions, project="live-mount", actor="agent:test",
+                               because="reap", agents_json=_listed)
     assert "live mount" in out["error"]
 
 

@@ -24,7 +24,7 @@ import os
 import re
 import tempfile
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
@@ -5470,9 +5470,45 @@ async def _transcript_activity(
     return True, fresh
 
 
+async def harness_shows_no_body(
+    pool: asyncpg.Pool, *, agent_ids: Iterable[str], cwds: Iterable[str],
+    agents_json: Any = None, live_by_cwd: Any = None,
+) -> bool:
+    """True only when the harness's own list confirms nothing is running for these agents or
+    directories: the strict list was READ, shows no live body at any of `cwds` or under any of
+    `agent_ids`' session ids, and no process backs those directories (a resumed session the
+    list cannot show still has one). Teardown uses this to ignore a mount record that is
+    merely recent: a body ended outside osiris (`claude stop`, a crash) leaves a mount that
+    reads live for 15 minutes. Fails CLOSED: an unreadable list or a blind process census
+    returns False, and the caller keeps its old refusal."""
+    try:
+        roster = await (agents_json or _claude_agents_json_strict)()
+    except (OSError, TimeoutError, ValueError):
+        return False
+    where = {c for c in cwds if c}
+    sid8s = {a.split(":", 1)[-1][:8] for a in agent_ids if a}
+    for row in roster:
+        if not isinstance(row, dict):
+            continue
+        if not (row.get("cwd") in where or str(row.get("sessionId") or "")[:8] in sid8s):
+            continue
+        if _harness_row_is_live(row, claimed=await _row_is_claimed(pool, row)):
+            return False
+
+    def _process_backs_a_directory() -> bool | None:
+        from src.orchestrator import census
+
+        by_cwd = (live_by_cwd or census.live_bodies_by_cwd)()
+        if by_cwd is None:
+            return None
+        return any(c in by_cwd or os.path.realpath(c) in by_cwd for c in where)
+
+    return await asyncio.to_thread(_process_backs_a_directory) is False
+
+
 async def vacate_dead_seat(
     actions: Actions, *, seat_id: str, actor: str, because: str,
-    liveness_fn: Any = None,
+    liveness_fn: Any = None, agents_json: Any = None, live_by_cwd: Any = None,
 ) -> dict[str, Any]:
     """The vacate-dead-holder call: the evidence-gathering complement to
     seats.vacate_holder's bare write, and to seats.retire_seat's stale-holder refusal
@@ -5514,10 +5550,21 @@ async def vacate_dead_seat(
                           "nowhere to look is not evidence of death"}
 
     verdict = await liveness_fn(pool, holder)
+    harness_confirms_gone = False
     if verdict["live"]:
-        return {"status": "refused-live", "seat": seat_id,
-                "detail": f"{holder} reads live via agent_liveness (last_seen "
-                          f"{verdict['last_seen']}): never evicts a live session"}
+        # A recent mount record is not a body: a session ended outside osiris leaves one
+        # reading live for 15 minutes. When the strict harness list was read and shows
+        # nothing for this seat's holder or directories, and no process is there, vacate.
+        where = [c for c in (office, facts.get("tree_cwd")) if c]
+        mounted = [r["agent_id"] for r in await pool.fetch(
+            "SELECT agent_id FROM agent_mounts WHERE cwd = ANY($1::text[])", where)]
+        harness_confirms_gone = await harness_shows_no_body(
+            pool, agent_ids=[holder, *mounted], cwds=where, agents_json=agents_json,
+            live_by_cwd=live_by_cwd)
+        if not harness_confirms_gone:
+            return {"status": "refused-live", "seat": seat_id,
+                    "detail": f"{holder} reads live via agent_liveness (last_seen "
+                              f"{verdict['last_seen']}): never evicts a live session"}
 
     out = await vacate_holder(actions, seat_id=seat_id, actor=actor, because=because)
     if "error" in out:
@@ -5527,6 +5574,8 @@ async def vacate_dead_seat(
     # that placeholder, so the evidence does not say a seat whose bodies ran was never mounted.
     # Evidence only: the decision above stays the holder's own liveness.
     verdict = dict(verdict)
+    if harness_confirms_gone:
+        verdict["harness_list_confirms_no_body"] = True
     if not verdict.get("ever_mounted"):
         where = [c for c in (office, facts.get("tree_cwd")) if c]
         if where and await pool.fetchval(

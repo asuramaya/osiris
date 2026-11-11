@@ -6693,9 +6693,14 @@ async def test_vacate_dead_seat_refuses_when_agent_liveness_says_live(
         worker_handle="Sekhmet-Alive", house="osiris")
     await _office(actions, worker_seat, "/tmp/sekhmet-alive")
 
+    async def _listed(**kw: Any) -> list[dict[str, Any]]:
+        # a genuinely live holder has a body the harness list shows at its directory
+        return [{"name": "[OS] Sekhmet-Alive", "cwd": "/tmp/sekhmet-alive", "id": "vd3b0001",
+                 "sessionId": "vd3b0001-0000", "status": "busy", "state": "working"}]
+
     d = await tm.vacate_dead_seat(
         actions, seat_id=worker_seat, actor="test", because="dead",
-        liveness_fn=_fake_liveness(live=True))
+        liveness_fn=_fake_liveness(live=True), agents_json=_listed)
     assert d["status"] == "refused-live"
     assert "agent:vd3holdr" in d["detail"]
 
@@ -6767,7 +6772,12 @@ async def test_vacate_dead_seat_uses_the_real_agent_liveness_by_default(
                      project="osiris", cwd="/tmp/anubis-fresh", model="claude-sonnet-5",
                      session_key=None)
 
-    d = await tm.vacate_dead_seat(actions, seat_id=worker_seat, actor="test", because="dead")
+    async def _listed(**kw: Any) -> list[dict[str, Any]]:
+        return [{"name": "[OS] Anubis-Fresh", "cwd": "/tmp/anubis-fresh", "id": "vd7b0001",
+                 "sessionId": "vd7b0001-0000", "status": "busy", "state": "working"}]
+
+    d = await tm.vacate_dead_seat(actions, seat_id=worker_seat, actor="test", because="dead",
+                                  agents_json=_listed)
     assert d["status"] == "refused-live"
 
 

@@ -155,6 +155,7 @@ async def _resolve_project_ref(
 
 async def retire_project(
     actions: Actions, *, project: str, actor: str, because: str,
+    agents_json: Any = None, live_by_cwd: Any = None,
 ) -> dict[str, Any]:
     """Retire a dead SoftwareProject stub: status flip to 'retired' via a compensating
     event (`Actions.set_status`). Refuses on: blank `because`; an unresolved or non-active
@@ -194,8 +195,21 @@ async def retire_project(
     mount_seen = await actions.pool.fetchval(
         "SELECT max(last_seen) FROM agent_mounts WHERE project=$1", bare_name)
     if mount_seen is not None and (datetime.now(UTC) - mount_seen) < _LIVE_MOUNT_WINDOW:
-        return {"error": f"{canonical} has a live mount (seen {mount_seen.isoformat()}); "
-                         "live signal, retire_project refuses"}
+        # A recent mount is not a body: one ended outside osiris (`claude stop`, a crash)
+        # reads live for the whole window. When the strict harness list was read and shows
+        # nothing for the project's recent mounts, and no process is in their directories,
+        # the record is stale and does not block. An unreadable list keeps the refusal.
+        from src.orchestrator.trigger import harness_shows_no_body
+
+        recent = await actions.pool.fetch(
+            "SELECT agent_id, cwd FROM agent_mounts WHERE project=$1 AND last_seen > $2",
+            bare_name, datetime.now(UTC) - _LIVE_MOUNT_WINDOW)
+        if not await harness_shows_no_body(
+                actions.pool, agent_ids=[r["agent_id"] for r in recent],
+                cwds=[r["cwd"] for r in recent], agents_json=agents_json,
+                live_by_cwd=live_by_cwd):
+            return {"error": f"{canonical} has a live mount (seen {mount_seen.isoformat()}); "
+                             "live signal, retire_project refuses"}
     await actions.set_status(pid, "retired", because, actor)
     return {"retired_project": canonical, "id": str(pid)[:8], "because": because}
 
