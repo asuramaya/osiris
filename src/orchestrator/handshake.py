@@ -58,7 +58,8 @@ async def fork_seat(
     if not job_dir:
         return None
     base = root or (Path.home() / ".claude/projects")
-    path = locate_current_transcript(base, job_dir, anchored_only=True)
+    path = await asyncio.to_thread(
+        locate_current_transcript, base, job_dir, anchored_only=True)
     if path is None:
         return None
     try:
@@ -86,7 +87,8 @@ async def resumed_job_seat(
     if not job_dir:
         return None
     base = root or (Path.home() / ".claude/projects")
-    if locate_current_transcript(base, job_dir, anchored_only=True) is not None:
+    if await asyncio.to_thread(
+            locate_current_transcript, base, job_dir, anchored_only=True) is not None:
         return None  # a real transcript exists: fork_seat's own archaeology owns this case
     prior = mounts.resumed_anchor(job_dir)
     rec = await mounts.find_mount(actions.pool, job_dir=prior) if prior else None
@@ -220,7 +222,8 @@ async def compact_seat(
     if not job_dir:
         return None
     base = root or (Path.home() / ".claude/projects")
-    path = locate_current_transcript(base, job_dir, anchored_only=True)
+    path = await asyncio.to_thread(
+        locate_current_transcript, base, job_dir, anchored_only=True)
     if path is None:
         return None
     def _read_first_line() -> bytes:
