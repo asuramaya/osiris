@@ -294,6 +294,40 @@ async def test_a_broken_stored_chain_is_reported_as_truncated_never_as_complete(
         capsys.readouterr().out)
 
 
+async def test_a_failed_dsh_compress_leaves_nothing_in_the_dsh_home(
+    actions: Any, tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """zstd missing or failing must not leave a half-made session where DSH looks: the
+    session is built in a scratch directory and renamed into place only when whole."""
+    import subprocess
+
+    import pytest
+
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    sessions = tmp_path / "dsh-sessions"
+    sessions.mkdir()
+    real_run = subprocess.run
+
+    def missing(*a: Any, **k: Any) -> Any:
+        raise FileNotFoundError("zstd")
+
+    def failing(*a: Any, **k: Any) -> Any:
+        raise subprocess.CalledProcessError(1, "zstd")
+
+    for boom, exc in ((missing, FileNotFoundError), (failing, subprocess.CalledProcessError)):
+        monkeypatch.setattr(subprocess, "run", boom)
+        with pytest.raises(exc):
+            await rebuild_session(actions.pool, SID, to="dsh", into=sessions,
+                                  cwd="/var/tmp/osiris-scratch/replay")
+        assert list(sessions.rglob("*")) == [], "a failed compress left files behind"
+    monkeypatch.setattr(subprocess, "run", real_run)
+    ok = await rebuild_session(actions.pool, SID, to="dsh", into=sessions,
+                               cwd="/var/tmp/osiris-scratch/replay")
+    assert Path(ok["path"]).is_file()
+    assert not [p for p in sessions.rglob("*") if p.name.startswith(".partial-")]
+
+
 # --- the dsh writer: tmp dirs only ----------------------------------------------------------
 
 def _dsh_events(path: Path) -> list[dict[str, Any]]:

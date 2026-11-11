@@ -18,8 +18,11 @@ each target writer is a plain mapping. Targets: crush (SQLite). dsh and claude a
 writers over the same turns."""
 from __future__ import annotations
 
+import contextlib
 import json
+import shutil
 import sqlite3
+import tempfile
 import uuid
 from collections import Counter
 from collections.abc import Iterable
@@ -476,11 +479,25 @@ def write_dsh(
     _refuse_session_store(sessions_dir, target_dir.parent, target_dir)
     if target_dir.exists():
         raise ValueError(f"refusing to overwrite {target_dir}")
-    target_dir.mkdir(parents=True, exist_ok=True)
-    plain = target_dir / "session.jsonl"
-    plain.write_text("".join(json.dumps(e) + "\n" for e in events))
-    subprocess.run(["zstd", "-q", "--rm", "-f", str(plain), "-o", str(plain) + ".zstd"],
-                   check=True, timeout=120)
+    # Build the session in a private scratch directory beside its final place and rename it
+    # into position only when it is whole: a failed compress (zstd missing, a full disk) leaves
+    # nothing behind in a real DSH home, never a half-made session DSH might list.
+    parent = target_dir.parent
+    made_parent = not parent.exists()
+    parent.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix=".partial-", dir=parent))
+    try:
+        plain = work / "session.jsonl"
+        plain.write_text("".join(json.dumps(e) + "\n" for e in events))
+        subprocess.run(["zstd", "-q", "--rm", "-f", str(plain), "-o", str(plain) + ".zstd"],
+                       check=True, timeout=120)
+        work.rename(target_dir)
+    except BaseException:
+        shutil.rmtree(work, ignore_errors=True)
+        if made_parent:
+            with contextlib.suppress(OSError):
+                parent.rmdir()
+        raise
     return {"to": "dsh", "session_id": sid, "path": str(target_dir / "session.jsonl.zstd"),
             "turns": len(rebuilt.turns) + 1, "events": len(events), "folded": dict(fold)}
 
