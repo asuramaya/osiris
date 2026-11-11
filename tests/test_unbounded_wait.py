@@ -72,7 +72,9 @@ _SUBPROCESS_BASELINE: dict[str, int] = {
     # `rehold` subcommand same false-positive class as every
     # other `asyncio.run(cmd_*)` dispatch line already counted here: the scanner's
     # coarse name-match proxy matches `asyncio.run` the same as `subprocess.run`.
-    "src/cli.py": 93,
+    # 93 -> 94: the `rebuild-transcript` dispatch adds one `asyncio.run(...)`, matched by the
+    # same coarse `run` proxy as every command dispatch (not a subprocess wait).
+    "src/cli.py": 94,
     "src/ingest/files.py": 3,
     "src/ingest/gitlog.py": 3,
     # src/ingest/sessions.py's count includes two `asyncio.run(...)` call sites added

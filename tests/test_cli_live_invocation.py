@@ -386,6 +386,10 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
 # alone. mint-seat/new/bootstrap are flagged separately: they mint or spawn for real,
 # with no confirmed refusal-only path found anywhere in this suite.
 NEEDS_SAFE_INVOCATION: dict[str, str] = {
+    "rebuild-transcript": "a successful call WRITES a new session into another harness's "
+                          "data directory (crush's database, or a Claude projects file); "
+                          "its writers are covered by tests/test_rebuild_transcript.py "
+                          "against tmp directories, never invoked here with no safe target",
     "layout": "genuinely writes unconditionally (own body read): graph_layout."
               "run_layout_migrate loops layout_batch, which asserts real graph_x/"
               "graph_y/graph_layout_v on every unplaced object it finds; no dry-run "
