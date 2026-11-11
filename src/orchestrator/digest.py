@@ -689,6 +689,10 @@ async def _obligation_pressure(actions: Actions) -> list[dict[str, Any]]:
     return out
 
 
+# How many digest streams may hold a connection at once.
+_DIGEST_PARALLEL = 4
+
+
 async def _timed(timings: dict[str, int], name: str, coro: Any) -> Any:
     """Await one digest stream and record its wall time in whole milliseconds."""
     t0 = time.perf_counter()
@@ -711,24 +715,32 @@ async def fleet_digest(
     graph (the operator-inbox read is a peek; spend reads telemetry, not the graph)."""
     timings: dict[str, int] = {}
     effective_since, watermark = await _resolve_since(actions, since)
-    roster = await _timed(timings, "roster", _roster(actions))
-    activity = await _timed(timings, "activity", _activity(actions, effective_since))
-    laundering, disputes = await _timed(
-        timings, "credence", _credence_streams(actions, effective_since, timings))
-    conversations = await _timed(
-        timings, "conversations", _conversations(actions, effective_since))
-    costs = await _timed(timings, "costs", _costs(actions, effective_since))
-    bodies = await _timed(timings, "bodies", _bodies(actions, effective_since))
-    retrieval = await _timed(timings, "retrieval", _retrieval(actions, effective_since))
-    miner = await _timed(timings, "miner", _miner(actions, effective_since))
-    proposals = await _timed(
-        timings, "proposals", _proposal_telemetry(actions, effective_since))
     from src.orchestrator.abstention_miner import abstention_survey
-    abstention = await _timed(timings, "abstention", abstention_survey(actions.pool))
-    obligation_pressure = await _timed(
-        timings, "obligations", _obligation_pressure(actions))
-    operator_inbox = await _timed(
-        timings, "operator_inbox", _operator_inbox(actions, lease_secs=lease_secs))
+
+    # The streams read independent things, so they run together instead of one after another
+    # (the digest took the SUM of them, about 760 ms; it now takes about the slowest). At most
+    # four hold a connection at once, half of osiris-mcp's pool, and the slowest start first.
+    gate = asyncio.Semaphore(_DIGEST_PARALLEL)
+
+    async def stream(name: str, coro: Any) -> Any:
+        async with gate:
+            return await _timed(timings, name, coro)
+
+    (credence, roster, abstention, conversations, activity, obligation_pressure, operator_inbox,
+     costs, bodies, retrieval, miner, proposals) = await asyncio.gather(
+        stream("credence", _credence_streams(actions, effective_since, timings)),
+        stream("roster", _roster(actions)),
+        stream("abstention", abstention_survey(actions.pool)),
+        stream("conversations", _conversations(actions, effective_since)),
+        stream("activity", _activity(actions, effective_since)),
+        stream("obligations", _obligation_pressure(actions)),
+        stream("operator_inbox", _operator_inbox(actions, lease_secs=lease_secs)),
+        stream("costs", _costs(actions, effective_since)),
+        stream("bodies", _bodies(actions, effective_since)),
+        stream("retrieval", _retrieval(actions, effective_since)),
+        stream("miner", _miner(actions, effective_since)),
+        stream("proposals", _proposal_telemetry(actions, effective_since)))
+    laundering, disputes = credence
     # The danger map: a stamped swap (durable, from the transcript at mount) or a live swap
     # (the heartbeat caught the harness swapping the model since the last stamp, not yet in
     # the graph, but real and current). Both mean the harness got nervous; the operator must

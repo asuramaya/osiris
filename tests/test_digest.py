@@ -594,3 +594,34 @@ async def test_roster_takes_the_grade_then_recency_winner_in_one_pass(actions: A
     assert got["live_swap"] == "high-grade → new-live (unstamped)"
     bare_row = rows["agent:rst0c3d4"]
     assert bare_row["model"] is None and bare_row["project"] is None
+
+
+async def test_the_digest_streams_run_together_but_never_more_than_four_at_once(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The streams are independent reads, so they overlap (the digest took the sum of them,
+    about 760 ms live, and now takes about the slowest); at most four hold a connection at a
+    time, half of osiris-mcp's pool. The result is the same shape and values either way."""
+    import asyncio
+
+    from src.orchestrator import digest as dg
+
+    in_flight = 0
+    peak = 0
+    real = dg._timed
+
+    async def slow_timed(timings, name, coro):  # type: ignore[no-untyped-def]
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        try:
+            await asyncio.sleep(0.03)  # make the overlap certain
+            return await real(timings, name, coro)
+        finally:
+            in_flight -= 1
+
+    monkeypatch.setattr(dg, "_timed", slow_timed)
+    out = await fleet_digest(actions)
+    assert peak == 4
+    assert {"roster", "activity", "credence", "conversations", "operator_inbox",
+            "obligations", "abstention"} <= set(out["timings_ms"])
