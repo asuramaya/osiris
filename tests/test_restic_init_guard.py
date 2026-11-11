@@ -94,7 +94,8 @@ def test_a_probe_failure_that_is_not_a_missing_repository_never_inits(
 
     failure = fake.backup()
 
-    assert failure is not None and failure.startswith("restic snapshots failed, not initializing")
+    assert failure is not None and failure.startswith("restic snapshots failed")
+    assert "not initializing" in failure
     assert "init" not in fake.commands() and "backup" not in fake.commands()
 
 

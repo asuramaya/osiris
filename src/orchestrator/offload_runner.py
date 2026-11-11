@@ -169,24 +169,41 @@ def _run_restic_backup(
         outcome = restic_locks.clear_stale_locks(env, blocking_only_exclusive=True)
         if outcome.busy:
             return outcome.busy
-        probe = subprocess.run(
-            ["restic", "snapshots"], env=env, capture_output=True,
-            timeout=_PROBE_TIMEOUT_SECONDS, check=False)
+
+        def snapshots() -> Any:
+            return restic_locks.run_restic(
+                ["snapshots"], env, timeout=_PROBE_TIMEOUT_SECONDS, text=False)
+
+        probe = snapshots()
         if probe.returncode != 0:
             detail = (probe.stdout + b"\n" + probe.stderr).decode(errors="replace")
-            if not repository_is_missing(detail):
+            if restic_locks.is_lock_failure(detail):
+                # The pre-check let a lock through (or could not read the listing): look again
+                # now that we KNOW the repository is locked, clear what is stale, retry once.
+                again = restic_locks.clear_stale_locks(
+                    env, blocking_only_exclusive=True, after_lock_failure=True)
+                if again.busy:
+                    return again.busy
+                if again.cleared or again.note:
+                    probe = snapshots()
+                    detail = (probe.stdout + b"\n" + probe.stderr).decode(errors="replace")
+            if probe.returncode != 0 and restic_locks.is_lock_failure(detail):
+                held = restic_locks.holder_line(detail) or _one_line(probe.stderr)
+                why = f" (lock listing: {outcome.unreadable})" if outcome.unreadable else ""
+                return f"restic snapshots failed on a lock, not initializing: {held}{why}"
+            if probe.returncode != 0 and not repository_is_missing(detail):
                 return f"restic snapshots failed, not initializing: {_one_line(probe.stderr)}"
+        if probe.returncode != 0:
             if not init_if_needed:
                 return ("the repository looks missing but this target has offloaded before; "
                         "not initializing over it (is the target reachable?)")
-            init = subprocess.run(
-                ["restic", "init"], env=env, capture_output=True,
-                timeout=_PROBE_TIMEOUT_SECONDS, check=False)
+            init = restic_locks.run_restic(
+                ["init"], env, timeout=_PROBE_TIMEOUT_SECONDS, text=False)
             if init.returncode != 0:
                 return f"restic init failed: {init.stderr.decode(errors='replace').strip()}"
-        backup = subprocess.run(
-            ["restic", "backup", str(source), "--exclude=*.tmp"],
-            env=env, capture_output=True, timeout=_RESTIC_TIMEOUT_SECONDS, check=False)
+        backup = restic_locks.run_restic(
+            ["backup", str(source), "--exclude=*.tmp"], env,
+            timeout=_RESTIC_TIMEOUT_SECONDS, text=False)
         if backup.returncode != 0:
             return f"restic backup failed: {backup.stderr.decode(errors='replace').strip()}"
         return None

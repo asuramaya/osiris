@@ -41,6 +41,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -60,15 +61,38 @@ def _check_clear_of_locks(repo_url: str, env: dict[str, str]) -> str | None:
     return outcome.busy
 
 
-def _lock_failure(repo_url: str, env: dict[str, str], proc: Any) -> str | None:
-    """A check that failed on a lock appearing after the pre-check: re-read the locks and say
-    who holds the repository (or None when the output was not a lock failure)."""
+def _check_retrying_on_a_lock(
+    repo_url: str, env: dict[str, str], run_check: Callable[[], Any],
+) -> tuple[Any, str | None]:
+    """Runs the check; if it fails on a repository lock, clears what is stale and runs it once
+    more. Returns (the last check, a failure sentence or None). The sentence says what really
+    happened: it claims a clear only when locks were cleared (an earlier wording said "the stale
+    lock was cleared" whether or not anything had been, which hid a loop for four days)."""
     from src.orchestrator import restic_locks
 
-    if not restic_locks.is_lock_failure(f"{proc.stdout}\n{proc.stderr}"):
-        return None
-    return _check_clear_of_locks(repo_url, env) or (
-        "repository was locked during the check; the stale lock was cleared, retry the drill")
+    check = run_check()
+    if check.returncode == 0:
+        return check, None
+    text = f"{check.stdout}\n{check.stderr}"
+    if not restic_locks.is_lock_failure(text):
+        return check, None
+    outcome = restic_locks.clear_stale_locks(env, after_lock_failure=True)
+    if outcome.note:
+        restic_locks.add_note(repo_url, outcome.note)
+    if outcome.busy:
+        return check, outcome.busy
+    if not (outcome.cleared or outcome.note):
+        held = restic_locks.holder_line(text) or "restic did not say who"
+        why = f" (lock listing: {outcome.unreadable})" if outcome.unreadable else ""
+        return check, f"repository is locked and none of its locks is stale: {held}{why}"
+    check = run_check()
+    if check.returncode == 0:
+        return check, None
+    text = f"{check.stdout}\n{check.stderr}"
+    if restic_locks.is_lock_failure(text):
+        held = restic_locks.holder_line(text) or "restic did not say who"
+        return check, f"repository was still locked after clearing stale locks: {held}"
+    return check, None
 
 
 def run_drill(repo_url: str, *, scratch: Path | None = None) -> str | None:
@@ -79,6 +103,7 @@ def run_drill(repo_url: str, *, scratch: Path | None = None) -> str | None:
     restored content. Resolves the restic password itself (`ResticPasswordMissing`
     degrades this one call, never a subprocess.run with a half-populated env);
     the password never appears in the returned failure string."""
+    from src.orchestrator import restic_locks
     from src.orchestrator.restic_credential import ResticPasswordMissing, get_restic_password
 
     try:
@@ -92,15 +117,16 @@ def run_drill(repo_url: str, *, scratch: Path | None = None) -> str | None:
         busy = _check_clear_of_locks(repo_url, env)
         if busy:
             return busy
-        check = subprocess.run(["restic", "check"], env=env, capture_output=True,
-                               text=True, timeout=600)
+        check, locked = _check_retrying_on_a_lock(
+            repo_url, env,
+            lambda: restic_locks.run_restic(["check"], env, timeout=600))
+        if locked:
+            return locked
         if check.returncode != 0:
-            return (_lock_failure(repo_url, env, check)
-                    or f"restic check failed:\n{check.stdout}\n{check.stderr}")
+            return f"restic check failed:\n{check.stdout}\n{check.stderr}"
 
-        restore = subprocess.run(
-            ["restic", "restore", "latest", "--target", str(scratch)],
-            env=env, capture_output=True, text=True, timeout=1800)
+        restore = restic_locks.run_restic(
+            ["restore", "latest", "--target", str(scratch)], env, timeout=1800)
         if restore.returncode != 0:
             return f"restic restore failed:\n{restore.stdout}\n{restore.stderr}"
 
@@ -147,8 +173,17 @@ class _Budget:
 
 def _restic(args: list[str], env: dict[str, str], budget: _Budget, step: str,
             ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["restic", *args], env=env, capture_output=True, text=True,
-                          timeout=budget.timeout(step), check=False)
+    from src.orchestrator import restic_locks
+
+    return restic_locks.run_restic(args, env, timeout=budget.timeout(step))
+
+
+def _stop(proc: subprocess.Popen[Any]) -> None:
+    """These two readers stop a restic that is still running on purpose (they want only the first
+    bytes); a SIGKILL there left a repository lock behind on every drill."""
+    from src.orchestrator import restic_locks
+
+    restic_locks.stop_restic(proc)
 
 
 def _glob_escape(path: str) -> str:
@@ -202,8 +237,7 @@ def _pick_samples(env: dict[str, str], budget: _Budget, rng: random.Random,
                     if j < SAMPLE_FILES:
                         bucket[j] = (path, size)
     finally:
-        proc.kill()
-        proc.wait()
+        _stop(proc)
     chosen = (transcripts + others)[:SAMPLE_FILES]
     return recovery, newest_dump, chosen
 
@@ -217,8 +251,7 @@ def _dump_header_failure(path: str, env: dict[str, str], budget: _Budget) -> str
         assert proc.stdout is not None
         head = proc.stdout.read(4096)
     finally:
-        proc.kill()
-        proc.wait()
+        _stop(proc)
     budget.timeout("the dump header check finished")
     if path.endswith(".dump"):
         return None if head.startswith(b"PGDMP") else (
@@ -253,11 +286,14 @@ def run_bounded_drill(
         busy = _check_clear_of_locks(repo_url, env)
         if busy:
             return busy
-        check = _restic(["check", f"--read-data-subset={READ_DATA_SUBSET}"], env, budget,
-                        "the repository check finished")
+        check, locked = _check_retrying_on_a_lock(
+            repo_url, env,
+            lambda: _restic(["check", f"--read-data-subset={READ_DATA_SUBSET}"], env, budget,
+                            "the repository check finished"))
+        if locked:
+            return locked
         if check.returncode != 0:
-            return (_lock_failure(repo_url, env, check)
-                    or f"restic check failed:\n{check.stdout}\n{check.stderr}")
+            return f"restic check failed:\n{check.stdout}\n{check.stderr}"
         recovery, dump, samples = _pick_samples(env, budget, rng)
         wanted = ([recovery] if recovery else []) + [p for p, _ in samples]
         if not wanted and not dump:
