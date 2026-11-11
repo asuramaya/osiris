@@ -384,7 +384,11 @@ async def test_waiting_for_the_spawn_lock_pins_no_pool_connection(actions: Actio
             return
 
     async with trigger.seat_spawn_lock(pool, "pinless"):
-        waiters = [asyncio.create_task(_waiter()) for _ in range(4)]
+        # separate callers: a clean context, so they do not inherit the holder's "held" mark
+        import contextvars
+
+        waiters = [asyncio.create_task(_waiter(), context=contextvars.Context())
+                   for _ in range(4)]
         for _ in range(10):
             await asyncio.sleep(0.1)
             in_use.append(pool.get_size() - pool.get_idle_size())
@@ -396,3 +400,64 @@ async def test_waiting_for_the_spawn_lock_pins_no_pool_connection(actions: Actio
     # the lock is free again afterwards
     async with trigger.seat_spawn_lock(pool, "pinless", wait=1.0):
         pass
+
+
+async def test_every_door_takes_the_seat_lock_and_the_cli_does_not_deadlock_on_itself(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """launch_seat, resume_seat, wake_worker and dispatch_dm refuse (spawning nothing) while
+    another holder has the seat's lock, and a door called inside the CLI's own lock does not
+    wait on itself."""
+    from src.orchestrator.trigger import launch_seat, resume_seat, spawn_lock_key
+
+    await _seat(actions, tmp_path, "doors")
+    pool = actions.pool
+    key = await spawn_lock_key(pool, "doors")
+    assert key.startswith("seat:")  # one key per seat, whichever way a door names it
+
+    async def _boom(*a: Any, **k: Any) -> Any:
+        raise AssertionError("must not spawn while the lock is held elsewhere")
+
+    # hold the lock from another task, so the doors see it busy
+    ready = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _holder() -> None:
+        async with trigger.seat_spawn_lock(pool, key):
+            ready.set()
+            await release.wait()
+
+    task = asyncio.create_task(_holder())
+    await ready.wait()
+    try:
+        orig = trigger.seat_spawn_lock
+
+        def _quick(p: Any, k: str, *, wait: float = 45.0) -> Any:
+            return orig(p, k, wait=0.3)
+
+        import pytest as _pt
+
+        mp = _pt.MonkeyPatch()
+        mp.setattr(trigger, "seat_spawn_lock", _quick)
+        try:
+            out = await launch_seat(Actions(pool), caller="operator", target="doors",
+                                    operator_authorized=True, spawn=_boom)
+            assert out["status"] == "refused-spawn-in-progress"
+            out = await resume_seat(Actions(pool), caller="operator", target="doors",
+                                    resume_spawn=_boom)
+            assert out["status"] == "refused-spawn-in-progress"
+            out = await trigger.wake_worker(Actions(pool), caller="operator", target="doors",
+                                            message="hi", spawn=_boom)
+            assert out["status"] == "refused-spawn-in-progress"
+            mail = await trigger.dispatch_dm(pool, addressee="doors", msg_id=1, sender="x",
+                                             spawn=_boom, fresh_spawn=_boom)
+            assert mail["mode"] == "window-busy"
+        finally:
+            mp.undo()
+    finally:
+        release.set()
+        await task
+    # reentrant: holding the lock, the same task takes it again without waiting
+    async with trigger.seat_spawn_lock(pool, key):
+        async with trigger.seat_spawn_lock(pool, key, wait=0.1):
+            pass

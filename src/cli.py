@@ -1862,9 +1862,9 @@ async def cmd_launch(
         if debug:
             return await _cmd_launch_pty(handle, model=model, pool=pool, manager=manager,
                                          wake_default=wake_default)
-        from src.orchestrator.trigger import SpawnInProgress, seat_spawn_lock
+        from src.orchestrator.trigger import SpawnInProgress, seat_spawn_lock, spawn_lock_key
         try:
-            async with seat_spawn_lock(pool, handle):
+            async with seat_spawn_lock(pool, await spawn_lock_key(pool, handle)):
                 return await _cmd_launch_harness(
                     handle, model=model, pool=pool, wake_default=wake_default, spawn=spawn,
                     agents_json=agents_json, verbose=verbose, fresh=fresh,
@@ -2084,9 +2084,9 @@ async def cmd_resume(
                   f"{exc}.", file=sys.stderr)
             return 1
     try:
-        from src.orchestrator.trigger import SpawnInProgress, seat_spawn_lock
+        from src.orchestrator.trigger import SpawnInProgress, seat_spawn_lock, spawn_lock_key
         try:
-            async with seat_spawn_lock(pool, handle):
+            async with seat_spawn_lock(pool, await spawn_lock_key(pool, handle)):
                 return await _cmd_resume_harness(
                     handle, model=model, pool=pool, wake_default=wake_default,
                     agents_json=agents_json, resume_spawn=resume_spawn, settings=settings,

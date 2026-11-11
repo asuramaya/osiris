@@ -16,16 +16,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
+import functools
 import json
 import logging
 import os
 import re
 import tempfile
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar, cast
 
 import asyncpg
 
@@ -55,6 +57,121 @@ from src.orchestrator.signatures import (
 RECEIPTS = Path.home() / ".osiris" / "wake-receipts"
 
 _log = logging.getLogger("osiris.trigger")
+
+_HELD_SPAWN_LOCKS: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
+    "osiris_held_spawn_locks", default=frozenset())
+
+
+async def spawn_lock_key(pool: asyncpg.Pool, target: str) -> str:
+    """One key per SEAT whichever way a door names it (handle, seat id or agent id), so the
+    CLI, the MCP launch tool, a wake and a DM dispatch for the same seat contend on one
+    lock. A target that resolves to no seat keys on its own text."""
+    seat = await _seat_for_target(Actions(pool), target)
+    return seat or target
+
+
+_DoorT = TypeVar("_DoorT", bound=Callable[..., Awaitable[Any]])
+
+
+def _spawn_locked(
+    pool_of: Callable[..., asyncpg.Pool], target_of: Callable[..., str],
+    refuse: Callable[[str], dict[str, Any]],
+) -> Callable[[_DoorT], _DoorT]:
+    """Wrap a door that can start a body so the whole call (twin check through spawn) runs
+    under the seat's spawn lock. Reentrant: a door called inside another door (the CLI's own
+    lock, `launch_seat` called by a wake) does not wait on itself. When the lock stays busy
+    the door refuses in its own vocabulary; nothing is spawned."""
+    def deco(fn: _DoorT) -> _DoorT:
+        @functools.wraps(fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            pool = pool_of(*args, **kwargs)
+            key = await spawn_lock_key(pool, target_of(*args, **kwargs))
+            try:
+                async with seat_spawn_lock(pool, key):
+                    return await fn(*args, **kwargs)
+            except SpawnInProgress:
+                return refuse(key)
+        return cast(_DoorT, wrapper)
+    return deco
+
+
+def _pool_of_actions(*a: Any, **k: Any) -> asyncpg.Pool:
+    return cast(asyncpg.Pool, (a[0] if a else k["actions"]).pool)
+
+
+def _pool_of_pool(*a: Any, **k: Any) -> asyncpg.Pool:
+    return cast(asyncpg.Pool, a[0] if a else k["pool"])
+
+
+def _target_kw(*a: Any, **k: Any) -> str:
+    return str(k["target"])
+
+
+def _addressee_kw(*a: Any, **k: Any) -> str:
+    return str(k["addressee"])
+
+
+def _spawn_busy(status_key: str, status: str) -> Callable[[str], dict[str, Any]]:
+    return lambda key: {status_key: status, "detail": (
+        f"another launch, resume or wake of {key} is still starting a body: nothing "
+        "started, try again shortly")}
+
+
+_SPAWN_BUSY_STATUS = _spawn_busy("status", "refused-spawn-in-progress")
+_SPAWN_BUSY_MODE = _spawn_busy("mode", "window-busy")
+
+
+class SpawnInProgress(RuntimeError):
+    """Another launch or resume for the same seat holds the spawn lock."""
+
+
+@contextlib.asynccontextmanager
+async def seat_spawn_lock(
+    pool: asyncpg.Pool, handle: str, *, wait: float = 45.0,
+) -> AsyncIterator[None]:
+    """One launch or resume per seat at a time, across processes: a Postgres advisory lock
+    held on its own connection from before the twin check until the new body shows in the
+    roster (or the call gives up). Two launches seconds apart used to both read "no body"
+    because the first body had not been listed yet. Waits up to `wait` seconds, then raises
+    `SpawnInProgress`. The lock dies with its connection, so a crashed launch never leaves
+    it held."""
+    key = f"osiris:spawn:{handle}"
+    if key in _HELD_SPAWN_LOCKS.get():
+        yield  # this task already holds it (a door called inside a door): never wait on self
+        return
+    conn: Any = None
+    deadline = time.monotonic() + wait
+    token: contextvars.Token[frozenset[str]] | None = None
+    try:
+        while True:
+            # A connection is held only while the lock is HELD (a session-level advisory
+            # lock lives on its connection). Waiting holds none: each try borrows one and
+            # gives it straight back, so several launches queued on one seat never pin the
+            # shared pool while they wait.
+            candidate = await pool.acquire()
+            try:
+                got = bool(await candidate.fetchval(
+                    "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", key))
+            except BaseException:
+                await pool.release(candidate)
+                raise
+            if got:
+                conn = candidate
+                break
+            await pool.release(candidate)
+            if time.monotonic() >= deadline:
+                raise SpawnInProgress(handle)
+            await asyncio.sleep(0.25)
+        token = _HELD_SPAWN_LOCKS.set(_HELD_SPAWN_LOCKS.get() | {key})
+        yield
+    finally:
+        if token is not None:
+            _HELD_SPAWN_LOCKS.reset(token)
+        if conn is not None:
+            try:
+                await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", key)
+            finally:
+                await pool.release(conn)
 
 # the trigger speaks in its own name when it gives up, never in an agent's
 _TRIGGER_AGENT = "agent:osiris-trigger"
@@ -2079,6 +2196,7 @@ async def _resume_occupancy_gate(
     return None
 
 
+@_spawn_locked(_pool_of_pool, _addressee_kw, _SPAWN_BUSY_MODE)
 async def dispatch_dm(
     pool: asyncpg.Pool, *, addressee: str, msg_id: int, sender: str | None,
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
@@ -3001,6 +3119,7 @@ _WAKE_STATUS = {
 }
 
 
+@_spawn_locked(_pool_of_actions, _target_kw, _SPAWN_BUSY_STATUS)
 async def wake_worker(
     actions: Actions, *, caller: str, target: str, message: str,
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
@@ -4154,6 +4273,7 @@ async def _deliver_brief_to_live_seat(
             "why": nudge_result.get("detail") or nudge_result.get("mode", "unknown")}
 
 
+@_spawn_locked(_pool_of_actions, _target_kw, _SPAWN_BUSY_STATUS)
 async def launch_seat(
     actions: Actions, *, caller: str, target: str, message: str = "",
     model: str | None = None, settings: Settings | None = None,
@@ -4626,6 +4746,7 @@ async def _verify_brief_reached_a_turn(
     return out
 
 
+@_spawn_locked(_pool_of_actions, _target_kw, _SPAWN_BUSY_STATUS)
 async def resume_seat(
     actions: Actions, *, caller: str, target: str, message: str = "",
     model: str | None = None, settings: Settings | None = None,
@@ -5679,52 +5800,6 @@ async def _spawn_claude_bg(
     _log.info("trigger: bg-spawned %s in %s (pid %s)", name or "(unnamed)", repo, proc.pid)
     found = _BG_BACKGROUNDED.search(text)
     return found.group(1) if found else None
-
-
-class SpawnInProgress(RuntimeError):
-    """Another launch or resume for the same seat holds the spawn lock."""
-
-
-@contextlib.asynccontextmanager
-async def seat_spawn_lock(
-    pool: asyncpg.Pool, handle: str, *, wait: float = 45.0,
-) -> AsyncIterator[None]:
-    """One launch or resume per seat at a time, across processes: a Postgres advisory lock
-    held on its own connection from before the twin check until the new body shows in the
-    roster (or the call gives up). Two launches seconds apart used to both read "no body"
-    because the first body had not been listed yet. Waits up to `wait` seconds, then raises
-    `SpawnInProgress`. The lock dies with its connection, so a crashed launch never leaves
-    it held."""
-    key = f"osiris:spawn:{handle}"
-    conn: Any = None
-    deadline = time.monotonic() + wait
-    try:
-        while True:
-            # A connection is held only while the lock is HELD (a session-level advisory
-            # lock lives on its connection). Waiting holds none: each try borrows one and
-            # gives it straight back, so several launches queued on one seat never pin the
-            # shared pool while they wait.
-            candidate = await pool.acquire()
-            try:
-                got = bool(await candidate.fetchval(
-                    "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", key))
-            except BaseException:
-                await pool.release(candidate)
-                raise
-            if got:
-                conn = candidate
-                break
-            await pool.release(candidate)
-            if time.monotonic() >= deadline:
-                raise SpawnInProgress(handle)
-            await asyncio.sleep(0.25)
-        yield
-    finally:
-        if conn is not None:
-            try:
-                await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", key)
-            finally:
-                await pool.release(conn)
 
 
 class HarnessListUnreadable(OSError):
