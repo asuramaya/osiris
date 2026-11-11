@@ -38,6 +38,7 @@ import fcntl
 import json
 import os
 import subprocess
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -140,8 +141,9 @@ def repository_is_missing(output: str) -> bool:
 
 
 def _one_line(raw: bytes) -> str:
-    lines = [ln.strip() for ln in raw.decode(errors="replace").splitlines() if ln.strip()]
-    return lines[-1][:240] if lines else "no output"
+    from src.orchestrator.restic_locks import failure_summary
+
+    return failure_summary(raw.decode(errors="replace"))
 
 
 _PROBE_TIMEOUT_SECONDS = 30  # restic snapshots and init: a slow link must not hang the tick
@@ -190,7 +192,8 @@ def _run_restic_backup(
             if probe.returncode != 0 and restic_locks.is_lock_failure(detail):
                 held = restic_locks.holder_line(detail) or _one_line(probe.stderr)
                 why = f" (lock listing: {outcome.unreadable})" if outcome.unreadable else ""
-                return f"restic snapshots failed on a lock, not initializing: {held}{why}"
+                return (f"{restic_locks.BUSY_PREFIX} (locked by another run, nothing was "
+                        f"initialized): {held}{why}")
             if probe.returncode != 0 and not repository_is_missing(detail):
                 return f"restic snapshots failed, not initializing: {_one_line(probe.stderr)}"
         if probe.returncode != 0:
@@ -217,6 +220,26 @@ def _run_restic_backup(
 
 def _lock_path() -> Path:
     return _receipts_path().with_name("offload_tick.lock")
+
+
+@contextlib.contextmanager
+def hold_tick_lock() -> Iterator[bool]:
+    """Try to take the tick's own file lock (non-blocking); yields whether it was taken and
+    releases it on the way out. The scheduled restore test uses the same lock as the tick, so the
+    two never run in the repository together."""
+    lock_path = _lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            with contextlib.suppress(OSError):
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 async def run_offload_tick(pool: asyncpg.Pool, *, vault: Path | None = None) -> dict[str, Any]:
@@ -297,7 +320,7 @@ async def _run_offload_tick_locked(
     never an error for the tick). The restore test is NOT run here: it re-reads data and
     would delay the next tick, so it has its own timer (`scheduled_drill.run_drill_pass`,
     `osiris offload-runner drill`)."""
-    from src.orchestrator import recovery_copies
+    from src.orchestrator import recovery_copies, restic_locks
     from src.orchestrator.backup_settings import get_backup_settings
     from src.orchestrator.backup_validation import check_local_target_presence
     from src.orchestrator.network_presence import is_unreachable_error, lan_presence
@@ -362,6 +385,12 @@ async def _run_offload_tick_locked(
                                   "last_error": None, "last_skip_reason": None,
                                   "skipped_since": None, "stale_notified_clock": None})
             results.append({"name": name, "ok": True})
+        elif restic_locks.is_busy(fail):
+            # Somebody else holds the repository right now (the restore test, a backup started by
+            # hand, another host). Nothing failed: a quiet skip, no last_error, no clobbered last
+            # success. A lock that never lets go still surfaces, through the stale-offload notice.
+            _note_skip(name, str(fail), now)
+            results.append({"name": name, "skipped": str(fail)})
         elif is_unreachable_error(fail):
             # The network had no way to the target (away from home, a tunnel down): the
             # backup could not run, which says nothing about the repository. A quiet skip,

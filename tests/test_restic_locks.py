@@ -413,7 +413,7 @@ def test_a_lock_failure_names_restics_own_holder_line_not_its_advice(
     failure = offload_runner._run_restic_backup(
         repository="fake", password=b"x", source=source)
 
-    assert failure is not None and "not initializing" in failure
+    assert failure is not None and restic_locks.is_busy(failure)  # a busy repository, not a failure
     assert "already locked exclusively by PID 4242 on nas-box" in failure
     assert "the `unlock` command" not in failure
     assert "init" not in fake.commands()
@@ -534,3 +534,93 @@ def test_the_drill_readers_stop_restic_without_a_kill(sleeper: Path) -> None:
     drill._stop(proc)
 
     assert proc.poll() is not None and sleeper.read_text() == "released"
+
+
+
+# ---- a busy repository is a quiet skip, and the tick and the restore test never meet ----
+
+
+async def _nas_target(actions):  # type: ignore[no-untyped-def]
+    from src.orchestrator.backup_settings import write_backup_settings
+
+    await write_backup_settings(
+        actions.pool, actor="operator", because="x",
+        offload_targets=[{"name": "nas", "kind": "restic", "path_or_url": "sftp://nas/repo",
+                          "schedule": "*-*-* 03:00:00", "enabled": True}])
+
+
+async def test_a_tick_that_finds_the_repository_busy_skips_and_records_no_failure(
+    actions, fake: Fake, monkeypatch: pytest.MonkeyPatch,  # type: ignore[no-untyped-def]
+) -> None:
+    """The restore test holds the repository (restic check is exclusive); the backup tick that
+    lands beside it used to record `ok: False` and a last_error for a backup that never ran."""
+    from src.orchestrator import network_presence
+
+    monkeypatch.setattr(network_presence, "lan_presence", lambda target: {"present": True})
+    monkeypatch.setattr(offload_runner, "get_restic_password", lambda: b"x", raising=False)
+    monkeypatch.setenv("OSIRIS_RESTIC_PASSWORD", "x")
+    await _nas_target(actions)
+    offload_runner._write_receipt("nas", {"last_successful_offload": "T0", "last_attempt_at": "T0",
+                                          "last_error": None})
+    fake.lock("a" * 64, age_min=1, host="nas-box", pid=77, exclusive=True)  # live, someone else's
+
+    out = await offload_runner.run_offload_tick(actions.pool)
+
+    [row] = out["targets"]
+    assert "skipped" in row and restic_locks.is_busy(row["skipped"])
+    assert "nas-box/77" in row["skipped"]
+    receipt = offload_runner.offload_receipts()["nas"]
+    assert receipt["last_successful_offload"] == "T0"  # never clobbered
+    assert not receipt.get("last_error")                # and no failure recorded
+    assert "backup" not in fake.commands()
+
+
+async def test_a_drill_that_finds_the_repository_busy_records_nothing_and_stays_due(
+    actions, fake: Fake,  # type: ignore[no-untyped-def]
+) -> None:
+    from src.orchestrator import scheduled_drill, soul_key
+
+    fake.lock("b" * 64, age_min=1, host="nas-box", pid=78, exclusive=True)
+    present = [{"name": "nas", "path_or_url": "fake"}]
+    offload = {"nas": {"last_successful_offload": datetime.now(UTC).isoformat()}}
+
+    first = await scheduled_drill.run_due_drills(
+        present, offload, run_drill=drill.run_bounded_drill)
+
+    [row] = first
+    assert "skipped" in row and restic_locks.is_busy(row["skipped"])
+    assert soul_key.restore_drill_receipts() == {}  # no receipt: no failure, no six-hour hold-off
+    fake.state["locks"] = {}
+    fake._write()
+    again = await scheduled_drill.run_due_drills(
+        present, offload, run_drill=drill.run_bounded_drill)  # due at once, not held off
+    assert again and "skipped" not in again[0]
+
+
+async def test_the_drill_pass_does_nothing_while_the_tick_holds_the_lock(
+    actions, fake: Fake, monkeypatch: pytest.MonkeyPatch,  # type: ignore[no-untyped-def]
+) -> None:
+    from src.orchestrator import recovery_copies, scheduled_drill
+
+    async def present(pool):  # type: ignore[no-untyped-def]
+        return [{"name": "nas", "path_or_url": "fake"}]
+
+    monkeypatch.setattr(recovery_copies, "present_targets", present)
+    with offload_runner.hold_tick_lock() as ours:
+        assert ours
+        out = await scheduled_drill.run_drill_pass(actions.pool)
+    assert out == {"drills": [], "skipped": "the offload tick is running"}
+    assert fake.commands() == []  # restic never ran
+    # and once the tick is done the drill runs
+    again = await scheduled_drill.run_drill_pass(actions.pool)
+    assert "skipped" not in again
+
+
+async def test_a_tick_started_while_the_drill_holds_the_lock_skips_as_already_running(
+    actions, fake: Fake,  # type: ignore[no-untyped-def]
+) -> None:
+    with offload_runner.hold_tick_lock() as ours:
+        assert ours
+        out = await offload_runner.run_offload_tick(actions.pool)
+    assert out == {"skipped": "already running", "targets": []}
+    assert fake.commands() == []

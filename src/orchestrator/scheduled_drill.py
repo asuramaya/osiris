@@ -96,6 +96,14 @@ async def run_due_drills(
             pop_notes(url)
             out.append({"name": name, "skipped": "target not reachable from this network"})
             continue
+        from src.orchestrator.restic_locks import is_busy
+
+        if is_busy(fail):
+            # The repository is in use (the backup tick, another host): the drill did not run, so
+            # there is nothing to record. No receipt means no six-hour hold-off and no ok:False.
+            pop_notes(url)
+            out.append({"name": name, "skipped": str(fail)})
+            continue
         notes = pop_notes(url)
         note = "; ".join(notes) if notes else None
         record_restore_drill(url, ok=fail is None, error=fail, note=note)
@@ -109,7 +117,13 @@ async def run_drill_pass(pool: Any) -> dict[str, Any]:
     present, enabled targets (`recovery_copies.present_targets`) that are due a drill get one.
     Returns `{"drills": [...]}`; an empty list means nothing was due."""
     from src.orchestrator import recovery_copies
-    from src.orchestrator.offload_runner import offload_receipts
+    from src.orchestrator.offload_runner import hold_tick_lock, offload_receipts
 
     present = await recovery_copies.present_targets(pool)
-    return {"drills": await run_due_drills(present, offload_receipts())}
+    # The restore test and the backup tick take the same lock, so our own two units never meet in
+    # the repository (restic check is exclusive and a backup holds a lock for minutes). A pass that
+    # finds the tick running does nothing and tries again at the next timer.
+    with hold_tick_lock() as held:
+        if not held:
+            return {"drills": [], "skipped": "the offload tick is running"}
+        return {"drills": await run_due_drills(present, offload_receipts())}
