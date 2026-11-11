@@ -133,7 +133,7 @@ def fmt_value(v: Any, paint: Paint) -> str:
     handed back compactly rather than expanded — the caller decides whether a nested thing
     deserves its own block."""
     if v is None:
-        return paint.dim("—")
+        return paint.dim("-")
     if isinstance(v, bool):
         return paint.good("yes") if v else paint.dim("no")
     if isinstance(v, (int, float)):
@@ -151,7 +151,7 @@ def fmt_value(v: Any, paint: Paint) -> str:
         if not v:
             return paint.dim("(none)")
         if all(_is_scalar(i) for i in v):
-            return ", ".join("—" if i is None else str(i) for i in v)
+            return ", ".join("-" if i is None else str(i) for i in v)
         return paint.dim(f"({len(v)} items)")
     if isinstance(v, dict):
         return paint.dim("(none)") if not v else paint.dim(f"({len(v)} fields)")

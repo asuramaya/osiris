@@ -1,24 +1,24 @@
-"""osiris-manager — THE SACRED PROC (constitution #2, ruling `f1803b4a`; availability doctrine
+"""osiris-manager, THE SACRED PROC (constitution #2, ruling `f1803b4a`; availability doctrine
 `2ceb7ba0`). See `docs/SPEC-agent-manager.md` §1 (doctrines), §4.0, §4.4, §4.8.
 
 v1 is a SKELETON: it owns ADOPTION + VISIBILITY + THE SCREAM. It does not yet summon seats
-(that is wave 2) — every body it can ever act on in this version was summoned by something
+(that is wave 2), every body it can ever act on in this version was summoned by something
 else (`_spawn_in_body`, today; a later wave's warm-boot resurrection, eventually) and is only
 ever seen here as something to RE-ADOPT.
 
-STATE IS RECONSTRUCTED, NEVER TRUSTED FROM MEMORY. Daemon-death is a normal event — the whole
+STATE IS RECONSTRUCTED, NEVER TRUSTED FROM MEMORY. Daemon-death is a normal event, the whole
 point of the sacred-proc doctrine is that a crash here costs nothing but this process: on
 start, `Manager._rebuild_world` walks `systemctl --user list-units 'osiris-body-*'` and
 cross-references `~/.osiris/body-receipts` to tell a body still running (RE-ADOPT it) from one
-already dissolved (a receipt exists — nothing to do). COLD BY DEFAULT (doctrine 1): nothing is
-re-bodied, resumed, or resurrected here — adoption only means "this daemon now KNOWS the scope
+already dissolved (a receipt exists, nothing to do). COLD BY DEFAULT (doctrine 1): nothing is
+re-bodied, resumed, or resurrected here, adoption only means "this daemon now KNOWS the scope
 exists", never "make something alive again".
 
-THE ONE MUTATING OP IN v1 is `dissolve`, and it goes through `bodies.LocalProvider` — the exact
+THE ONE MUTATING OP IN v1 is `dissolve`, and it goes through `bodies.LocalProvider`: the exact
 Phase 0 lane (metered, receipted, receipt-before-return). Re-adopted bodies never had their
 child handle in THIS process (a dead daemon held it), so `LocalProvider.adopt()` seeds `_live`
 with a `_AdoptedProc` stand-in (systemctl-polling `.wait()`) instead of a real subprocess
-handle — everything downstream (stats-file lookup, cgroup fallback, receipt mint) is the
+handle, everything downstream (stats-file lookup, cgroup fallback, receipt mint) is the
 SAME code Phase 0 already shipped and tested.
 
 SACRED-PROC RULES IN CODE: this module spawns no long-lived children. Every subprocess it runs
@@ -88,7 +88,7 @@ _POKE_DEDUP_KEEP = 256
 
 
 def _pty_scope_unit(name: str) -> str:
-    """The transient scope a PTY child lives in — the session name, unit-name-safe."""
+    """The transient scope a PTY child lives in, the session name, unit-name-safe."""
     import re
     return f"osiris-pty-{re.sub(r'[^a-zA-Z0-9:_.-]', '-', name)}.scope"
 
@@ -103,18 +103,18 @@ async def _default_runner(
 ) -> asyncio.subprocess.Process:
     """The real seam: identical shape to `bodies._default_runner` (same `ProcessRunner`
     protocol) so `LocalProvider` and this daemon's own `systemctl`/`notify-send` calls share
-    ONE injectable boundary — tests fake this once, never real systemd or DBus."""
+    ONE injectable boundary, tests fake this once, never real systemd or DBus."""
     return await asyncio.create_subprocess_exec(
         *argv, cwd=cwd, env=env, stdout=stdout, stderr=stderr)
 
 
 class _AdoptedProc:
     """A `bodies._Waitable` stand-in for a RE-ADOPTED scope. `LocalProvider.dissolve()` expects
-    `proc.returncode` / `await proc.wait()` — the real (summon-time) case is a genuine
+    `proc.returncode` / `await proc.wait()`: the real (summon-time) case is a genuine
     `asyncio.subprocess.Process`, but a re-adopted body's original child handle belonged to a
     now-dead daemon process, which THIS process never parented (you cannot `wait()` a PID that
     isn't your child). So `.wait()` polls `systemctl --user is-active` instead, bounded by
-    `timeout` — the same "never unbounded" rule as every other subprocess this daemon runs."""
+    `timeout`: the same "never unbounded" rule as every other subprocess this daemon runs."""
 
     def __init__(self, unit: str, runner: ProcessRunner, *, timeout: float) -> None:
         self._unit = unit
@@ -161,7 +161,7 @@ NotifierFn = Callable[[str, str, str], Awaitable[None]]
 
 async def watchdog_tick(state: ScreamState, probe: ProbeFn, notify: NotifierFn) -> bool:
     """One watchdog beat (§4.8, ruling `2ceb7ba0`): probe, and on a healthy<->down TRANSITION
-    (never on a repeat) scream or all-clear. Edge-triggered, not level-triggered — a graph that
+    (never on a repeat) scream or all-clear. Edge-triggered, not level-triggered, a graph that
     stays down for an hour screams exactly once, the moment it fails, not once per tick. A pure
     function of (state, probe, notify) so the scream logic is testable without a watchdog loop,
     real systemd, or real DBus around it."""
@@ -178,14 +178,14 @@ async def watchdog_tick(state: ScreamState, probe: ProbeFn, notify: NotifierFn) 
         state.down_since = now
         await notify(
             "critical", "OSIRIS GRAPH UNREACHABLE",
-            "Postgres/Redis unreachable — the fleet is lobotomized until this clears")
+            "Postgres/Redis unreachable, the fleet is lobotomized until this clears")
         state.last_event = {"kind": "down", "at": now.isoformat(), "outage_seconds": None}
     state.healthy = healthy
     return healthy
 
 
 def _make_default_notify(runner: ProcessRunner) -> NotifierFn:
-    """`notify-send --urgency=<urgency>` (subprocess, bounded, awaited) — FAIL-OPEN if it is
+    """`notify-send --urgency=<urgency>` (subprocess, bounded, awaited), FAIL-OPEN if it is
     absent or errors: the desktop popup is a nicety, the CRITICAL log line is the guarantee
     (doctrine 3: never silently degrade). Every call logs regardless of whether the desktop
     notification actually landed."""
@@ -203,9 +203,9 @@ def _make_default_notify(runner: ProcessRunner) -> NotifierFn:
                 sent = False
         suffix = "" if sent else " (no desktop notify)"
         if urgency == "critical":
-            _log.critical("SCREAM%s: %s — %s", suffix, summary, body)
+            _log.critical("SCREAM%s: %s, %s", suffix, summary, body)
         else:
-            _log.info("all-clear%s: %s — %s", suffix, summary, body)
+            _log.info("all-clear%s: %s, %s", suffix, summary, body)
 
     return notify
 
@@ -213,7 +213,7 @@ def _make_default_notify(runner: ProcessRunner) -> NotifierFn:
 class Manager:
     """The daemon's brain: adoption registry + control socket + watchdog, all wired through one
     injectable `ProcessRunner` so tests never touch real systemd or DBus. `pool`/`redis` are
-    optional — a `probe` passed explicitly (as every test does) needs neither."""
+    optional, a `probe` passed explicitly (as every test does) needs neither."""
 
     def __init__(
         self, *, socket_path: Path, pool: asyncpg.Pool | None = None,
@@ -263,7 +263,7 @@ class Manager:
 
     async def _default_probe(self) -> bool:
         """THE GRAPH's health: Postgres `SELECT 1` + Redis `PING`, each bounded to
-        `_PROBE_TIMEOUT`. With no pool/redis wired at all (a bare Manager — every unit test that
+        `_PROBE_TIMEOUT`. With no pool/redis wired at all (a bare Manager, every unit test that
         injects its own `probe` never reaches this), reads healthy rather than fabricating a
         down signal nothing actually observed."""
         if self._pool is None or self._redis is None:
@@ -314,7 +314,7 @@ class Manager:
     async def _adopt_unit(self, handle: str, unit: str, state: str) -> None:
         """Seed `LocalProvider._live` for a body this daemon never summoned. `ram_envelope_bytes`
         / `repo_ref` / `seat_anchor` / `budget_usd` have no durable manifest to recover them from
-        in v1 (the graph-manifest resurrection is §4.4, a later wave) — honest placeholders, per
+        in v1 (the graph-manifest resurrection is §4.4, a later wave), honest placeholders, per
         the same law `bodies.py` already lives by: an honest zero beats a fabricated number."""
         cgroup = await self._resolve_cgroup(unit)
         proc = _AdoptedProc(unit, self._runner, timeout=self._stop_timeout)
@@ -426,7 +426,7 @@ class Manager:
         }
 
     async def _op_dissolve(self, handle: object) -> dict[str, Any]:
-        """THE ONE MUTATING OP IN v1 — via `LocalProvider.dissolve()`, exactly the Phase 0
+        """THE ONE MUTATING OP IN v1, via `LocalProvider.dissolve()`, exactly the Phase 0
         lane: receipt-before-return, honest fallbacks, nothing new invented here."""
         if not isinstance(handle, str) or not handle:
             return {"error": "dissolve requires a string 'handle'"}
@@ -439,7 +439,7 @@ class Manager:
     # --- the PTY broker (§4.5): tmux-with-a-graph, the daemon's half of the wire-up ---
 
     async def _op_pty_spawn(self, req: dict[str, Any]) -> dict[str, Any]:
-        """{"op": "pty_spawn", "name": .., "argv": [..], "cwd": .., "env": {..}} — `cwd`/`env`
+        """{"op": "pty_spawn", "name": .., "argv": [..], "cwd": .., "env": {..}}, `cwd`/`env`
         are optional. Name collisions surface as `SessionExistsError` from the broker itself
         (never a silent replace); every other validation failure here is this op refusing
         loudly on a malformed request, before a single fd or child is ever created."""
@@ -474,7 +474,7 @@ class Manager:
                 return {"error": "'seat.house' must be a string if given"}
             if self._pool is None:
                 return {"error": "seat attach requires graph access and this daemon has no "
-                                 "pool — spawn without 'seat', or wire DATABASE_URL"}
+                                 "pool, spawn without 'seat', or wire DATABASE_URL"}
             from src.actions.core import Actions
             from src.orchestrator.seats import ensure_seat, mint_attach_token
             seated = await ensure_seat(Actions(self._pool), house=house,
@@ -515,7 +515,7 @@ class Manager:
                 io_weight=_PTY_DEFAULT_IO_WEIGHT)
             if fail is not None:
                 await self._broker.close(name)
-                return {"error": f"pty child could not be bounded ({fail}) — under the "
+                return {"error": f"pty child could not be bounded ({fail}), under the "
                                  "sacred proc a child is born bounded or not at all; "
                                  "session closed"}
         # WINDOW METADATA (Stage B of the wake arc): remember which anchor/seat this window
@@ -553,7 +553,7 @@ class Manager:
                         {"agent_id": str(r["agent_id"]), "last_seen": str(r["at"])}
                         for r in live]
                     out["room_busy_note"] = (
-                        "live session(s) already hold this room — advisory only (the "
+                        "live session(s) already hold this room, advisory only (the "
                         "lease gate's refusal semantics wait on the room owner's rules); "
                         "coordinate before writing to a shared tree")
             except Exception:  # noqa: BLE001 — an advisory must never break a birth
@@ -563,19 +563,19 @@ class Manager:
     async def _lease_gate(
         self, *, cwd: str, seated: dict[str, Any] | None, override: bool,
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        """THE LEASE GATE — Alfred's field spec (msg 637, thread fd921b7d), built whole,
+        """THE LEASE GATE, Alfred's field spec (msg 637, thread fd921b7d), built whole,
         armed only by the operator's ratification (osiris_lease_refuse; default off keeps
         the advisory as the entire gate). The spec, kept faithful:
 
-          * exclusivity belongs to the RESIDENT SEAT only — a cwd that is some Seat's
+          * exclusivity belongs to the RESIDENT SEAT only, a cwd that is some Seat's
             anchor_cwd is that seat's charter room; every other cwd stays advisory-only;
           * the lease is LINEAGE-SHARED and PULSE-EXPIRED: any live session of the
             resident seat's holder lineage holds it, and a dead holder's claim expires
-            with its pulse (the liveness window) — there is NO handoff verb, by design;
-          * a FOREIGN body summoned into a leased room is REFUSED, not warned — the
+            with its pulse (the liveness window), there is NO handoff verb, by design;
+          * a FOREIGN body summoned into a leased room is REFUSED, not warned, the
             failure class this kills is UNATTRIBUTED PRESENCE;
           * the operator's own hand passes with lease_override=true, and the override is
-            LOGGED loudly — never silent, never refused.
+            LOGGED loudly, never silent, never refused.
 
         Returns (refusal, receipt_note): refusal set → the birth does not happen; note
         set → an override rode through and the receipt says so. Fail-open on any error —
@@ -623,7 +623,7 @@ class Manager:
                 return None, {"lease_override_logged": True,
                               "room_leased_to": str(room["seat"])}
             return {"error": (
-                f"ROOM LEASED — {cwd} is the charter room of {room['seat']} and its "
+                f"ROOM LEASED, {cwd} is the charter room of {room['seat']} and its "
                 f"holder's lineage is LIVE there ({holders}). A foreign body in a leased "
                 "room is unattributed presence. Spawn with the resident's seat, wait for "
                 "the pulse to expire, or pass lease_override=true (the operator's hand, "
@@ -636,7 +636,7 @@ class Manager:
         self, name: str, pid: int, *, ram_bytes: int, io_weight: int,
     ) -> str | None:
         """Adopt a just-spawned PTY child into its own transient scope (StartTransientUnit
-        with PIDs= — the D-Bus half of what `systemd-run --scope` does for a NEW process,
+        with PIDs=, the D-Bus half of what `systemd-run --scope` does for a NEW process,
         which the CLI cannot do for an existing pid). Adoption keeps the spawn/wait/killpg
         topology exactly as tested; only the cgroup membership changes. Returns None on
         success, else the error string (the caller refuses the birth)."""
@@ -693,7 +693,7 @@ class Manager:
         next input (bracketed paste + CR; the broker owns the bytes). Policy lives HERE:
         `min_idle_secs` refuses a busy window ('busy': true in the refusal, so the caller can
         fall through its ladder instead of typing into someone's sentence), and `dedup` (a
-        message id) makes one cause poke at most once per window, ever — a re-fired trigger
+        message id) makes one cause poke at most once per window, ever, a re-fired trigger
         tick answers `deduped` instead of double-typing."""
         name = req.get("name")
         if not isinstance(name, str) or not name:
@@ -712,7 +712,7 @@ class Manager:
             return {"poked": name, "deduped": True}
         min_idle = req.get("min_idle_secs")
         if isinstance(min_idle, int | float) and session.idle_seconds < float(min_idle):
-            return {"error": f"window busy — idle {session.idle_seconds:.0f}s < "
+            return {"error": f"window busy, idle {session.idle_seconds:.0f}s < "
                              f"required {float(min_idle):.0f}s", "busy": True}
         if isinstance(dedup, str) and dedup:
             seen[dedup] = time.monotonic()
@@ -724,12 +724,12 @@ class Manager:
     async def _op_pty_attach(
         self, req: dict[str, Any], reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
     ) -> bool:
-        """{"op": "pty_attach", "name": .., "rows": .., "cols": ..} — on success, acks with
+        """{"op": "pty_attach", "name": .., "rows": .., "cols": ..}, on success, acks with
         `{"attached": name}` and then hands the connection to `serve_attached` (the SAME
-        framing `serve_session` uses: O/X/I/R frames, `read_frame`/`pack_frame` — nothing
+        framing `serve_session` uses: O/X/I/R frames, `read_frame`/`pack_frame`: nothing
         reinvented here), which owns it until the peer disconnects. Returns True in that case
         (the caller must stop treating this connection as line-oriented JSON). An unknown or
-        missing name answers with one `{"error": ...}` line instead and returns False — loud,
+        missing name answers with one `{"error": ...}` line instead and returns False, loud,
         never silent, and the connection stays in ordinary control mode."""
         name = req.get("name")
         if not isinstance(name, str) or not name:
@@ -784,7 +784,7 @@ class Manager:
 
     async def run_forever(self) -> None:
         """Start, then block until SIGTERM/SIGINT (systemd's `Restart=always` stop/restart
-        signal) — cleanup runs in `finally`, but doctrine 3 does not depend on it: a SIGKILL
+        signal), cleanup runs in `finally`, but doctrine 3 does not depend on it: a SIGKILL
         that skips this entirely leaves the scopes and the receipts dir exactly as reachable
         to the NEXT daemon's `rebuild_world` as a clean shutdown would."""
         await self.start()

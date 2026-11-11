@@ -237,11 +237,11 @@ _LEGACY_EXTENSION_REASON_STRINGS = frozenset({
     # against the live graph. Closed: a row written from this point on always carries
     # unlinked_because_kind structurally, so this set never needs a new entry for a future
     # wording change.
-    "extension-link-pending (task #189 condition 2, decision 7ea187b9) — machine-set: "
+    "extension-link-pending (task #189 condition 2, decision 7ea187b9), machine-set: "
     "this write's only requested connectivity is obsoletes=/confirms=/refutes=/"
     "implements=/rediscovers=/bears_on=, which mint after this transaction and cannot "
     "satisfy the gate at its own commit point",
-    "extension-link-pending (task #189 condition 2, decision 7ea187b9) — machine-set: "
+    "extension-link-pending (task #189 condition 2, decision 7ea187b9), machine-set: "
     "this write's only requested connectivity is obsoletes=/confirms=/refutes=/"
     "implements=/rediscovers=/bears_on=/narrows=, which mint after this transaction and "
     "cannot satisfy the gate at its own commit point",

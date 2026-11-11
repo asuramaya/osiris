@@ -1,9 +1,9 @@
-"""Sourced dossier report — the follow-the-money investigator's deliverable.
+"""Sourced dossier report, the follow-the-money investigator's deliverable.
 
 The engine's output stops at a graph; an investigator ships a *story with receipts*.
 This assembles the graph around one entity into a litigation-defensible Markdown
 dossier where EVERY claim carries its provenance inline (source · how-obtained · when).
-That provenance — the append-only, evidence-graded kernel — is the point: the report
+That provenance, the append-only, evidence-graded kernel, is the point: the report
 is built to survive a defamation threat. Sections: identity, network, financing
 (Form D feeders), litigation, footprint discrepancy, co-investment, and a sources
 appendix. Merge-aware (reads the whole identity cluster).
@@ -51,7 +51,7 @@ def _flows(props: dict[str, Any]) -> str:
 async def _crypto_section(
     pool: asyncpg.Pool, object_id: uuid.UUID, cluster: list[uuid.UUID]
 ) -> list[str]:
-    """On-chain activity + sanctions exposure — renders only when the subject cluster
+    """On-chain activity + sanctions exposure, renders only when the subject cluster
     has `transacted_with` edges (i.e. it's a traced wallet)."""
     cps = await pool.fetch(
         "SELECT o.canonical, "
@@ -71,7 +71,7 @@ async def _crypto_section(
         p = r["props"] or {}
         label = r["cname"] or r["canonical"]
         out.append(
-            f"- `{label}` — {p.get('tx_count', '?')} txs · {_flows(p)}  "
+            f"- `{label}`: {p.get('tx_count', '?')} txs · {_flows(p)}  "
             "_(etherscan · authoritative)_"
         )
     out.append("")
@@ -84,7 +84,7 @@ async def _crypto_section(
         for h in hits:
             holders = ", ".join(h.get("holders") or []) or "unnamed holder"
             out.append(
-                f"- ⚑ counterparty `{h['address']}` is an OFAC-listed wallet — "
+                f"- ⚑ counterparty `{h['address']}` is an OFAC-listed wallet, "
                 f"held by **{holders}**  _(opensanctions · authoritative)_"
             )
         out.append("")
@@ -95,7 +95,7 @@ def _sub(prop: str, ref: str) -> str:
     """A correlated subselect for a property value (keeps the inline SQL readable).
     Winner-ordered: multi-source properties return the GRADE winner, and never more
     than one row (a bare scalar subquery is a CardinalityViolation the day a second
-    source describes the object — the onboarding-day outage class)."""
+    source describes the object, the onboarding-day outage class)."""
     return (
         f"(SELECT value #>> '{{}}' FROM current_assertions "
         f"WHERE object_id={ref} AND name='{prop}' "
@@ -179,7 +179,7 @@ async def build_dossier_report(pool: asyncpg.Pool, object_id: uuid.UUID) -> str:
                 roles = ", ".join(sorted(e["roles"]))
                 src = ", ".join(sorted(e["src"]))
                 sources.update(e["src"])
-                out.append(f"- **{e['name']}** — {roles}  _({src} · authoritative)_")
+                out.append(f"- **{e['name']}**: {roles}  _({src} · authoritative)_")
             out.append("")
 
     # --- financing (Form D feeders raising for it) ------------------------
@@ -193,7 +193,7 @@ async def build_dossier_report(pool: asyncpg.Pool, object_id: uuid.UUID) -> str:
     )
     if feeders:
         sources.add("edgar")
-        out += ["## Financing — Form D feeder funds", ""]
+        out += ["## Financing, Form D feeder funds", ""]
         seen_f: set[str] = set()
         for r in feeders:
             if not r["nm"] or r["nm"] in seen_f:
@@ -201,7 +201,7 @@ async def build_dossier_report(pool: asyncpg.Pool, object_id: uuid.UUID) -> str:
             seen_f.add(r["nm"])
             amt = f"${int(r['amt']):,}" if r["amt"] else "undisclosed"
             inv = f", {r['inv']} investors" if r["inv"] else ""
-            out.append(f"- **{r['nm']}** — raised {amt}{inv}  _(edgar · authoritative)_")
+            out.append(f"- **{r['nm']}**: raised {amt}{inv}  _(edgar · authoritative)_")
         out.append("")
 
     # --- litigation -------------------------------------------------------
@@ -223,7 +223,7 @@ async def build_dossier_report(pool: asyncpg.Pool, object_id: uuid.UUID) -> str:
             seen_c.add(r["nm"])
             role = "**named party**" if r["ec"] == "direct_observation" else "mentioned"
             meta = " · ".join(b for b in (r["court"], (r["dt"] or "")[:10], r["nature"]) if b)
-            out.append(f"- ⚖ {r['nm']} — {meta}  ({role})")
+            out.append(f"- ⚖ {r['nm']}, {meta}  ({role})")
         out.append("")
 
     # --- footprint discrepancy -------------------------------------------
@@ -236,7 +236,7 @@ async def build_dossier_report(pool: asyncpg.Pool, object_id: uuid.UUID) -> str:
         )
         for d in disc["discrepancies"]:
             who = ", ".join(sorted({x["name"] for x in d["reach"] if x["name"]})[:4])
-            out.append(f"- ⚑ **{d['country']}** — {who}")
+            out.append(f"- ⚑ **{d['country']}**: {who}")
         out.append("")
 
     # --- co-investment ----------------------------------------------------
@@ -244,7 +244,7 @@ async def build_dossier_report(pool: asyncpg.Pool, object_id: uuid.UUID) -> str:
     if ties:
         out += ["## Co-investment ties", ""]
         for t in ties:
-            out.append(f"- **{t['company']}** — {t['shared_operators']} shared SPV operator(s)")
+            out.append(f"- **{t['company']}**: {t['shared_operators']} shared SPV operator(s)")
         out.append("")
 
     # --- watchlist exposure across the financing network ------------------
@@ -257,7 +257,7 @@ async def build_dossier_report(pool: asyncpg.Pool, object_id: uuid.UUID) -> str:
             roles = (", " + ", ".join(h["roles"])) if h["roles"] else ""
             out.append(
                 f"- ⚑ **{h['member_name']}** ({via}{roles}) matches watchlist entity "
-                f"**{h['watchlist_entity']}** — {h['reason']}  _(opensanctions · authoritative)_"
+                f"**{h['watchlist_entity']}**: {h['reason']}  _(opensanctions · authoritative)_"
             )
         out.append("")
 

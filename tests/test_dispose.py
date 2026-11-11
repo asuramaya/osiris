@@ -428,7 +428,7 @@ async def test_repair_stale_pile_corrects_the_summary_when_the_pile_partially_dr
     corrected = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='corrected_summary'", t)
-    assert "DISPOSE OF YOUR MINER PILE — 27 candidates on partialproj" in corrected
+    assert "DISPOSE OF YOUR MINER PILE: 27 candidates on partialproj" in corrected
     original = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='summary'", t)

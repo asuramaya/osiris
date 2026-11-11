@@ -1,4 +1,4 @@
-"""Arq worker — the production process that drives the cascade.
+"""Arq worker, the production process that drives the cascade.
 
 Tests exercise the cascade coroutines directly against real Postgres + Redis;
 this module is the long-running wiring: it builds a CascadeContext once at
@@ -90,7 +90,7 @@ def register_default_watchers() -> None:
 
 
 async def _proc_mem_kb() -> dict[str, int | None]:
-    """This process's own RSS/swap off /proc/self/status — mirrors mcp_server.py's own
+    """This process's own RSS/swap off /proc/self/status, mirrors mcp_server.py's own
     helper (thread 4746e7f4/0c03a685); small and process-local enough (stdlib-only) that
     a shared import wasn't worth coupling this daemon's boot path to the other daemon's
     HTTP route module. Fails open to None per field rather than raising."""
@@ -114,9 +114,9 @@ _WORKER_MEMTRACE_CHECK_INTERVAL_S = 5.0
 
 async def _boot_memtrace(window_s: float) -> None:
     """Ports 8c7100c's bounded-window safety rails to the worker's own boot burst (thread
-    0c03a685) — the exact incident that redesign exists to prevent (an unbounded
+    0c03a685), the exact incident that redesign exists to prevent (an unbounded
     tracemalloc pinning a live event loop) must never repeat here either. 5 frames, an
-    RSS tripwire, a hard duration cap, self-terminating with nobody polling — but unlike
+    RSS tripwire, a hard duration cap, self-terminating with nobody polling, but unlike
     the mcp route, this daemon has no HTTP surface: it logs the top allocation sites ONCE,
     at the end of the window, since that is the only channel this process has."""
     import tracemalloc
@@ -287,7 +287,7 @@ async def drain_cascade(ctx: dict[str, Any]) -> int:
 
 async def expand_case_job(ctx: dict[str, Any], case_id: str) -> int:
     """The heavy case-expansion the API used to run inline in its own event loop.
-    It is ENQUEUED here so a long crawl can never block or crash the console — the
+    It is ENQUEUED here so a long crawl can never block or crash the console, the
     worker⊥surface cut. The API's SSE stream still surfaces progress, reading the
     same Postgres this writes to."""
     return await expand_case(ctx["cascade"], uuid.UUID(case_id))
@@ -299,17 +299,17 @@ async def provenance_backfill_job(
 ) -> dict[str, Any]:
     """THE STALL, its own fix, item 1 (thread 0be2f790, Thoth mail 10626, 2026-09-14
     evening): `backfill(target='provenance_possible_upstream')` used to read real
-    transcripts — some 200-470MB — on osiris-mcp's own event loop thread, starving the
+    transcripts, some 200-470MB, on osiris-mcp's own event loop thread, starving the
     whole fleet's shared connection for 19 minutes before the operator restarted it by
     hand. No transcript byte is EVER read there again: the MCP door now enqueues THIS
     job on osiris-worker (its own process, its own loop) and returns a job id; this
     function does the real work and posts the receipt as a thread annotation when it's
     done, exactly where a caller checking back would look. The CLI door
-    (`cmd_backfill`) still calls `backfill_possible_upstream` in-process — it IS its
+    (`cmd_backfill`) still calls `backfill_possible_upstream` in-process, it IS its
     own process, so the starvation risk this job exists to avoid does not apply there.
 
     Streaming, the byte cap, and the wall-clock budget all live inside
-    `backfill_possible_upstream` itself (items 2-4 of the same ruling) — this wrapper
+    `backfill_possible_upstream` itself (items 2-4 of the same ruling), this wrapper
     only supplies the worker-side execution boundary and the receipt's own delivery."""
     from src.orchestrator.capture import annotate_thread
     from src.orchestrator.provenance_backfill import backfill_possible_upstream
@@ -320,7 +320,7 @@ async def provenance_backfill_job(
         actions, dry_run=dry_run, because=because, limit=limit, newest_first=newest_first)
     summary = report.get("summary", {})
     note = (
-        f"WORKER RECEIPT (provenance_backfill_job, requested by {actor}): "
+        f"WORKER RESULT (provenance_backfill_job, requested by {actor}): "
         f"dry_run={report.get('dry_run')} newest_first={report.get('newest_first')} "
         f"candidates_examined={report.get('candidates_examined')}/"
         f"{report.get('candidates_total')} partial={report.get('partial')} "
@@ -360,10 +360,10 @@ async def reap_runs(ctx: dict[str, Any]) -> int:
 
 
 async def reap_leases(ctx: dict[str, Any]) -> int:
-    """Self-heal: recover resource_leases nobody released (task #103/#119) — a crash, a
+    """Self-heal: recover resource_leases nobody released (task #103/#119), a crash, a
     compaction, a dropped session. Mirrors reap_runs exactly; explicit release_lease stays
     the primary path, this is the backstop. Default window matches
-    mcp_server.reap_stale_leases' own default (an hour — agent-work-paced, not
+    mcp_server.reap_stale_leases' own default (an hour, agent-work-paced, not
     machine-paced like helper_runs' 900s)."""
     return await reap_stale_leases(ctx["pool"])
 
@@ -379,12 +379,12 @@ async def sense_liveness(ctx: dict[str, Any]) -> int:
     """IS THAT MIND ALIVE, OR HAS IT MERELY STOPPED TALKING TO US? (456960e5)
 
     `last_seen` was refreshed only when an agent CALLED Osiris, and every liveness test reads
-    `last_seen > now() - 15 minutes` — so a mind heads-down for twenty minutes reads as DEAD. WE
+    `last_seen > now() - 15 minutes`: so a mind heads-down for twenty minutes reads as DEAD. WE
     WERE MEASURING CHATTINESS AND CALLING IT ALIVENESS. The wake trigger reads that same field,
     which is how it woke projects whose agent was alive and working, putting two agents on one tree.
 
     A `stat()` on the transcripts fixes it: a live session is WRITING, whether or not it is talking
-    to us. FREE, deterministic, never wrong — an OBSERVATION, not a guess, which is why it runs on
+    to us. FREE, deterministic, never wrong, an OBSERVATION, not a guess, which is why it runs on
     its own switch (OSIRIS_TRANSCRIPTS) and NOT the adversary's. Killing the expensive inferrer must
     never blind the free observer.
     """
@@ -397,9 +397,9 @@ async def sense_liveness(ctx: dict[str, Any]) -> int:
 async def backfill_transcripts(ctx: dict[str, Any]) -> int:
     """THE STORE STAYS CURRENT ON THE OBSERVER'S SWITCH (task #19, the operator's word
     2026-07-19). The transcript store is Osiris eating sessions from ANY harness; its
-    backfill is a free, deterministic sweep — the spend gate (9675fe4) makes an unchanged
+    backfill is a free, deterministic sweep, the spend gate (9675fe4) makes an unchanged
     transcript cost a stat and a row lookup, nothing more. So it runs on OSIRIS_TRANSCRIPTS
-    (the free observer, always on) and NEVER the miner's licence — killing the expensive
+    (the free observer, always on) and NEVER the miner's licence, killing the expensive
     inferrer must not stale the store (the one-switch-one-cost law, 51000597). Returns
     sessions touched."""
     root = get_settings().osiris_transcripts
@@ -459,16 +459,16 @@ async def sweep_doors(ctx: dict[str, Any]) -> int:
     """THE DOOR SWEEP (operator ruling, 2026-07-17: 'chrome shows fleet 5 but there are only
     3 agents up' + 'the 20+ doors on some i also consider a bug'). Two rules, one tick:
 
-    THE GHOST RULE first — a fresh row whose cwd and project hold no claude body is a killed
+    THE GHOST RULE first, a fresh row whose cwd and project hold no claude body is a killed
     tab's leak (terminal kill skips SessionEnd), released now instead of decaying for 15
     minutes. The census runs BEFORE the row fetch (the sweep's grace floor covers the scan
-    gap), and a BLIND census (None — pgrep itself failed) skips the rule entirely: 'could not
-    look' must never read as 'nobody is home'. THE PILE RULE second — stale rows collapse to
+    gap), and a BLIND census (None, pgrep itself failed) skips the rule entirely: 'could not
+    look' must never read as 'nobody is home'. THE PILE RULE second, stale rows collapse to
     one last-known address per active agent, none for the demoted or the objectless. Pure
     reconciliation of hot state against OS truth; the graph's record of who lived is
     elsewhere and untouched.
 
-    Both rules are reversible and audited (mounts.py, thread 45dd4f3c, Thoth DM 2835) — every
+    Both rules are reversible and audited (mounts.py, thread 45dd4f3c, Thoth DM 2835), every
     row either releases writes an `audit_log` snapshot first, undoable via
     `mounts.undrop_dead_project_mount`, the same mechanism #59's own drop already uses."""
     actions = Actions(ctx["pool"])
@@ -486,11 +486,11 @@ _SENSE_BUDGET = 3  # LLM extract calls per tick — the tick's wall-clock is ~th
 
 
 async def sense_sessions(ctx: dict[str, Any]) -> int:
-    """Sense the session transcripts — the last unsensed source. Distill new dialogue,
+    """Sense the session transcripts, the last unsensed source. Distill new dialogue,
     redact, extract, land the yield DERIVED. Off unless OSIRIS_SENSE_SESSIONS names the
     projects root; a failed pass logs and waits for the next tick (cursors only advance
-    past what was actually emitted). Every outcome — success, error, even the timeout
-    cancel — lands in the miner:ticks telemetry: the heartbeat says the worker breathes,
+    past what was actually emitted). Every outcome, success, error, even the timeout
+    cancel, lands in the miner:ticks telemetry: the heartbeat says the worker breathes,
     this says the tick actually finishes (the onboarding-day outage ran a full day
     behind a green heartbeat, decision 3191e0df)."""
     root = get_settings().osiris_sense_sessions
@@ -534,7 +534,7 @@ async def meter_the_wakes(ctx: dict[str, Any]) -> int:
     Spawning an entire Claude session is the most expensive thing Osiris can do, and it was the one
     thing nobody could see. I can price the miner to the cent; I cannot tell the operator what the
     farm that minted 463 agents on his abandoned projects cost him. That is the SAME disease I spent
-    the week killing in the miner — a producer whose spend nobody counted, and which therefore could
+    the week killing in the miner, a producer whose spend nobody counted, and which therefore could
     not be falsified, and which therefore rotted. A HAND YOU CANNOT COST IS A HAND YOU CANNOT
     GOVERN.
 
@@ -562,14 +562,14 @@ async def meter_the_wakes(ctx: dict[str, Any]) -> int:
 
 
 async def reap_orphans(ctx: dict[str, Any]) -> int:
-    """THE ORPHAN LANE (B7) — a session that died with no rite left NOBODY holding the context.
+    """THE ORPHAN LANE (B7), a session that died with no rite left NOBODY holding the context.
 
     Killing the crawl made the PreCompact hook the only bell, so a session that crashes, is killed,
     or simply ENDS without reaching the context ceiling was never read at all. That was a
     regression I shipped knowingly, and this is its fix.
 
-    IT IS NOT A CRAWL. The crawl walked EVERY transcript FOREVER on a clock. This DETECTS — for
-    free, with a stat() and a watermark lookup — which sessions have ENDED and were never read, and
+    IT IS NOT A CRAWL. The crawl walked EVERY transcript FOREVER on a clock. This DETECTS, for
+    free, with a stat() and a watermark lookup, which sessions have ENDED and were never read, and
     hands each ONCE to the same licence-gated death rite a graceful session gets. Its cost is
     (sessions that actually died un-swept), and it converges to zero.
 
@@ -590,7 +590,7 @@ async def reap_orphans(ctx: dict[str, Any]) -> int:
 
 
 async def _arq_sweep(ctx: dict[str, Any], path: Path) -> None:
-    """Sweep one transcript and mark it read — whatever it yielded, INCLUDING NOTHING.
+    """Sweep one transcript and mark it read, whatever it yielded, INCLUDING NOTHING.
 
     An empty yield is a COMPLETE answer (most sessions abandon nothing); re-reading a session
     because it had nothing to say would be paying, forever, to be told nothing twice.
@@ -606,12 +606,12 @@ async def _arq_sweep(ctx: dict[str, Any], path: Path) -> None:
 
 
 async def sweep_session(ctx: dict[str, Any], transcript: str) -> int:
-    """THE DEATH RITE — and now the ONLY way the adversary ever runs (B6, ruling ceae1604).
+    """THE DEATH RITE, and now the ONLY way the adversary ever runs (B6, ruling ceae1604).
 
     A PreCompact/Stop hook posts the dying session's transcript here and the adversary reads it
     WHOLE, once, at the seam. Not a chunk with a cursor: the WHOLE ARC. That is what makes its
-    hardest rule possible — "before you return anything, search the rest of the transcript for its
-    resolution" — and it is why the crawl could never have obeyed that rule at any prompt quality.
+    hardest rule possible, "before you return anything, search the rest of the transcript for its
+    resolution", and it is why the crawl could never have obeyed that rule at any prompt quality.
     A reader that cannot remember mints the question and never sees the answer.
 
     Mining is SUMMONED, never walking: the cost is one call per session that actually ENDS, and
@@ -658,8 +658,8 @@ async def sweep_session(ctx: dict[str, Any], transcript: str) -> int:
 
 
 async def _mark_ledger_done(pool: Any, transcript: str) -> None:
-    """Every sweep_session exit — success, failure, dark subsystem, or a deliberate out-of-
-    scope defer — marks its sweep_ledger row(s) done. An out-of-scope defer or a disabled
+    """Every sweep_session exit, success, failure, dark subsystem, or a deliberate out-of-
+    scope defer, marks its sweep_ledger row(s) done. An out-of-scope defer or a disabled
     sensing subsystem is a real, stable DECISION, not a stall; retrying either forever would be
     the watchdog nagging (then eventually poison-pill escalating) something that was never
     actually stuck, only ever deferred by design."""
@@ -680,16 +680,16 @@ SWEEP_RETRY_CEILING = 1800
 async def reap_stuck_sweeps(ctx: dict[str, Any]) -> int:
     """Finding A's own watchdog (thread 5177057a, Thoth's design approval DM 1326): sweep_route
     writes one sweep_ledger row per enqueue attempt; this is the only reader that acts on an
-    attempt still incomplete past its SLA. Cheap by construction — one indexed query against
+    attempt still incomplete past its SLA. Cheap by construction, one indexed query against
     sweep_ledger_pending_idx, no filesystem walk, no spend unless something is actually stuck.
 
     Catches exactly what B7 (the orphan reaper) structurally cannot: a dropped enqueue on a
     lineage whose first-ever sweep already succeeded. mark_swept's watermark is a one-time-ever
     boolean per transcript file, so the orphan reaper goes permanently blind to that file the
-    moment it is swept once — a session compacting every few minutes is exactly this shape.
+    moment it is swept once, a session compacting every few minutes is exactly this shape.
 
     Bounded, never loops forever: past SWEEP_RETRY_CEILING with no completion, re-enqueueing
-    stops and the row is escalated as a poison pill instead (_escalate_poison_sweep) — a
+    stops and the row is escalated as a poison pill instead (_escalate_poison_sweep), a
     durable, fleet-visible Thread plus a logged alarm, the same "confess, don't hide" discipline
     as every other silent-failure class this house has already closed."""
     pool = ctx["cascade"].actions.pool
@@ -719,7 +719,7 @@ async def _escalate_poison_sweep(ctx: dict[str, Any], row: Any) -> None:
     re-enqueueing it forever would burn spend retrying a transcript that will never yield. Stop,
     and confess loudly instead of looping quietly: a durable Thread the fleet can see (open_thread
     dedups on its own summary hash, so a later tick finding the same row doesn't mint a second
-    one) plus a logged alarm. Marks the row done either way — this ledger's own job is knowing
+    one) plus a logged alarm. Marks the row done either way, this ledger's own job is knowing
     whether to keep retrying, not proving the sweep actually succeeded; the escalation Thread is
     the source of truth for that."""
     from src.orchestrator.capture import open_thread as _open_thread
@@ -730,8 +730,8 @@ async def _escalate_poison_sweep(ctx: dict[str, Any], row: Any) -> None:
     await _open_thread(
         actions,
         f"POISON SWEEP: transcript {row['transcript_path']} (session {row['session_id']}) "
-        f"never completed after {SWEEP_RETRY_CEILING // 60} min of retries — the death rite's "
-        "mining call is stuck or crashing on this transcript every attempt. Needs a mind to "
+        f"never completed after {SWEEP_RETRY_CEILING // 60} min of retries, the death rite's "
+        "mining call is stuck or crashing on this transcript every attempt. Needs an agent to "
         "read it directly and find out why, not another automatic retry.",
         kind="obligation", arc="Compaction-Resilience", source="cron:sweep_watchdog",
     )
@@ -775,7 +775,7 @@ async def embed_pass(ctx: dict[str, Any]) -> int:
 async def neighborhood_pass(ctx: dict[str, Any]) -> int:
     """Rung 4's daily walk (ruling a0cfcca1): fold DERIVED echoes into their deliberate
     captures (mechanical, free), then refresh up to 3 stale neighborhood summaries
-    (fingerprint-watermarked — an unchanged repo costs nothing; metered in llm_usage)."""
+    (fingerprint-watermarked, an unchanged repo costs nothing; metered in llm_usage)."""
     from src.ingest.providers import llm_provider
     from src.orchestrator.neighborhoods import consolidate_pass, summarize_neighborhoods
 
@@ -795,7 +795,7 @@ async def neighborhood_pass(ctx: dict[str, Any]) -> int:
 
 async def trigger_mail(ctx: dict[str, Any]) -> int:
     """The mailbox alarm clock: wake an agent in a project that has unread mail (bounded by a
-    per-project rate cap; OFF unless osiris_trigger_enabled — the kill switch). A spawn failure
+    per-project rate cap; OFF unless osiris_trigger_enabled, the kill switch). A spawn failure
     logs, never sinks the cron. Worker-as-tripwire (rule #2); Osiris itself still has no hands."""
     from src.orchestrator.settings_service import settings_with_overlay
 
@@ -814,7 +814,7 @@ async def trigger_mail(ctx: dict[str, Any]) -> int:
 async def pit_watch_heartbeat(ctx: dict[str, Any]) -> int:
     """Pit Watch Stage B: alarm on a managed_by pair's ask-graded DM sitting unread while its
     addressee is provably not mid-turn, escalating to the operator's desk after enough
-    consecutive sightings (OFF unless osiris_pit_watch_enabled — the kill switch). Never
+    consecutive sightings (OFF unless osiris_pit_watch_enabled, the kill switch). Never
     dispatches or spawns anything of its own; a DB hiccup logs, never sinks the cron."""
     from src.orchestrator.pit_watch import pit_watch_tick
     from src.orchestrator.settings_service import settings_with_overlay
@@ -831,7 +831,7 @@ async def pit_watch_heartbeat(ctx: dict[str, Any]) -> int:
 
 
 async def fleet_reconcile_heartbeat(ctx: dict[str, Any]) -> int:
-    """Task #59 phase 2's scheduled leg — a thin cron shim, same shape as trigger_mail /
+    """Task #59 phase 2's scheduled leg, a thin cron shim, same shape as trigger_mail /
     pit_watch_heartbeat: the flag gate (osiris_fleet_reconcile_enabled) and the acting
     logic both live in fleet_reconcile.reconcile_scheduled_tick, never here, so a test can
     exercise the real gate without touching arq. A DB hiccup logs, never sinks the cron."""
@@ -853,7 +853,7 @@ async def fleet_reconcile_heartbeat(ctx: dict[str, Any]) -> int:
 
 async def phantom_heal_heartbeat(ctx: dict[str, Any]) -> int:
     """The phantom-heal sweep's scheduled leg (decision ee012ebc, operator ruling
-    7d6815bb) — a no-op unless osiris_phantom_heal_enabled (the kill switch), same shape
+    7d6815bb), a no-op unless osiris_phantom_heal_enabled (the kill switch), same shape
     as fleet_reconcile_heartbeat/closure_miner_heartbeat: the flag gate lives here, the
     acting logic (fold_existing_zero_turn_phantoms) lives in agents.py so a test can
     exercise it directly without touching arq. Folds only FRESH zero-turn phantoms never
@@ -877,7 +877,7 @@ async def phantom_heal_heartbeat(ctx: dict[str, Any]) -> int:
 
 async def phantom_fold_reap_heartbeat(ctx: dict[str, Any]) -> int:
     """The phantom/fold backlog reap's scheduled leg (dispatch #185 item (e), ruling
-    696d302c, Thoth DM 5464) — a no-op unless osiris_phantom_fold_reap_enabled (the kill
+    696d302c, Thoth DM 5464), a no-op unless osiris_phantom_fold_reap_enabled (the kill
     switch), same shape as fleet_reconcile_heartbeat/phantom_heal_heartbeat: the flag gate
     lives here, the acting logic (phantom_fold_scheduled_tick) lives in
     phantom_fold_reap.py so a test can exercise it directly without touching arq.
@@ -905,8 +905,8 @@ async def obligation_hygiene_heartbeat(ctx: dict[str, Any]) -> int:
     """The obligation-hygiene no-regrow rule's scheduled leg (dispatch #204 follow-on,
     operator ruling relayed Thoth DM 7161, 2026-09-05): a no-op unless
     osiris_obligation_hygiene_enabled (the kill switch, TRUE BY DEFAULT per the operator's
-    own explicit instruction — a named exception to this file's own dark-by-default
-    convention), same shape as its seven 15-min siblings — the flag gate lives here, the
+    own explicit instruction, a named exception to this file's own dark-by-default
+    convention), same shape as its seven 15-min siblings, the flag gate lives here, the
     acting logic (obligation_hygiene_scheduled_tick) lives in obligation_hygiene.py so a
     test can exercise it directly without touching arq. N1=7 idle days nudges the
     obligation's own owner (or the operator, per the owner-address fallback); N2=+7 more
@@ -931,7 +931,7 @@ async def obligation_hygiene_heartbeat(ctx: dict[str, Any]) -> int:
 
 async def no_regrow_heartbeat(ctx: dict[str, Any]) -> int:
     """The no-regrow rule's scheduled leg (operator's word via Thoth DM 8606/8618,
-    2026-09-09) — a SEPARATE clock from obligation_hygiene_heartbeat above, keyed off
+    2026-09-09), a SEPARATE clock from obligation_hygiene_heartbeat above, keyed off
     `stale_after` rather than idle-since-last-touch. A no-op unless
     osiris_no_regrow_enabled (the kill switch, OFF by default). The acting logic
     (no_regrow_scheduled_tick) lives in no_regrow.py so a test can exercise it directly
@@ -956,14 +956,14 @@ async def no_regrow_heartbeat(ctx: dict[str, Any]) -> int:
 async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     """THE STALE-WINDOW SWEEP, INSTALLED ON THE FRESH-INSTALL PATH (thread 28fa9e22,
     operator dispatch wave 3/4, #203's own "ships mechanically, never a coordinator's
-    hand pass" mandate): migration 0060 ran ONCE, by hand, at deploy time — but new
+    hand pass" mandate): migration 0060 ran ONCE, by hand, at deploy time, but new
     derived threads keep aging past their own 30-day window every day after, and a
     stranger's install has no coordinator to re-run a migration script by hand. This
     cron re-applies the SAME three laws (owner/kind/expiry) on the same 900s cadence as
     its no-regrow siblings, so a fresh `osiris migrate` + boot alone keeps the graph's
     own classification current, forever, with zero hand on it.
 
-    The acting logic (`apply_migration_0060`) lives in migration_0060.py — Khnum's own
+    The acting logic (`apply_migration_0060`) lives in migration_0060.py, Khnum's own
     helper, called here verbatim, never a second copy of the closure/owner/kind rules.
     Idempotent by construction (that module's own docstring): a clean re-run over
     already-compliant rows costs nothing. A DB hiccup logs, never sinks the cron.
@@ -975,27 +975,27 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
 
     AND THE GHOST HOUSE-STAMP SWEEP (thread a732e331 clause 3, wave 7 dispatch msg 8079,
     since house_hygiene.py): a Seat's own pre-house-optional ghost stamp, same "unclaimed
-    leftover expires mechanically" reasoning a third time — a receipt naming each retired
+    leftover expires mechanically" reasoning a third time, a receipt naming each retired
     seat, same failure discipline as its two siblings above.
 
     AND THE MECHANICAL FLEET PRUNE (thread 07ca68ca, wave 8, since fleet_prune.py):
     `dead_transcript` (a mount row whose own job_dir anchor directory is gone) and
     `unclaimed_body` (a verified live OS body with no agent_mounts row, bound when
-    tree_seat_hint resolves its cwd to a living seat+holder) — deliberately narrower than
+    tree_seat_hint resolves its cwd to a living seat+holder), deliberately narrower than
     fleet_reconcile's own identity-folding buckets, which stay behind their own
     fleet_reconcile_heartbeat/osiris_fleet_reconcile_enabled kill switch (see fleet_prune.
     py's module docstring for why). PLUS the stacked-header office sub-sweep (thread
     658c2152, folded into 07ca68ca): every active seat's CLAUDE.md checked for a leading
     duplicate header before its compiled marker span, healed through reissue_office
-    (adopt=True) — same failure discipline as its three siblings above.
+    (adopt=True), same failure discipline as its three siblings above.
 
     AND THE PROVENANCE SWEEP HEARTBEAT (wave 15, mail 8840, `apply_provenance_sweep_
     heartbeat` in capture.py): every cardinality-1-mint-or-abstain orphan lane the wave
     built (Agent/Decision/Thread/Reference/Practice/Superstition, each mechanically
-    derived, never a guess) re-applied on the same cadence — "so a stranger's install
+    derived, never a guess) re-applied on the same cadence, "so a stranger's install
     self-heals" (the dispatch's own words), never a coordinator re-running a backfill
     script by hand. One lane failing is reported under its own key, never sinks its
-    siblings — same discipline this cron already gives its other four sub-sweeps.
+    siblings, same discipline this cron already gives its other four sub-sweeps.
 
     AND THE BOOT DRIFT NUDGE (thread f37aaf1b, v1.1 follow-up piece 1, `apply_boot_
     drift_nudge_sweep` in boot_compiler.py): every active seat whose compiled CLAUDE.md
@@ -1009,14 +1009,14 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     PER-SUB-SWEEP TIME BUDGET AND INSTRUMENTATION (thread 9150aec2, follow-up piece,
     Thoth mail 10204): the w218 liveness regression FIXED the specific defect (an
     unbounded per-agent transcript walk) but left this cron's own seven sub-sweeps
-    measured only in aggregate — a single slow sweep could still hold `_boot_lock` for
+    measured only in aggregate, a single slow sweep could still hold `_boot_lock` for
     its whole run with nobody able to see WHICH of the seven was responsible short of
     re-reading source. Every sub-sweep below now runs under `asyncio.wait_for(...,
     timeout=_SUBSWEEP_TIMEOUT_SECS)`: a sweep that overruns its own share logs its name
     and elapsed time and the cron MOVES ON (same "one hiccup never sinks a sibling" law
     this function's own docstring already establishes for exceptions, extended to
     timeouts) rather than holding the lock past its budget. `_SUBSWEEP_TIMEOUT_SECS=60`
-    — seven sweeps at 60s each sums to 420s, comfortably under this cron's own
+   , seven sweeps at 60s each sums to 420s, comfortably under this cron's own
     `timeout=600` arq ceiling with margin for the untimed bookkeeping between them.
     Every tick's own seven timings are logged unconditionally (never gated on "something
     happened," unlike this function's per-sweep receipt lines above) so a slow tick is
@@ -1045,7 +1045,7 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
         except TimeoutError:
             _log.warning(
                 "classification laws heartbeat: sub-sweep %s exceeded its own %ss "
-                "budget — abandoned this tick, never held the boot lock past it",
+                "budget, abandoned this tick, never held the boot lock past it",
                 name, _SUBSWEEP_TIMEOUT_SECS)
             result = {}
         except Exception as exc:  # a DB/disk/mail hiccup must not kill the cron
@@ -1117,14 +1117,14 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
 
 async def landing_audit_heartbeat(ctx: dict[str, Any]) -> int:
     """The landing audit's scheduled leg (Thoth DM 5544): task #168 built and tested
-    deploy_guard.landing_audit/stale_unmerged_branches — measured live, the mechanism was
+    deploy_guard.landing_audit/stale_unmerged_branches, measured live, the mechanism was
     never broken, but its ONLY caller was cmd_deploy, and the deploy cursor had sat at
     e42f7c6 (2026-08-18) for 5 days, blocked by an unrelated gate (Sekhmet's false-mint-live
-    lane). Detection was correct; its sole trigger was dark — an adoption gap, not a
+    lane). Detection was correct; its sole trigger was dark, an adoption gap, not a
     ranking or detection defect. Same thin-shim shape as its five 15-min siblings above:
-    the acting logic (deploy_guard.landing_audit) is UNCHANGED, no new surface — a no-op
+    the acting logic (deploy_guard.landing_audit) is UNCHANGED, no new surface, a no-op
     unless osiris_landing_audit_enabled (the kill switch). Runs off `_REPO_ROOT`, same as
-    check_unreviewed_boot's sibling call above in startup() — correct here because the
+    check_unreviewed_boot's sibling call above in startup(), correct here because the
     worker daemon always runs from the one canonical deployed checkout, never a seat's own
     worktree (deploy_guard's own worktree-resolution gotcha applies to cmd_deploy, invoked
     by hand from any worktree; it does not apply to this always-primary-service caller). A
@@ -1149,7 +1149,7 @@ async def landing_audit_heartbeat(ctx: dict[str, Any]) -> int:
 
 async def closure_miner_heartbeat(ctx: dict[str, Any]) -> int:
     """The closure miner's scheduled leg (Thoth DM 2679, following the deploy that made
-    this defensible) — same thin-shim shape as fleet_reconcile_heartbeat: the flag gate
+    this defensible), same thin-shim shape as fleet_reconcile_heartbeat: the flag gate
     (osiris_closure_miner_enabled) and the acting logic both live in
     closure.close_by_commits_scheduled_tick, never here. A DB hiccup logs, never sinks
     the cron."""
@@ -1171,12 +1171,12 @@ async def closure_miner_heartbeat(ctx: dict[str, Any]) -> int:
 
 async def abstention_miner_heartbeat(ctx: dict[str, Any]) -> int:
     """THE FIRST MINER's own scheduled leg (wave 16, decision 4d622aee, operator
-    2026-09-10: "yes, build and wire it") — same thin-shim shape as
+    2026-09-10: "yes, build and wire it"), same thin-shim shape as
     closure_miner_heartbeat: the flag gate (osiris_abstention_miner_enabled) and the
     acting logic both live in abstention_miner.abstention_miner_tick, never here.
     guarded_miner_tick (proposals.py, wave 15 item 4) writes a durable failure receipt
     BEFORE any exception is allowed to propagate; this try/except is the belt to that
-    wrapper's own suspenders — a DB hiccup logs, never sinks the cron."""
+    wrapper's own suspenders, a DB hiccup logs, never sinks the cron."""
     from src.orchestrator.abstention_miner import abstention_miner_tick
     from src.orchestrator.proposals import guarded_miner_tick
 
@@ -1195,18 +1195,18 @@ async def abstention_miner_heartbeat(ctx: dict[str, Any]) -> int:
 async def backfill_decided_in_heartbeat(ctx: dict[str, Any]) -> int:
     """Task #101's own periodic retry (Thoth's grant, DM 2271, riding behind the one-off
     sweep in decisions c6d1598c/e73c1453): the live path (record_decision) only ever
-    mints `decided_in` FORWARD, at write time — a decision citing a commit gitlog hasn't
+    mints `decided_in` FORWARD, at write time, a decision citing a commit gitlog hasn't
     reached yet is a genuine RACE (ruling c5ab0dcb's Mode B, omission), not an ambiguity,
     and nothing retried it before this. Same idempotent backfill_decided_in the one-off
-    sweep used, run on a schedule instead of by hand — most ticks just re-confirm an
+    sweep used, run on a schedule instead of by hand, most ticks just re-confirm an
     already-near-empty backlog, since the live path already handles the common case.
 
     DELIBERATELY QUIET ON THE STABLE SKIP: the one-off sweep confirmed 132 commit shas
-    cited in this house's own decisions were NEVER ingested at all — a permanent gap this
+    cited in this house's own decisions were NEVER ingested at all, a permanent gap this
     cron structurally cannot close (the referent does not exist; no amount of retrying
     changes that). Logging that count every tick would be the exact Stage C disease Thoth
     named: a stable, already-known, unfixable-here fact read back as a fresh alarm 132
-    times a day. So only `minted` (a genuinely NEW edge — a real race that just closed)
+    times a day. So only `minted` (a genuinely NEW edge, a real race that just closed)
     triggers a log line, matching this file's own "log only when something happened"
     convention (trigger_mail/pit_watch_heartbeat/fleet_reconcile_heartbeat, above);
     `skipped` still rides in the returned report for record_job's own telemetry, silent
@@ -1227,10 +1227,10 @@ async def backfill_decided_in_heartbeat(ctx: dict[str, Any]) -> int:
 
 async def tree_ingest_alarm_heartbeat(ctx: dict[str, Any]) -> int:
     """The tree-ingest census's scheduled leg (thread 5126, operator ruling df646654/
-    fe8ec7ff) — a no-op unless osiris_tree_ingest_alarm_enabled (the kill switch), same
+    fe8ec7ff), a no-op unless osiris_tree_ingest_alarm_enabled (the kill switch), same
     shape as closure_miner_heartbeat/phantom_heal_heartbeat: the flag gate and the acting
     logic both live in tree_ingest.uningested_trees_alarm_tick, never here. It never
-    ingests anything itself — it mails the owning Seat a graded 'ask'; ingest_project stays
+    ingests anything itself, it mails the owning Seat a graded 'ask'; ingest_project stays
     that seat's own deliberate second call. A DB hiccup logs, never sinks the cron."""
     from src.orchestrator.settings_service import settings_with_overlay
     from src.orchestrator.tree_ingest import uningested_trees_alarm_tick
@@ -1271,24 +1271,24 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     """THE RETENTION HEARTBEAT (wave 12 item 1, operator's word via Thoth DM 8378: "put
     outbox_retention and audit_log_retention ... on the heartbeat"): outbox/audit_log are
     the two highest-churn append-only tables (src.orchestrator.retention's own module
-    docstring — measured live 2026-09-08: outbox 803 MB, audit_log 1.2 GB, neither ever
-    pruned), so this DELETEs (execute=True, batched — the acting logic lives entirely in
+    docstring, measured live 2026-09-08: outbox 803 MB, audit_log 1.2 GB, neither ever
+    pruned), so this DELETEs (execute=True, batched, the acting logic lives entirely in
     retention.py, never duplicated here) published outbox rows and audit_log rows older
     than their windows (outbox 30 days, audit_log 90), once a day (not every-15-min like this
-    file's other siblings — a multi-million-row table does not need that granularity, and
+    file's other siblings, a multi-million-row table does not need that granularity, and
     the operator's own acceptance test is "flat over a week", not "flat over 15 minutes").
     A no-op unless osiris_retention_heartbeat_enabled (TRUE BY DEFAULT, a named exception
-    to this file's dark-by-default convention — the operator asked for this to RUN, not
+    to this file's dark-by-default convention, the operator asked for this to RUN, not
     merely exist).
 
     A DESK RECEIPT EVERY RUN (the operator's own explicit acceptance: "the first run's
     counts on the desk"), unlike every sibling above's "log only when something happened"
-    convention — a daily cadence means this never floods the desk, and a silent zero-
+    convention, a daily cadence means this never floods the desk, and a silent zero-
     delete run is itself useful confirmation the job is alive. `run_at_startup=True` so a
     fresh deploy of this wave gets its first receipt immediately, not at the next 03:30.
 
     A DB hiccup on either table logs and skips ONLY that table's own retention + receipt
-    line — the other table's run is independent, same "one hiccup never sinks a sibling"
+    line, the other table's run is independent, same "one hiccup never sinks a sibling"
     discipline as classification_laws_heartbeat's four sub-sweeps."""
     from src.orchestrator.mailbox import send_message
     from src.orchestrator.retention import (
@@ -1503,20 +1503,20 @@ async def db_compaction_heartbeat(ctx: dict[str, Any]) -> int:
 async def soul_cold_tier_heartbeat(ctx: dict[str, Any]) -> int:
     """THE SOUL STORE'S COLD TIER (wave 12 item 2, thread 78efd46d, operator ruling via
     decision 64ec1905: "memory gets tiers not deletion"): fold a bounded batch of
-    sessions untouched for 30+ days (SoulStore.fold_cold_tier_batch — the acting logic
+    sessions untouched for 30+ days (SoulStore.fold_cold_tier_batch, the acting logic
     lives entirely there, never duplicated here) into one compressed soul_lines_cold row
     each. Once a day, same cadence class as retention_heartbeat above (a fold is no more
-    urgent than a prune, and both are cheap no-ops on a quiet day) — a no-op unless
+    urgent than a prune, and both are cheap no-ops on a quiet day), a no-op unless
     osiris_soul_cold_tier_enabled (TRUE BY DEFAULT, a named exception to this file's
-    dark-by-default convention — the operator asked for this to RUN).
+    dark-by-default convention, the operator asked for this to RUN).
 
-    A desk receipt only when something actually folded or errored — unlike retention_
+    A desk receipt only when something actually folded or errored, unlike retention_
     heartbeat's own "every run" convention: a fold is much rarer per session (30-day
     idle window vs. daily prune eligibility), so most ticks are genuinely nothing to
     report, and a silent-zero receipt every day would be the exact Stage C noise this
     file's other siblings already refuse to produce.
 
-    A DB hiccup on the whole batch logs and returns 0 — SoulStore.fold_cold_tier_batch
+    A DB hiccup on the whole batch logs and returns 0, SoulStore.fold_cold_tier_batch
     already isolates one bad session's own error into the receipt without aborting its
     siblings, so a hiccup reaching here means something broke before or between
     sessions, not within one."""
@@ -1617,15 +1617,15 @@ async def soul_key_tpm_heartbeat(ctx: dict[str, Any]) -> int:
 async def harness_backfill_heartbeat(ctx: dict[str, Any]) -> int:
     """THE HARNESS SIGNAL'S OWN CATCH-UP (wave 13 item 3, thread e7f173a6, Thoth's ruling
     msg 8544): mount() stamps a `harness` property going forward, but every mind mounted
-    before this wave's own deploy carries no stamp — the fleet render would show every
+    before this wave's own deploy carries no stamp, the fleet render would show every
     one of them as "(box default)" forever, never true, until a coincidental remount.
-    This sweeps recently-seen `agent_mounts` rows (last_seen within a day — the live
+    This sweeps recently-seen `agent_mounts` rows (last_seen within a day, the live
     fleet's own window, never the whole historical mount table) whose Agent carries no
     `harness` assertion yet, and stamps one from the SAME `_infer_harness` classifier
-    mount() itself calls — never a second copy of that shape.
+    mount() itself calls, never a second copy of that shape.
 
     Same "one bad row must not abort the sweep" law as `backfill`'s own per-session
-    try/except, and unconditional (no settings kill switch) — a read-only classification
+    try/except, and unconditional (no settings kill switch), a read-only classification
     off an anchor's own shape, the same class of mechanical, always-on sweep
     classification_laws_heartbeat already is, never a write an operator would want to
     veto."""
@@ -1703,11 +1703,11 @@ def watched(fn: Any, *, every: int, heavy: bool = False) -> Any:
     """THE SEAM WHERE A JOB CANNOT LIE ABOUT ITS OWN HEALTH.
 
     The session-miner failed every tick for ten hours and nothing knew, because it CAUGHT its own
-    exception, logged a warning nobody reads, and returned 0 — indistinguishable from a clean tick
+    exception, logged a warning nobody reads, and returned 0, indistinguishable from a clean tick
     with nothing to do. A job that swallows its error looks green.
 
     So error handling moves OUT of the jobs and into this seam. Every cron reports its outcome
-    here — success or failure — and one added next year inherits the watch without its author
+    here, success or failure, and one added next year inherits the watch without its author
     knowing this exists. The "a failed pass logs and waits for the next tick" contract is now kept
     in ONE place, for all of them, instead of being re-implemented (or forgotten) per job.
 
@@ -1715,10 +1715,10 @@ def watched(fn: Any, *, every: int, heavy: bool = False) -> Any:
     "late" from "dead" without a table of magic numbers somewhere else.
 
     BOOT SERIALIZATION (thread 0c03a685): within `ctx["boot_serialize_until"]` (stamped
-    once in startup()) this acquires `_boot_lock` before running `fn` — the fifteen
+    once in startup()) this acquires `_boot_lock` before running `fn`: the fifteen
     run_at_startup jobs that used to fire concurrently in the same ~3s window now queue
     one at a time instead. Past that deadline the check is a cheap monotonic comparison
-    and the lock is never touched — a scheduled tick's steady-state cost is unchanged.
+    and the lock is never touched, a scheduled tick's steady-state cost is unchanged.
 
     TWO BOUNDS ON THE BOOT QUEUE (restart hygiene, 2026-11-05): a waiter gives the lock up
     after `_BOOT_LOCK_WAIT_S` and SKIPS the tick (its job timeout is no longer spent in the

@@ -2874,7 +2874,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        f"({r['seat']}, last seen "
                        f"{r['last_seen'].isoformat()[:19] if r['last_seen'] else 'never'}): "
                        "likely the same soul wearing a second row (a bridged resume without "
-                       "its receipts). Verify and heal by hand; never auto-merge"}
+                       "its records). Verify and heal by hand; never auto-merge"}
             for r in twins])
 
         # PARALLEL-LIVES: a generation whose MINT captured a live pulse on a DIFFERENT
@@ -2993,7 +2993,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                           else "no direct mail between them has ever been seen")
                        + f", past the {stale_days}-day disclosure window. A proxy for the "
                          "fiduciary-disclosure duty, not proof either peer "
-                         "withheld a finding: testimony for a mind to judge, same as every "
+                         "withheld a finding: testimony for an agent to judge, same as every "
                          "other check here"}
             for r in peer_silence])
 
@@ -3037,7 +3037,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             {"subject": f"{r['holder']} holding {r['held']}'s act ({r['act']})",
              "detail": f"time-boxed hold expired {r['deadline'].isoformat()} with no "
                        "resolve_thread call yet: the spec's auto-escalation-to-the-operator "
-                       "half, unbuilt as a push, surfaces here instead: this is where a mind "
+                       "half, unbuilt as a push, surfaces here instead: this is where an agent "
                        "(or a future caller reading this check) takes it to the operator's "
                        "desk, not lint's own act"}
             for r in held_past_deadline])
@@ -3867,8 +3867,8 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     }
     return {"totals": totals, "projects": projects,
             "top_of_wall": shown, "more_on_wall": more,
-            "note": "the fleet wall: the graded top (declared duties + threads a mind touched), "
-                    "never the raw scroll. `pile` is untouched miner echoes (no mind has read "
+            "note": "the fleet wall: the graded top (declared duties + threads an agent touched), "
+                    "never the raw scroll. `pile` is untouched miner echoes (no agent has read "
                     "them); `guessed_obligations` are duties the MINER inferred and nobody "
                     "confirmed, they are NOT debt. Focus a project to see its own graded wall."}
 
@@ -5281,9 +5281,9 @@ async def _fn_backup_status(
         "unit": pitr_unit,
         "schedule": _backup_timer_calendar(pitr_unit),
         **pitr_live,
-        "note": ("scripts/osiris_pitr_drill.py runs from its weekly timer; no receipt persisted"
+        "note": ("scripts/osiris_pitr_drill.py runs from its weekly timer; no result saved"
                  if pitr_live else
-                 "timer state unreadable here (no systemd); no receipt persisted"),
+                 "timer state unreadable here (no systemd); no result saved"),
     }
 
     # THE DISK/WAL BRAKE: whether the bulk-rewrite jobs are paused right now, and why

@@ -1368,7 +1368,7 @@ async def settle_automated_desk_backlog(
 _DESK_NOISE_RE = (r"model (divergence|check|downgrade)|identity (check|\+ model|confession)"
                   r"|model-divergence|divergence at mount")
 _DESK_TRIAGE_RULES = {
-    "N1": "noise: a fold receipt, or a model or identity confession",
+    "N1": "noise: a fold result, or a model or identity confession",
     "N2": "an informational brief (not an ask) older than the informational window",
     "S1": "the sender's own later message corrects, replaces or withdraws it",
     "S2": "an ask, decision or hands brief nobody answered, older than the ask window",

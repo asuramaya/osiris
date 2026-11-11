@@ -1,8 +1,8 @@
-"""osiris init — take a fresh migrated DB to a usable console.
+"""osiris init: take a fresh migrated DB to a usable console.
 
 A fresh install is an empty shell: the migrations create the tables but seed NOTHING, so a
 clean DB has 0 compositions and an empty design canon. The console lands on nothing and
-`run_composition('decision-log')` returns "no composition" — the README's promised question
+`run_composition('decision-log')` returns "no composition", the README's promised question
 can't be answered. This one idempotent command seeds the default compositions (mirroring the
 proven dev-instance shape) and ingests the design canon (docs/reference/ + own docs, the
 substrate `consult_canon` reads), so a fresh box has a working console right after
@@ -11,7 +11,7 @@ substrate `consult_canon` reads), so a fresh box has a working console right aft
     python -m src.init
     python -m src.init --compositions-only   # deploy step: sync DEFAULT_COMPOSITIONS into a
                                               # LIVE DB, skip the (slow, unrelated) canon
-                                              # ingest — ruling 2ee43411, task #63: adding a
+                                              # ingest, ruling 2ee43411, task #63: adding a
                                               # default composition is a first-class deploy step,
                                               # never a raw asyncpg heredoc against the live DB.
 
@@ -22,11 +22,11 @@ re-grow the concept on a fresh box. Migration 0070 backfills the 31 compositions
 scoped on existing installs into `former_room_id`, a standing record, never re-populated by
 this command; the `rooms` table itself stays (read-only, never dropped).
 
-Idempotent: compositions upsert by name, the canon find-or-creates on canonical — so re-running
+Idempotent: compositions upsert by name, the canon find-or-creates on canonical, so re-running
 only fixes drift and never duplicates (asserted in tests/test_init.py).
 
 NB the canon step reads repo-relative doc paths (docs/reference/, docs/COMPOSER.md, …) via
-`ingest_canon` — same convention as `python -m src.ingest.reference`, so run it from the repo
+`ingest_canon`: same convention as `python -m src.ingest.reference`, so run it from the repo
 root (the CLI `main()` chdir's there to be safe; the pure `init()` relies on CWD).
 """
 
@@ -42,7 +42,7 @@ from src.orchestrator.compositions import DEFAULT_COMPOSITIONS, seed_default_com
 async def init(actions: Actions, *, canon: bool = True) -> dict[str, Any]:
     """Seed compositions + the design canon on a fresh migrated DB. Idempotent.
 
-    `canon=False` skips the canon ingest — for a caller not at the repo root (the canon reads
+    `canon=False` skips the canon ingest, for a caller not at the repo root (the canon reads
     repo-relative doc paths). Returns a summary of what's now present.
     """
     pool = actions.pool
@@ -75,8 +75,8 @@ def _print_next_steps(result: dict[str, Any]) -> None:  # pragma: no cover - CLI
     else:
         canon_line = "  · design canon: skipped"
     print(
-        f"osiris init — ready.\n"
-        f"  · compositions: {result['compositions']} seeded (global — rooms are retired)\n"
+        f"osiris init: ready.\n"
+        f"  · compositions: {result['compositions']} seeded (global, rooms are retired)\n"
         f"{canon_line}\n"
         f"\nnext:\n"
         f"  · ingest a repo:   uv run python -m src.ingest.project /path/to/your/repo\n"
@@ -103,7 +103,7 @@ def main() -> None:  # pragma: no cover - CLI
     p = argparse.ArgumentParser()
     p.add_argument("--compositions-only", action="store_true",
                     help="seed + room DEFAULT_COMPOSITIONS only; skip rooms' canon ingest step "
-                         "(rooms themselves still upsert — idempotent, safe on a live DB)")
+                         "(rooms themselves still upsert, idempotent, safe on a live DB)")
     args = p.parse_args()
 
     # the canon step reads repo-relative doc paths; run from the repo root regardless of CWD

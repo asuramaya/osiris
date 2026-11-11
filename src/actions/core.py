@@ -1,4 +1,4 @@
-"""The Actions layer — the *only* mutation path into the ontology.
+"""The Actions layer, the *only* mutation path into the ontology.
 
 Every method is atomic: the domain write, its ``audit_log`` row, and any
 ``outbox`` / ``object_events`` rows all commit in one transaction. UI clicks,
@@ -52,7 +52,7 @@ class Actions:
 
     @asynccontextmanager
     async def _tx(self) -> AsyncIterator[asyncpg.Connection]:
-        """A transaction-scoped connection: the caller's (when bound — one flat txn, no nested
+        """A transaction-scoped connection: the caller's (when bound, one flat txn, no nested
         savepoint) or a freshly acquired one wrapped in its own transaction (the default)."""
         if self._conn is not None:
             yield self._conn
@@ -62,7 +62,7 @@ class Actions:
 
     @asynccontextmanager
     async def _read(self) -> AsyncIterator[asyncpg.Connection]:
-        """Like _tx but for read helpers — bound connection or a plain acquire, no transaction."""
+        """Like _tx but for read helpers, bound connection or a plain acquire, no transaction."""
         if self._conn is not None:
             yield self._conn
         else:
@@ -74,7 +74,7 @@ class Actions:
         """A transaction boundary spanning several Actions calls. `async with actions.atomic()
         as a` yields an Actions bound to ONE connection+transaction: the create, its assertions,
         and its links either all commit or all roll back. The fix for the non-atomic capture
-        path (record_decision was five sequential txns — a crash between them left an orphan)."""
+        path (record_decision was five sequential txns, a crash between them left an orphan)."""
         async with self.pool.acquire() as conn, conn.transaction():
             yield Actions(self.pool, conn=conn)
 
@@ -358,13 +358,13 @@ class Actions:
         right value landed, the wrong one stayed current, both simultaneously "current" per
         current_assertions' own definition (every row nothing else's supersedes points at).
 
-        `because` is recorded in the audit trail — a cross-source retirement crosses
+        `because` is recorded in the audit trail, a cross-source retirement crosses
         accountability lines (someone else's self-declared word), so the justification is
         never optional the way assert_property's own routine same-source supersession
         doesn't need one.
 
         Raises ActionError when `superseded_id` isn't a `name` assertion on `object_id`, or
-        is already superseded — the orchestrator-level `retire_assertion` is expected to
+        is already superseded, the orchestrator-level `retire_assertion` is expected to
         have already checked this and returned a friendlier error dict; this is the
         last-resort invariant, matching merge_objects' own defense-in-depth."""
         actor = actor or source_id
@@ -425,7 +425,7 @@ class Actions:
         confidence: float,
         *,
         because: str = (
-            "a single-current-value property collapsed across sources — a workflow "
+            "a single-current-value property collapsed across sources, a workflow "
             "transition (e.g. a thread's resolve) supersedes every open witness, unlike "
             "assert_property's own same-source-only rule (ruling 1335332e, thread 6361)"
         ),
@@ -435,26 +435,26 @@ class Actions:
         evidence_class: str | None = None,
         actor: str | None = None,
     ) -> int:
-        """assert_property's own supersession is scoped to the SAME source only — correct
+        """assert_property's own supersession is scoped to the SAME source only, correct
         for multi-source corroboration (deploy_guard's alarm_schema_drift opens the same
         alarm Thread from two boot services on purpose, source=f"boot:{service}" each,
-        thread 35c425f9) — but wrong for a property that is single-valued PER OBJECT
+        thread 35c425f9), but wrong for a property that is single-valued PER OBJECT
         regardless of who writes it: a Thread's own `status` in the interactive obligation
-        lifecycle (one agent opens, a different one resolves — exactly one workflow state
+        lifecycle (one agent opens, a different one resolves, exactly one workflow state
         should ever be current, ruling 1335332e).
 
         `singular` is a property of the WRITE, not of the function (Thoth's scoping call,
         thread 6361 msg 6408): a caller reaches for THIS verb, instead of assert_property,
         only at the specific call sites where cross-source collapse is correct —
         resolve_thread's own status/resolved_in/resolved_because writes and
-        record_decision's inline thread-close of the same shape — never open_thread's,
+        record_decision's inline thread-close of the same shape, never open_thread's,
         which must keep coexisting so a second boot service's witness isn't destroyed.
         DEFAULT stays coexist (assert_property); this is an opt-in door, never a global
         behavior change, because a wrong default that DESTROYS a witness is categorically
         worse than a wrong default that merely leaves a leak unfixed at an un-migrated site.
 
         Collapses EVERY other current row for (object_id, name), not just one arbitrary
-        witness — so resolving a thread with N open witnesses (N boot services corroborating
+        witness, so resolving a thread with N open witnesses (N boot services corroborating
         one alarm, say) still leaves exactly one current `status` afterward, not N-1.
         Defers straight to assert_property when nothing else is current (the common case:
         nothing to collapse) or when this source itself was already the sole holder."""
@@ -501,12 +501,12 @@ class Actions:
         writers of `supersedes` (assert_property above, supersede_assertion) flip it in the
         SAME transaction as their INSERT, so no live path can leave a fresh gap).
 
-        Touches ONLY the flag, never an assertion's own content — the kernel itself
+        Touches ONLY the flag, never an assertion's own content, the kernel itself
         (constitution #3) is untouched, this repairs its projection, same class of act as
         0047's own one-time backfill UPDATE. Batched (`limit`) and idempotent: a row already
         flipped drops out of the WHERE clause, so re-running to walk a large population in
         batches, or after a partial failure, is always safe. Returns the ids actually
-        flipped, oldest-observed first — empty when nothing (in this batch) was stale."""
+        flipped, oldest-observed first, empty when nothing (in this batch) was stale."""
         async with self._tx() as conn:
             rows = await conn.fetch(
                 "WITH batch AS ("
@@ -599,14 +599,14 @@ class Actions:
         reason: str | None = None,
     ) -> int:
         """Deactivate every currently-active link on this (from, to, type) triple by stamping
-        `valid_until` — the column the schema has reserved since Phase 0 for exactly this
+        `valid_until`: the column the schema has reserved since Phase 0 for exactly this
         ('explicit deactivation, never delete') but that nothing had yet written to. A healed
         link is never gone: it stops counting as current (readers filter on `valid_until IS
         NULL OR valid_until > now()`), and its row stays exactly where it was created, in whose
-        name, and why. Idempotent — a triple with nothing active returns 0.
+        name, and why. Idempotent, a triple with nothing active returns 0.
 
         `reason` (thread badb4040, the generic retire_link door) rides in the SAME audit/
-        outbox payload this call already writes on a real deactivation — no second write,
+        outbox payload this call already writes on a real deactivation, no second write,
         no second table. Optional here at the kernel layer (most internal callers heal a
         link as routine bookkeeping, no narrative owed); `retire_link`'s own MCP door makes
         it mandatory, the same way `retire_assertion` already requires `because`."""
@@ -648,7 +648,7 @@ class Actions:
     ) -> None:
         """Record a merge as an append-only event, update the identity
         projection, leave assertions in place (resolve-on-read), and union
-        case memberships. Assertions are never rewritten — provenance survives."""
+        case memberships. Assertions are never rewritten, provenance survives."""
         if winner_id == loser_id:
             raise ActionError("cannot merge an object into itself")
         async with self._tx() as conn:
@@ -717,7 +717,7 @@ class Actions:
         never delete). Restores the merged object to active and clears the projection;
         the original merge event and its same_as link stay in the record as witnesses
         of the era. First used for the repo:osiris↔repo:thoth direction defect (task
-        #29): the ruling said one project, one room — the execution buried the true
+        #29): the ruling said one project, one room, the execution buried the true
         name under the day-old fracture label, and 2410 links landed on the corpse."""
         async with self._tx() as conn:
             row = await conn.fetchrow(
@@ -725,7 +725,7 @@ class Actions:
             if row is None:
                 raise ActionError("object does not exist")
             if row["status"] != "merged":
-                raise ActionError("object is not merged — nothing to unmerge")
+                raise ActionError("object is not merged, nothing to unmerge")
             await conn.execute(
                 "INSERT INTO object_events "
                 "(event_type, object_id, related_id, payload, actor, case_id) "
@@ -855,13 +855,13 @@ class Actions:
         alias_old: bool = True,
     ) -> dict[str, Any]:
         """Migrate an object's `canonical` by a COMPENSATING EVENT ('canonical_changed'
-        in object_events, payload {from, to, because}) — the uuid, every edge and every
+        in object_events, payload {from, to, because}), the uuid, every edge and every
         assertion stay put (they key on the uuid); only the unique (type, canonical)
         string moves. With `alias_old=True` (the default) the RETIRED string is appended
         to `object_aliases` in the same transaction so anything still spelling it
         resolves to this object forever (append-only; nothing is deleted). No-op when
         the canonical already equals `new_canonical`. Refuses (ActionError) when another
-        object of the same type already holds `new_canonical` — the caller (the rename
+        object of the same type already holds `new_canonical`: the caller (the rename
         door) decides what to do about a merged holder BEFORE calling this; this kernel
         verb never picks a side."""
         async with self._tx() as conn:
@@ -952,11 +952,11 @@ class Actions:
 
     async def execute(self, query: str, *args: Any) -> str:
         """Raw SQL joining this Actions' OWN transaction when bound (inside an
-        `atomic()` block), a fresh pool connection otherwise — for a caller that needs
+        `atomic()` block), a fresh pool connection otherwise, for a caller that needs
         one extra write alongside assert_property/create_link in the SAME atomic
         sequence (a bespoke table `assert_property` has no verb for, e.g. `fleet_
         messages`/`agent_mounts`) without reaching into the private `_conn` directly.
-        No audit/outbox row — this is a passthrough, not a domain write; the CALLER's
+        No audit/outbox row, this is a passthrough, not a domain write; the CALLER's
         own assert_property calls in the same block carry the audit trail."""
         async with self._tx() as conn:
             return cast(str, await conn.execute(query, *args))
@@ -975,7 +975,7 @@ class Actions:
             raise ActionError("merge chain too deep (cycle?)")
 
     async def current_values(self, object_id: uuid.UUID, name: str) -> list[Json]:
-        """Current value(s) of a property — the multi-source set, one per source."""
+        """Current value(s) of a property, the multi-source set, one per source."""
         async with self._read() as conn:
             rows = await conn.fetch(
                 "SELECT value, source_id, confidence, observed_at FROM current_assertions "
@@ -989,21 +989,21 @@ class Actions:
         self, object_id: uuid.UUID, name: str, source_id: str, value: Any,
     ) -> bool:
         """True when THIS source's own current value for (object_id, name) already
-        equals `value` — a read-before-write guard a periodic source calls BEFORE
+        equals `value`: a read-before-write guard a periodic source calls BEFORE
         assert_property, not a replacement for it (ruling 0623995e, thread 2a280e07:
         assert_property's own byte-dup skip compares `observed_at` too, so it never
-        fires for a source that stamps a fresh clock on every tick — a same-value
+        fires for a source that stamps a fresh clock on every tick, a same-value
         reassertion at a NEW timestamp is deliberately treated as real information
         THERE, "confirmed still true at T2". This helper is for the different, coarser
         question a periodic source asks: "do I have anything NEW to say at all", so it
-        can skip the call — and the fresh-clock write — entirely).
+        can skip the call, and the fresh-clock write, entirely).
 
         Scoped to THIS source specifically (`source_id`), never the cross-source
-        `current_assertions` winner — a different, higher-confidence source's value
+        `current_assertions` winner, a different, higher-confidence source's value
         disagreeing with this source's own prior assertion is not this source's own
         no-op to detect (using the cross-source winner here would make a source that
         can never win its own comparison re-assert forever, chasing a value it can
-        never make current — the exact shape found live in disk-census's own
+        never make current, the exact shape found live in disk-census's own
         already-known-repo path, decision 0623995e)."""
         # is_current-backed (migration 0047), the SAME O(1) lookup assert_property's own
         # kernel guard uses — never the anti-join this whole ruling exists to stop paying

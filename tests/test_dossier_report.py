@@ -39,7 +39,7 @@ async def test_report_renders_sections_with_provenance(actions: Actions) -> None
     assert "## Identity" in md and "## Litigation" in md and "## Sources" in md
     # principals: one line per person, roles merged
     assert "## Principals" in md
-    assert "**Jane Boss** — director, officer" in md
+    assert "**Jane Boss**: director, officer" in md
     # provenance is inline on every identity claim
     assert "incorporation_state" in md and "edgar · authoritative" in md
     # the litigation role is surfaced (named party vs mentioned)

@@ -1,4 +1,4 @@
-"""Phase 10 — PDF case brief (DESIGN §12 dissemination).
+"""Phase 10, PDF case brief (DESIGN §12 dissemination).
 
 Renders a case as a human-readable intelligence brief: summary, threat actors,
 techniques (with ATT&CK ids), and indicators. STIX 2.1 bundle export already
@@ -58,7 +58,7 @@ async def build_case_brief(
 
     styles = getSampleStyleSheet()
     story: list[Any] = [
-        Paragraph(f"OSINT → TTP/TTAL Brief — {name}", styles["Title"]),
+        Paragraph(f"OSINT → TTP/TTAL Brief: {name}", styles["Title"]),
         Paragraph(f"Generated {generated_at:%Y-%m-%d %H:%M UTC}", styles["Normal"]),
         Spacer(1, 14),
     ]
@@ -87,17 +87,17 @@ async def build_case_brief(
     )
     section(
         "Threat actors",
-        [[r["external_id"] or "—", r["name"] or r["canonical"]] for r in actors],
+        [[r["external_id"] or "-", r["name"] or r["canonical"]] for r in actors],
         ["ATT&CK", "Actor"],
     )
     section(
         "Techniques observed",
-        [[r["external_id"] or "—", r["name"] or r["canonical"]] for r in techniques],
+        [[r["external_id"] or "-", r["name"] or r["canonical"]] for r in techniques],
         ["ATT&CK", "Technique"],
     )
     section(
         "Indicators",
-        [[r["ioc_type"] or "—", r["pattern_value"] or r["canonical"]] for r in iocs],
+        [[r["ioc_type"] or "-", r["pattern_value"] or r["canonical"]] for r in iocs],
         ["Type", "Indicator"],
     )
     story.append(Paragraph(
@@ -106,5 +106,5 @@ async def build_case_brief(
     ))
 
     buf = BytesIO()
-    SimpleDocTemplate(buf, pagesize=LETTER, title=f"Osiris brief — {name}").build(story)
+    SimpleDocTemplate(buf, pagesize=LETTER, title=f"Osiris brief: {name}").build(story)
     return buf.getvalue()
