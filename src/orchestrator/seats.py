@@ -37,6 +37,7 @@ import asyncio
 import logging
 import re
 import secrets
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -527,6 +528,7 @@ SeatState = Literal["vacant", "occupied", "cold"]
 
 async def seat_occupancy(
     pool: asyncpg.Pool, seat_id: str, *, live_secs: int = _LIVE_SECS,
+    _timings: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Vacant / occupied / cold: one authority for whether a Seat has a living session
     in it, computed at read time from links(holds) + agent_mounts, no schema change, no
@@ -574,9 +576,19 @@ async def seat_occupancy(
             f"(LIVENESS_WINDOW_MINUTES) so every reader agrees; the default ({_LIVE_SECS}) "
             "already matches it. A genuine need for a different window is a design "
             "question for mounts.py's shared helper, not a per-caller parameter here.")
+    mark = time.monotonic()
+
+    def lap(step: str) -> None:
+        nonlocal mark
+        now = time.monotonic()
+        if _timings is not None:
+            _timings[step] = _timings.get(step, 0.0) + (now - mark)
+        mark = now
+
     ever_held = await pool.fetchval(
         "SELECT 1 FROM links l JOIN objects t ON t.id=l.to_id "
         "WHERE t.canonical=$1 AND l.type='holds' LIMIT 1", seat_id)
+    lap("ever_held")
     if not ever_held:
         return {"state": "vacant", "holder": None, "live": False}
     holder = await pool.fetchval(
@@ -585,11 +597,13 @@ async def seat_occupancy(
         "WHERE t.canonical=$1 AND l.type='holds' AND f.type='Agent' "
         "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "ORDER BY l.first_seen DESC LIMIT 1", seat_id)
+    lap("holder")
     if holder is None:
         return {"state": "cold", "holder": None, "live": False}
     from src.orchestrator.mounts import agent_liveness
 
     live = (await agent_liveness(pool, holder))["live"]
+    lap("liveness")
     return {"state": "occupied" if live else "cold", "holder": holder, "live": live}
 
 
@@ -610,11 +624,20 @@ async def fleet_occupancy(
         "   AS handle "
         "FROM objects o WHERE o.type='Seat' AND o.status='active' ORDER BY o.canonical")
     out: list[dict[str, Any]] = []
+    spent: dict[str, float] = {}
+    began = time.monotonic()
     for row in seats:
-        occ = await seat_occupancy(pool, row["seat_id"], live_secs=live_secs)
+        occ = await seat_occupancy(pool, row["seat_id"], live_secs=live_secs, _timings=spent)
+        t0 = time.monotonic()
         house = await derive_house(pool, row["seat_id"])
+        spent["derive_house"] = spent.get("derive_house", 0.0) + (time.monotonic() - t0)
         out.append({"seat_id": row["seat_id"], "handle": row["handle"], "house": house,
                     **occ})
+    if time.monotonic() - began > 0.5:  # where a slow occupancy read spends its time
+        logger.info("fleet_occupancy %.1fs over %d seats; steps (ms, summed): %s",
+                    time.monotonic() - began, len(seats),
+                    ", ".join(f"{k}={round(v * 1000)}" for k, v in
+                              sorted(spent.items(), key=lambda kv: -kv[1])))
     return out
 
 
