@@ -110,6 +110,50 @@ async def test_assert_property_no_ops_a_same_source_same_value_reassertion(
     assert other_source not in (first, reweighted, changed)
 
 
+async def test_batched_bumps_land_every_noop_bump_once_at_the_end(
+    actions: Actions, case_id: str,
+) -> None:
+    """Inside `batched_bumps()` a no-op reassertion's observed_at bump is applied together at
+    the block's end: the same ids come back, the same rows exist, every bump has landed
+    afterwards, an OLDER observation never moves a row backwards, and a changed value still
+    writes and supersedes inside the block."""
+    obj = await actions.create_or_find_object("Domain", "batch.com", "analyst:test", case_id)
+    a1 = await actions.assert_property(obj, "registrar", "GoDaddy", "helper:rdap", NOW, 0.9)
+    a2 = await actions.assert_property(obj, "country", "US", "helper:rdap", NOW, 0.9)
+    a3 = await actions.assert_property(obj, "ns", "ns1", "helper:rdap", NOW, 0.9)
+    later = datetime(2026, 6, 1, tzinfo=UTC)
+    earlier = datetime(2026, 1, 1, tzinfo=UTC)
+
+    async def seen(aid: int) -> datetime:
+        return await actions.pool.fetchval("SELECT observed_at FROM assertions WHERE id=$1", aid)
+
+    async with actions.batched_bumps():
+        assert await actions.assert_property(
+            obj, "registrar", "GoDaddy", "helper:rdap", later, 0.9) == a1
+        assert await actions.assert_property(
+            obj, "country", "US", "helper:rdap", later, 0.9) == a2
+        # an older observation: no bump at all
+        assert await actions.assert_property(
+            obj, "ns", "ns1", "helper:rdap", earlier, 0.9) == a3
+        # a changed value is not a no-op: it writes and supersedes immediately
+        changed = await actions.assert_property(
+            obj, "ns", "ns2", "helper:rdap", later, 0.9)
+        assert changed != a3
+        assert await seen(a1) == NOW, "the bump is held until the block ends"
+    assert await seen(a1) == later and await seen(a2) == later
+    assert await seen(a3) == NOW                      # the older observation moved nothing
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1", obj) == 4
+
+    # nested and bound blocks do nothing extra; a bound Actions commits with its own transaction
+    async with actions.batched_bumps(), actions.batched_bumps():
+        pass
+    async with actions.atomic() as inner, inner.batched_bumps():
+        assert await inner.assert_property(
+            obj, "country", "US", "helper:rdap", datetime(2026, 7, 1, tzinfo=UTC), 0.9) == a2
+    assert await seen(a2) == datetime(2026, 7, 1, tzinfo=UTC)
+
+
 async def test_assert_property_flips_is_current_on_the_exact_row_it_supersedes(
     actions: Actions, case_id: str,
 ) -> None:

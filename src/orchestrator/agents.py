@@ -3973,6 +3973,19 @@ async def register_agent(
     mint_reason: str | None = None, revisit_check: bool = False,
     clock: PhaseClock | None = None,
 ) -> uuid.UUID:
+    """See `_register_agent`. The unchanged facts it re-states (about a dozen on every mount)
+    have their `observed_at` bumps committed once, at the end, not once each."""
+    async with actions.batched_bumps():
+        return await _register_agent(
+            actions, identity, actor=actor, expected_model=expected_model,
+            mint_reason=mint_reason, revisit_check=revisit_check, clock=clock)
+
+
+async def _register_agent(
+    actions: Actions, identity: AgentIdentity, *, actor: str, expected_model: str | None = None,
+    mint_reason: str | None = None, revisit_check: bool = False,
+    clock: PhaseClock | None = None,
+) -> uuid.UUID:
     """Mint (idempotently) the Agent object and its org-chart links. The agent attributes its
     own registration (`source = agent:<session>`), self-declared. Re-mount is a no-op
     (find-or-create plus the kernel's byte-dup assertion skip absorb it). `expected_model`
