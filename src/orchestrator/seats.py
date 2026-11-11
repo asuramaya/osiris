@@ -607,6 +607,23 @@ async def seat_occupancy(
     return {"state": "occupied" if live else "cold", "holder": holder, "live": live}
 
 
+async def _seat_holder(pool: asyncpg.Pool, seat_id: str) -> tuple[bool, str | None]:
+    """(has this seat ever been held, its current active holder): the two reads at the top of
+    seat_occupancy, which fleet_occupancy repeats for every seat."""
+    ever_held = await pool.fetchval(
+        "SELECT 1 FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' LIMIT 1", seat_id)
+    if not ever_held:
+        return False, None
+    holder = await pool.fetchval(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' AND f.type='Agent' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "ORDER BY l.first_seen DESC LIMIT 1", seat_id)
+    return True, (str(holder) if holder is not None else None)
+
+
 async def fleet_occupancy(
     pool: asyncpg.Pool, *, live_secs: int = _LIVE_SECS,
 ) -> list[dict[str, Any]]:
@@ -623,11 +640,30 @@ async def fleet_occupancy(
         "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "   AS handle "
         "FROM objects o WHERE o.type='Seat' AND o.status='active' ORDER BY o.canonical")
-    out: list[dict[str, Any]] = []
+    # Same answers as asking seat_occupancy per seat, with the liveness reads done once for all
+    # holders (agents_live): that was 0.9 s of this function's ~1.1 s (the step timings).
     spent: dict[str, float] = {}
     began = time.monotonic()
+    held: list[tuple[Any, str | None, bool]] = []  # (row, holder, ever_held)
     for row in seats:
-        occ = await seat_occupancy(pool, row["seat_id"], live_secs=live_secs, _timings=spent)
+        t0 = time.monotonic()
+        held_ever, holder = await _seat_holder(pool, row["seat_id"])
+        spent["holder"] = spent.get("holder", 0.0) + (time.monotonic() - t0)
+        held.append((row, holder, held_ever))
+    t0 = time.monotonic()
+    from src.orchestrator.mounts import agents_live
+
+    live_of = await agents_live(pool, [h for _, h, _ in held if h is not None])
+    spent["liveness"] = time.monotonic() - t0
+    out: list[dict[str, Any]] = []
+    for row, holder, held_ever in held:
+        if not held_ever:
+            occ = {"state": "vacant", "holder": None, "live": False}
+        elif holder is None:
+            occ = {"state": "cold", "holder": None, "live": False}
+        else:
+            live = live_of[holder]
+            occ = {"state": "occupied" if live else "cold", "holder": holder, "live": live}
         t0 = time.monotonic()
         house = await derive_house(pool, row["seat_id"])
         spent["derive_house"] = spent.get("derive_house", 0.0) + (time.monotonic() - t0)

@@ -1221,6 +1221,61 @@ async def agent_liveness(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
             "ever_mounted": ever_mounted}
 
 
+async def agents_live(pool: asyncpg.Pool, agent_ids: list[str]) -> dict[str, bool]:
+    """`{a: (await agent_liveness(pool, a))["live"] for a in agent_ids}` with each read done once
+    for all of them. `fleet_occupancy` asks about every active seat's holder (about 40) and paid
+    ~25 ms each, 0.9 s of a fleet() call (measured, fleet_occupancy step timings): a mount query,
+    then for every holder whose mount is not fresh (most of them) an anchor-sid query, a thread
+    hop to stat transcripts, and an `ever_mounted` query this caller never reads.
+
+    The same three inputs and the same helpers decide the answer: the lineage-widened
+    `agent_mounts.last_seen`; when that is not live, the freshest transcript mtime over the
+    lineage's newest `MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK` anchor sids plus a session-derived
+    prefix; then `freshest_liveness_ts` and `is_live`. Only `live` is returned (not
+    `ever_mounted`/`last_seen`): callers that need those keep `agent_liveness`."""
+    from src.config.settings import get_settings
+    from src.orchestrator.agents import _generation
+
+    ids = list(dict.fromkeys(agent_ids))
+    if not ids:
+        return {}
+    bases = [_generation(a)[0] for a in ids]
+    mount_seen: dict[str, datetime | None] = {a: None for a in ids}
+    for r in await pool.fetch(
+            "SELECT h.aid, max(m.last_seen) AS seen "
+            "FROM unnest($1::text[], $2::text[]) AS h(aid, base) "
+            "LEFT JOIN agent_mounts m ON m.agent_id = h.aid OR m.agent_id = h.base "
+            "  OR m.agent_id LIKE h.base || '-%' GROUP BY h.aid", ids, bases):
+        mount_seen[r["aid"]] = r["seen"]
+    transcript: dict[str, datetime | None] = {}
+    needy = [(a, b) for a, b in zip(ids, bases, strict=True) if not is_live(mount_seen[a])]
+    root = get_settings().osiris_transcripts
+    if needy and root:
+        sids: dict[str, list[str]] = {a: [] for a, _ in needy}
+        for r in await pool.fetch(
+                "SELECT h.aid, s.sid FROM unnest($1::text[], $2::text[]) AS h(aid, base) "
+                "CROSS JOIN LATERAL (SELECT a.observed_at, a.value #>> '{}' AS sid "
+                "  FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+                "  WHERE o.type = 'Agent' AND a.name LIKE 'anchor_sid:%' "
+                "    AND (o.canonical = h.aid OR o.canonical = h.base "
+                "         OR o.canonical LIKE h.base || '-%') "
+                "  ORDER BY a.observed_at DESC LIMIT $3) s",
+                [a for a, _ in needy], [b for _, b in needy],
+                MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK):
+            sids[r["aid"]].append(r["sid"])
+        for a, b in needy:
+            derived = _session_derived_prefix(b)
+            if derived:
+                sids[a].append(derived)
+
+        def stat_all() -> dict[str, datetime | None]:
+            return {a: _freshest_transcript_mtime(Path(root), found)
+                    for a, found in sids.items() if found}
+
+        transcript = await asyncio.to_thread(stat_all)  # one hop for every holder
+    return {a: is_live(freshest_liveness_ts(mount_seen[a], transcript.get(a))) for a in ids}
+
+
 async def agent_liveness_exact(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     """`agent_liveness`'s exact-canonical counterpart, no lineage-base widening at all.
     Built for `seats.follow_binding`'s own live-sibling guard and reused by

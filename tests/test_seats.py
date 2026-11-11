@@ -6353,7 +6353,7 @@ async def test_a_slow_fleet_occupancy_logs_which_read_was_slow(
     actions: Actions, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
     """fleet_occupancy asks each active seat for ever_held, holder, liveness and house, so its
-    cost (0.3 to 1.5 s of a fleet() call) hides in one of four reads. A call past half a second
+    cost (0.3 to 1.5 s of a fleet() call) hides in one of the reads. A call past half a second
     logs the summed time per read, slowest first; a fast one logs nothing."""
     import asyncio
     import logging
@@ -6373,10 +6373,45 @@ async def test_a_slow_fleet_occupancy_logs_which_read_was_slow(
         await fleet_occupancy(actions.pool)
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("fleet_occupancy")]
     assert len(lines) == 1 and "steps (ms, summed): derive_house=" in lines[0]
-    assert "ever_held=" in lines[0]
+    assert "holder=" in lines[0] and "liveness=" in lines[0]
 
     caplog.clear()
     monkeypatch.setattr(seats_mod, "derive_house", real)
     with caplog.at_level(logging.INFO, logger="osiris.seats"):
         await fleet_occupancy(actions.pool)
     assert not [r for r in caplog.records if r.getMessage().startswith("fleet_occupancy")]
+
+
+async def test_fleet_occupancy_equals_asking_each_seat_in_turn(actions: Actions) -> None:
+    """fleet_occupancy reads every holder's liveness once for all seats (it was 0.9 s of its 1.1 s,
+    a read per seat). The rows must be exactly what seat_occupancy + derive_house give seat by seat,
+    in the same order, for occupied, cold and vacant seats in two houses."""
+    from src.orchestrator.seats import derive_house, fleet_occupancy, seat_occupancy
+
+    made = []
+    for i in range(9):
+        made.append(await ensure_seat(
+            actions, house="osiris" if i % 2 else "rotten-apple", handle=f"Occ{i:02d}",
+            source="test"))
+    for i, state in ((0, "occupied"), (1, "occupied"), (2, "cold"), (3, "cold")):
+        agent = f"agent:occ{i:05d}"
+        await actions.create_or_find_object("Agent", agent, "test")
+        await bind_holder(actions, seat_id=made[i]["seat_id"], agent_id=agent)
+        if state == "occupied":
+            await save_mount(actions.pool, job_dir=f"/jobs/occ{i}", agent_id=agent,
+                             project="osiris", cwd="/w/osiris", model="claude-sonnet-5",
+                             session_key=None)
+
+    in_turn = []
+    for r in await actions.pool.fetch(
+            "SELECT o.canonical AS seat_id, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "   AS handle FROM objects o WHERE o.type='Seat' AND o.status='active' "
+            "ORDER BY o.canonical"):
+        in_turn.append({"seat_id": r["seat_id"], "handle": r["handle"],
+                        "house": await derive_house(actions.pool, r["seat_id"]),
+                        **await seat_occupancy(actions.pool, r["seat_id"])})
+
+    assert await fleet_occupancy(actions.pool) == in_turn
+    assert {row["state"] for row in in_turn} >= {"occupied", "cold", "vacant"}

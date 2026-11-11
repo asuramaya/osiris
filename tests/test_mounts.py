@@ -3625,3 +3625,75 @@ async def test_a_slow_fleet_logs_which_probe_was_slow(
         assert not [r for r in caplog.records if r.getMessage().startswith("fleet ")]
     finally:
         srv._pool = saved_pool
+
+
+async def test_agents_live_equals_agent_liveness_for_every_way_a_holder_can_read_live(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`agents_live` is `agent_liveness(...)["live"]` for many holders with each read done once
+    (fleet_occupancy paid ~25 ms per seat for it, 0.9 s of a fleet() call). It must give the SAME
+    answer for every shape: a fresh mount, a stale mount, a mount on another generation of the
+    lineage, a stale mount with a fresh or an old transcript behind an anchor sid, a session-derived
+    id with and without a transcript, and an agent nothing is known about."""
+    import os
+    import time as time_mod
+
+    from src.config import settings as settings_mod
+
+    class _FakeSettings:
+        osiris_transcripts = str(tmp_path)
+
+    monkeypatch.setattr(settings_mod, "get_settings", lambda: _FakeSettings())
+    mounts._transcript_index_cache.clear()
+    proj = tmp_path / "-proj"
+    proj.mkdir()
+
+    async def mount(agent_id: str, *, stale: bool = False) -> None:
+        await mounts.save_mount(actions.pool, job_dir=f"/jobs/{agent_id[-10:]}", agent_id=agent_id,
+                         project="p", cwd="/w", model="m", session_key=None)
+        if stale:
+            await actions.pool.execute(
+                "UPDATE agent_mounts SET last_seen = now() - interval '1 day' WHERE agent_id=$1",
+                agent_id)
+
+    async def anchor(agent_id: str, sid: str) -> None:
+        a = await actions.create_or_find_object("Agent", agent_id, "test")
+        await actions.assert_property(a, f"anchor_sid:{sid[:8]}", sid, "test",
+                                      datetime.now(UTC), 0.9, evidence_class=_SD)
+
+    def transcript(sid: str, *, age_s: int = 0) -> None:
+        path = proj / f"{sid}.jsonl"
+        path.write_text("{}\n")
+        if age_s:
+            past = time_mod.time() - age_s
+            os.utime(path, (past, past))
+
+    holders = ["agent:liveone01", "agent:stale0002", "agent:wide0003", "agent:wide0004-ii",
+               "agent:anchfresh5", "agent:anchold006", "agent:c0ffee11", "agent:deadbe22",
+               "agent:nothing007", "agent:wide0004"]
+    await actions.create_or_find_object("Agent", "agent:nothing007", "test")
+    await mount("agent:liveone01")
+    await mount("agent:stale0002", stale=True)
+    await mount("agent:wide0003-ii")           # the holder wears the older label of the lineage
+    await mount("agent:wide0004-ii")           # and the reverse: the mount wears a newer one
+    await anchor("agent:anchfresh5", "aaaa1111-0000-4000-8000-000000000001")
+    transcript("aaaa1111-0000-4000-8000-000000000001")
+    await anchor("agent:anchold006", "bbbb2222-0000-4000-8000-000000000002")
+    transcript("bbbb2222-0000-4000-8000-000000000002", age_s=86400)
+    await actions.create_or_find_object("Agent", "agent:c0ffee11", "test")
+    transcript("c0ffee11-0000-4000-8000-000000000003")      # session-derived, fresh transcript
+    await actions.create_or_find_object("Agent", "agent:deadbe22", "test")  # derived, none
+    mounts._transcript_index_cache.clear()
+
+    one_by_one = {h: (await mounts.agent_liveness(actions.pool, h))["live"] for h in holders}
+    mounts._transcript_index_cache.clear()
+    in_bulk = await mounts.agents_live(actions.pool, holders)
+
+    assert in_bulk == one_by_one
+    # the interesting answers really are both ways
+    assert one_by_one["agent:liveone01"] and one_by_one["agent:wide0003"]
+    assert one_by_one["agent:anchfresh5"] and one_by_one["agent:c0ffee11"]
+    assert not one_by_one["agent:stale0002"] and not one_by_one["agent:anchold006"]
+    assert not one_by_one["agent:nothing007"] and not one_by_one["agent:deadbe22"]
+    assert await mounts.agents_live(actions.pool, []) == {}
+    mounts._transcript_index_cache.clear()
