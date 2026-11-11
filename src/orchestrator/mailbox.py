@@ -110,6 +110,14 @@ _DELIVERABLE_TO_READER = (
     " OR " + _READER_HOLDS_ADDR + " "
     " OR (m.to_project = $project AND m.to_agent IS NULL AND m.from_agent <> $agent)) "
     "AND m.read_at IS NULL "
+    # The reader's OWN receipt (r, the LEFT JOIN every caller makes on this agent) already says
+    # whether this reader settled the message. The NOT EXISTS below includes that same row, so
+    # `r.read_at IS NULL` never changes the answer; it lets the join discard what this reader
+    # has read BEFORE the lineage probe, which otherwise scanned every other reader's receipt
+    # for each broadcast (a broadcast carries about 50). Live, for a reader who is caught up:
+    # 2,549 probes down to 6, 176 ms down to 36 ms, and the same rows for 415 reader and
+    # project pairs checked.
+    "AND r.read_at IS NULL "
     "AND NOT EXISTS (SELECT 1 FROM message_recipients r3 WHERE r3.message_id = m.id "
     "  AND (r3.agent_id = $agent OR r3.agent_id = $lineage "
     "       OR r3.agent_id LIKE $lineage || '-%') "
