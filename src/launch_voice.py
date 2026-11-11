@@ -64,6 +64,12 @@ def running(verb: str, handle: str, window: str | None) -> str:
     return f"osiris {verb}: {handle} is running{where}."
 
 
+def started_new(handle: str, window: str | None) -> str:
+    """The fresh-session half of launch's one answer ("continued <sid>" is `resumed`)."""
+    where = f" ('{window}' in claude agents)" if window else ""
+    return f"osiris launch: {handle} started a new session{where}."
+
+
 def already_running(verb: str, handle: str) -> str:
     return f"osiris {verb}: {handle} is already running; nothing started."
 

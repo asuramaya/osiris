@@ -1659,8 +1659,11 @@ async def _cmd_launch_harness(
     dormant = out.get("dormant_history")
     if dormant is not None and verbose:
         from src.ingest.sessions import dormant_history_note
-        print(f"osiris launch: {handle!r}: {dormant_history_note(dormant)}",
-              file=sys.stderr)
+        why = ("--fresh asked for a new session" if fresh else
+               "the seat's own record names no session to continue, so `osiris resume` "
+               "would refuse it too")
+        print(f"osiris launch: {handle!r}: "
+              f"{dormant_history_note(dormant, not_continued=why)}", file=sys.stderr)
 
     if out.get("tree_restored"):
         print(voice.tree_restored("launch", str(out["tree_restored"])))
@@ -1671,7 +1674,7 @@ async def _cmd_launch_harness(
               f"{out.get('spawned_model') or '(claude CLI default)'}")
 
     if out.get("can_receive"):
-        print(voice.running("launch", handle, window))
+        print(voice.started_new(handle, window))
         return 0
 
     spawned_id = out.get("spawned_id")
@@ -1695,7 +1698,7 @@ async def _cmd_launch_harness(
     if alive_row is None:
         print(voice.started_not_visible("launch", handle))
         return 0
-    print(voice.running("launch", handle, window))
+    print(voice.started_new(handle, window))
     if verbose and alive_row.get("sessionId"):
         print(f"  session {alive_row.get('sessionId')}")
     return 0
