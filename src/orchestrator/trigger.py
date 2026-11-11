@@ -111,6 +111,11 @@ def _addressee_kw(*a: Any, **k: Any) -> str:
     return str(k["addressee"])
 
 
+def _stop_target_kw(*a: Any, **k: Any) -> str:
+    """A stop names its seat by `target`, or by the caller itself when it stops its own."""
+    return str(k.get("target") or k["caller"])
+
+
 def _spawn_busy(status_key: str, status: str) -> Callable[[str], dict[str, Any]]:
     return lambda key: {status_key: status, "detail": (
         f"another launch, resume or wake of {key} is still starting a body: nothing "
@@ -5132,6 +5137,7 @@ async def _stop_orphan_harness_body(
                                                 if skipped else "")}
 
 
+@_spawn_locked(_pool_of_actions, _stop_target_kw, _SPAWN_BUSY_STATUS)
 async def stop_seat(
     actions: Actions, *, caller: str, target: str | None, reason: str = "",
     kill: Any = None, agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,

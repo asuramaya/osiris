@@ -461,3 +461,45 @@ async def test_every_door_takes_the_seat_lock_and_the_cli_does_not_deadlock_on_i
     async with trigger.seat_spawn_lock(pool, key):
         async with trigger.seat_spawn_lock(pool, key, wait=0.1):
             pass
+
+
+async def test_stop_waits_for_a_launch_in_its_spawn_window_and_then_sees_the_body(
+    actions: Actions,
+) -> None:
+    """A stop that arrives while a launch is spawning used to read "no body", exit 0, and
+    leave the new body running. It now waits for the seat's lock, so by the time it looks the
+    body is listed and it stops it."""
+    import os
+
+    from src.orchestrator.trigger import _window_name, spawn_lock_key
+
+    seat = await ensure_seat(actions, house="osiris", handle="stopwait", source="test")
+    office = "/tmp/stopwait-office"
+    await actions.assert_property(
+        await actions.create_or_find_object("Seat", seat["seat_id"], "test"),
+        "anchor_cwd", office, "test", trigger.datetime.now(trigger.UTC), 0.9)
+    name = await _window_name(actions.pool, "osiris", "stopwait", None)
+    key = await spawn_lock_key(actions.pool, "stopwait")
+    listed: list[dict[str, Any]] = []
+
+    async def _roster(**kw: Any) -> list[dict[str, Any]]:
+        return list(listed)
+
+    killed: list[str | None] = []
+
+    async def _kill(pid: int, k: str | None) -> None:
+        killed.append(k)
+
+    async def _launching() -> None:
+        async with trigger.seat_spawn_lock(actions.pool, key):
+            await asyncio.sleep(0.5)  # the spawn window
+            listed.append({"name": name, "cwd": office, "pid": os.getpid(), "id": "sw1sw1sw",
+                           "state": "working", "sessionId": "sw1sw1sw-0000"})
+
+    launching = asyncio.create_task(_launching(), context=__import__("contextvars").Context())
+    await asyncio.sleep(0.15)  # the launch is mid-spawn and holds the lock
+    out = await trigger.stop_seat(
+        actions, caller="operator", target="stopwait", agents_json=_roster, kill=_kill,
+        read_cmdline=lambda p: b"claude\x00--bg")
+    await launching
+    assert out["status"] == "stopped" and killed == ["sw1sw1sw"]
