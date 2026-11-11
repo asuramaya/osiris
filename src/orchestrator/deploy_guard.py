@@ -30,6 +30,7 @@ import contextlib
 import logging
 import re
 import subprocess
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -1351,9 +1352,19 @@ async def audit_graph_merge_claims(
     mismatches (`_verify_graph_claim` swallows everything unverifiable), each a dict with
     `canonical` (the graph object naming the claim) and `note`. NEVER REFUSES: a git or DB
     failure degrades to an empty list."""
+    laps: dict[str, int] = {}
+    mark = [time.monotonic()]
+    began = mark[0]
+
+    def lap(step: str) -> None:
+        now = time.monotonic()
+        laps[step] = round((now - mark[0]) * 1000)
+        mark[0] = now
+
     head = await asyncio.to_thread(
         subprocess.run, ["git", "rev-parse", "main"], cwd=repo_root,
         capture_output=True, text=True, timeout=5, check=False)
+    lap("rev_main")
     if head.returncode != 0:
         return []
     main_sha = head.stdout.strip()
@@ -1365,6 +1376,7 @@ async def audit_graph_merge_claims(
             "AND a.value #>> '{}' ILIKE '%merge %'")
     except Exception:  # noqa: BLE001, a DB hiccup is unknown, never a crash
         return []
+    lap("query")
     findings: list[dict[str, Any]] = []
     seen: set[str] = set()
     pending: list[tuple[str, str, str | None]] = []
@@ -1381,10 +1393,12 @@ async def audit_graph_merge_claims(
                 continue
             seen.add(key)
             pending.append((r["canonical"], branch, cited))
+    lap("regex")
     # two git processes for every claim at once; the per-claim path remains the answer whenever
     # git cannot give the batch (and is what the batch is tested equal to)
     batch = await asyncio.to_thread(
         _batch_claim_notes, repo_root, main_sha, list({(b, c) for _, b, c in pending}))
+    lap("git_batch")
     for canonical, branch, cited in pending:
         if batch is not None:
             note = batch[(branch, cited)]
@@ -1392,6 +1406,11 @@ async def audit_graph_merge_claims(
             note = await _verify_graph_claim(repo_root, main_sha, branch, cited)
         if note is not None:
             findings.append({"canonical": canonical, "note": note})
+    lap("notes")
+    if time.monotonic() - began > 1.0:  # where a slow landing audit spends its time
+        _log.info("merge-claim audit %.1fs over %d rows, %d claims; steps (ms): %s",
+                  time.monotonic() - began, len(rows), len(pending),
+                  ", ".join(f"{k}={v}" for k, v in sorted(laps.items(), key=lambda kv: -kv[1])))
     return findings
 
 
