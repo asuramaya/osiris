@@ -42,7 +42,8 @@ MIN_BLOAT_BYTES = 2 * GB
 # A table that is small by design (its live rows fit in a few hundred MB) can be mostly empty
 # space and still never reach the 2 GB floor above, so it would never be rewritten: the
 # outbox sat at 709 MB reclaimable of 1.08 GB (65%) and was skipped night after night.
-MIN_BLOAT_BYTES_BY_TABLE = {"outbox": 256 * 1024 ** 2}
+# The audit log is the same shape: mostly retired duplicate rows, 1.28 GB reclaimable of 1.67 GB.
+MIN_BLOAT_BYTES_BY_TABLE = {"outbox": 256 * 1024 ** 2, "audit_log": 256 * 1024 ** 2}
 LOCK_TIMEOUT_SECS = 30
 RECEIPT_KEY = "compaction:last"
 DRAIN_KEY = "drain:"
