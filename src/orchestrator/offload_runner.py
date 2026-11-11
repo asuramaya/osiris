@@ -61,11 +61,42 @@ def _receipts_path() -> Path:
 
 
 def _read_receipts() -> dict[str, Any]:
+    return _load_receipts()[0]
+
+
+def _quarantine_path() -> Path:
+    path = _receipts_path()
+    return path.with_name(path.name + ".unreadable")
+
+
+def _load_receipts() -> tuple[dict[str, Any], bool]:
+    """The receipts and whether they are UNTRUSTWORTHY: a file that exists but does not parse
+    (half-written, damaged), or one that did not parse earlier and was set aside. Receipts are what
+    says a target has offloaded before, so an unreadable file must never read as 'never offloaded'
+    (that is the one fact that stands between a bad day and `restic init` on a repository that
+    exists)."""
     path = _receipts_path()
     try:
-        return dict(json.loads(path.read_text()))
-    except (OSError, ValueError):
-        return {}
+        text = path.read_text()
+    except FileNotFoundError:
+        return {}, _quarantine_path().exists()
+    except OSError:
+        return {}, True
+    try:
+        return dict(json.loads(text)), _quarantine_path().exists()
+    except (ValueError, TypeError):
+        return {}, True
+
+
+def _set_aside_unreadable_receipts() -> None:
+    """Keep a receipts file that does not parse (never overwrite it): the copy is both the
+    evidence and the standing mark that this box can no longer prove what it offloaded."""
+    path = _receipts_path()
+    quarantine = _quarantine_path()
+    if quarantine.exists():
+        return
+    with contextlib.suppress(OSError):
+        os.replace(path, quarantine)
 
 
 def _write_receipt(name: str, receipt: dict[str, Any]) -> None:
@@ -75,7 +106,9 @@ def _write_receipt(name: str, receipt: dict[str, Any]) -> None:
     `last_error` alongside whatever succeeded most recently."""
     path = _receipts_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    receipts = _read_receipts()
+    receipts, untrusted = _load_receipts()
+    if untrusted and path.exists():
+        _set_aside_unreadable_receipts()
     existing = receipts.get(name, {})
     if receipt.get("last_successful_offload"):
         # the moment this target FIRST held a good backup, kept for good (a receipt written
@@ -86,7 +119,14 @@ def _write_receipt(name: str, receipt: dict[str, Any]) -> None:
             existing.get("last_successful_offload") or receipt["last_successful_offload"])
     existing.update(receipt)
     receipts[name] = existing
-    path.write_text(json.dumps(receipts, indent=2))
+    # temp file then rename: a crash or a stopped run leaves the old file or the new one, never half
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps(receipts, indent=2))
+        os.replace(tmp, path)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
 
 
 def _note_skip(name: str, reason: str, now: str) -> None:
@@ -385,7 +425,9 @@ async def _run_offload_tick_locked(
         name = target.get("name", "<unnamed>")
         repository = target.get("path_or_url", "")
         # a target that has ever offloaded has a repository: never initialise over it
-        ever_offloaded = bool((_read_receipts().get(name) or {}).get("last_successful_offload"))
+        receipts, untrusted = _load_receipts()
+        ever_offloaded = untrusted or bool(
+            (receipts.get(name) or {}).get("last_successful_offload"))
         notes: list[str] = []
         fail = await asyncio.to_thread(
             _run_restic_backup, repository=repository, password=password, source=source,
