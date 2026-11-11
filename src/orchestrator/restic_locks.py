@@ -135,9 +135,36 @@ def read_locks(env: dict[str, str], restic: Runner = _run) -> list[Lock] | str:
     return locks
 
 
+# A line that names WHY the connection or login failed, as opposed to restic's own closing line.
+_CAUSE_MARKERS = (
+    "ssh:", "no route to host", "network is unreachable", "network unreachable",
+    "connection refused", "connection timed out", "connection reset", "could not resolve",
+    "name or service not known", "host key verification", "permission denied",
+    "broken pipe", "operation timed out", "i/o timeout",
+)
+
+
+def failure_summary(text: str) -> str:
+    """One line for a failed restic run that keeps the CAUSE. restic ends a failed sftp run with a
+    generic line ("Fatal: unable to open repository at ...: unexpected EOF"); the ssh error that
+    explains it ("ssh: connect to host nas port 22: No route to host") is the line BEFORE. Keeping
+    only the last line hid that cause, so a run that could not reach the NAS was recorded as a
+    failure and never read as "away from home". The summary is the last line, followed by the
+    latest earlier line that names a cause, when there is one."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return "no output"
+    last = lines[-1]
+    cause = next((ln for ln in reversed(lines[:-1])
+                  if any(m in ln.lower() for m in _CAUSE_MARKERS)), None)
+    if cause and cause != last and not any(m in last.lower() for m in _CAUSE_MARKERS):
+        return f"{last[:160]} ({cause[:200]})"
+    return last[:240]
+
+
 def _short(proc: subprocess.CompletedProcess[str], what: str) -> str:
-    detail = (proc.stderr or proc.stdout or "").strip().splitlines()
-    return f"{what}: {detail[-1][:200]}" if detail else what
+    detail = failure_summary(proc.stderr or proc.stdout or "")
+    return f"{what}: {detail}" if (proc.stderr or proc.stdout or "").strip() else what
 
 
 def is_stale(lock: Lock, *, now: datetime, local_host: str,

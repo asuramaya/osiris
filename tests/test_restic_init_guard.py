@@ -146,3 +146,40 @@ def test_a_target_that_ever_offloaded_is_never_initialised(fake: Fake) -> None:
 ])
 def test_the_missing_repository_classifier(text: str, missing: bool) -> None:
     assert offload_runner.repository_is_missing(text) is missing
+
+
+SSH_NO_ROUTE = ("ssh: connect to host nas.local port 22: No route to host\n"
+                "Fatal: unable to open repository at sftp:nas:/mnt/B/osiris: unexpected EOF")
+
+
+def test_the_ssh_cause_before_restics_closing_line_is_kept_so_away_reads_as_away(
+    fake: Fake,
+) -> None:
+    """restic ends a failed sftp run with 'unexpected EOF'; the ssh error that explains it is the
+    line before. Only the last line was kept, so 'No route to host' was recorded as a backup
+    failure instead of the quiet 'away from home' skip."""
+    from src.orchestrator.network_presence import is_unreachable_error
+
+    fake.state["snapshots_stderr"] = SSH_NO_ROUTE
+    fake.save()
+
+    failure = fake.backup()
+
+    assert failure is not None and is_unreachable_error(failure)
+    assert "No route to host" in failure and "unexpected EOF" in failure
+    assert "init" not in fake.commands() and "backup" not in fake.commands()
+
+
+def test_failure_summary_keeps_the_cause_only_when_the_last_line_lacks_it() -> None:
+    from src.orchestrator.restic_locks import failure_summary
+
+    assert failure_summary(SSH_NO_ROUTE).startswith("Fatal: unable to open repository")
+    assert "(ssh: connect to host nas.local port 22: No route to host)" in failure_summary(
+        SSH_NO_ROUTE)
+    # a last line that already says why is returned alone, never doubled
+    assert failure_summary("x\nssh: connect to host h port 22: Connection refused") == (
+        "ssh: connect to host h port 22: Connection refused")
+    # an earlier line that is not a cause adds nothing
+    assert failure_summary("repository abc opened\nFatal: wrong password or no key found") == (
+        "Fatal: wrong password or no key found")
+    assert failure_summary("") == "no output" and failure_summary("  \n ") == "no output"

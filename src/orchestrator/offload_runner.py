@@ -141,8 +141,9 @@ def repository_is_missing(output: str) -> bool:
 
 
 def _one_line(raw: bytes) -> str:
-    lines = [ln.strip() for ln in raw.decode(errors="replace").splitlines() if ln.strip()]
-    return lines[-1][:240] if lines else "no output"
+    from src.orchestrator.restic_locks import failure_summary
+
+    return failure_summary(raw.decode(errors="replace"))
 
 
 _PROBE_TIMEOUT_SECONDS = 30  # restic snapshots and init: a slow link must not hang the tick
