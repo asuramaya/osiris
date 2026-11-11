@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import json
 import os
+import threading
 import time
 import tomllib
 from collections import defaultdict
@@ -1061,28 +1062,59 @@ def is_live(ts: datetime | None, *, now: datetime | None = None) -> bool:
 # not once per call.
 _TRANSCRIPT_INDEX_TTL_SECS = 60.0
 _transcript_index_cache: dict[str, tuple[float, dict[str, Path]]] = {}
+# the roots whose index is being rebuilt right now, so a burst of callers starts one walk
+_transcript_index_refreshing: set[str] = set()
+_transcript_index_lock = threading.Lock()
 
 
-def _transcript_index(root: Path) -> dict[str, Path]:
-    """sid (file stem) -> path, for every `*.jsonl` under `root`: one walk, cached at
-    module level keyed by `root` for `_TRANSCRIPT_INDEX_TTL_SECS`. A stale index only ever
-    costs a liveness read a slightly-out-of-date mtime within the TTL window, never a wrong
-    answer: a transcript that appeared in the last `_TRANSCRIPT_INDEX_TTL_SECS` is found on
-    the next rebuild at worst, and `is_live`'s own 15-minute window easily absorbs a 60s
-    staleness margin."""
-    key = str(root)
-    now = time.monotonic()
-    cached = _transcript_index_cache.get(key)
-    if cached is not None and now - cached[0] < _TRANSCRIPT_INDEX_TTL_SECS:
-        return cached[1]
+def _walk_transcripts(root: Path) -> dict[str, Path]:
     index: dict[str, Path] = {}
     try:
         for p in root.expanduser().rglob("*.jsonl"):
             index[p.stem] = p
     except OSError:
         pass
-    _transcript_index_cache[key] = (now, index)
     return index
+
+
+def _refresh_transcript_index(key: str, root: Path) -> None:
+    """Rebuilds the index for `root` and swaps it in whole; the old one serves until then."""
+    try:
+        index = _walk_transcripts(root)
+        _transcript_index_cache[key] = (time.monotonic(), index)
+    finally:
+        with _transcript_index_lock:
+            _transcript_index_refreshing.discard(key)
+
+
+def _transcript_index(root: Path) -> dict[str, Path]:
+    """sid (file stem) -> path, for every `*.jsonl` under `root`, cached at module level
+    keyed by `root`. STALE WHILE REVALIDATE: once an index exists, a caller never waits for the
+    walk (about 0.7 s over `~/.claude/projects`): past `_TRANSCRIPT_INDEX_TTL_SECS` the stale
+    index is returned at once and one background thread rebuilds it for the next caller. Only
+    the very first call for a root, which has nothing to serve, walks the tree itself. A stale
+    index only ever costs a liveness read a slightly-out-of-date mtime, never a wrong answer: a
+    transcript that appeared in the last minute or two is found on the next rebuild at worst,
+    and `is_live`'s own 15-minute window easily absorbs that margin."""
+    key = str(root)
+    cached = _transcript_index_cache.get(key)
+    if cached is None:
+        index = _walk_transcripts(root)
+        _transcript_index_cache[key] = (time.monotonic(), index)
+        return index
+    if time.monotonic() - cached[0] >= _TRANSCRIPT_INDEX_TTL_SECS:
+        with _transcript_index_lock:
+            start = key not in _transcript_index_refreshing
+            if start:
+                _transcript_index_refreshing.add(key)
+        if start:
+            try:
+                threading.Thread(target=_refresh_transcript_index, args=(key, root),
+                                 name="transcript-index", daemon=True).start()
+            except RuntimeError:  # no thread to be had: keep serving the stale index
+                with _transcript_index_lock:
+                    _transcript_index_refreshing.discard(key)
+    return cached[1]
 
 
 def _freshest_transcript_mtime(root: Path, session_ids: list[str]) -> datetime | None:
