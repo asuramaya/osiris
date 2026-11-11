@@ -85,11 +85,19 @@ def is_trusted(path: str, projects: dict[str, Any]) -> bool:
     return any(accepted(c) for c in (here, *here.parents))
 
 
-def untrusted_dirs(paths: Sequence[str | None], home: Path | None = None) -> list[str]:
+_READ_IT: Any = object()
+
+
+def untrusted_dirs(
+    paths: Sequence[str | None], home: Path | None = None, *, projects: Any = _READ_IT,
+) -> list[str]:
     """The directories among `paths` that exist but are not trusted, each once, in order.
     Empty when the config cannot be read. A directory that does not exist is a different
-    problem with its own message and is skipped here."""
-    projects = load_projects(home)
+    problem with its own message and is skipped here. A caller checking many seats reads the
+    config once with `load_projects()` and passes the table (or None) as `projects`: the file
+    is 450 KB and parsing it per seat was most of a roster's CPU."""
+    if projects is _READ_IT:
+        projects = load_projects(home)
     if projects is None:
         return []
     out: list[str] = []

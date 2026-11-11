@@ -4528,6 +4528,34 @@ assertion_stats AS (
 )
 """
 
+# THE SAME TWO STATS, FOR ONE TYPE: buckets mode only reads link_stats and assertion_stats
+# for the objects of the type it was asked about, but the shared form above aggregates every
+# live link and every current assertion in the graph first (about 340 ms live for the 60
+# SoftwareProject rows roster() needs). This form takes the target objects first and aggregates
+# only the links and assertions that touch them: the same numbers for those objects.
+_TRIAGE_LINK_CTE_FOR_TYPE = """
+WITH target AS MATERIALIZED (
+    SELECT id FROM objects WHERE type = $1 AND status = $2
+),
+live_links AS (
+    SELECT from_id AS obj_id, GREATEST(first_seen, last_seen, created_at) AS touch
+    FROM links WHERE (valid_until IS NULL OR valid_until > now())
+      AND from_id IN (SELECT id FROM target)
+    UNION ALL
+    SELECT to_id AS obj_id, GREATEST(first_seen, last_seen, created_at)
+    FROM links WHERE (valid_until IS NULL OR valid_until > now())
+      AND to_id IN (SELECT id FROM target)
+),
+link_stats AS (
+    SELECT obj_id, count(*) AS link_count, max(touch) AS last_link_touch
+    FROM live_links GROUP BY obj_id
+),
+assertion_stats AS (
+    SELECT object_id, max(observed_at) AS last_assertion
+    FROM current_assertions WHERE object_id IN (SELECT id FROM target) GROUP BY object_id
+)
+"""
+
 _TRIAGE_BUCKET_PRIORITY = {
     "duplicate_suspect": 0, "bulk_import": 1, "orphan": 2, "hub": 3, "stale": 4, "thin": 5,
     "normal": 6,
@@ -4652,7 +4680,7 @@ async def _triage_buckets(pool: asyncpg.Pool, args: dict[str, Any]) -> Any:
         return await _triage_type_gaps(pool, status, limit, offset)
     stale_days = max(1, min(int(args.get("stale_days") or 30), 365))
     cohort_min = max(2, min(int(args.get("cohort_min") or 3), 50))
-    rows = await pool.fetch(_TRIAGE_LINK_CTE + """
+    rows = await pool.fetch(_TRIAGE_LINK_CTE_FOR_TYPE + """
         , per_object AS (
             SELECT o.id, o.canonical, o.created_at,
                    COALESCE(ls.link_count, 0) AS link_count,

@@ -33,6 +33,7 @@ precisely because agent generations churn underneath it.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import secrets
@@ -47,6 +48,7 @@ import asyncpg
 
 from src.actions.core import Actions
 from src.db.pool import pin
+from src.orchestrator import workspace_trust
 from src.orchestrator.workspace_trust import untrusted_dirs
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
@@ -812,6 +814,10 @@ def _roster_caveats_out(caveats: list[str], want_caveats: bool) -> dict[str, Any
     }
 
 
+# How many seat rows roster() reads at once (the bucket map is a fourth connection).
+_ROSTER_PARALLEL = 3
+
+
 async def roster(
     pool: asyncpg.Pool, *, repo: str | None = None, live_secs: int = _LIVE_SECS,
     want_caveats: bool = False,
@@ -920,7 +926,10 @@ async def roster(
     from src.orchestrator.charter import charter_of
     from src.orchestrator.offices import _default_office_root
 
-    bucket_map = await _triage_bucket_map(pool)
+    # The triage bucket map is one slow shared read (about 300 ms live). It starts now and each
+    # row waits for it only at the point it needs it, so it overlaps the per-seat reads below.
+    bucket_task = asyncio.ensure_future(_triage_bucket_map(pool))
+    trust_projects = workspace_trust.load_projects()  # parsed once for every row
     seat_rows = await pool.fetch(
         "SELECT o.canonical AS seat_id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -928,8 +937,7 @@ async def roster(
         "   AS handle "
         "FROM objects o WHERE o.type='Seat' AND o.status='active' ORDER BY o.canonical")
 
-    rows: list[dict[str, Any]] = []
-    for sr in seat_rows:
+    async def _build_row(sr: Any) -> dict[str, Any]:
         seat_id = sr["seat_id"]
         facts = await seat_facts(pool, seat_id)
         occ = await seat_occupancy(pool, seat_id, live_secs=live_secs)
@@ -973,6 +981,7 @@ async def roster(
         duplicate_siblings = None
         name_resolution = None
         if pin_state == "declared" and pin.value:
+            bucket_map = await bucket_task
             pin_canonical = _bucket_key(bucket_map, f"repo:{pin.value}")
             triage_bucket = bucket_map.get(pin_canonical, "no-such-project")
             if triage_bucket == "duplicate_suspect":
@@ -1009,7 +1018,7 @@ async def roster(
         from src.orchestrator.project_identity import charter_display_labels
 
         chartered_display = await charter_display_labels(pool, chartered)
-        rows.append({
+        return {
             "seat": seat_id, "handle": facts["handle"], "house": facts["house"],
             "manager": manager_handle,
             "occupancy": occ["state"], "holder": occ["holder"],
@@ -1017,7 +1026,8 @@ async def roster(
             "anchor_cwd": anchor, "tree_cwd": facts["tree_cwd"], "live_cwd": live_cwd,
             "probed_anchor_cwd": probed_anchor,
             "office_exists": _dir_exists(effective_anchor),
-            "workspace_trust": {"untrusted": untrusted_dirs([facts["tree_cwd"], anchor])},
+            "workspace_trust": {"untrusted": untrusted_dirs(
+                [facts["tree_cwd"], anchor], projects=trust_projects)},
             "chartered_repos": chartered,
             "chartered_repos_display": chartered_display,
             "pin_charter_agreement": pin_charter_agreement,
@@ -1027,7 +1037,23 @@ async def roster(
                        if duplicate_siblings is not None else {}),
                     **({"name_resolution": name_resolution}
                        if name_resolution is not None else {})},
-        })
+        }
+
+    # The seats are read independently of one another (each row is its own handful of reads), so
+    # a few at a time instead of one after another: 39 seats made about 590 queries in a row,
+    # about 800 ms. At most `_ROSTER_PARALLEL` rows hold a connection at once, and gather keeps
+    # the rows in the order the seats came back.
+    gate = asyncio.Semaphore(_ROSTER_PARALLEL)
+
+    async def _gated(sr: Any) -> dict[str, Any]:
+        async with gate:
+            return await _build_row(sr)
+
+    try:
+        rows: list[dict[str, Any]] = list(await asyncio.gather(*[_gated(sr) for sr in seat_rows]))
+    finally:
+        if not bucket_task.done():
+            bucket_task.cancel()
 
     if repo is None:
         return {"seats": rows, **_roster_caveats_out(list(_ROSTER_CAVEATS), want_caveats)}
