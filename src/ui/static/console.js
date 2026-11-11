@@ -883,7 +883,7 @@ var REPAIRS_TARGETS = [
   { key: 'agent_project_links', hint: 'Move works_in/governs off an off-head Agent onto its living head.' },
   { key: 'closed_by_real_sources', hint: 'Re-point closed_by edges off placeholder Agents onto the real Person/SystemSource, then retire the placeholder.' },
   { key: 'operator_charter', hint: 'Mint governs from person:operator to every active SoftwareProject it doesn’t already cover. Fleet-wide authority scope. Apply is CLI-only: osiris backfill operator_charter --apply --because "..."', cliOnly: true },
-  { key: 'desk_triage', hint: 'Settle old agent-written operator mail by five named rules (noise, informational, corrected, unanswered asks, spent manifests). Counts by rule first.' },
+  { key: 'desk_triage', hint: 'Settle old agent-written operator mail by four named rules (noise, informational, answered by the sender, old asks and unclassified briefs). Counts by rule first.' },
   { key: 'abstention_churn_collapse', hint: 'Keep the first and latest repeated in-repo abstention per object and delete the copies between (history delete; dry run shows rows and bytes).' },
   { key: 'automated_desk_backlog', hint: 'Settle the operator desk’s unread automated notices (cron and system senders) older than a day; asks and decisions are kept.' },
   { key: 'stale_in_repo_abstentions', hint: 'Retire in_repo abstentions on objects that already have a live in_repo link.' },

@@ -1376,49 +1376,59 @@ async def settle_automated_desk_backlog(
 _DESK_NOISE_RE = (r"model (divergence|check|downgrade)|identity (check|\+ model|confession)"
                   r"|model-divergence|divergence at mount")
 _DESK_TRIAGE_RULES = {
-    "N1": "noise: a fold result, or a model or identity confession",
-    "N2": "an informational brief (not an ask) older than the informational window",
-    "S1": "the sender's own later message corrects, replaces or withdraws it",
-    "S2": "an ask, decision or hands brief nobody answered, older than the ask window",
-    "S3": "a prune-ladder manifest whose planned removal date has passed",
+    "N1": "noise: a fold result, or a model or identity confession (never an ask, decision "
+          "or hands brief)",
+    "N2": "a brief the sender marked fyi, older than the informational window",
+    "S1": "the sender's own later message answers it or names it by number",
+    "S2": "an ask, decision, hands or unclassified brief older than the ask window; whether "
+          "anyone answered it elsewhere is not checked",
 }
 
 # One classifier for the dry run and the apply, so they can never disagree. A row gets the
 # first rule that fits; no rule means it is kept. Only unread, un-dimmed operator mail.
-_DESK_TRIAGE_SQL = """
+# Only agent-written mail is ever a candidate: a scheduled job's or a system process's notice
+# is never settled here. A brief with no grade and no band was never classified, so it is not
+# called informational: it waits out the ask window like an ask.
+_DESK_TRIAGE_COLUMNS = """
 SELECT id, from_agent, created_at, rule FROM (
   SELECT m.id, m.from_agent, m.created_at,
     CASE
-      WHEN m.from_agent = 'system:prune-ladder'
-           AND m.created_at < now() - interval '2 days' THEN 'S3'
       WHEN m.from_agent NOT LIKE 'agent:%' THEN NULL
-      WHEN lower(left(m.body, 400)) ~ $4
-           OR lower(left(m.body, 10)) = 'great fold' THEN 'N1'
-      WHEN COALESCE(m.desk_kind, '') NOT IN ('decision', 'hands') AND COALESCE(m.grade, '') <> 'ask'
+      WHEN (lower(left(m.body, 400)) ~ $4 OR lower(left(m.body, 10)) = 'great fold')
+           AND COALESCE(m.desk_kind, '') NOT IN ('decision', 'hands')
+           AND COALESCE(m.grade, '') <> 'ask' THEN 'N1'
+      WHEN (m.desk_kind = 'fyi' OR m.grade = 'fyi')
+           AND COALESCE(m.desk_kind, '') NOT IN ('decision', 'hands')
+           AND COALESCE(m.grade, '') <> 'ask'
            AND m.created_at < now() - make_interval(days => $1) THEN 'N2'
       WHEN m.created_at < now() - make_interval(days => $2) AND EXISTS (
              SELECT 1 FROM fleet_messages l WHERE l.to_project = $3 AND l.from_agent = m.from_agent
                AND l.id > m.id AND l.created_at < m.created_at + interval '3 days'
                AND (l.reply_to = m.id
-                    OR l.body ~* '(supersede|replaces|correction|withdraw|retract|resolved|amend)')
+                    OR l.body ~* ('(#|msg |mail |message |dm |brief )' || m.id::text
+                                  || '([^0-9]|$)'))
            ) THEN 'S1'
-      WHEN (COALESCE(m.desk_kind, '') IN ('decision', 'hands') OR m.grade = 'ask')
+      WHEN (COALESCE(m.desk_kind, '') IN ('decision', 'hands') OR m.grade = 'ask'
+            OR (m.desk_kind IS NULL AND m.grade IS NULL))
            AND m.created_at < now() - make_interval(days => $2) THEN 'S2'
     END AS rule
   FROM fleet_messages m
-  WHERE m.to_project = $3 AND m.to_agent IS NULL AND m.read_at IS NULL AND m.moot_at IS NULL
-) t
 """
+_DESK_TRIAGE_UNREAD = (
+    "  WHERE m.to_project = $3 AND m.to_agent IS NULL AND m.read_at IS NULL "
+    "AND m.moot_at IS NULL\n) t")
+_DESK_TRIAGE_SQL = _DESK_TRIAGE_COLUMNS + _DESK_TRIAGE_UNREAD
 
 
 async def triage_agent_desk_backlog(
     pool: asyncpg.Pool, *, actor: str, dry_run: bool = True, because: str | None = None,
     informational_days: int = 30, ask_days: int = 42,
 ) -> dict[str, Any]:
-    """The old, agent-written operator mail nobody should have to read one by one: five named
+    """The old, agent-written operator mail nobody should have to read one by one: four named
     rules (`_DESK_TRIAGE_RULES`), first match wins. Each settled row stays in the record, marked
     read and moot, with its rule and the reason in the note. Never touched: a row no rule
-    fits (anything recent, any ask newer than `ask_days`, and any current notice from a job).
+    fits (anything recent, any ask newer than `ask_days`, and any notice from a job or a
+    system process: only mail written by an agent is ever a candidate).
 
     DRY RUN IS THE DEFAULT and returns the counts by rule and by sender, and how many rows no
     rule fits; `dry_run=False` REQUIRES a non-blank `because`. Idempotent: a settled row is no
