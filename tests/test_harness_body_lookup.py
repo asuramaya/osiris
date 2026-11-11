@@ -296,3 +296,45 @@ async def test_stop_by_list_records_the_session_so_resume_can_find_it(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical='agent:anchored-body' AND a.name='session'")
     assert session == "ab12cd34"
+
+
+class _WedgedProc:
+    """A `claude agents --json` that never answers."""
+
+    returncode: int | None = None
+
+    def __init__(self) -> None:
+        self.killed = False
+        self.reaped = False
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        await asyncio.sleep(3600)
+        return b"", b""
+
+    def kill(self) -> None:
+        self.killed = True
+
+    async def wait(self) -> int:
+        self.reaped = True
+        return -9
+
+
+@pytest.mark.parametrize("strict", [True, False])
+async def test_a_timed_out_agents_list_is_killed_and_reaped(
+    monkeypatch: pytest.MonkeyPatch, strict: bool,
+) -> None:
+    """Strict or not, a wedged `claude agents --json` hits the deadline and its child is
+    killed and reaped (it used to be left running, one per attempt)."""
+    proc = _WedgedProc()
+
+    async def _spawn(*a: Any, **k: Any) -> _WedgedProc:
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
+    monkeypatch.setattr(trigger, "_AGENTS_LIST_DEADLINE", 0.05)
+    if strict:
+        with pytest.raises(trigger.HarnessListUnreadable):
+            await trigger._claude_agents_json(strict=True)
+    else:
+        assert await trigger._claude_agents_json() == []
+    assert proc.killed and proc.reaped

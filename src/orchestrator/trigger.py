@@ -5722,6 +5722,20 @@ class HarnessListUnreadable(OSError):
     empty list is an answer ("no body"), this is the lack of one."""
 
 
+# Every `claude agents --json` call has a deadline: a wedged harness must not hang a caller
+# forever, and a timed-out child is killed and reaped, never left running.
+_AGENTS_LIST_DEADLINE = 20.0
+
+
+async def _kill_and_reap(proc: Any) -> None:
+    """End a child that overran its deadline (or whose caller was cancelled) and collect it,
+    so a timed-out `claude agents --json` never leaves a process or a zombie behind."""
+    with contextlib.suppress(ProcessLookupError):
+        proc.kill()
+    with contextlib.suppress(TimeoutError, OSError):
+        await asyncio.wait_for(proc.wait(), timeout=5.0)
+
+
 async def _claude_agents_json(
     *, cwd: str | None = None, include_completed: bool = False, strict: bool = False,
 ) -> list[dict[str, Any]]:
@@ -5732,7 +5746,8 @@ async def _claude_agents_json(
 
     `strict=True` is for the callers that DECIDE something from an empty answer (launch,
     resume, stop): a spawn failure, a timeout, a non-zero exit or unparseable output raises
-    `HarnessListUnreadable` instead of reading as "no body"."""
+    `HarnessListUnreadable` instead of reading as "no body". Both modes have the same
+    deadline and kill and reap the child when it is exceeded."""
     cmd = ["claude", "agents", "--json"]
     if cwd:
         cmd += ["--cwd", cwd]
@@ -5741,15 +5756,20 @@ async def _claude_agents_json(
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=20.0 if strict else None)
-    except TimeoutError as exc:
-        if strict:
-            raise HarnessListUnreadable("claude agents --json timed out") from exc
-        return []
     except OSError as exc:
         if strict:
             raise HarnessListUnreadable(f"claude agents --json did not run: {exc}") from exc
         return []
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=_AGENTS_LIST_DEADLINE)
+    except TimeoutError as exc:
+        await _kill_and_reap(proc)
+        if strict:
+            raise HarnessListUnreadable("claude agents --json timed out") from exc
+        return []
+    except asyncio.CancelledError:
+        await _kill_and_reap(proc)
+        raise
     if strict and proc.returncode not in (0, None):
         raise HarnessListUnreadable(f"claude agents --json exited {proc.returncode}")
     try:
