@@ -2851,6 +2851,40 @@ async def test_resume_guard_returns_gate_token_directly_not_prose_to_reparse(
     assert "signed testimony names a different agent" in detail2
 
 
+async def test_a_launched_body_naming_its_own_session_resumes_but_a_stranger_still_refuses(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """A body started by `osiris launch` mounts as agent:<its session id>, so its signed
+    acts name that id, not the seat holder's. Reached through the graph walk (`hop` set),
+    that is the addressee's own session and must pass the guard. A signature naming ANOTHER
+    agent still refuses, with or without a hop, and a session naming its own id still
+    refuses when it did not come through the graph walk."""
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    st = _settings(enabled=True, sense=str(sense))
+    resume = (FULL_SID, "/repo/demo", 0.0, "")
+    own = f"agent:{FULL_SID[:8]}"
+    t = proj / f"{FULL_SID}.jsonl"
+    t.write_bytes(('{"type":"user","toolUseResult":'
+                   '"{\\"sent\\":1,\\"from\\":\\"' + own + '\\"}"}\n').encode())
+    ok, _ = await trigger_module._resume_guard(
+        actions.pool, resume, "agent:holder01", seat_id=None, st=st,
+        hop=0, launch_cwd="/repo/demo")
+    assert ok is None
+    # not reached through the graph walk (no hop): the registry's word alone, still refused
+    gate, _ = await trigger_module._resume_guard(
+        actions.pool, resume, "agent:holder01", seat_id=None, st=st)
+    assert gate == "crossed-registry"
+    # another seat's session: it names someone who is neither the holder nor itself
+    t.write_bytes(b'{"type":"user","toolUseResult":'
+                  b'"{\\"sent\\":1,\\"from\\":\\"agent:zzstranger-ix\\"}"}\n')
+    gate2, _ = await trigger_module._resume_guard(
+        actions.pool, resume, "agent:holder01", seat_id=None, st=st,
+        hop=0, launch_cwd="/repo/demo")
+    assert gate2 == "crossed-registry"
+
+
 # ═══ THE CORROBORATION FALLBACK ══════════════════════
 # one parked session was provably its own: every signature in the whole transcript
 # was its own lineage, but the LAST 400KB was all unsigned harness noise (away summaries,

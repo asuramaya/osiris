@@ -1235,6 +1235,17 @@ def _zero_hop_graph_corroborates(
     return hop == 0 and launch_cwd is not None and resume[1] == launch_cwd
 
 
+async def _names_its_own_session(root: Path, sid: str) -> bool:
+    """True when the newest signed act in session `sid` names `agent:<sid[:8]>`, the
+    identity a launched body mounts under (see `_resume_guard`)."""
+    own = f"agent:{sid[:8]}"
+    act, _ = await asyncio.to_thread(_resident_tail_signatures_sync, root, sid)
+    if act is None:
+        act, _t = await asyncio.to_thread(
+            _resident_of_deeper_sync, root, sid, acts_only=True)
+    return act is not None and act == own
+
+
 async def _resume_guard(
     pool: asyncpg.Pool, resume: tuple[str, str, float, str], base: str, *,
     seat_id: str | None, st: Settings, hop: int | None = None,
@@ -1265,6 +1276,15 @@ async def _resume_guard(
     verdict = await _resident_verdict(pool, root, resume[0], base, job_dir_hint=resume[3],
                                       seat_id=seat_id)
     if verdict == "match":
+        return None, None
+    if verdict == "mismatch" and hop is not None and await _names_its_own_session(
+            root, resume[0]):
+        # A body started by `osiris launch` mounts as agent:<its own session id>, so every
+        # act it signs names that id, never the seat holder's. The session reached this
+        # guard through the graph's own `session` property for the holder's lineage (the
+        # walk's `hop` is set only on that path), so the graph already binds it to the
+        # addressee; a signature naming the session itself is that same session, not
+        # another agent. A crossed registry names a DIFFERENT agent and still refuses.
         return None, None
     if verdict == "mismatch":
         return "crossed-registry", (
