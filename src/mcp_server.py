@@ -7033,7 +7033,7 @@ async def backfill(
     "stale_in_repo_abstentions" (retires an in_repo abstention on a linked object) |
     "automated_desk_backlog" (settles old cron notices on the desk) |
     "desk_triage" (settles old agent desk mail by named rules) |
-    "abstention_churn_collapse" (drops repeat abstentions) |
+    "abstention_churn_collapse" (folds repeat abstentions) |
     "provenance_possible_upstream" (back-stamps `possible_upstream` onto
     historical Decision/Thread writes via each write's transcript record. `limit`/
     `newest_first` are consulted by this target only. Runs in the background and
