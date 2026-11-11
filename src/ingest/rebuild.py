@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import shutil
 import sqlite3
 import tempfile
@@ -267,7 +268,7 @@ def write_crush(
     db = data_dir / "crush.db"
     _refuse_symlinks(data_dir, db)
     _refuse_session_store(workspace, data_dir, db)
-    data_dir.mkdir(parents=True, exist_ok=True)
+    _private_mkdir(data_dir)
     fresh = not db.exists()
     conn = sqlite3.connect(db)
     try:
@@ -297,6 +298,8 @@ def write_crush(
         conn.commit()
     finally:
         conn.close()
+    for f in db.parent.glob(db.name + "*"):   # crush.db and its -wal / -shm
+        f.chmod(0o600)
     return {"to": "crush", "session_id": sid, "path": str(db), "turns": len(rebuilt.turns) + 1,
             "folded": dict(rebuilt.folded)}
 
@@ -327,6 +330,24 @@ def _refuse_session_store(*paths: Path | str) -> None:
                 "writing into Claude Code's own session store "
                 f"({real_claude_projects_dir()}) is held until the operator allows it; "
                 f"{path} resolves into it. Point it at a scratch directory")
+
+
+def _private_mkdir(path: Path) -> None:
+    """Create `path` and any missing parent with mode 0700. A rebuilt session is decrypted
+    conversation text, so no directory made for it is readable by anyone else. Directories
+    that already exist keep the mode they have."""
+    missing = [d for d in (path, *path.parents) if not d.exists()]
+    for d in reversed(missing):
+        d.mkdir(mode=0o700, exist_ok=True)
+        d.chmod(0o700)   # mkdir's mode is masked by the umask; this sets it exactly
+
+
+def _private_write(path: Path, text: str) -> None:
+    """Write `text` to a new file readable by its owner only (0600)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
+    path.chmod(0o600)
 
 
 def _refuse_symlinks(*paths: Path) -> None:
@@ -398,8 +419,8 @@ def write_claude(
     target = projects_dir / _slug(cwd) / f"{sid}.jsonl"
     _refuse_symlinks(target.parent, target)
     _refuse_session_store(projects_dir, target.parent, target)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("".join(json.dumps(d) + "\n" for d in out))
+    _private_mkdir(target.parent)
+    _private_write(target, "".join(json.dumps(d) + "\n" for d in out))
     return {"to": "claude", "session_id": sid, "path": str(target), "turns": len(rebuilt.turns) + 1,
             "lines": len(out), "folded": dict(rebuilt.folded)}
 
@@ -484,13 +505,14 @@ def write_dsh(
     # nothing behind in a real DSH home, never a half-made session DSH might list.
     parent = target_dir.parent
     made_parent = not parent.exists()
-    parent.mkdir(parents=True, exist_ok=True)
+    _private_mkdir(parent)
     work = Path(tempfile.mkdtemp(prefix=".partial-", dir=parent))
     try:
         plain = work / "session.jsonl"
-        plain.write_text("".join(json.dumps(e) + "\n" for e in events))
+        _private_write(plain, "".join(json.dumps(e) + "\n" for e in events))
         subprocess.run(["zstd", "-q", "--rm", "-f", str(plain), "-o", str(plain) + ".zstd"],
                        check=True, timeout=120)
+        Path(str(plain) + ".zstd").chmod(0o600)
         work.rename(target_dir)
     except BaseException:
         shutil.rmtree(work, ignore_errors=True)

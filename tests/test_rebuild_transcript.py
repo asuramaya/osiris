@@ -344,6 +344,47 @@ async def test_install_with_an_into_is_refused_rather_than_ignoring_the_into(
     assert not (tmp_path / "home" / ".dsh").exists() and not (tmp_path / "elsewhere").exists()
 
 
+async def test_rebuilt_sessions_are_private_to_their_owner(
+    actions: Any, tmp_path: Path,
+) -> None:
+    """The output is decrypted conversation text: every file made is 0600 and every directory
+    made is 0700, whatever the umask. A directory that already existed keeps its mode."""
+    import os
+    import stat
+
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    old_umask = os.umask(0o022)
+    try:
+        existing = tmp_path / "existing"
+        existing.mkdir(mode=0o755)
+        existing.chmod(0o755)
+        cwd = "/var/tmp/osiris-scratch/replay"
+        made = []
+        r1 = await rebuild_session(actions.pool, SID, to="crush", into=existing / "ws")
+        made.append(Path(r1["path"]))
+        r2 = await rebuild_session(actions.pool, SID, to="claude", into=existing / "proj",
+                                   cwd=cwd)
+        made.append(Path(r2["path"]))
+        r3 = await rebuild_session(actions.pool, SID, to="dsh", into=existing / "dsh", cwd=cwd)
+        made.append(Path(r3["path"]))
+    finally:
+        os.umask(old_umask)
+
+    def mode(path: Path) -> int:
+        return stat.S_IMODE(path.stat().st_mode)
+
+    assert mode(existing) == 0o755
+    for f in made:
+        assert mode(f) == 0o600, f
+        d = f.parent
+        while d != existing:
+            assert mode(d) == 0o700, d
+            d = d.parent
+    for extra in (made[0].parent).glob("crush.db-*"):
+        assert mode(extra) == 0o600, extra
+
+
 # --- the dsh writer: tmp dirs only ----------------------------------------------------------
 
 def _dsh_events(path: Path) -> list[dict[str, Any]]:
