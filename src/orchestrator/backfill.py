@@ -23,7 +23,7 @@ BACKFILL_TARGETS = frozenset({
     "bootstrap_orphan_references", "boot_alarm_commit_links", "task_sync_citation_links",
     "lineage_repo_links", "agent_project_links", "closed_by_real_sources",
     "operator_charter", "provenance_possible_upstream", "stale_in_repo_abstentions",
-    "automated_desk_backlog", "desk_triage",
+    "automated_desk_backlog", "desk_triage", "abstention_churn_collapse",
 })
 
 # CLI-ONLY FOR APPLY: operator_charter mints a `governs` link from person:operator to EVERY
@@ -124,6 +124,9 @@ async def run_backfill(
     if target == "desk_triage":
         from src.orchestrator.mailbox import triage_agent_desk_backlog as _f_desk_triage
         return await _f_desk_triage(pool, actor=actor, dry_run=dry_run, because=because)
+    if target == "abstention_churn_collapse":
+        from src.orchestrator.abstention_churn import collapse_abstention_churn as _f_collapse
+        return await _f_collapse(pool, actor=actor, dry_run=dry_run, because=because)
     if target == "stale_in_repo_abstentions":
         from src.orchestrator.capture import (
             backfill_stale_in_repo_abstentions as _f_stale_abstentions,

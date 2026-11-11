@@ -6939,16 +6939,17 @@ async def backfill(
     "task_sync_citation_links" (links a task_sync Thread to the Thread it names) |
     "lineage_repo_links" (links a zero-link Decision/Thread to its
     author's lineage project) | "agent_project_links" (moves works_in/governs off an
-    outdated Agent record onto its current one; the one target taking `only_bases` to scope the
-    write) | "closed_by_real_sources" (re-points a `closed_by` edge off
+    outdated Agent record onto its current one; the only target taking `only_bases`) |
+    "closed_by_real_sources" (re-points a `closed_by` edge off
     the old 'session'/'analyst:operator' placeholder Agent objects onto the real Person/
     SystemSource record minted today, then retires the now-edgeless
     placeholder) | "operator_charter" (mints a
     `governs` link from `person:operator` to every active SoftwareProject it doesn't
-    already govern, so the operator stays chartered over everything) |
+    already govern) |
     "stale_in_repo_abstentions" (retires an in_repo abstention on a linked object) |
     "automated_desk_backlog" (settles old cron notices on the desk) |
     "desk_triage" (settles old agent desk mail by named rules) |
+    "abstention_churn_collapse" (drops repeat abstentions) |
     "provenance_possible_upstream" (back-stamps `possible_upstream` onto
     historical Decision/Thread writes via each write's transcript record. `limit`/
     `newest_first` are consulted by this target only. Runs in the background and
