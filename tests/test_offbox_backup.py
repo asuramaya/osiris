@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from src.orchestrator import restic_locks
 
 pytestmark = pytest.mark.skipif(
     shutil.which("restic") is None, reason="restic is not installed on this box")
@@ -118,7 +119,7 @@ def test_restore_drill_resolves_the_password_the_same_way_the_offload_runner_doe
 
     captured_env: dict[str, str] = {}
 
-    def _fake_run(cmd: list[str], *, env: dict[str, str], **kwargs: object) -> object:
+    def _fake_run(args: list[str], env: dict[str, str], **kwargs: object) -> object:
         captured_env.update(env)
         raise AssertionError("restic must never actually run in this test")
 
@@ -127,7 +128,10 @@ def test_restore_drill_resolves_the_password_the_same_way_the_offload_runner_doe
 
     monkeypatch.setattr(
         "src.orchestrator.restic_credential.get_restic_password", _fake_get_restic_password)
-    monkeypatch.setattr(drill_module.subprocess, "run", _fake_run)
+    # every restic call the drill makes goes through restic_locks.run_restic (the lock clearing
+    # first, then the check); patching subprocess.run here would no longer be reached, and a real
+    # restic would run against the repository named below
+    monkeypatch.setattr(restic_locks, "run_restic", _fake_run)
 
     with pytest.raises(AssertionError):
         drill_module.run_drill("local:/nonexistent/wont-be-reached")
@@ -151,7 +155,7 @@ def test_restore_drill_refuses_with_a_clear_message_when_no_password_resolves(
     def _unreachable(*a: object, **k: object) -> object:
         raise AssertionError("restic must never run without a resolved password")
 
-    monkeypatch.setattr(drill_module.subprocess, "run", _unreachable)
+    monkeypatch.setattr(restic_locks, "run_restic", _unreachable)
 
     fail = drill_module.run_drill("local:/nonexistent/wont-be-reached")
     assert fail is not None
