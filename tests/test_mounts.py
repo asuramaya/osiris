@@ -3589,3 +3589,39 @@ async def test_sweep_ghost_doors_spares_a_seat_holder_and_a_working_transcript(
     assert released == 1
     left = {r["job_dir"] for r in await p.fetch("SELECT job_dir FROM agent_mounts")}
     assert left == {"/x/jobs/holderon", "/x/jobs/writeron"}
+
+
+async def test_a_slow_fleet_logs_which_probe_was_slow(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """fleet() is a chain of best-effort probes (OS scans, registry census, landing audit,
+    occupancy...). A call past a second logs the step times, slowest first, so a 6 s average
+    can be pinned on one probe; a fast call logs nothing."""
+    import logging
+    import time
+
+    from src import mcp_server as srv
+    from src.orchestrator import census
+
+    real = census.live_bodies
+
+    def slow_scan() -> Any:
+        time.sleep(1.1)
+        return real()
+
+    monkeypatch.setattr(census, "live_bodies", slow_scan)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        with caplog.at_level(logging.INFO, logger="osiris.mcp"):
+            await srv.fleet()
+        slow = [r.getMessage() for r in caplog.records if r.getMessage().startswith("fleet ")]
+        assert len(slow) == 1 and "steps (ms): live_bodies=" in slow[0]  # the slow probe leads
+
+        caplog.clear()
+        monkeypatch.setattr(census, "live_bodies", real)
+        with caplog.at_level(logging.INFO, logger="osiris.mcp"):
+            await srv.fleet()
+        assert not [r for r in caplog.records if r.getMessage().startswith("fleet ")]
+    finally:
+        srv._pool = saved_pool
