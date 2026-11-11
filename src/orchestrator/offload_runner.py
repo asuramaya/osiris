@@ -186,6 +186,10 @@ def _one_line(raw: bytes) -> str:
     return failure_summary(raw.decode(errors="replace"))
 
 
+# A backup that is stopped is given this long to finish its current pack, write its index and
+# release its lock before the SIGKILL: over a slow link the default few seconds are not enough, and
+# a kill mid-upload is what leaves the exclusive-looking lock the next run then has to untangle.
+_BACKUP_STOP_GRACE_SECONDS = 90
 _RESTIC_INCOMPLETE_SNAPSHOT = 3  # restic backup: the snapshot was created, some files unreadable
 _PROBE_TIMEOUT_SECONDS = 30  # restic snapshots and init: a slow link must not hang the tick
 
@@ -251,7 +255,7 @@ def _run_restic_backup(
                 return f"restic init failed: {init.stderr.decode(errors='replace').strip()}"
         backup = restic_locks.run_restic(
             ["backup", str(source), "--exclude=*.tmp"], env,
-            timeout=_RESTIC_TIMEOUT_SECONDS, text=False)
+            timeout=_RESTIC_TIMEOUT_SECONDS, text=False, grace=_BACKUP_STOP_GRACE_SECONDS)
         if backup.returncode == _RESTIC_INCOMPLETE_SNAPSHOT:
             if notes is not None:
                 notes.append("snapshot saved, but restic could not read some source files: "

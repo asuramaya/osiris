@@ -159,6 +159,25 @@ def test_a_backup_timeout_says_it_will_resume_not_that_nothing_was_initialized(
     assert "will resume" in failure and "nothing was initialized" not in failure
 
 
+def test_a_stopped_backup_gets_a_long_grace_before_the_kill(
+    fake: Fake, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import restic_locks
+
+    graces: dict[str, Any] = {}
+    real = restic_locks.run_restic
+
+    def spy(args: list[str], env: dict[str, str], **kw: Any) -> Any:
+        graces[args[0]] = kw.get("grace")
+        return real(args, env, **kw)
+
+    monkeypatch.setattr(restic_locks, "run_restic", spy)
+
+    assert fake.backup() is None
+    assert graces["backup"] == offload_runner._BACKUP_STOP_GRACE_SECONDS >= 60
+    assert graces["snapshots"] is None  # the short probes keep the short grace
+
+
 def test_any_other_backup_exit_is_still_a_failure(fake: Fake) -> None:
     fake.state["backup_exit"] = 1
     fake.state["backup_stderr"] = "Fatal: boom"
