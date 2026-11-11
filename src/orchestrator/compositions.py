@@ -676,6 +676,15 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
 # snippet still headlines with the OR query, and grade x recency weigh exactly as the
 # strict route does.
 #
+# THE PAIRS FORM (measured 2026-11-11 on the live graph): the form above this one still took 3.5
+# to 15 s on a long query (a 300 character decision summary as prior art, 25,000 candidate
+# rows), almost all of it parsing each candidate's text into a tsvector to test it against
+# every word. Asking the index which rows match each word instead returns the same pairs
+# without reading any text: 0.1 to 0.5 s on 14 queries, 91.6 s in total before and 4.0 s
+# after, identical top rows. It also removed a latent defect: a row the OR query matched but no
+# single word's own query matched scored NULL, and NULL sorts first under DESC, so such a
+# query returned fifteen unranked rows (and float(None) then failed the whole search).
+#
 # `n AS MATERIALIZED` IS LOAD-BEARING (measured, not stylistic): `n` is a single-row count
 # referenced only inside SubPlan 3's per-candidate rank calc, so PG's once-referenced-CTE
 # heuristic auto-inlines it, re-executing count(*) FROM corpus per candidate row instead of
@@ -687,34 +696,35 @@ _RELAX_SQL = (
     "n AS MATERIALIZED (SELECT count(*)::float + 1 AS total FROM current_assertions a "
     "  JOIN objects o ON o.id = a.object_id AND o.status = 'active' "
     "  WHERE a.name IN (" + _FTS_FIELDS + ")), "
-    # df per word through the expression index (ix_assertions_fts), never a corpus scan
-    "df AS MATERIALIZED (SELECT w.w, (SELECT count(*) FROM current_assertions a "
-    "  JOIN objects o ON o.id = a.object_id AND o.status = 'active' "
-    "  WHERE a.name IN (" + _FTS_FIELDS + ") "
-    "    AND to_tsvector('english', a.value #>> '{}') @@ plainto_tsquery('english', w.w)) "
-    "  + 1 AS d FROM words w), "
-    # only rows that match ANY word are fetched, via the same index, and each builds its
-    # tsvector once
-    "hit AS MATERIALIZED ("
-    "  SELECT o.id, o.type, o.canonical, a.name AS field, a.value #>> '{}' AS text, "
-    "   a.source_id, a.evidence_class, a.observed_at, "
-    "   to_tsvector('english', a.value #>> '{}') AS tv, " + _GRADE_W + " AS gw "
+    "tq AS MATERIALIZED (SELECT w.w, plainto_tsquery('english', w.w) AS q FROM words w), "
+    # which rows match which query word: one scan of the FTS expression index per word, so no
+    # row's text is parsed again to find out (the form this replaced built a tsvector for every
+    # row matching ANY word, 20 to 30 thousand of them, then tested each against every word)
+    "pairs AS MATERIALIZED (SELECT x.*, tq.w FROM tq, LATERAL ("
+    "  SELECT a.id AS aid, o.id AS oid, o.type, o.canonical, a.name AS field, a.source_id, "
+    "   a.evidence_class, a.observed_at, " + _GRADE_W + " AS gw "
     "  FROM current_assertions a JOIN objects o ON o.id = a.object_id "
     "   AND o.status = 'active' "
     "  WHERE a.name IN (" + _FTS_FIELDS + ") "
-    "    AND to_tsvector('english', a.value #>> '{}') @@ websearch_to_tsquery('english', $2)), "
-    "cand AS ("
-    "  SELECT DISTINCT ON (c.id) c.id, c.type, c.canonical, c.field, c.text, "
-    "   c.source_id, c.evidence_class, c.observed_at, "
-    "   ((SELECT sum(ln(n.total / df.d)) FROM df, n "
-    "     WHERE c.tv @@ plainto_tsquery('english', df.w)) * c.gw * "
-    "    (1.0 / (1.0 + EXTRACT(epoch FROM (now() - c.observed_at)) / 7776000.0)))::real "
+    "    AND to_tsvector('english', a.value #>> '{}') @@ tq.q) x), "
+    # df is the same count the old form took, now read off the pairs
+    "df AS (SELECT w, count(*) + 1 AS d FROM pairs GROUP BY w), "
+    "scored AS (SELECT p.aid, p.oid, p.type, p.canonical, p.field, p.source_id, "
+    "   p.evidence_class, p.observed_at, "
+    "   (sum(ln(n.total / df.d)) * p.gw * "
+    "    (1.0 / (1.0 + EXTRACT(epoch FROM (now() - p.observed_at)) / 7776000.0)))::real "
     "     AS rank "
-    "  FROM hit c ORDER BY c.id, rank DESC), "
+    "  FROM pairs p JOIN df ON df.w = p.w, n "
+    "  GROUP BY p.aid, p.oid, p.type, p.canonical, p.field, p.source_id, "
+    "   p.evidence_class, p.observed_at, p.gw), "
+    "cand AS (SELECT DISTINCT ON (oid) * FROM scored ORDER BY oid, rank DESC), "
     "top AS (SELECT * FROM cand ORDER BY rank DESC LIMIT $3) "
-    "SELECT top.*, ts_headline('english', top.text, websearch_to_tsquery('english', $2), "
-    "         'MaxWords=20, MinWords=8, MaxFragments=1') AS snippet "
-    "FROM top ORDER BY top.rank DESC")
+    # the text is read only for the rows that survive, to headline them
+    "SELECT top.oid AS id, top.type, top.canonical, top.field, a.value #>> '{}' AS text, "
+    "  top.source_id, top.evidence_class, top.observed_at, top.rank, "
+    "  ts_headline('english', a.value #>> '{}', websearch_to_tsquery('english', $2), "
+    "   'MaxWords=20, MinWords=8, MaxFragments=1') AS snippet "
+    "FROM top JOIN current_assertions a ON a.id = top.aid ORDER BY top.rank DESC")
 
 
 _TRGM_SQL = (
