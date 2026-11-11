@@ -1283,10 +1283,14 @@ def _batch_claim_notes(
     would (`<name>^{commit}` for the commit tests, the full `refs/heads/<name>` for existence).
     A name resolving to a commit is an ancestor exactly when it is in that set. Same three
     answers as the per-claim path (proven ancestor / proven not / unknown) and the same notes.
-    None means git failed and the caller must use the per-claim path; a claim whose name could
-    be read as an option (a leading "-") is left to that path too."""
-    if any(b.startswith("-") or (c or "").startswith("-") for b, c in claims):
-        return None
+    None means git failed and the caller must use the per-claim path. A claim whose name could
+    be read as an option (a leading "-": prose like "merge --no-ff" parses to one) is simply
+    left OUT of the result, and the caller asks the per-claim path about it alone. (Declining the
+    whole batch for one such claim sent every audit down the slow path: the live journal showed
+    git_batch=0 and 1.7 s of per-claim git, because the graph's text carries such mentions.)"""
+    claims = [(b, c) for b, c in claims if not (b.startswith("-") or (c or "").startswith("-"))]
+    if not claims:
+        return {}
     try:
         walked = subprocess.run(
             ["git", "-C", str(repo_root), "rev-list", main_sha],
@@ -1400,7 +1404,7 @@ async def audit_graph_merge_claims(
         _batch_claim_notes, repo_root, main_sha, list({(b, c) for _, b, c in pending}))
     lap("git_batch")
     for canonical, branch, cited in pending:
-        if batch is not None:
+        if batch is not None and (branch, cited) in batch:
             note = batch[(branch, cited)]
         else:
             note = await _verify_graph_claim(repo_root, main_sha, branch, cited)

@@ -80,9 +80,17 @@ async def test_the_batch_equals_the_per_claim_path_on_every_kind_of_claim(
     assert "NOT an ancestor of main" in str(batch[("side", short(repo["side_tip"]))])
 
 
-def test_an_option_shaped_name_is_left_to_the_per_claim_path(repo: dict[str, str]) -> None:
+def test_an_option_shaped_name_is_left_to_the_per_claim_path_alone(repo: dict[str, str]) -> None:
+    """Prose such as "merge --no-ff" parses to a branch named "--no-ff". That one claim goes to
+    the per-claim path; the rest of the batch must still be answered in bulk (declining the
+    whole batch made every live audit slow)."""
     root, main = Path(repo["root"]), repo["main"]
-    assert dg._batch_claim_notes(root, main, [("-oops", None), ("side", None)]) is None
+    out = dg._batch_claim_notes(
+        root, main, [("--no-ff", None), ("-oops", "deadbee"), ("side", None)])
+    assert out is not None
+    assert ("--no-ff", None) not in out and ("-oops", "deadbee") not in out
+    assert out[("side", None)] == "names 'side' but it is NOT an ancestor of main"
+    assert dg._batch_claim_notes(root, main, [("--no-ff", None)]) == {}
 
 
 def test_a_git_failure_is_left_to_the_per_claim_path(tmp_path: Path) -> None:
@@ -145,3 +153,35 @@ async def test_a_slow_audit_logs_which_step_was_slow(
     with caplog.at_level(logging.INFO, logger="osiris.deploy_guard"):
         await dg.audit_graph_merge_claims(actions.pool, Path(repo["root"]))
     assert not [r for r in caplog.records if "merge-claim audit" in r.getMessage()]
+
+
+async def test_the_audit_gives_the_same_findings_by_batch_and_per_claim_with_option_names(
+    repo: dict[str, str], actions: object, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End to end on the real audit: graph text with an ordinary unmerged claim, a merged one, a
+    cited-sha one and a "merge --no-ff" mention. The findings through the batch (option-shaped
+    claim handled alone) equal the findings with the batch switched off."""
+    from datetime import UTC, datetime
+
+    from src.actions.core import Actions
+
+    assert isinstance(actions, Actions)
+    texts = {
+        "decision:c1": ("we should merge side now, then merge merged-feat "
+                        f"({repo['merged_tip'][:7]})"),
+        "decision:c2": (f"merge side ({repo['side_tip'][:7]}) is still open; "
+                        "use merge --no-ff later"),
+        "decision:c3": "merge gone-branch (deadbee) never happened",
+    }
+    for canonical, text in texts.items():
+        d = await actions.create_or_find_object("Decision", canonical, "agent:t")
+        await actions.assert_property(d, "summary", text, "agent:t", datetime.now(UTC), 0.9,
+                                      evidence_class="self_declared")
+    root = Path(repo["root"])
+
+    batched = await dg.audit_graph_merge_claims(actions.pool, root)
+    monkeypatch.setattr(dg, "_batch_claim_notes", lambda *a, **k: None)
+    per_claim = await dg.audit_graph_merge_claims(actions.pool, root)
+
+    assert batched == per_claim
+    assert {f["canonical"] for f in batched} >= {"decision:c1", "decision:c2"}
