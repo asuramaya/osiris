@@ -5578,6 +5578,9 @@ async def cmd_rebuild_transcript(
     if receipt.get("truncated"):
         print(f"WARNING: this copy is incomplete: the {receipt['truncated']}. The opening "
               "note in the copy says so too.")
+    if receipt.get("mtime"):
+        print(f"the copy carries the original's last-activity time ({receipt['mtime']}), so "
+              "it does not become this workspace's newest session; choose it by its id.")
     print(voice.how_to_open(to, receipt["session_id"], into, cwd))
     return 0
 

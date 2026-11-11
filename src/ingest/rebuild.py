@@ -582,7 +582,14 @@ def write_dsh(
         _private_write(plain, "".join(json.dumps(e) + "\n" for e in events))
         subprocess.run(["zstd", "-q", "--rm", "-f", str(plain), "-o", str(plain) + ".zstd"],
                        check=True, timeout=120)
-        Path(str(plain) + ".zstd").chmod(0o600)
+        final = Path(str(plain) + ".zstd")
+        final.chmod(0o600)
+        # DSH opens the workspace's most recently touched session by default. A copy written
+        # now would be the newest by a long way and take that place from whatever the operator
+        # was using; it keeps the original's last-activity time instead.
+        if rebuilt.last_at is not None:
+            stamp = rebuilt.last_at.timestamp()
+            os.utime(final, (stamp, stamp))
         work.rename(target_dir)
     except BaseException:
         shutil.rmtree(work, ignore_errors=True)
@@ -591,7 +598,8 @@ def write_dsh(
                 parent.rmdir()
         raise
     return {"to": "dsh", "session_id": sid, "path": str(target_dir / "session.jsonl.zstd"),
-            "turns": len(rebuilt.turns) + 1, "events": len(events), "folded": dict(fold)}
+            "turns": len(rebuilt.turns) + 1, "events": len(events), "folded": dict(fold),
+            "mtime": rebuilt.last_at.isoformat() if rebuilt.last_at else None}
 
 
 def _check_target(to: str, into: Path | str, cwd: str | None) -> None:
