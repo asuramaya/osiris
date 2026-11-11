@@ -3051,7 +3051,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         # Agent that is NOT its lineage's living_head yet still carries a live works_in/
         # governs edge, read-only here; the repair stays that verb's own job, this only
         # counts.
-        from src.orchestrator.folds import living_head
+        from src.orchestrator.folds import living_heads
 
         off_head_rows = await pool.fetch(
             "SELECT DISTINCT f.canonical AS agent, f.status AS status, p.canonical AS project "
@@ -3061,7 +3061,9 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             "WHERE l.type IN ('works_in','governs') "
             "AND (l.valid_until IS NULL OR l.valid_until > now())")
         off_head_bases = {_generation(str(r["agent"]))[0] for r in off_head_rows}
-        off_head_of: dict[str, str] = {b: await living_head(pool, b) for b in off_head_bases}
+        # ONE bulk resolution (identical to living_head per base, which cost ~160 s live: five
+        # queries per generation walked, per base)
+        off_head_of: dict[str, str] = await living_heads(pool, sorted(off_head_bases))
         stale_links = [r for r in off_head_rows
                        if str(r["agent"]) != off_head_of[_generation(str(r["agent"]))[0]]]
         land("stale-off-head-link", "warn", [

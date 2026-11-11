@@ -78,6 +78,127 @@ async def living_head(pool: asyncpg.Pool, agent_id: str) -> str:
     return head
 
 
+_LIKE_SPECIAL = ("%", "_", "\\")
+
+
+async def living_heads(pool: asyncpg.Pool, agent_ids: list[str]) -> dict[str, str]:
+    """`{a: await living_head(pool, a) for a in agent_ids}`, with the per-node reads done ONCE.
+
+    `living_head` costs a handful of queries per generation it walks, and the graph lint asks it
+    for every lineage base that carries a works_in/governs edge: about 160 s live (measured,
+    graph_lint step timings, 2026-11-11), nearly all of it round trips. This resolves the same
+    answer from five bulk reads (merge chains, every Agent's status and false_mint, every
+    `succeeded_by` value, every mount's agent id) for the overwhelmingly common lineage: a chain
+    with at most ONE continuing successor at every hop. There the walk's liveness comparison never
+    decides anything (liveness only arbitrates a genuine fork), so no liveness read is needed.
+
+    EXACT BY FALLBACK, NOT BY APPROXIMATION: any base this cannot prove it resolves identically
+    (a fork at any hop, an ambiguous or looping merge chain, a label LIKE would treat as a
+    pattern, a walk that runs out of the 64-edge budget) is handed to the real `living_head`. The
+    walk below mirrors `_lineage_head_walk` / `lineage_head` / `canonical_agent` step for step
+    (seen set, hop budget, 10-hop merge loops, husk and merged tails); tests/test_folds_bulk.py
+    holds it equal to the real function over forks, husks, merges, cycles and mounts."""
+    from src.orchestrator.agents import _generation
+
+    if not agent_ids:
+        return {}
+    merged_any: dict[str, set[str]] = {}    # canonical_agent: status='merged', any type
+    merged_agent: dict[str, set[str]] = {}  # lineage_head's loop: any Agent with merged_into
+    for r in await pool.fetch(
+            "SELECT o.canonical AS c, w.canonical AS w, o.status AS status, o.type AS type "
+            "FROM objects o JOIN objects w ON w.id = o.merged_into "
+            "WHERE o.status = 'merged' OR o.type = 'Agent'"):
+        if r["status"] == "merged":
+            merged_any.setdefault(r["c"], set()).add(r["w"])
+        if r["type"] == "Agent":
+            merged_agent.setdefault(r["c"], set()).add(r["w"])
+    node: dict[str, tuple[bool, str]] = {}   # canonical -> (active, false_mint winner value)
+    dup_nodes: set[str] = set()
+    for r in await pool.fetch(
+            "SELECT DISTINCT ON (o.id) o.canonical AS c, o.status = 'active' AS active, "
+            " (SELECT ca.value #>> '{}' FROM current_assertions ca WHERE ca.object_id = o.id "
+            "   AND ca.name = 'false_mint' ORDER BY ca.confidence DESC, ca.observed_at DESC "
+            "   LIMIT 1) AS fm "
+            "FROM objects o WHERE o.type = 'Agent' ORDER BY o.id"):
+        if r["c"] in node:
+            dup_nodes.add(r["c"])
+        node[r["c"]] = (bool(r["active"]), r["fm"] or "")
+    succ: dict[str, set[str]] = {}
+    for r in await pool.fetch(
+            "SELECT o.canonical AS c, a.value #>> '{}' AS v FROM current_assertions a "
+            "JOIN objects o ON o.id = a.object_id "
+            "WHERE o.type = 'Agent' AND a.name = 'succeeded_by'"):
+        if r["v"]:
+            succ.setdefault(r["c"], set()).add(r["v"])
+    # best mount per lineage base: a mount id matches base b when it IS b or starts with b + "-"
+    best_mount: dict[str, tuple[bool, Any, str]] = {}
+    for r in await pool.fetch("SELECT agent_id, max(last_seen) AS seen FROM agent_mounts "
+                              "GROUP BY agent_id"):
+        mid = str(r["agent_id"])
+        cuts = [mid] + [mid[:i] for i, ch in enumerate(mid) if ch == "-"]
+        for b in cuts:
+            key = (r["seen"] is not None, r["seen"], mid)
+            cur = best_mount.get(b)
+            if cur is None or (key[0], key[1]) > (cur[0], cur[1]):
+                best_mount[b] = key
+
+    def merge_chain(start: str, table: dict[str, set[str]]) -> str | None:
+        cur = start
+        for _ in range(10):
+            winners = table.get(cur)
+            if winners is None:
+                return cur
+            if len(winners) != 1:
+                return None  # ambiguous: the real query would pick one of several
+            cur = next(iter(winners))
+        return cur
+
+    def walk(start: str) -> tuple[bool, str | None]:
+        """The no-fork walk: (True, head) with head None for "nothing valid", or (False, None)
+        when this lineage needs the real walk (a fork, or the hop budget is in play)."""
+        seen = {start}
+        budget = 64
+        path: list[str] = [start]
+        cur = start
+        while True:
+            cands = [c for c in sorted(succ.get(cur, ())) if c not in seen] if budget > 0 else []
+            if len(cands) >= 2:
+                return False, None
+            if not cands:
+                break
+            nxt = cands[0]
+            seen.add(nxt)
+            budget -= 1
+            if budget <= 0:
+                return False, None  # leave the budget edge to the real walk
+            path.append(nxt)
+            cur = nxt
+        for name in reversed(path):  # deepest valid node wins, falling back toward the base
+            active, fm = node.get(name, (False, ""))
+            if active and fm != "true":
+                return True, name
+        return True, None
+
+    out: dict[str, str] = {}
+    for agent_id in agent_ids:
+        resolved: str | None = None
+        if (agent_id not in dup_nodes and not any(ch in agent_id for ch in _LIKE_SPECIAL)):
+            canon = merge_chain(agent_id, merged_any)
+            if canon is not None and canon not in dup_nodes:
+                head_start = merge_chain(canon, merged_agent)
+                if head_start is not None and head_start not in dup_nodes:
+                    proven, head = walk(head_start)
+                    base = _generation(canon)[0]
+                    if proven and not any(ch in base for ch in _LIKE_SPECIAL):
+                        head_name = head if head is not None else head_start
+                        mount = best_mount.get(base)
+                        resolved = (mount[2] if mount is not None
+                                    and _generation(mount[2])[1] > _generation(head_name)[1]
+                                    else head_name)
+        out[agent_id] = resolved if resolved is not None else await living_head(pool, agent_id)
+    return out
+
+
 async def wakeable_identity(pool: asyncpg.Pool, agent_id: str) -> str | None:
     """Answers the wake question, "which OS session can be resumed," independently of
     `living_head`'s delivery question, "whose mailbox owns this name." A succession is a
