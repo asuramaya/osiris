@@ -493,3 +493,17 @@ def test_started_new_names_the_window_and_the_fresh_session() -> None:
     assert started_new("atlas", None) == "osiris launch: atlas started a new session."
     assert resumed("launch", "atlas", "abcdef1234") == (
         "osiris launch: atlas resumed (session abcdef12).")
+
+
+def test_the_launch_note_names_no_cause_it_cannot_know() -> None:
+    """launch did not continue; the guard that refused (a crossed registry, no recorded
+    session, a ceiling) is resume's to name, so the note points at `resume --verbose`."""
+    from src.ingest.sessions import dormant_history_note
+
+    note = dormant_history_note({
+        "path": "/whatever.jsonl", "size_bytes": 800_000,
+        "last_touched": "2026-11-11T22:07:57+00:00", "resumable": True,
+        "resume_command": "claude --resume abc123",
+    }, not_continued="`osiris resume atlas --verbose` says why")
+    assert "It was not continued: `osiris resume atlas --verbose` says why." in note
+    assert "names no session" not in note

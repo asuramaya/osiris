@@ -16,16 +16,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
+import functools
 import json
 import logging
 import os
 import re
 import tempfile
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar, cast
 
 import asyncpg
 
@@ -55,6 +57,135 @@ from src.orchestrator.signatures import (
 RECEIPTS = Path.home() / ".osiris" / "wake-receipts"
 
 _log = logging.getLogger("osiris.trigger")
+
+_HELD_SPAWN_LOCKS: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
+    "osiris_held_spawn_locks", default=frozenset())
+
+
+async def spawn_lock_key(pool: asyncpg.Pool, target: str) -> str:
+    """One key per SEAT whichever way a door names it (handle, seat id or agent id), so the
+    CLI, the MCP launch tool, a wake and a DM dispatch for the same seat contend on one
+    lock. A target that resolves to no seat keys on its own text."""
+    seat = await _seat_for_target(Actions(pool), target)
+    return seat or target
+
+
+_DoorT = TypeVar("_DoorT", bound=Callable[..., Awaitable[Any]])
+
+
+def _spawn_locked(
+    pool_of: Callable[..., asyncpg.Pool], target_of: Callable[..., str],
+    refuse: Callable[[str], dict[str, Any]],
+) -> Callable[[_DoorT], _DoorT]:
+    """Wrap a door that can start a body so the whole call (twin check through spawn) runs
+    under the seat's spawn lock. Reentrant: a door called inside another door (the CLI's own
+    lock, `launch_seat` called by a wake) does not wait on itself. When the lock stays busy
+    the door refuses in its own vocabulary; nothing is spawned."""
+    def deco(fn: _DoorT) -> _DoorT:
+        @functools.wraps(fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            pool = pool_of(*args, **kwargs)
+            key = await spawn_lock_key(pool, target_of(*args, **kwargs))
+            try:
+                async with seat_spawn_lock(pool, key):
+                    return await fn(*args, **kwargs)
+            except SpawnInProgress:
+                return refuse(key)
+        return cast(_DoorT, wrapper)
+    return deco
+
+
+def _pool_of_actions(*a: Any, **k: Any) -> asyncpg.Pool:
+    return cast(asyncpg.Pool, (a[0] if a else k["actions"]).pool)
+
+
+def _pool_of_pool(*a: Any, **k: Any) -> asyncpg.Pool:
+    return cast(asyncpg.Pool, a[0] if a else k["pool"])
+
+
+def _target_kw(*a: Any, **k: Any) -> str:
+    return str(k["target"])
+
+
+def _addressee_kw(*a: Any, **k: Any) -> str:
+    return str(k["addressee"])
+
+
+def _stop_target_kw(*a: Any, **k: Any) -> str:
+    """A stop names its seat by `target`, or by the caller itself when it stops its own."""
+    return str(k.get("target") or k["caller"])
+
+
+def _spawn_busy(status_key: str, status: str) -> Callable[[str], dict[str, Any]]:
+    return lambda key: {status_key: status, "detail": (
+        f"another launch, resume or wake of {key} is still starting a body: nothing "
+        "started, try again shortly")}
+
+
+_SPAWN_BUSY_STATUS = _spawn_busy("status", "refused-spawn-in-progress")
+_SPAWN_BUSY_MODE = _spawn_busy("mode", "window-busy")
+
+
+class SpawnInProgress(RuntimeError):
+    """Another launch or resume for the same seat holds the spawn lock."""
+
+
+# The longest a launch or resume holds a seat's lock after spawning, waiting for the body to
+# be working or mounted. Waiters wait longer than this plus a spawn, so a refusal means a
+# genuinely stuck spawn, not an ordinary slow one.
+SPAWN_HOLD_BOUND = 30.0
+
+
+@contextlib.asynccontextmanager
+async def seat_spawn_lock(
+    pool: asyncpg.Pool, handle: str, *, wait: float = 90.0,
+) -> AsyncIterator[None]:
+    """One launch or resume per seat at a time, across processes: a Postgres advisory lock
+    held on its own connection from before the twin check until the new body shows in the
+    roster (or the call gives up). Two launches seconds apart used to both read "no body"
+    because the first body had not been listed yet. Waits up to `wait` seconds (longer than
+    `SPAWN_HOLD_BOUND` plus a spawn), then raises `SpawnInProgress`. The lock dies with its
+    connection, so a crashed launch never leaves it held."""
+    key = f"osiris:spawn:{handle}"
+    if key in _HELD_SPAWN_LOCKS.get():
+        yield  # this task already holds it (a door called inside a door): never wait on self
+        return
+    conn: Any = None
+    deadline = time.monotonic() + wait
+    token: contextvars.Token[frozenset[str]] | None = None
+    try:
+        while True:
+            # A connection is held only while the lock is HELD (a session-level advisory
+            # lock lives on its connection). Waiting holds none: each try borrows one and
+            # gives it straight back, so several launches queued on one seat never pin the
+            # shared pool while they wait.
+            candidate = await pool.acquire()
+            try:
+                got = bool(await candidate.fetchval(
+                    "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", key))
+            except BaseException:
+                await pool.release(candidate)
+                raise
+            if got:
+                conn = candidate
+                break
+            await pool.release(candidate)
+            if time.monotonic() >= deadline:
+                raise SpawnInProgress(handle)
+            await asyncio.sleep(0.25)
+        token = _HELD_SPAWN_LOCKS.set(_HELD_SPAWN_LOCKS.get() | {key})
+        yield
+    finally:
+        if token is not None:
+            _HELD_SPAWN_LOCKS.reset(token)
+        # If this unlock is itself cancelled, the lock is still released: `pool.release` resets
+        # the connection (asyncpg runs `pg_advisory_unlock_all()` in its reset), and a connection
+        # that is dropped instead takes its session-level locks with it.
+        if conn is not None:
+            try:
+                await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", key)
+            finally:
+                await pool.release(conn)
 
 # the trigger speaks in its own name when it gives up, never in an agent's
 _TRIGGER_AGENT = "agent:osiris-trigger"
@@ -1529,9 +1660,24 @@ async def _resume_office(
     return office or fallback or ""
 
 
+def _row_is_this_spawn(row: dict[str, Any], req8: str, started_after: float | None) -> bool:
+    """Is this roster row the body the resume just started? The continued session itself
+    (its id starts with the requested one), or, for the copy the harness makes of a stopped
+    record, a row started after the spawn call. A leftover idle row at the same directory is
+    neither and is not adopted. With no spawn time to compare, any row at the directory
+    counts, as before."""
+    if str(row.get("sessionId") or "").startswith(req8):
+        return True
+    started = row.get("startedAt")
+    if started_after is None or started is None:
+        return True
+    return float(started) / 1000.0 >= started_after - 5.0
+
+
 async def _adopt_resumed_body(
     pool: asyncpg.Pool, *, agents_json: Any, office: str, requested_sid: str,
     holder: str, project: str | None, attempts: int = 6, delay: float = 2.0,
+    started_after: float | None = None,
 ) -> dict[str, Any]:
     """What the harness actually started, measured directly against harness version
     2.1.259: `claude --bg --resume <id>` continues the session under its own id, OR, when
@@ -1563,7 +1709,8 @@ async def _adopt_resumed_body(
         except (OSError, TimeoutError, ValueError):
             rows = []
         row = next((r for r in rows if isinstance(r, dict) and r.get("cwd") == office
-                    and r.get("sessionId")), None)
+                    and r.get("sessionId")
+                    and _row_is_this_spawn(r, req8, started_after)), None)
         if row is not None:
             break
         await asyncio.sleep(delay)
@@ -1571,17 +1718,18 @@ async def _adopt_resumed_body(
         return {"session_id": None, "copied": False, "adopted": False}
     # Listed is not yet a body the next launch can see (a freshly claimed spare can be listed
     # before it is working or mounted), and the caller's per-seat lock is released when it
-    # returns: hold until the row is working or mounted, bounded like the poll above.
-    for _ in range(attempts * 3):
-        if "state" not in row and "status" not in row:
-            break  # a row that reports no state gives nothing to wait for
-        if await _row_is_claimed(pool, row):
+    # returns: hold until the row is working or mounted, bounded by SPAWN_HOLD_BOUND. It fails
+    # CLOSED: a row that vanished, or a list that errored, is not a claimed body, so neither
+    # ends the wait early; only the bound does.
+    hold_until = time.monotonic() + SPAWN_HOLD_BOUND
+    while "state" in row or "status" in row:
+        if await _row_is_claimed(pool, row) or time.monotonic() >= hold_until:
             break
         await asyncio.sleep(min(delay, 1.0))
         try:
             rows = await agents_json(cwd=office)
         except (OSError, TimeoutError, ValueError):
-            break
+            continue
         row = next((r for r in rows if isinstance(r, dict) and r.get("id") == row.get("id")),
                    row)
     sid = str(row["sessionId"])
@@ -2079,6 +2227,7 @@ async def _resume_occupancy_gate(
     return None
 
 
+@_spawn_locked(_pool_of_pool, _addressee_kw, _SPAWN_BUSY_MODE)
 async def dispatch_dm(
     pool: asyncpg.Pool, *, addressee: str, msg_id: int, sender: str | None,
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
@@ -2149,7 +2298,7 @@ async def _dispatch_dm_body(
     fresh_spawn = fresh_spawn or _spawn_claude_bg
     windows = windows or _manager_windows
     poke = poke or _poke_window
-    agents_json = agents_json or _claude_agents_json
+    agents_json = agents_json or _claude_agents_json_strict
     sleep = sleep or asyncio.sleep
     if jobs is None or nudge is None:
         # The injection point: `nudge` defaults to claude_daemon.reply, the daemon
@@ -3001,6 +3150,7 @@ _WAKE_STATUS = {
 }
 
 
+@_spawn_locked(_pool_of_actions, _target_kw, _SPAWN_BUSY_STATUS)
 async def wake_worker(
     actions: Actions, *, caller: str, target: str, message: str,
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
@@ -3787,8 +3937,11 @@ def _row_names_handle(row: dict[str, Any], handle: str | None) -> bool:
     """A harness roster row's window name is `[<tag>] <handle>`: true when it names `handle`."""
     if not handle:
         return False
-    name = str(row.get("name") or "")
-    return name == handle or name.endswith("] " + handle)
+    # Handles resolve case-insensitively everywhere else, so a body whose name differs from the
+    # typed handle only in case must still match.
+    name = str(row.get("name") or "").casefold()
+    want = handle.casefold()
+    return name == want or name.endswith("] " + want)
 
 
 async def _launch_twin_check(
@@ -3931,6 +4084,7 @@ async def _launch_twin_check(
                 everywhere = await agents_json()
             except (OSError, TimeoutError, ValueError):
                 everywhere = []
+                roster_ok = False  # fail closed: this read matters as much as the first
             session_match = next(
                 (r for r in everywhere if isinstance(r, dict)
                  and any(str(r.get("sessionId") or "").startswith(sid) for sid in sessions)),
@@ -4055,9 +4209,9 @@ async def _launch_target_setup(
             if not restored.ok:
                 return {"status": "refused-no-tree",
                         "detail": f"{handle} ({target_seat}): {restored.line}. Fix it "
-                                  "with: bind_seat_tree("
-                                  f"seat_id={target_seat!r}, tree_cwd='<the real directory>', "
-                                  "because='...')"}
+                                  f"with: osiris bind-seat-tree {target_seat} "
+                                  '<the real directory> "<why>" (the bind_seat_tree tool '
+                                  "does the same)"}
         fabricated = await fabricated_tree_verdict(pool, target_seat, tree_cwd)
         if fabricated is not None:
             repo, real_path = fabricated
@@ -4154,6 +4308,7 @@ async def _deliver_brief_to_live_seat(
             "why": nudge_result.get("detail") or nudge_result.get("mode", "unknown")}
 
 
+@_spawn_locked(_pool_of_actions, _target_kw, _SPAWN_BUSY_STATUS)
 async def launch_seat(
     actions: Actions, *, caller: str, target: str, message: str = "",
     model: str | None = None, settings: Settings | None = None,
@@ -4197,7 +4352,7 @@ async def launch_seat(
     manager = manager or _manager_control
     windows = windows or _manager_windows
     spawn = spawn or _spawn_claude_bg
-    agents_json = agents_json or _claude_agents_json
+    agents_json = agents_json or _claude_agents_json_strict
     cost_reader = cost_reader or _bg_session_cost
     if sleep is None:
         sleep = asyncio.sleep
@@ -4626,6 +4781,7 @@ async def _verify_brief_reached_a_turn(
     return out
 
 
+@_spawn_locked(_pool_of_actions, _target_kw, _SPAWN_BUSY_STATUS)
 async def resume_seat(
     actions: Actions, *, caller: str, target: str, message: str = "",
     model: str | None = None, settings: Settings | None = None,
@@ -4683,7 +4839,7 @@ async def resume_seat(
     pool = actions.pool
     from src.orchestrator.agents import _generation, project_of
     from src.orchestrator.seats import seat_receipt
-    agents_json = agents_json or _claude_agents_json
+    agents_json = agents_json or _claude_agents_json_strict
     resume_spawn = resume_spawn or _spawn_claude
     clear_stale_record = clear_stale_record or _clear_stale_stopped_record
 
@@ -5011,6 +5167,7 @@ async def _stop_orphan_harness_body(
                                                 if skipped else "")}
 
 
+@_spawn_locked(_pool_of_actions, _stop_target_kw, _SPAWN_BUSY_STATUS)
 async def stop_seat(
     actions: Actions, *, caller: str, target: str | None, reason: str = "",
     kill: Any = None, agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
@@ -5681,45 +5838,23 @@ async def _spawn_claude_bg(
     return found.group(1) if found else None
 
 
-class SpawnInProgress(RuntimeError):
-    """Another launch or resume for the same seat holds the spawn lock."""
-
-
-@contextlib.asynccontextmanager
-async def seat_spawn_lock(
-    pool: asyncpg.Pool, handle: str, *, wait: float = 45.0,
-) -> AsyncIterator[None]:
-    """One launch or resume per seat at a time, across processes: a Postgres advisory lock
-    held on its own connection from before the twin check until the new body shows in the
-    roster (or the call gives up). Two launches seconds apart used to both read "no body"
-    because the first body had not been listed yet. Waits up to `wait` seconds, then raises
-    `SpawnInProgress`. The lock dies with its connection, so a crashed launch never leaves
-    it held."""
-    key = f"osiris:spawn:{handle}"
-    conn = await pool.acquire()
-    held = False
-    try:
-        deadline = time.monotonic() + wait
-        while True:
-            held = bool(await conn.fetchval(
-                "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", key))
-            if held:
-                break
-            if time.monotonic() >= deadline:
-                raise SpawnInProgress(handle)
-            await asyncio.sleep(0.25)
-        yield
-    finally:
-        try:
-            if held:
-                await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", key)
-        finally:
-            await pool.release(conn)
-
-
 class HarnessListUnreadable(OSError):
     """`claude agents --json` did not run or did not parse. Distinct from an empty list: an
     empty list is an answer ("no body"), this is the lack of one."""
+
+
+# Every `claude agents --json` call has a deadline: a wedged harness must not hang a caller
+# forever, and a timed-out child is killed and reaped, never left running.
+_AGENTS_LIST_DEADLINE = 20.0
+
+
+async def _kill_and_reap(proc: Any) -> None:
+    """End a child that overran its deadline (or whose caller was cancelled) and collect it,
+    so a timed-out `claude agents --json` never leaves a process or a zombie behind."""
+    with contextlib.suppress(ProcessLookupError):
+        proc.kill()
+    with contextlib.suppress(TimeoutError, OSError):
+        await asyncio.wait_for(proc.wait(), timeout=5.0)
 
 
 async def _claude_agents_json(
@@ -5732,7 +5867,8 @@ async def _claude_agents_json(
 
     `strict=True` is for the callers that DECIDE something from an empty answer (launch,
     resume, stop): a spawn failure, a timeout, a non-zero exit or unparseable output raises
-    `HarnessListUnreadable` instead of reading as "no body"."""
+    `HarnessListUnreadable` instead of reading as "no body". Both modes have the same
+    deadline and kill and reap the child when it is exceeded."""
     cmd = ["claude", "agents", "--json"]
     if cwd:
         cmd += ["--cwd", cwd]
@@ -5741,19 +5877,29 @@ async def _claude_agents_json(
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=20.0 if strict else None)
-    except TimeoutError as exc:
-        if strict:
-            raise HarnessListUnreadable("claude agents --json timed out") from exc
-        return []
     except OSError as exc:
         if strict:
             raise HarnessListUnreadable(f"claude agents --json did not run: {exc}") from exc
         return []
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=_AGENTS_LIST_DEADLINE)
+    except TimeoutError as exc:
+        await _kill_and_reap(proc)
+        if strict:
+            raise HarnessListUnreadable("claude agents --json timed out") from exc
+        return []
+    except asyncio.CancelledError:
+        await _kill_and_reap(proc)
+        raise
     if strict and proc.returncode not in (0, None):
         raise HarnessListUnreadable(f"claude agents --json exited {proc.returncode}")
+    text = out.decode(errors="replace")
+    if strict and not text.strip():
+        # A harness whose supervisor is down can exit 0 and print nothing. A real empty
+        # roster prints `[]`; silence is no answer, so it must not read as "no body".
+        raise HarnessListUnreadable("claude agents --json printed nothing")
     try:
-        rows = json.loads(out.decode() or "[]")
+        rows = json.loads(text or "[]")
     except ValueError as exc:
         if strict:
             raise HarnessListUnreadable("claude agents --json output did not parse") from exc
