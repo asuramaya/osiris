@@ -3662,7 +3662,28 @@ def _bg_boot_prompt_bound(*, office: str, anchor: str, handle: str, agent: str,
     )
 
 
-def _harness_row_is_live(row: dict[str, Any], *, read_cmdline: Any = None) -> bool:
+async def _row_is_claimed(pool: asyncpg.Pool, row: dict[str, Any]) -> bool:
+    """A listed row whose process still wears a `claude bg-spare` command line is a real body
+    when it is doing work or has mounted: the harness reuses a pre-warmed spare as the body
+    without changing its argv (measured live: a busy, mounted body at pid N whose cmdline was
+    `claude bg-spare --bg-spare <sock>`). A spare that never claimed is neither busy nor
+    mounted."""
+    if row.get("state") == "working" or row.get("status") == "busy":
+        return True
+    sid8 = str(row.get("sessionId") or "")[:8]
+    if len(sid8) < 8:
+        return False
+    from src.orchestrator.mounts import is_live
+
+    last_seen = await pool.fetchval(
+        "SELECT last_seen FROM agent_mounts WHERE agent_id=$1 OR agent_id LIKE $1 || '-%' "
+        "ORDER BY last_seen DESC NULLS LAST LIMIT 1", f"agent:{sid8}")
+    return last_seen is not None and bool(is_live(last_seen))
+
+
+def _harness_row_is_live(
+    row: dict[str, Any], *, read_cmdline: Any = None, claimed: bool = False,
+) -> bool:
     """A `claude agents --json` row counts as a genuinely live session only when its own
     `state` is not failed/completed and (when the row names one) its own `pid` is actually
     alive on this box, checked against `/proc`, never assumed from a static roster line.
@@ -3692,6 +3713,8 @@ def _harness_row_is_live(row: dict[str, Any], *, read_cmdline: Any = None) -> bo
         return False
     if not Path(f"/proc/{pid_int}").exists():
         return False
+    if claimed:
+        return True  # see `_row_is_claimed`: a spare's argv does not make a working body one
     from src.orchestrator.census import _is_bg_spare, _proc_cmdline
 
     read_cmdline = read_cmdline or _proc_cmdline
@@ -3813,7 +3836,8 @@ async def _launch_twin_check(
     cwd_rows = [r for r in roster if isinstance(r, dict)
                 and (r.get("cwd") == launch_cwd or _row_names_handle(r, handle))]
     for row in cwd_rows:
-        if not _harness_row_is_live(row, read_cmdline=read_cmdline):
+        if not _harness_row_is_live(row, read_cmdline=read_cmdline,
+                                    claimed=await _row_is_claimed(pool, row)):
             if stale_harness_row is None:
                 stale_harness_row = row
             continue
@@ -3877,7 +3901,9 @@ async def _launch_twin_check(
                  and any(str(r.get("sessionId") or "").startswith(sid) for sid in sessions)),
                 None)
             if (session_match is not None
-                    and _harness_row_is_live(session_match, read_cmdline=read_cmdline)):
+                    and _harness_row_is_live(
+                        session_match, read_cmdline=read_cmdline,
+                        claimed=await _row_is_claimed(pool, session_match))):
                 from_harness = session_match
             elif session_match is not None and stale_harness_row is None:
                 stale_harness_row = session_match
@@ -4887,7 +4913,8 @@ async def _stop_orphan_harness_body(
     for r in roster:
         if not isinstance(r, dict) or r.get("cwd") not in seat_cwds:
             continue
-        if not _harness_row_is_live(r, read_cmdline=read_cmdline):
+        if not _harness_row_is_live(r, read_cmdline=read_cmdline,
+                                    claimed=await _row_is_claimed(pool, r)):
             continue
         if r.get("name") == expected_name or await _harness_row_seat(pool, r) == target_seat:
             owned.append(r)
