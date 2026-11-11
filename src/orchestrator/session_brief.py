@@ -84,6 +84,20 @@ def _text_of(content: Any) -> str:
     return ""
 
 
+class _Tail(deque[tuple[Any, ...]]):
+    """A bounded deque (the newest `maxlen` kept) that also counts everything ever appended, so
+    the brief can say how many earlier entries it is NOT showing, a true total and not just how
+    many were trimmed from what was kept."""
+
+    def __init__(self, maxlen: int) -> None:
+        super().__init__(maxlen=maxlen)
+        self.seen = 0
+
+    def append(self, item: tuple[Any, ...]) -> None:
+        self.seen += 1
+        super().append(item)
+
+
 class SessionDigest:
     """Fed one stored line at a time (`feed`), so a very long session never sits in memory."""
 
@@ -95,18 +109,19 @@ class SessionDigest:
         self.compactions = 0
         self.compact: tuple[int, str] | None = None
         self.first_request: tuple[int, str] | None = None
-        self.operator: deque[tuple[int, str]] = deque(maxlen=6)
-        self.mails: deque[tuple[int, str]] = deque(maxlen=8)        # mail previews seen
+        self.operator: _Tail = _Tail(6)
+        self.mails: _Tail = _Tail(8)        # mail previews seen
         self.dms: OrderedDict[int, tuple[int, str, str]] = OrderedDict()  # full ask bodies
-        self.said: deque[tuple[int, str]] = deque(maxlen=4)
-        self.decisions: deque[tuple[int, str]] = deque(maxlen=40)
-        self.opened: deque[tuple[int, str]] = deque(maxlen=25)
-        self.resolved: deque[tuple[int, str]] = deque(maxlen=25)
-        self.sent: deque[tuple[int, str]] = deque(maxlen=20)
+        self.dm_ids: set[int] = set()        # every distinct DM seen, however few are kept
+        self.said: _Tail = _Tail(4)
+        self.decisions: _Tail = _Tail(40)
+        self.opened: _Tail = _Tail(25)
+        self.resolved: _Tail = _Tail(25)
+        self.sent: _Tail = _Tail(20)
         self.files: OrderedDict[str, int] = OrderedDict()
         self.branches: OrderedDict[str, int] = OrderedDict()
-        self.commits: deque[tuple[int, str, str, str]] = deque(maxlen=20)
-        self.committing: deque[tuple[int, str]] = deque(maxlen=20)
+        self.commits: _Tail = _Tail(20)
+        self.committing: _Tail = _Tail(20)
         self.tool_counts: Counter[str] = Counter()
 
     # -- feeding -----------------------------------------------------------------------
@@ -171,6 +186,7 @@ class SessionDigest:
                     continue
                 mid = int(m.get("id") or 0)
                 self.dms[mid] = (idx, who, str(m.get("body") or ""))
+                self.dm_ids.add(mid)
                 self.dms.move_to_end(mid)
                 while len(self.dms) > 8:
                     self.dms.popitem(last=False)
@@ -258,9 +274,14 @@ class SessionDigest:
         return f"line L<n> of session {anchor_sid}"
 
 
-def _section(title: str, items: list[str], limit: int) -> str:
+def _section(
+    title: str, items: list[str], limit: int, available: int | None = None,
+) -> str:
     """`title`, then `items` (already one line each) newest last, trimmed from the OLD end to
-    fit `limit` characters; "" when there is nothing."""
+    fit `limit` characters; "" when there is nothing. `available` is how many entries the
+    session really had (a bounded collection keeps only the newest, and the caller shows only
+    the last few of those): the "(+N earlier not shown)" note is that true total minus what is
+    shown, never just what this function trimmed."""
     if not items:
         return ""
     head = f"{title}\n"
@@ -271,7 +292,7 @@ def _section(title: str, items: list[str], limit: int) -> str:
             break
         kept.append(item)
         used += len(item) + 1
-    dropped = len(items) - len(kept)
+    dropped = max(available if available is not None else len(items), len(items)) - len(kept)
     body = "\n".join(reversed(kept))
     note = f"\n(+{dropped} earlier not shown)" if dropped else ""
     return head + body + note
@@ -327,26 +348,33 @@ def render_brief(
     if not asks:
         for idx, text in list(digest.mails)[-4:]:
             asks.append(f"- L{idx}: " + _cap(" ".join(text.split()), 600))
-    parts.append(_section("LAST INSTRUCTIONS RECEIVED (oldest first):", asks, 4500))
+    asked = (len(digest.dm_ids) + digest.operator.seen) or digest.mails.seen
+    parts.append(_section("LAST INSTRUCTIONS RECEIVED (oldest first):", asks, 4500, asked))
 
     said = [f"- L{idx}: " + _cap(" ".join(t.split()), 900) for idx, t in digest.said][-2:]
-    parts.append(_section("WHAT YOU WERE DOING (your last words in that session):", said, 2000))
+    parts.append(_section("WHAT YOU WERE DOING (your last words in that session):", said, 2000,
+                          digest.said.seen))
 
     parts.append(_section(
-        "DECISIONS YOU RECORDED:", [f"- L{i}: {t}" for i, t in digest.decisions], 2500))
+        "DECISIONS YOU RECORDED:", [f"- L{i}: {t}" for i, t in digest.decisions], 2500,
+        digest.decisions.seen))
 
     thread_lines = [f"- OPEN NOW: {t}" for t in graph_threads]
     thread_lines += [f"- L{i} opened: {t}" for i, t in digest.opened][-8:]
     thread_lines += [f"- L{i} resolved: {t}" for i, t in digest.resolved][-6:]
-    parts.append(_section("THREADS AND OBLIGATIONS:", thread_lines, 2400))
+    parts.append(_section("THREADS AND OBLIGATIONS:", thread_lines, 2400,
+                          len(graph_threads) + digest.opened.seen + digest.resolved.seen))
 
     parts.append(_section(
-        "MAIL YOU SENT (last):", [f"- L{i}: {t}" for i, t in digest.sent], 1200))
+        "MAIL YOU SENT (last):", [f"- L{i}: {t}" for i, t in digest.sent], 1200,
+        digest.sent.seen))
 
     work: list[str] = []
     if digest.branches:
+        more = max(len(digest.branches) - 10, 0)
         work.append("branches: " + ", ".join(
-            f"{b} (L{i})" for b, i in list(digest.branches.items())[-10:]))
+            f"{b} (L{i})" for b, i in list(digest.branches.items())[-10:])
+            + (f" (+{more} earlier not shown)" if more else ""))
     seen_msgs: set[str] = set()
     for i, br, sha, msg in list(digest.commits)[-10:]:
         work.append(f"commit {sha} on {br}: {msg} (L{i})")
@@ -354,9 +382,13 @@ def render_brief(
     for i, msg in list(digest.committing)[-10:]:
         if msg[:40] not in seen_msgs:
             work.append(f"committed: {msg} (L{i})")
+    if digest.commits.seen > 10:
+        work.append(f"(+{digest.commits.seen - 10} earlier commits not shown)")
     if digest.files:
+        more_files = max(len(digest.files) - 14, 0)
         work.append("files edited, most recent last: " + ", ".join(
-            f"{p} (L{i})" for p, i in list(digest.files.items())[-14:]))
+            f"{p} (L{i})" for p, i in list(digest.files.items())[-14:])
+            + (f" (+{more_files} earlier not shown)" if more_files else ""))
     parts.append(_section("WORK TOUCHED:", work, 2400))
 
     if handoff:

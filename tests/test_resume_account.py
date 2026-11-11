@@ -134,3 +134,28 @@ async def test_the_account_question_is_answered_from_the_store_alone(
     assert finding["history_owner"] == OLD and finding["owner_lines"][OLD] == 8
     assert await store_account_mismatch(actions.pool, "beef1234", current=OLD) is None
     assert await store_account_mismatch(actions.pool, "deadbeef", current=NEW) is None
+
+
+async def test_the_fallback_to_the_short_brief_says_why_in_the_log(
+    actions: Any, caplog: Any, monkeypatch: Any,
+) -> None:
+    import logging
+
+    finding = {"detail": "history belongs to another Claude account"}
+    with caplog.at_level(logging.INFO, logger="src.orchestrator.resume_account"):
+        await store_briefing(actions.pool, handle="Deckard", anchor_sid="00000000",
+                             finding=finding)
+    assert any("came back empty" in r.message and "00000000" in r.message
+               for r in caplog.records)
+
+    async def boom(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("store unreachable")
+
+    monkeypatch.setattr("src.orchestrator.session_brief.build_session_brief", boom)
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="src.orchestrator.resume_account"):
+        brief = await store_briefing(actions.pool, handle="Deckard", anchor_sid="00000000",
+                                     finding=finding)
+    assert "launched FRESH" in brief
+    assert any(r.levelno == logging.WARNING and "RuntimeError: store unreachable" in r.message
+               for r in caplog.records)

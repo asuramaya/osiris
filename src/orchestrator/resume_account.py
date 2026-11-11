@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import asyncpg
+
+logger = logging.getLogger(__name__)
 
 _OWNER = re.compile(rb'"ownerAccountUuid"\s*:\s*"([0-9a-fA-F-]{36})"')
 _BRIEF_CHARS = 7000
@@ -166,8 +169,11 @@ async def store_briefing(
             seat_id=seat_id)
         if whole:
             return whole
-    except Exception:  # noqa: BLE001 - a brief never fails the launch
-        pass
+        logger.info("store_briefing: the whole-session brief for %s came back empty (the store "
+                    "holds nothing readable for it); using the short brief", anchor_sid)
+    except Exception as exc:  # noqa: BLE001 - a brief never fails the launch
+        logger.warning("store_briefing: building the whole-session brief for %s failed "
+                       "(%s: %s); using the short brief", anchor_sid, type(exc).__name__, exc)
 
     parts = [
         f"You are {handle}, launched FRESH. Your previous session ({anchor_sid}) could not "

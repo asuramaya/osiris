@@ -201,3 +201,39 @@ async def test_an_old_accounts_lines_are_readable_on_demand_by_the_agent_canonic
 async def test_a_session_the_store_does_not_hold_has_no_brief(actions: Any) -> None:
     assert await build_session_brief(
         actions.pool, handle="Nobody", anchor_sid="00000000", finding=None) is None
+
+
+def test_earlier_not_shown_is_the_true_total_not_what_the_cap_kept() -> None:
+    """The digest keeps only the newest of each kind and the brief shows fewer still; the
+    "(+N earlier not shown)" note must be everything the session had minus what is shown."""
+    from src.orchestrator.session_brief import render_brief
+
+    d = SessionDigest()
+    n = 0
+    for i in range(90):                      # far past the digest's own cap of 40
+        d.feed(n, _a([_use("mcp__osiris__record_decision",
+                           summary=f"decision number {i}")]).encode())
+        n += 1
+    for mid in range(100, 112):              # twelve distinct DMs, five are shown
+        d.feed(n, _inbox_dm(mid, "agent:ad1a1cb0-g129", f"ask {mid}").encode())
+        n += 1
+    brief = render_brief(d, handle="X", anchor_sid="abcd1234", agent=None, finding=None,
+                         graph_threads=[], handoff=None)
+    dec = brief.split("DECISIONS YOU RECORDED:")[1].split("\n\n")[0]
+    shown = dec.count("\n- L")
+    assert 0 < shown <= 40       # the digest itself keeps at most 40 of the 90
+    assert f"(+{90 - shown} earlier not shown)" in dec
+    asks = brief.split("LAST INSTRUCTIONS RECEIVED (oldest first):")[1].split("\n\n")[0]
+    shown_asks = asks.count("\n- L")
+    assert shown_asks == 5
+    assert f"(+{12 - shown_asks} earlier not shown)" in asks
+
+
+def test_a_section_that_shows_everything_claims_nothing_is_missing() -> None:
+    from src.orchestrator.session_brief import render_brief
+
+    d = SessionDigest()
+    d.feed(0, _a([_use("mcp__osiris__record_decision", summary="only one")]).encode())
+    brief = render_brief(d, handle="X", anchor_sid="abcd1234", agent=None, finding=None,
+                         graph_threads=[], handoff=None)
+    assert "only one" in brief and "earlier not shown" not in brief
