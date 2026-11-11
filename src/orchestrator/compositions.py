@@ -5357,6 +5357,10 @@ async def _fn_backup_status(
     offbox_section = {
         "wired": True,
         "offload_targets": offload_targets,
+        # backups that finished but could not read some files (restic exit 3): kept visible here
+        # until a later backup comes through clean
+        "warnings": [f"{t['name']}: {t['last_note']}" for t in offload_targets
+                     if isinstance(t, dict) and t.get("last_note") and t.get("name")],
         "repositories": (settings or {}).get("offbox_repositories", []) or [],
     }
     # The weekly point-in-time restore drill has its own timer; report what systemd says about

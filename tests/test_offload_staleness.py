@@ -104,6 +104,15 @@ def test_readiness_is_done_when_nothing_is_stale_and_waits_without_a_target() ->
     assert _steps()["offload_current"]["status"] == "missing"
 
 
+def test_readiness_does_not_stay_green_when_the_last_backup_left_files_unread() -> None:
+    noted = {**NAS, "last_note": "snapshot saved, but restic could not read some source files: x"}
+    step = _steps(offload_targets=[noted], stale_offload=[])["offload_current"]
+    assert step["status"] == "needs_attention"
+    assert "saved with a warning" in step["reason"] and "nas:" in step["reason"]
+    clean = {**NAS, "last_note": None}
+    assert _steps(offload_targets=[clean], stale_offload=[])["offload_current"]["status"] == "done"
+
+
 # --- the tick: receipts and the desk, once -------------------------------------------------
 
 
