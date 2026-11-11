@@ -701,7 +701,7 @@ def dormant_history_confession(
     return out
 
 
-def dormant_history_note(info: dict[str, Any]) -> str:
+def dormant_history_note(info: dict[str, Any], *, not_continued: str | None = None) -> str:
     """The rendered one-line report for `dormant_history_confession`'s own result, shared
     so the CLI lane and the MCP launch() tool say the identical sentence rather than
     drifting into two wordings for one fact. Names the resume command by hand when both
@@ -719,6 +719,11 @@ def dormant_history_note(info: dict[str, Any]) -> str:
     base = (f"this office already holds a transcript with {mb:.1f}MB of history, last "
             f"touched {info['last_touched']}. launch cannot see or control whether the "
             f"harness hands the fresh session that same file; naming it, not blocking it.")
+    if not_continued is not None:
+        # `launch` already asked the one question `osiris resume` asks (the seat's own
+        # record of its sessions) and did not continue: never tell the person to run a
+        # resume that would refuse. `not_continued` carries the reason.
+        return f"{base} It was not continued: {not_continued}."
     if info.get("resumable") and info.get("resume_command"):
         return (f"{base} It IS resumable: `osiris resume <seat>` continues that session "
                 f"instead of starting a different one in its name.")

@@ -398,7 +398,7 @@ async def test_launch_fresh_flag_starts_a_new_session_anyway(
         "freshflag", model=None, pool=actions.pool, spawn=_spawn, agents_json=_agents,
         resume_spawn=_spawn, settings=patched, fresh=True))
     assert code == 0 and calls == [None]
-    assert "freshflag is running" in out and "resumed" not in out
+    assert "freshflag started a new session" in out and "resumed" not in out
 
 
 async def test_resume_with_nothing_resumable_names_one_next_step(
@@ -423,7 +423,7 @@ async def test_resume_of_another_accounts_history_says_so_in_one_line(
     note, hint = _lines(err)
     assert hint.startswith("Also: osiris rebuild-transcript ") and hint.endswith("--to crush|dsh")
     assert "another Claude account" in note and "work@example.com" not in note
-    assert "resacct is running" in out
+    assert "resacct started a new session" in out
 
 
 async def test_resume_spawn_refusal_reads_like_launch(
@@ -456,7 +456,7 @@ async def test_dormant_history_stays_quiet_by_default(
         actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _c, out, err = await scenario_launch_dormant_not_resumable(actions, tmp_path, monkeypatch)
     assert err == "" and _lines(out) == [
-        "osiris launch: dormantone is running ('[OS] dormantone' in claude agents)."]
+        "osiris launch: dormantone started a new session ('[OS] dormantone' in claude agents)."]
 
 
 def test_the_flags_exist_and_default_off() -> None:
@@ -483,3 +483,13 @@ def test_the_voice_helpers() -> None:
         "resume", "/x", "Workspace not trusted. Run `claude` in /elsewhere/y once and accept")
     assert v.is_untrusted("Workspace not trusted. Run ...") and not v.is_untrusted("boom")
     assert v.first_sentence("It broke. And then more detail follows.") == "It broke."
+
+
+def test_started_new_names_the_window_and_the_fresh_session() -> None:
+    from src.launch_voice import resumed, started_new
+
+    assert started_new("atlas", "[OS] atlas") == (
+        "osiris launch: atlas started a new session ('[OS] atlas' in claude agents).")
+    assert started_new("atlas", None) == "osiris launch: atlas started a new session."
+    assert resumed("launch", "atlas", "abcdef1234") == (
+        "osiris launch: atlas resumed (session abcdef12).")

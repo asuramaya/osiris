@@ -1280,7 +1280,7 @@ async def test_cmd_launch_harness_spawns_and_confirms(
     # What must still hold is the same thing the old assertion was protecting: launch says
     # nothing about resume machinery it did not run.
     out_text = buf.getvalue()
-    assert "freshbg is running" in out_text and "in claude agents" in out_text
+    assert "freshbg started a new session" in out_text and "in claude agents" in out_text
     assert "resumed" not in out_text          # nothing to resume, so launch says nothing of it
     assert "min_tail_bytes" not in out_text and "ceiling=" not in out_text
 
@@ -7947,7 +7947,7 @@ async def test_launch_succeeds_when_the_named_session_shows_up_in_the_roster(
                                    wake_default=None, spawn=_spawn, agents_json=_agents,
                                    sleep=_no_sleep)
     assert rc == 0
-    assert "okbg is running" in capsys.readouterr().out
+    assert "okbg started a new session" in capsys.readouterr().out
 
 
 async def test_launch_fails_when_the_harness_named_a_session_that_never_appears(

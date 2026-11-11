@@ -1667,3 +1667,17 @@ def test_the_spec_carries_the_pile_clear_thirty_and_the_field_weights() -> None:
     assert "'audit', 'catalog'" in _SYSTEM          # weight DOWN: completes in-session
     assert "SAME file, artifact" in _SYSTEM         # cluster: one concern, one entry
     assert "SELF-RETIRES" in _SYSTEM                # stale self-retirement, the other side
+
+
+def test_dormant_history_note_never_sends_a_person_to_a_resume_that_would_refuse() -> None:
+    """launch asks the question resume asks; when it did not continue, the note says so and
+    names why, instead of calling the transcript resumable."""
+    from src.ingest.sessions import dormant_history_note
+
+    note = dormant_history_note({
+        "path": "/whatever.jsonl", "size_bytes": 1_100_000,
+        "last_touched": "2026-11-11T19:51:20+00:00",
+        "resumable": True, "resume_command": "claude --resume abc123",
+    }, not_continued="the seat's own record names no session to continue")
+    assert "It was not continued: the seat's own record names no session" in note
+    assert "IS resumable" not in note and "osiris resume <seat>" not in note
