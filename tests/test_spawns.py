@@ -693,3 +693,75 @@ async def test_file_subagents_continues_ordinals_past_already_named_siblings(
     await file_subagents(actions, project="conttest", dry_run=False, actor="test")
     assert await _prop(actions, "agent:ac11cc00112233445", "patronym") == "Cont I.1"  # untouched
     assert await _prop(actions, "agent:ac22cc00112233445", "patronym") == "Cont I.2"  # continues
+
+
+async def test_a_spawn_asking_who_it_is_is_told_its_own_name_and_its_parents(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Reported live: a worker mounted as a spawn, then its get_status said it was the seat
+    that spawned it. The parent's connection answers an unstamped call; a stamped one is the
+    spawn's."""
+    from types import SimpleNamespace
+
+    from src import mcp_server as srv
+
+    job_dir = str(tmp_path / "jobs" / "face0031")
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:face0031",
+                            project="demo", cwd=str(tmp_path), model=None,
+                            session_key="sid:whoami")
+    ctx = SimpleNamespace(request_context=SimpleNamespace(
+        request=SimpleNamespace(headers={"mcp-session-id": "whoami", "x-osiris-job": job_dir}),
+        session=object()))
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        parent = await srv.get_status(ctx=ctx)
+        assert parent["you"] == "agent:face0031"
+        child = await srv.get_status(subagent_id="agent-kid00031", subagent_type="worker",
+                                     ctx=ctx)
+        assert child["you"] == "agent:kid00031"
+        assert child["spawn_of"] == "agent:face0031" and "spawn" in child["note"]
+        again = await srv.get_status(ctx=ctx)                 # the parent is unchanged
+        assert again["you"] == "agent:face0031"
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop("sid:whoami", None)
+        srv._spawns_seen.clear()
+
+
+async def test_a_spawns_write_through_the_consolidated_thread_tool_is_the_spawns_own(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The write and the read-back: a stamped annotate lands under the child's name, an
+    unstamped one under the connection's."""
+    from types import SimpleNamespace
+
+    from src import mcp_server as srv
+
+    job_dir = str(tmp_path / "jobs" / "face0032")
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:face0032",
+                            project="demo", cwd=str(tmp_path), model=None,
+                            session_key="sid:threadwrite")
+    ctx = SimpleNamespace(request_context=SimpleNamespace(
+        request=SimpleNamespace(headers={"mcp-session-id": "threadwrite",
+                                         "x-osiris-job": job_dir}), session=object()))
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        opened = await srv.open_thread("spawn writes through thread()", kind="task", ctx=ctx)
+        ref = opened["id"]
+        await srv.thread(ref=ref, action="annotate", note="from the spawn",
+                         subagent_id="agent-kid00032", subagent_type="worker", ctx=ctx)
+        await srv.thread(ref=ref, action="annotate", note="from the seat", ctx=ctx)
+        async def _writer(text: str) -> str | None:
+            return await actions.pool.fetchval(
+                "SELECT a.source_id FROM assertions a JOIN objects o ON o.id=a.object_id "
+                "WHERE o.id=$1::uuid AND a.value::text LIKE $2 ORDER BY a.observed_at DESC "
+                "LIMIT 1", ref, f"%{text}%")
+
+        assert await _writer("from the spawn") == "agent:kid00032"
+        assert await _writer("from the seat") == "agent:face0032"
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop("sid:threadwrite", None)
+        srv._spawns_seen.clear()

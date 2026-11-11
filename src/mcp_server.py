@@ -4510,21 +4510,30 @@ async def _project_briefing(
 # ---- Phase 2: GRANULAR GETTERS (graphy tool surface) -------------------
 
 @mcp.tool()
-async def get_status(render: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
-    """Your identity, mail count, and fleet status, in brief. Returns only:
-    you, model, project, seat, mail, fleet_pulse, handoff_pending. No thread/decision
-    text, no succession notes. `handoff_pending` is a bare pointer only, so a caller can
-    check whether an unread handoff exists without paying the cost of `orient()`'s full
-    succession note: {"from": <agent_id>, "refs": [<short-id>, ...]} when your nearest
-    ancestor left one unacknowledged, else omitted entirely.
-    Read the real text with recall(ref=<one of refs>); ack_handoff(ref=...) once read.
-
-    `render='text'` returns only {"text": <str>}, one line per field, rendered on the
-    server, so a caller can print it verbatim instead of a model re-formatting JSON at
-    token cost. Omit (or pass any other value) for the ordinary structured result."""
+async def get_status(
+    render: str | None = None, subagent_id: str | None = None,
+    subagent_type: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Your identity, mail count and fleet status, in brief. Returns only: you, model,
+    project, seat, mail, fleet_pulse, handoff_pending. `handoff_pending` is a bare pointer,
+    {"from": <agent_id>, "refs": [<short-id>, ...]}, present when your nearest ancestor
+    left an unacknowledged handoff: read it with recall(ref=...), then ack_handoff(ref=...).
+    A spawn gets its own id and `spawn_of`. `render='text'` returns only {"text": <str>},
+    one line per field, to print verbatim."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
     proj = ident.project if ident else None
+    from src.orchestrator import lineage as _spawn_lineage
+
+    if _spawn_lineage.normalize_spawn_id(subagent_id) is not None:
+        # A SPAWN ASKING WHO IT IS: it shares its parent's connection, so the connection's
+        # identity is the parent's. Answering with that made a worker read "you" as the
+        # seat that spawned it, while its writes (which do carry the stamp) landed on itself.
+        child = await _actor_for(ctx, subagent_id, subagent_type)
+        return {"you": child, "project": proj,
+                "spawn_of": ident.agent_id if ident else "unknown (parent unmounted)",
+                "note": "you are a spawn: your writes are attributed to you; the seat, its "
+                        "mail and its succession belong to your parent"}
     reader = ident.agent_id if ident else ""
     lease = get_settings().osiris_mail_lease_secs
     counts = (await unread_counts(pool, proj, reader_agent=reader, lease_secs=lease)
