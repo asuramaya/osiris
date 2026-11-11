@@ -338,3 +338,33 @@ async def test_a_timed_out_agents_list_is_killed_and_reaped(
     else:
         assert await trigger._claude_agents_json() == []
     assert proc.killed and proc.reaped
+
+
+class _AnsweringProc:
+    def __init__(self, out: bytes, code: int = 0) -> None:
+        self._out = out
+        self.returncode = code
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        return self._out, b""
+
+
+@pytest.mark.parametrize("out", [b"", b"  \n"])
+async def test_strict_empty_output_is_unreadable_not_no_body(
+    monkeypatch: pytest.MonkeyPatch, out: bytes,
+) -> None:
+    async def _spawn(*a: Any, **k: Any) -> _AnsweringProc:
+        return _AnsweringProc(out)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
+    with pytest.raises(trigger.HarnessListUnreadable):
+        await trigger._claude_agents_json(strict=True)
+    assert await trigger._claude_agents_json() == []  # the fail-open callers still read []
+
+
+async def test_strict_a_printed_empty_list_is_an_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _spawn(*a: Any, **k: Any) -> _AnsweringProc:
+        return _AnsweringProc(b"[]\n")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
+    assert await trigger._claude_agents_json(strict=True) == []

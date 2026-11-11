@@ -5772,8 +5772,13 @@ async def _claude_agents_json(
         raise
     if strict and proc.returncode not in (0, None):
         raise HarnessListUnreadable(f"claude agents --json exited {proc.returncode}")
+    text = out.decode(errors="replace")
+    if strict and not text.strip():
+        # A harness whose supervisor is down can exit 0 and print nothing. A real empty
+        # roster prints `[]`; silence is no answer, so it must not read as "no body".
+        raise HarnessListUnreadable("claude agents --json printed nothing")
     try:
-        rows = json.loads(out.decode() or "[]")
+        rows = json.loads(text or "[]")
     except ValueError as exc:
         if strict:
             raise HarnessListUnreadable("claude agents --json output did not parse") from exc
