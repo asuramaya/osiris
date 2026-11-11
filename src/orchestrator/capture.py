@@ -432,6 +432,25 @@ async def derive_or_abstain(
         f"{len(candidates)} candidates for {link_type}, not a unique lookup, "
         "never guessed" if candidates else
         f"no candidate found for {link_type}")
+    # IDEMPOTENT ON MEANING: an abstention whose link_type and candidate set match a live
+    # one already on the object says nothing new, whatever the reason text or the writing
+    # actor. Re-asserting it only supersedes the old row with a copy of itself (measured:
+    # ~26k such rows a day, 99% of all non-current assertions, from two lanes rewording one
+    # verdict). A changed candidate set is a changed fact and still writes.
+    wanted = sorted(str(c) for c in candidates)
+    live = await actions.pool.fetch(
+        "SELECT value FROM assertions WHERE object_id=$1 AND name=$2 "
+        "AND NOT (value ? 'resolved') "
+        "AND NOT EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes=id)",
+        from_id, f"derivation_abstained_{link_type}")
+    for row in live:
+        value = row["value"]
+        if isinstance(value, str):
+            value = json.loads(value)
+        if sorted(str(c) for c in (value.get("candidates") or [])) == wanted:
+            return {"minted": False, "to": None, "abstained": True, "reason": reason,
+                   "candidate_count": len(candidates), "candidates": list(candidates),
+                   "unchanged": True}
     # property name carries `link_type` (never a bare "derivation_abstained"): assert_
     # property's own last-write-wins semantics mean a second lane abstaining on the same
     # object under a different link_type must not silently clobber the first lane's own
@@ -589,6 +608,7 @@ async def _supersede_stale_in_repo_abstention(
 
 async def backfill_lineage_repo_links(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+    defer_abstention: bool = False,
 ) -> dict[str, Any]:
     """Links every zero-live-link Decision/Thread authored by a real Agent lineage (never
     the bare `session` back-compat source) to its project, via the same two rungs a new
@@ -658,7 +678,11 @@ async def backfill_lineage_repo_links(
                      "reason": reason, "candidate_count": len(result["lineage_candidates"]),
                      "source": row["source_id"]}
             abstained += 1
-            if not dry_run:
+            # `defer_abstention`: the provenance sweep runs the at-write-time lane right
+            # after this one over the same objects, and its windowed lookup is the finer
+            # verdict. Both writing made them overwrite each other every pass whenever
+            # their candidate sets differed, so the sweep lets the finer lane record it.
+            if not dry_run and not defer_abstention:
                 await derive_or_abstain(actions, row["id"], "in_repo",
                                         result["lineage_candidates"], actor,
                                         why_if_ambiguous=reason)
@@ -1406,7 +1430,8 @@ async def apply_provenance_sweep_heartbeat(
         lanes["agent_error"] = repr(exc)
     try:
         lanes["decision_thread"] = await backfill_lineage_repo_links(
-            actions, actor=actor, dry_run=False, because=because)
+            actions, actor=actor, dry_run=False, because=because,
+            defer_abstention=True)
     except Exception as exc:
         lanes["decision_thread_error"] = repr(exc)
     try:
