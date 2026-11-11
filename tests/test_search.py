@@ -353,10 +353,11 @@ def test_the_relaxed_leg_reads_through_the_index_not_the_whole_corpus() -> None:
     from src.orchestrator.compositions import _RELAX_SQL
 
     assert "corpus AS" not in _RELAX_SQL
-    assert "hit AS MATERIALIZED" in _RELAX_SQL and "df AS MATERIALIZED" in _RELAX_SQL
+    assert "pairs AS MATERIALIZED" in _RELAX_SQL and "tq AS MATERIALIZED" in _RELAX_SQL
     # the candidate filter uses the exact indexed expression, so ix_assertions_fts applies
-    assert ("to_tsvector('english', a.value #>> '{}') @@ websearch_to_tsquery('english', $2)"
-            in _RELAX_SQL)
+    assert "to_tsvector('english', a.value #>> '{}') @@ tq.q" in _RELAX_SQL
+    # no row's text is parsed per candidate: the tsvector is never in the select list
+    assert "AS tv" not in _RELAX_SQL
 
 
 async def test_a_slow_search_logs_where_it_spent_its_time(
