@@ -800,6 +800,31 @@ mcp = BoundedMCP(
         "them. Use send(to='operator') to reach the person operating this system."
     ),
 )
+
+
+def _use_plain_logging() -> None:
+    """Swap the SDK's rich log handler for a plain one. FastMCP's constructor installs
+    RichHandler on the root logger, which highlights, wraps and tabulates every line on the
+    event loop: 1.4 ms for an ordinary line, against 0.02 ms plain, and it is the reason a
+    30,000-character stack dump once held the loop for 160 ms. journald already stamps each
+    line, and one plain line greps better than rich's wrapped columns. Logger names and the
+    level are unchanged, and a handler that is not rich (a test's capture, an operator's own)
+    is left alone."""
+    import logging
+
+    root = logging.getLogger()
+    plain = logging.Formatter("%(levelname)s %(name)s: %(message)s")
+    for handler in list(root.handlers):
+        if type(handler).__module__.split(".")[0] != "rich":
+            continue
+        replacement = logging.StreamHandler()  # stderr, like the rich console it replaces
+        replacement.setFormatter(plain)
+        replacement.setLevel(handler.level)
+        root.removeHandler(handler)
+        root.addHandler(replacement)
+
+
+_use_plain_logging()
 # DECLARE THE listChanged CAPABILITY (see BoundedMCP/_nudge_tool_list_refresh above): FastMCP
 # never passes NotificationOptions through to the lowlevel Server's own
 # create_initialization_options(), so `tools_changed` silently defaults to False and a

@@ -582,3 +582,45 @@ async def test_the_watchdog_prints_its_dump_off_the_event_loop(
         logger.removeHandler(tap)
     assert seen[0][0] != main
     assert seen[0][1] is True  # highlighting and markup are off for the dump
+
+
+def test_the_servers_root_logger_has_no_rich_handler_and_keeps_one_plain_line_format() -> None:
+    """FastMCP installs a rich handler that costs about 1.4 ms a line on the event loop;
+    the module swaps it for a plain single-line one at import."""
+    import logging
+
+    handlers = logging.getLogger().handlers
+    assert not [h for h in handlers if type(h).__module__.split(".")[0] == "rich"]
+    plain = [h for h in handlers if isinstance(h, logging.StreamHandler)
+             and h.formatter is not None
+             and h.formatter._fmt == "%(levelname)s %(name)s: %(message)s"]
+    # under a test runner the module may be imported after another handler already owned the
+    # root logger (so FastMCP installed none): the swap then has nothing to do, and that is fine
+    assert len(plain) <= 1
+
+
+def test_use_plain_logging_replaces_a_rich_handler_and_leaves_others() -> None:
+    import logging
+
+    from rich.logging import RichHandler
+
+    root = logging.getLogger()
+    other = logging.NullHandler()
+    rich_h = RichHandler()
+    rich_h.setLevel(logging.WARNING)
+    root.addHandler(other)
+    root.addHandler(rich_h)
+    try:
+        srv._use_plain_logging()
+        assert rich_h not in root.handlers and other in root.handlers
+        added = [h for h in root.handlers if isinstance(h, logging.StreamHandler)
+                 and not isinstance(h, logging.NullHandler)
+                 and h.formatter is not None
+                 and h.formatter._fmt == "%(levelname)s %(name)s: %(message)s"]
+        assert added and added[-1].level == logging.WARNING
+    finally:
+        for h in list(root.handlers):
+            if h is other or (isinstance(h, logging.StreamHandler)
+                              and getattr(h.formatter, "_fmt", "") ==
+                              "%(levelname)s %(name)s: %(message)s"):
+                root.removeHandler(h)
