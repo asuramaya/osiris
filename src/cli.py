@@ -5419,6 +5419,48 @@ async def cmd_rematerialize(
     return 0
 
 
+async def cmd_rebuild_transcript(
+    anchor_sid: str, *, to: str, into: str, title: str | None = None,
+    cwd: str | None = None, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris rebuild-transcript <anchor_sid> --to crush --into <workspace> - write a stored
+    session (any harness, any account) as a NEW session in another harness's native format.
+    The original is never touched and no owner or account stamp is written."""
+    from src.ingest.rebuild import rebuild_session
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:rebuild-transcript")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris rebuild-transcript: could not reach postgres at "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        receipt = await rebuild_session(
+            pool, anchor_sid, to=to, into=into, title=title, cwd=cwd)
+    except ValueError as exc:
+        print(f"osiris rebuild-transcript: refused: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if owns_pool:
+            await pool.close()
+    folded = ", ".join(f"{k} {v}" for k, v in receipt["folded"].items()) or "nothing"
+    print(f"rebuilt {anchor_sid} as {to} session {receipt['session_id']} "
+          f"({receipt['turns']} turns) in {receipt['path']}")
+    print(f"not carried as turns, folded into the opening note: {folded}")
+    return 0
+
+
 # --- amend-decision ----------------------------------------------------------------------------
 
 async def cmd_amend_decision(
@@ -8087,8 +8129,8 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         declare-machine-identity, correct-agent-house (deprecated alias
                         for correct-agent-project, one release only)
   operate               deploy, migrate, seed, soul-key, restic-key, offload-runner,
-                        bootstrap, retention, rematerialize, fleet-reconcile,
-                        fleet-prune, backfill, graph-migrate, layout
+                        bootstrap, retention, rematerialize, rebuild-transcript,
+                        fleet-reconcile, fleet-prune, backfill, graph-migrate, layout
 
 Every read verb takes --json: one compact line for a script or an agent, instead of the
 human view. Run `osiris <command> --help` for that command's own flags and a worked example.
@@ -9521,6 +9563,25 @@ def _build_parser() -> argparse.ArgumentParser:
                                  help="write even if the target exists and was modified "
                                       "more recently than the store's last ingest")
 
+    p_rebuild = sub.add_parser(
+        "rebuild-transcript", description=_d(
+            "Write a stored session (from any harness, any account) as a NEW session in "
+            "another harness's native format, so that harness can open and continue it. "
+            "The original is never touched; no owner or account is recorded on the copy; "
+            "the new session opens with a note saying it was rebuilt by osiris and listing "
+            "anything that was folded rather than carried as a turn."),
+        epilog="example: osiris rebuild-transcript 4ffb15db --to crush "
+               "--into ~/code/handlingtheloop")
+    p_rebuild.add_argument("anchor_sid", help="the 8-char anchor of the stored session")
+    p_rebuild.add_argument("--to", required=True, choices=["crush", "claude"],
+                           help="the harness to write the new session for")
+    p_rebuild.add_argument("--into", required=True,
+                           help="crush: the workspace directory whose data the session joins; "
+                                "claude: a projects directory to write the session file under")
+    p_rebuild.add_argument("--title", default=None, help="the new session's title")
+    p_rebuild.add_argument("--cwd", default=None,
+                           help="--to claude: the workspace the session belongs to")
+
     p_mint_seat = sub.add_parser(
         "mint-seat", description=_d(
             "Mint (or adopt) a worker seat: create the seat, scaffold its directory "
@@ -10169,6 +10230,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "heal-seat-transcript":
         return asyncio.run(cmd_heal_seat_transcript(
             args.seat, args.source_paths, apply=args.apply, because=args.because))
+    if args.command == "rebuild-transcript":
+        return asyncio.run(cmd_rebuild_transcript(
+            args.anchor_sid, to=args.to, into=os.path.expanduser(args.into),
+            title=args.title, cwd=args.cwd))
     if args.command == "rematerialize":
         return asyncio.run(cmd_rematerialize(args.anchor_sid, dest=args.dest,
                                              force=args.force))

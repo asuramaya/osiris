@@ -45,6 +45,9 @@ _CLI_ONLY_GLOBAL = frozenset({"actor"})
 # alias for `merge` kept working for muscle memory and deliberately never advertised,
 # not a live act left to reconcile, so it belongs here too, not in a rename.
 NO_MCP_EQUIVALENT = {
+    "rebuild-transcript": "writes a copy of a stored session into ANOTHER harness's data "
+        "directory on the operator's machine; an operator's own act, with no agent door "
+        "until the operator decides an agent may write another harness's session store",
     "proposals": "the operator's one-pass list-and-judge over the miner's pending proposals; "
         "every decision goes through the existing `proposal` accept/reject action (which the "
         "MCP tool already exposes), so there is no second write path to mirror",
