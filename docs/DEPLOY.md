@@ -291,13 +291,16 @@ A watch that pages a real operator needs guards a demo doesn't:
 ## The connection envelope at scale
 
 > **Summary: on today's per-request cost, this machine's pools (8 for `osiris-mcp`, 4
-> for `osiris-worker`) serve roughly 370 concurrent Claude Code sessions at a statusline
-> render cadence of 15 seconds (about 180 with half the capacity kept free), not
+> for `osiris-worker`) serve roughly 570 concurrent Claude Code sessions at a statusline
+> render cadence of 15 seconds (about 280 with half the capacity kept free), not
 > 1,000.** The pools themselves are not the limit and are not saturating (measured
-> below); the limit is that a statusline render still costs about a third of a second
-> of one connection (0.33 s median after the JIT fix, 0.6 s before it), against the 57 ms
-> this section was first built on. pgbouncer is still not needed. Read on for the
-> measurement and what would change the number.
+> below); the limit is that a statusline render still costs about a fifth of a second
+> of one connection (0.21 s median on 2026-11-11, 0.33 s after the JIT fix on
+> 2026-10-29, 0.6 s before it), against the 57 ms this section was first built on. The
+> session counts in the tables further down are the 2026-10-29 arithmetic (0.33 s, about
+> 370 sessions at a 15 s cadence); scale them by 1.55 for the 2026-11-11 cost.
+> pgbouncer is still not needed. Read on for the measurement and what would change the
+> number.
 
 Before this work, every statusline render and every Stop-hook turn-end opened its own
 `asyncpg.connect()`, a per-process fork, not a pool checkout. Measured live: 138 tx/s
@@ -402,6 +405,49 @@ figure the ceilings below use); a quiet-box run would tell whether the tail is l
 something in the route. On the same box, over 10 minutes, `osiris-pg` used 64% of one core
 against 117% before the fix, with `osiris-mcp` 16.8%, the arq worker 18.9% and the console
 3.8% (12.5%, 20.2% and 3.9% before).
+
+**After the later work (2026-11-11).** Since that measurement the statusline and turn-end
+routes, the search legs and the event loop were each worked on (JIT off, two indexes, the
+heartbeat tail fix, the deduplication scan and vector-matrix rebuild moved off the loop, the
+transcript lookup moved off the loop, the slow-call report and the log handler made cheap, the
+relaxed search leg rewritten to read index pairs). 60 probes of each route over about
+2.5 minutes, one every 2 seconds, against the live `osiris-mcp`. The box was NOT fully
+quiet: the 1-minute load average was 1.7 when the run started and 11.3 when it ended, because
+another agent's test run began partway through (the 5-minute average at the end was 4.9, the
+15-minute 4.7), so read these as typical-fleet figures, not a clean-box floor.
+
+| Route | p50 | p95 | max |
+|---|---|---|---|
+| `/heartbeat`, real session | 212 ms | 317 ms | 532 ms |
+| `/stop` (deliverable phase) | 109 ms | 154 ms | 169 ms |
+
+The `/heartbeat` tail that was 1,759 ms at p95 and 9,746 ms at the maximum on 2026-10-29 is 317
+and 532 ms now, with no failures, so that tail was load plus the loop stalls fixed since, not
+the route. Backend CPU over the same 150 seconds, as a share of one core: `osiris-pg` 37.4%
+(64% on 2026-10-29), `osiris-mcp` 8.2% (16.8%), the arq worker 7.1% (18.9%), the heartbeat
+daemon 2.8%, the console 0.1% (3.8%), the manager 0.0%. Throughput ceiling at the new medians
+(`pool_size / p50`, the same upper bound as above): `/heartbeat` 8 connections / 0.212 s is
+about **38 req/s**, `/stop` 8 / 0.109 s is about **73 req/s**.
+
+Other figures from the server's own call timing (`tool_traffic`, the 60 minutes up to
+2026-11-11 20:20, at the normal fleet's load, which was heavy, 8 to 17 on the 1-minute
+average for most of that hour, so these are upper bounds): `mount` 531 ms average over 47
+calls, `inbox` 171 ms over 129, `fleet_digest` 1,186 ms over 17, `roster` 1,340 ms over 20,
+`fleet` 5,386 ms over 17 (4,287 ms of the one slow call's breakdown was the landing audit),
+`candidates` 2,118 ms over 17 (since cut to about 60 ms), `search` 8,744 ms over 18 (before
+the relaxed-leg fix below). The event-loop sampler (`tool_traffic().loop_lag`, a stall is a
+loop blocked for 150 ms or more) read 0 stalls in that window, down from a worst stall of 418 ms
+earlier the same day.
+
+Search and prior art (every `send` to an agent, `record_decision` and `search` run the same
+search; measured in one process on the live graph, old and new statement side by side, the
+box at a load average of 8 to 14, so the relative change is the figure to trust): on 12 real
+decision summaries (300 characters, the longest query prior art makes), the queries that reach
+the any-term leg went from 3,863 / 3,826 / 4,374 ms to 445 / 563 / 493 ms, the other eight stay at
+30 to 290 ms, and all 12 hit lists are identical. The earlier 10 to 12 s journal lines were that
+same leg at load 10 to 15. Typo search (the trigram leg, only reached by a word that matches
+nothing) scans every searchable row (75,721 rows, 35 MB of text) at about 59 microseconds a row,
+so about 5 s at that load; a trigram index only helps gibberish words, so none was added.
 
 The first measurement of this section, in August 2026 against a 20-connection pool and
 a smaller database, found 57 ms and 16 ms. Today's real-session `/heartbeat` is about ten
