@@ -30,8 +30,10 @@ if cmd == "snapshots":
         time.sleep(state["snapshots_sleep"])
     if state["snapshots_stderr"]:
         print(state["snapshots_stderr"], file=sys.stderr)
-        sys.exit(1)
+        sys.exit(state.get("snapshots_exit", 1))
     sys.exit(0)
+if cmd == "backup" and state.get("backup_sleep"):
+    time.sleep(state["backup_sleep"])
 if cmd == "backup" and state.get("backup_exit"):
     print(state.get("backup_stderr", ""), file=sys.stderr)
     sys.exit(state["backup_exit"])
@@ -144,6 +146,38 @@ def test_an_incomplete_snapshot_is_a_success_with_a_note(fake: Fake) -> None:
     assert "could not be read" in notes[0]
 
 
+def test_a_backup_timeout_says_it_will_resume_not_that_nothing_was_initialized(
+    fake: Fake, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(offload_runner, "_RESTIC_TIMEOUT_SECONDS", 1)
+    fake.state["backup_sleep"] = 4
+    fake.save()
+
+    failure = fake.backup()
+
+    assert failure is not None and "timed out after 1s" in failure
+    assert "will resume" in failure and "nothing was initialized" not in failure
+
+
+def test_a_stopped_backup_gets_a_long_grace_before_the_kill(
+    fake: Fake, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import restic_locks
+
+    graces: dict[str, Any] = {}
+    real = restic_locks.run_restic
+
+    def spy(args: list[str], env: dict[str, str], **kw: Any) -> Any:
+        graces[args[0]] = kw.get("grace")
+        return real(args, env, **kw)
+
+    monkeypatch.setattr(restic_locks, "run_restic", spy)
+
+    assert fake.backup() is None
+    assert graces["backup"] == offload_runner._BACKUP_STOP_GRACE_SECONDS >= 60
+    assert graces["snapshots"] is None  # the short probes keep the short grace
+
+
 def test_any_other_backup_exit_is_still_a_failure(fake: Fake) -> None:
     fake.state["backup_exit"] = 1
     fake.state["backup_stderr"] = "Fatal: boom"
@@ -209,3 +243,61 @@ def test_failure_summary_keeps_the_cause_only_when_the_last_line_lacks_it() -> N
     assert failure_summary("repository abc opened\nFatal: wrong password or no key found") == (
         "Fatal: wrong password or no key found")
     assert failure_summary("") == "no output" and failure_summary("  \n ") == "no output"
+
+
+# ---- restic's exit codes decide first (10 missing, 11 locked, 12 wrong password) ----
+
+
+def test_exit_10_is_a_missing_repository_whatever_the_wording(fake: Fake) -> None:
+    fake.state["snapshots_stderr"] = "Fatal: something restic will word differently next year"
+    fake.state["snapshots_exit"] = 10
+    fake.save()
+
+    failure = fake.backup()
+
+    assert "init" in fake.commands()
+    assert failure is not None and failure.startswith("restic init failed")
+
+
+def test_exit_10_with_a_network_cause_in_the_text_still_never_inits(fake: Fake) -> None:
+    fake.state["snapshots_stderr"] = NETWORK
+    fake.state["snapshots_exit"] = 10
+    fake.save()
+
+    failure = fake.backup()
+
+    assert failure is not None and "init" not in fake.commands()
+
+
+def test_exit_12_never_inits_even_when_the_text_says_missing(fake: Fake) -> None:
+    fake.state["snapshots_stderr"] = MISSING_SFTP
+    fake.state["snapshots_exit"] = 12
+    fake.save()
+
+    failure = fake.backup()
+
+    assert failure is not None and failure.startswith("restic snapshots failed")
+    assert "init" not in fake.commands()
+
+
+def test_exit_11_is_busy_whatever_the_wording(fake: Fake) -> None:
+    fake.state["snapshots_stderr"] = "Fatal: the repository wording changed"
+    fake.state["snapshots_exit"] = 11
+    fake.save()
+
+    failure = fake.backup()
+
+    assert failure is not None and failure.startswith("repository busy")
+    assert "init" not in fake.commands() and "backup" not in fake.commands()
+
+
+def test_the_exit_code_classifiers_fall_back_to_the_text_when_there_is_no_code() -> None:
+    from src.orchestrator import restic_locks
+
+    assert restic_locks.is_lock_failure("repository is already locked", None)
+    assert restic_locks.is_lock_failure("anything", 11)
+    assert not restic_locks.is_lock_failure("repository is already locked", 12)
+    assert not restic_locks.is_lock_failure("fine", 1)
+    assert offload_runner.repository_is_missing(MISSING_SFTP, 1)  # older restic: text only
+    assert offload_runner.repository_is_missing(MISSING_SFTP)
+    assert not offload_runner.repository_is_missing("anything", 11)

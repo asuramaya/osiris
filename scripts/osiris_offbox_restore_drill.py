@@ -77,7 +77,7 @@ def _check_retrying_on_a_lock(
     if check.returncode == 0:
         return check, None
     text = f"{check.stdout}\n{check.stderr}"
-    if not restic_locks.is_lock_failure(text):
+    if not restic_locks.is_lock_failure(text, check.returncode):
         return check, None
     outcome = restic_locks.clear_stale_locks(env, after_lock_failure=True)
     if outcome.note:
@@ -93,7 +93,7 @@ def _check_retrying_on_a_lock(
     if check.returncode == 0:
         return check, None
     text = f"{check.stdout}\n{check.stderr}"
-    if restic_locks.is_lock_failure(text):
+    if restic_locks.is_lock_failure(text, check.returncode):
         held = restic_locks.holder_line(text) or "restic did not say who"
         return check, (f"{restic_locks.BUSY_PREFIX} (still locked after clearing stale "
                        f"locks): {held}")
@@ -194,6 +194,10 @@ def _stop(proc: subprocess.Popen[Any]) -> None:
         os.killpg(proc.pid, signal.SIGKILL)
 
 
+class _ListingFailed(Exception):
+    """`restic ls` ended on its own with a failure exit code: the listing is not to be trusted."""
+
+
 class _Watched:
     """A streaming restic reader the budget can still stop: reading a pipe has no timeout of its
     own, so on a stalled link `for line in proc.stdout` would wait past the drill's whole budget.
@@ -220,10 +224,18 @@ class _Watched:
         self._timer.cancel()
         _stop(self.proc)
 
+    def fired(self) -> bool:
+        return self._fired.is_set()
+
     def check(self) -> None:
         if self._fired.is_set():
             raise TimeoutError(f"the drill ran out of its {self.budget.seconds:.0f}s time budget "
                                f"before {self.step}")
+
+
+def _last_line(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[-1] if lines else ""
 
 
 def _glob_escape(path: str) -> str:
@@ -244,6 +256,7 @@ def _pick_samples(env: dict[str, str], budget: _Budget, rng: random.Random,
     transcripts: list[tuple[str, int]] = []
     others: list[tuple[str, int]] = []
     seen_t = seen_o = nodes = 0
+    ended_by_itself = False
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -277,6 +290,16 @@ def _pick_samples(env: dict[str, str], budget: _Budget, rng: random.Random,
                     j = rng.randrange(count + 1)
                     if j < SAMPLE_FILES:
                         bucket[j] = (path, size)
+        else:
+            ended_by_itself = True
+        if ended_by_itself and not watched.fired():
+            # the stream ran to its end: restic's own exit code says whether the listing is whole
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                code = proc.wait(timeout=5)
+                if code != 0 and not watched.fired():
+                    err = proc.stderr.read() if proc.stderr is not None else ""
+                    raise _ListingFailed(
+                        f"restic ls exited {code}: {_last_line(err) or 'no message'}")
     finally:
         watched.close()
     watched.check()
@@ -337,11 +360,24 @@ def run_bounded_drill(
             return locked
         if check.returncode != 0:
             return f"restic check failed:\n{check.stdout}\n{check.stderr}"
-        recovery, dump, samples = _pick_samples(env, budget, rng)
+        try:
+            recovery, dump, samples = _pick_samples(env, budget, rng)
+        except _ListingFailed as exc:
+            if "no snapshot found" in str(exc):
+                return ("the repository has no snapshots, so there are no files to sample; a "
+                        "check-clean repository is NOT proof of a restorable backup")
+            return str(exc)
         wanted = ([recovery] if recovery else []) + [p for p, _ in samples]
         if not wanted and not dump:
             return ("the latest snapshot has no files to sample, or the repository has no "
                     "snapshots; a check-clean repository is NOT proof of a restorable backup")
+        # a snapshot with no recovery file or no database dump cannot recover the house, however
+        # many other files restore cleanly
+        missing = [name for name, found in (("the key recovery file", recovery),
+                                            ("a database dump", dump)) if not found]
+        if missing:
+            return ("the latest snapshot is missing " + " and ".join(missing)
+                    + "; a snapshot without them is not a backup of the house")
         if dump:
             failure = _dump_header_failure(dump, env, budget)
             if failure:

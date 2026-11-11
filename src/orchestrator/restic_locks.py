@@ -259,6 +259,13 @@ def clear_stale_locks(
         after = read_locks(env, restic)
     except (OSError, subprocess.TimeoutExpired):
         after = None
+    if after is None or isinstance(after, str):
+        # The unlock exited 0 but the check that it worked could not be read: say that, never
+        # "cleared". The caller still retries its own call (a note is enough for that).
+        where = ", ".join(sorted({describe(lock) for lock in stale}))
+        return LockOutcome(note=(
+            f"ran `restic unlock` for {len(stale)} stale repository lock(s) ({where}) but could "
+            "not re-read the lock listing to confirm they are gone"))
     if isinstance(after, list):
         left = [lock for lock in stale if any(lock.id == other.id for other in after)]
         if left:
@@ -330,6 +337,18 @@ def holder_line(text: str) -> str | None:
     return None
 
 
-def is_lock_failure(text: str) -> bool:
-    """Does a failed restic run's output say the repository was locked?"""
+# restic's own exit codes (0.17 and later) for the three situations this module tells apart
+EXIT_REPOSITORY_MISSING = 10
+EXIT_REPOSITORY_LOCKED = 11
+EXIT_WRONG_PASSWORD = 12
+
+
+def is_lock_failure(text: str, returncode: int | None = None) -> bool:
+    """Did a failed restic run fail because the repository was locked? restic's exit code says so
+    when it gives one (11 locked; 10 and 12 are other answers); the output text is the fallback
+    for an older restic or a run whose code was not kept."""
+    if returncode == EXIT_REPOSITORY_LOCKED:
+        return True
+    if returncode in (EXIT_REPOSITORY_MISSING, EXIT_WRONG_PASSWORD):
+        return False
     return "already locked" in text or "unable to create lock" in text
