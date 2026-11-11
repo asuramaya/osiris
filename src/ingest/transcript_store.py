@@ -330,28 +330,45 @@ class TranscriptStore:
         recorded time. The aggregate returns those four facts and nothing else; it is the
         same reduction `_reading_from_turns` makes over a turn list (assistant turns that
         are not summaries and name a real model)."""
-        row = await self.pool.fetchrow(
-            "WITH q AS ("
-            "  SELECT turn_idx, model, recorded_at, swap_deliberate FROM harness_turns "
-            "  WHERE harness=$1 AND anchor_sid=$2 AND role='assistant' "
-            "    AND NOT is_summary AND model IS NOT NULL AND model <> '' AND model <> $3) "
-            "SELECT EXISTS (SELECT 1 FROM harness_turns WHERE harness=$1 AND anchor_sid=$2) "
-            "         AS any_rows, "
-            "       (SELECT model FROM q ORDER BY turn_idx DESC LIMIT 1) AS current, "
-            "       (SELECT recorded_at FROM q WHERE recorded_at IS NOT NULL "
-            "          ORDER BY turn_idx DESC LIMIT 1) AS observed_at, "
-            "       COALESCE((SELECT bool_or(swap_deliberate) FROM q), false) AS deliberate, "
-            "       (SELECT array_agg(model ORDER BY first_idx) FROM "
-            "          (SELECT model, min(turn_idx) AS first_idx FROM q GROUP BY model) h) "
-            "         AS history",
+        # ONE pass over the session's turns, grouped by model (a session names a handful of
+        # models, so the result is a handful of rows). This used to read the same turns
+        # four times through a materialized CTE: 69 ms for a 62k-turn session, 165 ms for
+        # the largest, on every mount. Each model's first and last turn, whether any of its
+        # turns was a deliberate swap, and its newest recorded time are enough to rebuild
+        # the four facts below exactly.
+        rows = await self.pool.fetch(
+            "SELECT model, min(turn_idx) AS first_idx, max(turn_idx) AS last_idx, "
+            "       bool_or(swap_deliberate) AS deliberate, "
+            "       max(turn_idx) FILTER (WHERE recorded_at IS NOT NULL) AS rec_idx "
+            "FROM harness_turns WHERE harness=$1 AND anchor_sid=$2 AND role='assistant' "
+            "  AND NOT is_summary AND model IS NOT NULL AND model <> '' AND model <> $3 "
+            "GROUP BY model",
             harness, anchor_sid, _SYNTHETIC,
         )
-        if row is None or not row["any_rows"]:
-            return None
+        if not rows:
+            # no qualifying turn: a session that has rows but none naming a model still
+            # reads as an (empty) reading, a session with no rows at all reads as None
+            any_rows = await self.pool.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM harness_turns WHERE harness=$1 AND anchor_sid=$2)",
+                harness, anchor_sid)
+            if not any_rows:
+                return None
+            return ModelReading(
+                current=None, history=(), deliberate=False, observed_at=None,
+                method=harness, anchor_sid=anchor_sid or None)
+        newest = max(rows, key=lambda r: r["last_idx"])
+        rec_idx = max((r["rec_idx"] for r in rows if r["rec_idx"] is not None), default=None)
+        # (harness, anchor_sid, turn_idx) is the primary key: the newest recorded time is a
+        # point lookup, not a second sort of the whole session
+        observed_at = None if rec_idx is None else await self.pool.fetchval(
+            "SELECT recorded_at FROM harness_turns "
+            "WHERE harness=$1 AND anchor_sid=$2 AND turn_idx=$3",
+            harness, anchor_sid, rec_idx)
         return ModelReading(
-            current=row["current"], history=tuple(row["history"] or ()),
-            deliberate=bool(row["deliberate"]), observed_at=row["observed_at"],
-            method=harness, anchor_sid=anchor_sid or None,
+            current=newest["model"],
+            history=tuple(r["model"] for r in sorted(rows, key=lambda r: r["first_idx"])),
+            deliberate=any(bool(r["deliberate"]) for r in rows),
+            observed_at=observed_at, method=harness, anchor_sid=anchor_sid or None,
         )
 
     async def last_usage_of_session(
