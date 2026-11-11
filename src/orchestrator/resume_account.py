@@ -147,12 +147,27 @@ def last_turns(raw_lines: list[bytes], limit: int) -> list[tuple[str, str]]:
 
 async def store_briefing(
     pool: asyncpg.Pool, *, handle: str, anchor_sid: str, finding: dict[str, Any],
-    project: str | None = None, turns: int = 12,
+    project: str | None = None, turns: int = 12, seat_id: str | None = None,
 ) -> str:
     """The opening brief for a fresh launch that stands in for the history the harness will
-    not load: why it is fresh, where the seat's charter lives, the project's compiled
-    handoff when one resolves, and the last `turns` turns read from the soul store."""
+    not load. The whole stored session is read and condensed to a compaction-sized brief
+    (`session_brief`: its own last compaction summary, the last instructions verbatim,
+    decisions, threads, mail, files, branches, and how to pull any line on demand). Only if
+    that cannot be built (the store holds nothing for the session, or the build fails) does
+    this fall back to the short brief below: why it is fresh, the project's handoff and the
+    last `turns` turns."""
     from src.ingest.soul_store import SoulStore
+
+    try:
+        from src.orchestrator.session_brief import build_session_brief
+
+        whole = await build_session_brief(
+            pool, handle=handle, anchor_sid=anchor_sid, finding=finding, project=project,
+            seat_id=seat_id)
+        if whole:
+            return whole
+    except Exception:  # noqa: BLE001 - a brief never fails the launch
+        pass
 
     parts = [
         f"You are {handle}, launched FRESH. Your previous session ({anchor_sid}) could not "

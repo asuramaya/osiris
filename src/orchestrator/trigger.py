@@ -4651,7 +4651,7 @@ async def resume_seat(
     if finding is not None:
         brief = await store_briefing(
             pool, handle=handle, anchor_sid=session_id[:8], finding=finding,
-            project=await _governed_project_name(pool, target_seat))
+            project=await _governed_project_name(pool, target_seat), seat_id=target_seat)
         launched = await launch_seat(
             actions, caller=caller, target=target,
             message=(f"{message.strip()}\n\n{brief}" if message.strip() else brief),

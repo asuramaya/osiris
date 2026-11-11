@@ -93,9 +93,8 @@ def cannot_verify(verb: str, handle: str, sid: str) -> str:
 
 
 def other_account(verb: str, handle: str) -> str:
-    return (f"osiris {verb}: {handle}'s earlier session was written under another Claude "
-            "account, so Claude Code cannot load it. Starting a new one with a briefing "
-            "built from its history.")
+    return (f"osiris {verb}: {handle}'s history is from another Claude account; continued "
+            "from osiris's copy (brief + recall).")
 
 
 def would_not_start(verb: str, handle: str, reason: object) -> str:
