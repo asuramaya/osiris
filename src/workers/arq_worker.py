@@ -1248,7 +1248,14 @@ async def tree_ingest_alarm_heartbeat(ctx: dict[str, Any]) -> int:
     return alarmed
 
 
-def _retention_receipt_line(table: str, deleted: int, cutoff: str, days: int = 90) -> str:
+# One table's share of a retention run: the delete stops between batches once this is spent
+# and the next daily run continues, so a large backlog never holds the table for long.
+_RETENTION_TICK_SECS = 120.0
+
+
+def _retention_receipt_line(
+    table: str, deleted: int, cutoff: str, days: int = 90, finished: bool = True,
+) -> str:
     """One desk line per table, as a plain count of what was removed. It used to read
     "audit_log: -14710 rows older than 90d", a leading minus that looks like a negative
     count. A zero still gets a line, since a daily receipt that says nothing was due is
@@ -1256,7 +1263,8 @@ def _retention_receipt_line(table: str, deleted: int, cutoff: str, days: int = 9
     if deleted == 0:
         return f"{table}: nothing older than {days} days to remove (cutoff {cutoff})"
     noun = "row" if deleted == 1 else "rows"
-    return f"{table}: removed {deleted} {noun} older than {days} days (cutoff {cutoff})"
+    more = "" if finished else "; more remain, the next run continues"
+    return f"{table}: removed {deleted} {noun} older than {days} days (cutoff {cutoff}){more}"
 
 
 async def retention_heartbeat(ctx: dict[str, Any]) -> int:
@@ -1303,22 +1311,26 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     lines: list[str] = []
     deleted = 0
     try:
-        outbox = await outbox_retention(pool, days=OUTBOX_RETENTION_DAYS, execute=True)
+        outbox = await outbox_retention(pool, days=OUTBOX_RETENTION_DAYS, execute=True,
+                                        max_seconds=_RETENTION_TICK_SECS)
     except Exception as exc:  # a DB hiccup must not kill the cron
         _log.warning("outbox retention heartbeat failed: %r", exc)
     else:
         deleted += outbox["deleted"]
         lines.append(_retention_receipt_line(
-            "outbox", outbox["deleted"], outbox["cutoff"], days=outbox["days"]))
+            "outbox", outbox["deleted"], outbox["cutoff"], days=outbox["days"],
+            finished=outbox["finished"]))
 
     try:
-        audit = await audit_log_retention(pool, days=90, execute=True)
+        audit = await audit_log_retention(pool, days=90, execute=True,
+                                          max_seconds=_RETENTION_TICK_SECS)
     except Exception as exc:  # a DB hiccup must not kill the cron
         _log.warning("audit_log retention heartbeat failed: %r", exc)
     else:
         deleted += audit["deleted"]
         lines.append(_retention_receipt_line(
-            "audit_log", audit["deleted"], audit["cutoff"], days=audit["days"]))
+            "audit_log", audit["deleted"], audit["cutoff"], days=audit["days"],
+            finished=audit["finished"]))
 
     if lines:
         with contextlib.suppress(Exception):  # the desk being unreachable must not sink the cron

@@ -233,3 +233,43 @@ async def test_retention_heartbeat_survives_the_desk_being_unreachable(
     deleted = await retention_heartbeat(ctx)  # the delete must still land
     assert deleted >= 1
     assert await _marked_outbox_count(actions) == 0
+
+
+async def _claimed_unpublished_outbox_row(actions: Actions, *, created_at: datetime) -> None:
+    await actions.pool.execute(
+        f"INSERT INTO outbox (event_type, payload, created_at, claimed_at) "
+        f"VALUES ('{_MARKER}', '{{}}', $1, $1)", created_at)
+
+
+async def test_outbox_retention_also_reaps_old_rows_a_restart_left_claimed_but_unpublished(
+    actions: Actions,
+) -> None:
+    """The drain claims a batch up front and publishes row by row. A worker restarted
+    mid-batch leaves rows claimed and never published, and the drain never claims them
+    again, so retention is the only thing that can retire them. A row nobody has claimed
+    is still protected, and a recently claimed one is inside the window."""
+    await _claimed_unpublished_outbox_row(actions, created_at=OLD)  # abandoned: goes
+    await _claimed_unpublished_outbox_row(actions, created_at=RECENT)  # in the window: stays
+    await _outbox_row(actions, created_at=OLD, published=False)  # unclaimed: stays
+
+    dry = await outbox_retention(actions.pool, days=30)
+    assert dry["eligible"] == 1
+    out = await outbox_retention(actions.pool, days=30, execute=True)
+    assert out["deleted"] == 1
+    assert await _marked_outbox_count(actions) == 2
+
+
+async def test_a_tick_is_bounded_and_the_next_run_continues(actions: Actions) -> None:
+    for _ in range(12):
+        await _outbox_row(actions, created_at=OLD, published=True)
+
+    first = await outbox_retention(
+        actions.pool, days=30, execute=True, batch_size=5, max_seconds=0.0)
+    assert first["finished"] is False
+    assert first["deleted"] == 5  # one batch, then the budget stopped it
+    assert await _marked_outbox_count(actions) == 7
+
+    rest = await outbox_retention(actions.pool, days=30, execute=True, batch_size=5)
+    assert rest["finished"] is True
+    assert rest["deleted"] == 7
+    assert await _marked_outbox_count(actions) == 0
