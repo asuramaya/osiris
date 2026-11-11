@@ -298,12 +298,22 @@ async def _matrix(pool: asyncpg.Pool, model: str) -> tuple[list[Any], list[str],
             fields.extend(r["field"] for r in chunk)
             parts.append(np.asarray([r["vec"] for r in chunk], dtype=np.float32))
             await asyncio.sleep(0)
+    # The concatenate, the row norms and the divide are whole-matrix numpy work that
+    # releases the GIL, so a worker thread keeps the loop free for the ~190 ms they take.
+    packed = (ids, fields, await asyncio.to_thread(_unit_rows, parts))
+    _matrix_cache["v"] = (fp, packed)
+    return packed
+
+
+def _unit_rows(parts: list[Any]) -> Any:
+    """The stacked chunks as one matrix with every row scaled to unit length (a zero row
+    stays zero), so a query is one matrix-vector product."""
+    import numpy as np
+
     mat = np.concatenate(parts)
     norms = np.linalg.norm(mat, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
-    packed = (ids, fields, mat / norms)
-    _matrix_cache["v"] = (fp, packed)
-    return packed
+    return mat / norms
 
 
 def _top_k(mat: Any, qv: list[float], k: int, floor: float) -> list[tuple[int, float]]:

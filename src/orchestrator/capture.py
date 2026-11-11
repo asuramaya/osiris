@@ -35,6 +35,8 @@ never runs over session capture at all.
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import hashlib
 import json
 import logging
@@ -3150,6 +3152,34 @@ def _normalize_for_dedup(text: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", text.lower()).split())
 
 
+@functools.lru_cache(maxsize=20000)
+def _dedup_key(text: str) -> str:
+    """`_normalize_for_dedup` of the text with its boilerplate opener stripped, memoized:
+    a project's decision summaries barely change between two record_decision calls, so the
+    second call normalizes only what is new instead of every decision again."""
+    return _normalize_for_dedup(_strip_dedup_boilerplate(text))
+
+
+def _first_exact(candidates: list[tuple[Any, str]], norm_new: str) -> Any | None:
+    """The first candidate whose comparison key equals `norm_new`. Plain CPU over the
+    whole candidate set, so callers run it through `asyncio.to_thread`."""
+    for cid, cand in candidates:
+        if _dedup_key(cand) == norm_new:
+            return cid
+    return None
+
+
+def _best_ratio(candidates: list[tuple[Any, str]], norm_new: str) -> tuple[Any | None, float]:
+    """The candidate with the highest SequenceMatcher ratio against `norm_new`, and that
+    ratio. The no-pg_trgm fallback; run through `asyncio.to_thread` like `_first_exact`."""
+    best_id, best_ratio = None, 0.0
+    for cid, cand in candidates:
+        ratio = SequenceMatcher(None, norm_new, _dedup_key(cand)).ratio()
+        if ratio > best_ratio:
+            best_id, best_ratio = cid, ratio
+    return best_id, best_ratio
+
+
 # Recurring scaffolding a Decision's own summary opens with: measured live against the
 # real corpus, 363 of 7,498 decisions (4.8%) open with "STATE OF THE BOARD", the single
 # largest cluster, each one different substance riding an identical fixed header that
@@ -3317,26 +3347,22 @@ async def find_near_duplicate_decision(
     # normalize/similarity below actually compares.
     stripped_new = _strip_dedup_boilerplate(summary)
     norm_new = _normalize_for_dedup(stripped_new)
-    for did, cand in candidates:
-        if _normalize_for_dedup(_strip_dedup_boilerplate(cand)) == norm_new:
-            return uuid.UUID(str(did))
+    exact = await asyncio.to_thread(_first_exact, candidates, norm_new)
+    if exact is not None:
+        return uuid.UUID(str(exact))
     if exact_only:
         return None
     if await _pg_trgm_enabled(pool):
         ids = [did for did, _ in candidates]
-        bodies = [_strip_dedup_boilerplate(cand) for _, cand in candidates]
+        bodies = await asyncio.to_thread(
+            lambda: [_strip_dedup_boilerplate(cand) for _, cand in candidates])
         hit = await pool.fetchval(
             "WITH b AS (SELECT unnest($1::uuid[]) AS id, unnest($2::text[]) AS body) "
             "SELECT id FROM b WHERE similarity(body, $3) > $4 "
             "ORDER BY similarity(body, $3) DESC LIMIT 1",
             ids, bodies, stripped_new, _DEDUP_SIM)
         return uuid.UUID(str(hit)) if hit is not None else None
-    best_id, best_ratio = None, 0.0
-    for did, cand in candidates:
-        ratio = SequenceMatcher(
-            None, norm_new, _normalize_for_dedup(_strip_dedup_boilerplate(cand))).ratio()
-        if ratio > best_ratio:
-            best_id, best_ratio = did, ratio
+    best_id, best_ratio = await asyncio.to_thread(_best_ratio, candidates, norm_new)
     return uuid.UUID(str(best_id)) if best_id is not None and best_ratio > _DEDUP_SIM else None
 
 
