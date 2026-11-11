@@ -260,3 +260,39 @@ async def test_resume_adoption_holds_until_the_listed_body_is_working_or_mounted
         actions.pool, agents_json=_roster, office=office, requested_sid="r1r1r1r1-0000",
         holder="agent:resumewait", project=None, delay=0.01)
     assert out["session_id"] == "r1r1r1r1-0000" and polls["n"] >= 4
+
+
+async def test_stop_by_list_records_the_session_so_resume_can_find_it(
+    actions: Actions,
+) -> None:
+    """After `osiris stop` ended a body found through the harness list, `resume` said "nothing
+    to resume": only the holder-bound stop path recorded the session. Both must."""
+    import os
+
+    from src.orchestrator.trigger import _window_name
+
+    seat = await ensure_seat(actions, house="osiris", handle="anchored", source="test")
+    office = "/tmp/anchored-office"
+    await actions.assert_property(
+        await actions.create_or_find_object("Seat", seat["seat_id"], "test"),
+        "anchor_cwd", office, "test", trigger.datetime.now(trigger.UTC), 0.9)
+    name = await _window_name(actions.pool, "osiris", "anchored", None)
+    row = {"name": name, "cwd": office, "pid": os.getpid(), "id": "ab12cd34",
+           "state": "working", "sessionId": "ab12cd34-5678-4abc-9def-0123456789ab"}
+
+    async def _roster(**kw: Any) -> list[dict[str, Any]]:
+        return [row]
+
+    async def _kill(pid: int, key: str | None) -> None:
+        return None
+
+    out = await trigger._stop_orphan_harness_body(
+        actions.pool, target_seat=seat["seat_id"], kill=_kill, agents_json=_roster,
+        read_cmdline=lambda p: b"claude\x00--bg", holder="agent:anchored-body",
+        actor="test")
+    assert out["status"] == "stopped"
+    assert out["stopped_bodies"][0]["session_anchor_recorded"] is True
+    session = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='agent:anchored-body' AND a.name='session'")
+    assert session == "ab12cd34"

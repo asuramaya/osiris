@@ -4880,9 +4880,32 @@ async def _clear_stale_stopped_record(job_dir_key: str) -> bool:
 _OPERATOR_CALLER = "operator"
 
 
+async def _record_stopped_session(
+    actions: Actions, *, holder: str, session_id: str, actor: str,
+) -> bool:
+    """The session anchor, written before a body is killed, so `resume` can find the session
+    afterwards: the graph `session` property (what `_lineage_resume_candidate` walks) and the
+    session ledger entry. Ambient: a kill never waits on, or fails because of, this write.
+    Shared by the holder-bound stop path and the harness-list stop path."""
+    from src.orchestrator.agents import _looks_like_a_real_session
+    from src.orchestrator.handshake import record_session_anchor
+
+    try:
+        sid8 = session_id[:8]
+        if _looks_like_a_real_session(sid8):
+            holder_oid = await actions.create_or_find_object("Agent", holder, actor)
+            await actions.assert_property(
+                holder_oid, "session", sid8, actor, datetime.now(UTC), 0.9,
+                evidence_class="direct_observation")
+        return bool(await record_session_anchor(
+            actions, agent_id=holder, session_id=session_id, actor=actor))
+    except Exception:  # noqa: BLE001 ambient: see above
+        return False
+
+
 async def _stop_orphan_harness_body(
     pool: asyncpg.Pool, *, target_seat: str, kill: Any, agents_json: Any,
-    read_cmdline: Any = None,
+    read_cmdline: Any = None, holder: str | None = None, actor: str = "osiris-stop",
 ) -> dict[str, Any]:
     """The orphan path: `stop_seat`'s own graph-bound path above requires a `holds` edge
     to exist at all, but the harness's own roster can still be running a real body
@@ -4945,9 +4968,13 @@ async def _stop_orphan_harness_body(
             skipped.append(f"{row.get('name')!r} ({row.get('id')}): no usable pid, not "
                            "killed")
             continue
+        anchored = False
+        if holder and row.get("sessionId"):
+            anchored = await _record_stopped_session(
+                Actions(pool), holder=holder, session_id=str(row["sessionId"]), actor=actor)
         await kill(pid_int, row.get("id"))
         stopped.append({"id": row.get("id"), "name": row.get("name"), "pid": pid_int,
-                        "session": row.get("sessionId")})
+                        "session": row.get("sessionId"), "session_anchor_recorded": anchored})
     if not stopped:
         return {"status": "no-live-body", "seat": target_seat,
                 "detail": "; ".join(skipped) or "nothing safe to stop"}
@@ -5122,7 +5149,7 @@ async def stop_seat(
         # the seat holder's). Stop what the list shows.
         listed = await _stop_orphan_harness_body(
             pool, target_seat=target_seat, kill=kill, agents_json=agents_json,
-            read_cmdline=read_cmdline)
+            read_cmdline=read_cmdline, holder=str(holder), actor=caller)
         if listed.get("status") == "stopped":
             return {**listed, "holder": holder}
         detail = (f"{holder} carries no harness/proc-confirmed live body right "
