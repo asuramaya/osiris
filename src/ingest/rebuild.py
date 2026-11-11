@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import shutil
 import sqlite3
 import tempfile
@@ -39,6 +40,7 @@ class Part:
     call_id: str = ""
     name: str = ""
     input: str = ""               # tool_call: the JSON-encoded input
+    is_error: bool = False        # tool_result: the tool reported a failure
 
 
 @dataclass
@@ -125,7 +127,8 @@ def turns_from_claude_lines(lines: Iterable[tuple[int, bytes]]) -> Rebuilt:
                     turns.append(Turn("tool", [
                         Part("tool_result", _result_text(b.get("content"), folded),
                              call_id=str(b.get("tool_use_id") or ""),
-                             name=call_names.get(str(b.get("tool_use_id") or ""), ""))
+                             name=call_names.get(str(b.get("tool_use_id") or ""), ""),
+                             is_error=bool(b.get("is_error")))
                         for b in results], at, None, False, idx))
                 texts = [str(b.get("text", "")) for b in content
                          if isinstance(b, dict) and b.get("type") == "text"]
@@ -234,6 +237,68 @@ _GOOSE_VERSIONS = (0, 20250424200609, 20250515105448, 20250624000000, 2025062700
                    20250810000000, 20250812000000, 20260127000000)
 
 
+# the columns the writer fills, per table (sessions and messages); anything else a table has
+# must be nullable or carry a default, or the insert would fail
+_CRUSH_WRITES = {
+    "sessions": {"id", "title", "message_count", "updated_at", "created_at"},
+    "messages": {"id", "session_id", "role", "parts", "model", "created_at", "updated_at",
+                 "finished_at", "provider", "is_summary_message"},
+}
+
+
+def _check_crush_schema(conn: sqlite3.Connection) -> None:
+    """Before adding to a Crush database that already exists, make sure it is one this writer
+    understands: it has the sessions and messages tables with every column we fill, and no
+    other column that is required without a default. A database from an older or newer Crush
+    that differs is refused with what differed, never half-written."""
+    problems: list[str] = []
+    for table, ours in _CRUSH_WRITES.items():
+        info = conn.execute(f"PRAGMA table_info({table})").fetchall()   # noqa: S608
+        if not info:
+            problems.append(f"no {table} table")
+            continue
+        have = {r[1] for r in info}
+        if missing := sorted(ours - have):
+            problems.append(f"{table} lacks column(s) {', '.join(missing)}")
+        # r = (cid, name, type, notnull, default, pk): a required column we never fill
+        if required := sorted(r[1] for r in info
+                              if r[3] and r[4] is None and not r[5] and r[1] not in ours):
+            problems.append(f"{table} requires column(s) {', '.join(required)} that this "
+                            "tool does not fill")
+    if problems:
+        try:
+            top = conn.execute("SELECT max(version_id) FROM goose_db_version").fetchone()[0]
+        except sqlite3.DatabaseError:
+            top = None
+        raise ValueError(
+            "the existing Crush database is not one this tool can add to ("
+            + "; ".join(problems) + (f"; its schema version is {top}, this tool knows up to "
+                                     f"{_GOOSE_VERSIONS[-1]}" if top is not None else "")
+            + "). Nothing was written; point --into at a workspace with no .crush yet.")
+
+
+def _with_writer_folds(rebuilt: Rebuilt, to: str) -> Rebuilt:
+    """`rebuilt` with what THIS target cannot carry added to its folded counts, so the opening
+    note and the receipt say it. Claude: a thinking block needs the provider's signature, which
+    the store never had for a rebuilt copy, so reasoning is left out rather than written with
+    an empty one. DSH: no error flag on a tool result and no compaction-summary marker."""
+    fold: Counter[str] = Counter(rebuilt.folded)
+    parts = [p_ for t in rebuilt.turns for p_ in t.parts]
+    if to == "claude":
+        n = sum(1 for p_ in parts if p_.kind == "reasoning")
+        if n:
+            fold["reasoning (a thinking block needs a signature this copy cannot have)"] += n
+    if to == "dsh":
+        n = sum(1 for p_ in parts if p_.kind == "tool_result" and p_.is_error)
+        if n:
+            fold["tool-error flags (DSH has no slot for them)"] += n
+        n = sum(1 for t in rebuilt.turns if t.summary)
+        if n:
+            fold["compaction summaries carried as marked text"] += n
+    return Rebuilt(rebuilt.turns, fold, rebuilt.first_at, rebuilt.last_at,
+                   rebuilt.source_lines, rebuilt.stored_total)
+
+
 def _crush_parts(turn: Turn, at: int) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for p in turn.parts:
@@ -249,7 +314,8 @@ def _crush_parts(turn: Turn, at: int) -> list[dict[str, Any]]:
                 "provider_executed": False, "finished": True}})
         elif p.kind == "tool_result":
             out.append({"type": "tool_result", "data": {
-                "tool_call_id": p.call_id, "name": p.name, "content": p.text}})
+                "tool_call_id": p.call_id, "name": p.name, "content": p.text,
+                "is_error": p.is_error}})
     if turn.role == "assistant":
         calls = any(p.kind == "tool_call" for p in turn.parts)
         out.append({"type": "finish", "data": {
@@ -267,10 +333,12 @@ def write_crush(
     db = data_dir / "crush.db"
     _refuse_symlinks(data_dir, db)
     _refuse_session_store(workspace, data_dir, db)
-    data_dir.mkdir(parents=True, exist_ok=True)
+    _private_mkdir(data_dir)
     fresh = not db.exists()
     conn = sqlite3.connect(db)
     try:
+        if not fresh:
+            _check_crush_schema(conn)
         if fresh:
             conn.execute("PRAGMA journal_mode=WAL")
             for ddl in _CRUSH_SCHEMA:
@@ -297,6 +365,8 @@ def write_crush(
         conn.commit()
     finally:
         conn.close()
+    for f in db.parent.glob(db.name + "*"):   # crush.db and its -wal / -shm
+        f.chmod(0o600)
     return {"to": "crush", "session_id": sid, "path": str(db), "turns": len(rebuilt.turns) + 1,
             "folded": dict(rebuilt.folded)}
 
@@ -329,6 +399,24 @@ def _refuse_session_store(*paths: Path | str) -> None:
                 f"{path} resolves into it. Point it at a scratch directory")
 
 
+def _private_mkdir(path: Path) -> None:
+    """Create `path` and any missing parent with mode 0700. A rebuilt session is decrypted
+    conversation text, so no directory made for it is readable by anyone else. Directories
+    that already exist keep the mode they have."""
+    missing = [d for d in (path, *path.parents) if not d.exists()]
+    for d in reversed(missing):
+        d.mkdir(mode=0o700, exist_ok=True)
+        d.chmod(0o700)   # mkdir's mode is masked by the umask; this sets it exactly
+
+
+def _private_write(path: Path, text: str) -> None:
+    """Write `text` to a new file readable by its owner only (0600)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
+    path.chmod(0o600)
+
+
 def _refuse_symlinks(*paths: Path) -> None:
     """A path the writer is about to create or open must not be a symlink: a link is the one
     way a safe-looking `--into` can be made to land somewhere else."""
@@ -354,6 +442,7 @@ def write_claude(
     or organization stamp of any account. The first line is the import note. This is a copy
     made by osiris, claiming nobody's ownership; whether Claude Code will load it is the
     harness's own decision, and nothing here tries to influence that."""
+    rebuilt = _with_writer_folds(rebuilt, "claude")
     sid = str(uuid.uuid4())
     started = rebuilt.first_at or datetime.now(UTC)
     out: list[dict[str, Any]] = []
@@ -376,7 +465,8 @@ def write_claude(
                 **({"isCompactSummary": True} if t.summary else {}))
         elif t.role == "tool":
             emit("user", {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": p_.call_id, "content": p_.text}
+                {"type": "tool_result", "tool_use_id": p_.call_id, "content": p_.text,
+                 **({"is_error": True} if p_.is_error else {})}
                 for p_ in t.parts if p_.kind == "tool_result"]}, t.at)
         else:
             mid = "msg_osiris_" + uuid.uuid4().hex[:24]
@@ -384,7 +474,7 @@ def write_claude(
                 if p_.kind == "text":
                     block: dict[str, Any] = {"type": "text", "text": p_.text}
                 elif p_.kind == "reasoning":
-                    block = {"type": "thinking", "thinking": p_.text, "signature": ""}
+                    continue      # counted in the fold: it would need a signature
                 else:
                     try:
                         tool_input = json.loads(p_.input) if p_.input else {}
@@ -398,8 +488,8 @@ def write_claude(
     target = projects_dir / _slug(cwd) / f"{sid}.jsonl"
     _refuse_symlinks(target.parent, target)
     _refuse_session_store(projects_dir, target.parent, target)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("".join(json.dumps(d) + "\n" for d in out))
+    _private_mkdir(target.parent)
+    _private_write(target, "".join(json.dumps(d) + "\n" for d in out))
     return {"to": "claude", "session_id": sid, "path": str(target), "turns": len(rebuilt.turns) + 1,
             "lines": len(out), "folded": dict(rebuilt.folded)}
 
@@ -420,12 +510,11 @@ def write_dsh(
 
     from src.ingest.harness.dsh import _cwd_to_slug
 
-    fold: Counter[str] = Counter(rebuilt.folded)
+    counted = _with_writer_folds(rebuilt, "dsh")
+    fold = counted.folded
     reasoning = sum(1 for t in rebuilt.turns for p_ in t.parts if p_.kind == "reasoning")
     if reasoning:
         fold["reasoning carried as marked text"] += reasoning
-    counted = Rebuilt(rebuilt.turns, fold, rebuilt.first_at, rebuilt.last_at,
-                      rebuilt.source_lines, rebuilt.stored_total)
     sid = f"session-{uuid.uuid4()}"
     started = rebuilt.first_at or datetime.now(UTC)
     t_ms = int(started.timestamp() * 1000)
@@ -450,9 +539,11 @@ def write_dsh(
     for t in rebuilt.turns:
         if t.role == "user":
             turn, step = turn + 1, 0
+            body = "\n".join(p_.text for p_ in t.parts if p_.kind == "text")
             emit("user/message", t.at, {
-                "content": [{"type": "text", "text": "\n".join(
-                    p_.text for p_ in t.parts if p_.kind == "text")}],
+                "content": [{"type": "text", "text": (
+                    "[compaction summary of the earlier conversation] " + body
+                    if t.summary else body)}],
                 "source": {"kind": "user"}, "role": "user", "id": str(uuid.uuid4())})
         elif t.role == "assistant":
             step += 1
@@ -484,13 +575,14 @@ def write_dsh(
     # nothing behind in a real DSH home, never a half-made session DSH might list.
     parent = target_dir.parent
     made_parent = not parent.exists()
-    parent.mkdir(parents=True, exist_ok=True)
+    _private_mkdir(parent)
     work = Path(tempfile.mkdtemp(prefix=".partial-", dir=parent))
     try:
         plain = work / "session.jsonl"
-        plain.write_text("".join(json.dumps(e) + "\n" for e in events))
+        _private_write(plain, "".join(json.dumps(e) + "\n" for e in events))
         subprocess.run(["zstd", "-q", "--rm", "-f", str(plain), "-o", str(plain) + ".zstd"],
                        check=True, timeout=120)
+        Path(str(plain) + ".zstd").chmod(0o600)
         work.rename(target_dir)
     except BaseException:
         shutil.rmtree(work, ignore_errors=True)

@@ -5491,9 +5491,20 @@ async def cmd_rebuild_transcript(
     """osiris rebuild-transcript <anchor_sid> --to crush --into <workspace> - write a stored
     session (any harness, any account) as a NEW session in another harness's native format.
     The original is never touched and no owner or account stamp is written."""
+    import sqlite3
+    import subprocess
+
+    from cryptography.fernet import InvalidToken
+
     from src.ingest.rebuild import rebuild_session
+    from src.ingest.soul_crypto import SoulKeyMissing, SoulKeyRecoveryError
 
     if install:
+        if into:
+            print("osiris rebuild-transcript: --install places the session under "
+                  "~/.dsh/sessions itself, so it cannot be combined with --into. Use one "
+                  "or the other.", file=sys.stderr)
+            return 1
         if to != "dsh":
             print("osiris rebuild-transcript: --install is for --to dsh (it places the "
                   "session under ~/.dsh/sessions); crush joins the workspace you name with "
@@ -5528,6 +5539,28 @@ async def cmd_rebuild_transcript(
             pool, anchor_sid, to=to, into=into, title=title, cwd=cwd)
     except ValueError as exc:
         print(f"osiris rebuild-transcript: refused: {exc}", file=sys.stderr)
+        return 1
+    except (SoulKeyMissing, SoulKeyRecoveryError, InvalidToken) as exc:
+        print("osiris rebuild-transcript: the stored session could not be decrypted "
+              f"({type(exc).__name__}: {exc}). The soul key is missing or does not match "
+              "this store; nothing was written.", file=sys.stderr)
+        return 1
+    except sqlite3.DatabaseError as exc:
+        print(f"osiris rebuild-transcript: the Crush database could not be written "
+              f"({exc}). It may be locked by a running Crush, damaged, or from a version "
+              "this tool does not know; nothing was changed in it.", file=sys.stderr)
+        return 1
+    except subprocess.CalledProcessError as exc:
+        print(f"osiris rebuild-transcript: {Path(str(exc.cmd[0])).name} failed "
+              f"(exit {exc.returncode}); nothing was placed.", file=sys.stderr)
+        return 1
+    except FileNotFoundError as exc:
+        print(f"osiris rebuild-transcript: a file or program is missing: {exc.filename or exc} "
+              "(for --to dsh this is usually zstd; install it and try again); "
+              "nothing was placed.", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"osiris rebuild-transcript: could not write the copy: {exc}", file=sys.stderr)
         return 1
     finally:
         if owns_pool:

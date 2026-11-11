@@ -190,9 +190,12 @@ async def test_the_claude_file_reads_back_to_the_same_turns(
         (i, ln.encode()) for i, ln in enumerate(Path(out["path"]).read_text().splitlines()))
     assert [t.role for t in again.turns[1:]] == [t.role for t in original.turns]
     for a, b in zip(again.turns[1:], original.turns, strict=True):
+        # reasoning is the one thing not carried: a thinking block needs a provider signature
         assert [(p.kind, p.text, p.name, p.call_id) for p in a.parts] == [
-            (p.kind, p.text, p.name, p.call_id) for p in b.parts]
+            (p.kind, p.text, p.name, p.call_id) for p in b.parts if p.kind != "reasoning"]
         assert a.model == b.model
+    assert not any(p.kind == "reasoning" for t in again.turns for p in t.parts)
+    assert "reasoning (a thinking block needs a signature" in out["folded"].__repr__()
 
 
 async def test_the_claude_writer_refuses_the_real_session_store_and_needs_a_cwd(
@@ -326,6 +329,206 @@ async def test_a_failed_dsh_compress_leaves_nothing_in_the_dsh_home(
                                cwd="/var/tmp/osiris-scratch/replay")
     assert Path(ok["path"]).is_file()
     assert not [p for p in sessions.rglob("*") if p.name.startswith(".partial-")]
+
+
+async def test_install_with_an_into_is_refused_rather_than_ignoring_the_into(
+    actions: Any, tmp_path: Path, monkeypatch: Any, capsys: Any,
+) -> None:
+    from src.cli import cmd_rebuild_transcript
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    rc = await cmd_rebuild_transcript(
+        SID, to="dsh", into=str(tmp_path / "elsewhere"), cwd="/var/tmp/osiris-scratch/replay",
+        install=True, pool=actions.pool)
+    err = capsys.readouterr().err
+    assert rc == 1 and "cannot be combined with --into" in err
+    assert not (tmp_path / "home" / ".dsh").exists() and not (tmp_path / "elsewhere").exists()
+
+
+async def test_rebuilt_sessions_are_private_to_their_owner(
+    actions: Any, tmp_path: Path,
+) -> None:
+    """The output is decrypted conversation text: every file made is 0600 and every directory
+    made is 0700, whatever the umask. A directory that already existed keeps its mode."""
+    import os
+    import stat
+
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    old_umask = os.umask(0o022)
+    try:
+        existing = tmp_path / "existing"
+        existing.mkdir(mode=0o755)
+        existing.chmod(0o755)
+        cwd = "/var/tmp/osiris-scratch/replay"
+        made = []
+        r1 = await rebuild_session(actions.pool, SID, to="crush", into=existing / "ws")
+        made.append(Path(r1["path"]))
+        r2 = await rebuild_session(actions.pool, SID, to="claude", into=existing / "proj",
+                                   cwd=cwd)
+        made.append(Path(r2["path"]))
+        r3 = await rebuild_session(actions.pool, SID, to="dsh", into=existing / "dsh", cwd=cwd)
+        made.append(Path(r3["path"]))
+    finally:
+        os.umask(old_umask)
+
+    def mode(path: Path) -> int:
+        return stat.S_IMODE(path.stat().st_mode)
+
+    assert mode(existing) == 0o755
+    for f in made:
+        assert mode(f) == 0o600, f
+        d = f.parent
+        while d != existing:
+            assert mode(d) == 0o700, d
+            d = d.parent
+    for extra in (made[0].parent).glob("crush.db-*"):
+        assert mode(extra) == 0o600, extra
+
+
+async def test_tool_errors_summaries_and_unsigned_thinking_are_carried_or_counted(
+    actions: Any, tmp_path: Path,
+) -> None:
+    """A failed tool result keeps its error flag where the target has a slot (claude, crush) and
+    is counted where it has none (dsh). A thinking block is never written with an empty
+    signature (claude drops it and counts it). A compaction summary is marked in dsh, which has
+    no field for one, and counted."""
+    from src.ingest.harness.dsh import _decompress
+
+    lines = [
+        _u("Please run it."),
+        json.dumps({"type": "assistant", "timestamp": "2026-09-01T10:01:00.000Z", "message": {
+            "id": "msg_a", "model": "claude-opus-5", "content": [
+                {"type": "thinking", "thinking": "plan"},
+                {"type": "tool_use", "id": "toolu_e", "name": "Bash",
+                 "input": {"command": "false"}}]}}),
+        json.dumps({"type": "user", "timestamp": "2026-09-01T10:02:00.000Z", "message": {
+            "content": [{"type": "tool_result", "tool_use_id": "toolu_e", "is_error": True,
+                         "content": "exit 1"}]}}),
+        json.dumps({"type": "user", "isCompactSummary": True,
+                    "timestamp": "2026-09-01T10:03:00.000Z",
+                    "message": {"content": "Summary of what came before."}}),
+        _a([_text("Carrying on.")]),
+    ]
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", lines)
+    cwd = "/var/tmp/osiris-scratch/replay"
+
+    crush = await rebuild_session(actions.pool, SID, to="crush", into=tmp_path / "ws")
+    conn = sqlite3.connect(crush["path"])
+    results = [json.loads(r[0])[0]["data"] for r in conn.execute(
+        "SELECT parts FROM messages WHERE role='tool'")]
+    conn.close()
+    assert results == [{"tool_call_id": "toolu_e", "name": "Bash", "content": "exit 1",
+                        "is_error": True}]
+
+    cl = await rebuild_session(actions.pool, SID, to="claude", into=tmp_path / "p", cwd=cwd)
+    written = [json.loads(ln) for ln in Path(cl["path"]).read_text().splitlines()]
+    blocks = [b for d in written if isinstance(d["message"].get("content"), list)
+              for b in d["message"]["content"]]
+    assert not [b for b in blocks if b["type"] == "thinking"]
+    assert [b.get("is_error") for b in blocks if b["type"] == "tool_result"] == [True]
+    assert any(d.get("isCompactSummary") for d in written)
+    assert any("a thinking block needs a signature" in k for k in cl["folded"])
+
+    dsh = await rebuild_session(actions.pool, SID, to="dsh", into=tmp_path / "dsh", cwd=cwd)
+    events = [json.loads(ln) for ln in (_decompress(Path(dsh["path"])) or [])]
+    texts = [e["data"]["content"][0]["text"] for e in events if e["type"] == "user/message"]
+    assert any(t.startswith("[compaction summary of the earlier conversation] Summary")
+               for t in texts)
+    assert dsh["folded"]["compaction summaries carried as marked text"] == 1
+    assert dsh["folded"]["tool-error flags (DSH has no slot for them)"] == 1
+    assert "compaction summaries carried as marked text" in texts[0]    # the opening note says so
+
+
+async def test_the_cli_turns_known_failures_into_one_plain_line_each(
+    actions: Any, tmp_path: Path, monkeypatch: Any, capsys: Any,
+) -> None:
+    """A locked or damaged crush db, a missing or failing zstd, a missing soul key and a
+    permission error each print one plain line and return 1: never a traceback."""
+    import subprocess
+
+    from cryptography.fernet import InvalidToken
+    from src import cli
+    from src.ingest import rebuild
+    from src.ingest.soul_crypto import SoulKeyMissing
+
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+
+    def raising(exc: BaseException) -> Any:
+        async def boom(*a: Any, **k: Any) -> Any:
+            raise exc
+        return boom
+
+    cases = [
+        (sqlite3.OperationalError("database is locked"), "could not be written"),
+        (subprocess.CalledProcessError(1, ["zstd", "-q"]), "zstd failed (exit 1)"),
+        (FileNotFoundError(2, "No such file", "zstd"), "usually zstd"),
+        (SoulKeyMissing("no key"), "could not be decrypted"),
+        (InvalidToken(), "could not be decrypted"),
+        (PermissionError(13, "Permission denied"), "could not write the copy"),
+    ]
+    for exc, words in cases:
+        monkeypatch.setattr(rebuild, "rebuild_session", raising(exc))
+        rc = await cli.cmd_rebuild_transcript(
+            SID, to="crush", into=str(tmp_path / "ws"), pool=actions.pool)
+        err = capsys.readouterr().err
+        assert rc == 1 and words in err, (exc, err)
+        assert "Traceback" not in err and err.count("\n") == 1, err
+
+
+async def test_an_existing_crush_database_this_tool_does_not_understand_is_refused_untouched(
+    actions: Any, tmp_path: Path,
+) -> None:
+    import pytest
+
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+
+    def make(name: str, ddl: list[str]) -> Path:
+        ws = tmp_path / name
+        (ws / ".crush").mkdir(parents=True)
+        db = ws / ".crush" / "crush.db"
+        conn = sqlite3.connect(db)
+        for stmt in ddl:
+            conn.execute(stmt)
+        conn.commit()
+        conn.close()
+        return ws
+
+    sessions_ok = ("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, "
+                   "message_count INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, "
+                   "created_at INTEGER NOT NULL)")
+    messages_old = ("CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, "
+                    "role TEXT NOT NULL, parts TEXT NOT NULL, model TEXT, "
+                    "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+    cases = {
+        "empty": ([], "no sessions table"),
+        "older": ([sessions_ok, messages_old],
+                  "messages lacks column(s) finished_at, is_summary_message, provider"),
+        "newer": ([sessions_ok.replace("created_at INTEGER NOT NULL)",
+                                       "created_at INTEGER NOT NULL, owner TEXT NOT NULL)"),
+                   messages_old.replace(
+                       "updated_at INTEGER NOT NULL)",
+                       "updated_at INTEGER NOT NULL, finished_at INTEGER, provider TEXT, "
+                       "is_summary_message INTEGER DEFAULT 0 NOT NULL)")],
+                  "sessions requires column(s) owner"),
+    }
+    for name, (ddl, words) in cases.items():
+        ws = make(name, ddl)
+        before = (ws / ".crush" / "crush.db").read_bytes()
+        with pytest.raises(ValueError, match="not one this tool can add to") as err:
+            await rebuild_session(actions.pool, SID, to="crush", into=ws)
+        assert words in str(err.value), (name, str(err.value))
+        assert (ws / ".crush" / "crush.db").read_bytes() == before     # untouched
+
+    # a database this tool itself made still takes a second session
+    ws = tmp_path / "mine"
+    await rebuild_session(actions.pool, SID, to="crush", into=ws)
+    await rebuild_session(actions.pool, SID, to="crush", into=ws)
 
 
 # --- the dsh writer: tmp dirs only ----------------------------------------------------------
