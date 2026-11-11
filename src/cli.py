@@ -1485,7 +1485,8 @@ async def _resolve_and_guard_launch(
     # body by construction) AND agent_mounts (osiris's own registry, which a resumed
     # body's mid-turn mount() call DOES reach), same helper launch_seat's own
     # harness-native lane calls, so the two entry points can never drift.
-    twin = await _launch_twin_check(pool, agents_json, launch_cwd, seat_id=facts["seat_id"])
+    twin = await _launch_twin_check(pool, agents_json, launch_cwd, seat_id=facts["seat_id"],
+                                    handle=handle)
     if twin["harness"] or twin["mounts"]:
         seen_via = [s for s in (
             f"claude agents --json ({twin['harness'].get('name')!r})"
@@ -1506,9 +1507,21 @@ async def _resolve_and_guard_launch(
         # know) goes to stderr so `osiris launch X | ...` stays clean; the VERDICT stays
         # on stdout, and now names which of the two things happened.
         print(voice.already_running(verb, handle))
+        if not twin["roster_ok"]:
+            print(f"osiris {verb}: the claude agents list could not be read, so this went "
+                  "by osiris's own record of the session.", file=sys.stderr)
         if verbose:
             print(f"osiris {verb}: seen via {', '.join(seen_via)}", file=sys.stderr)
         return 0
+    if not twin["roster_ok"]:
+        print(f"osiris {verb}: the claude agents list could not be read, so a running body "
+              f"for {handle} cannot be ruled out. Nothing started; try again.",
+              file=sys.stderr)
+        return 1
+    if twin["ghost_mount"] is not None and verbose:
+        print(f"osiris {verb}: ignoring a mount record for {handle} "
+              f"({twin['ghost_mount']['agent_id']}): the claude agents list shows no body "
+              "and no process is running there", file=sys.stderr)
     if twin["stale_harness_row"] is not None and verbose:
         # A DEAD ROW THE TWIN GUARD SAW AND IGNORED: `claude agents --json` still lists
         # this seat's OLD body (failed state, dead pid), never trusted as a twin, but
@@ -1624,6 +1637,8 @@ async def _cmd_launch_harness(
     status = out.get("status")
     if status == "already-live":
         print(voice.already_running("launch", handle))
+        if fresh:
+            print("osiris launch: --fresh was ignored, a body is already running.")
         seen_via = out.get("seen_via")
         if seen_via and verbose:
             print(f"osiris launch: seen via {', '.join(seen_via)}", file=sys.stderr)
@@ -1791,9 +1806,9 @@ async def cmd_launch(
     `pool`/`manager`/`wake_default`/`spawn`/`agents_json` are all injectable (mirrors
     launch_seat's own test seam); production callers (main()) leave them at their real
     defaults. For continuing a seat's last session instead, see `cmd_resume`."""
-    from src.orchestrator.trigger import _claude_agents_json, _spawn_claude_bg
+    from src.orchestrator.trigger import _claude_agents_json_strict, _spawn_claude_bg
     spawn = spawn or _spawn_claude_bg
-    agents_json = agents_json or _claude_agents_json
+    agents_json = agents_json or _claude_agents_json_strict
 
     owns_pool = pool is None
     if pool is None:
@@ -1806,7 +1821,7 @@ async def cmd_launch(
         wake_default = settings.osiris_wake_model
         try:
             pool = await create_pool(
-                settings.database_url, min_size=1, max_size=2,
+                settings.database_url, min_size=1, max_size=3,
                 application_name="osiris-cli:launch")
         except Exception as exc:  # noqa: BLE001
             print(f"osiris launch: could not reach postgres at {settings.database_url}: "
@@ -1816,12 +1831,18 @@ async def cmd_launch(
         if debug:
             return await _cmd_launch_pty(handle, model=model, pool=pool, manager=manager,
                                          wake_default=wake_default)
-        return await _cmd_launch_harness(handle, model=model, pool=pool,
-                                         wake_default=wake_default, spawn=spawn,
-                                         agents_json=agents_json, verbose=verbose,
-                                         fresh=fresh, settings=settings,
-                                         resume_spawn=resume_spawn,
-                                         clear_stale_record=clear_stale_record)
+        from src.orchestrator.trigger import SpawnInProgress, seat_spawn_lock
+        try:
+            async with seat_spawn_lock(pool, handle):
+                return await _cmd_launch_harness(
+                    handle, model=model, pool=pool, wake_default=wake_default, spawn=spawn,
+                    agents_json=agents_json, verbose=verbose, fresh=fresh,
+                    settings=settings, resume_spawn=resume_spawn,
+                    clear_stale_record=clear_stale_record)
+        except SpawnInProgress:
+            print(f"osiris launch: another launch or resume of {handle} is still starting. "
+                  "Nothing started; try again in a minute.", file=sys.stderr)
+            return 1
     finally:
         if owns_pool:
             await pool.close()
@@ -2010,8 +2031,8 @@ async def cmd_resume(
     `pool`/`agents_json`/`resume_spawn`/`settings` are all injectable (mirrors
     `cmd_launch`'s own test seam); production callers (main()) leave them at their real
     defaults."""
-    from src.orchestrator.trigger import _claude_agents_json, _spawn_claude_bg
-    agents_json = agents_json or _claude_agents_json
+    from src.orchestrator.trigger import _claude_agents_json_strict, _spawn_claude_bg
+    agents_json = agents_json or _claude_agents_json_strict
     resume_spawn = resume_spawn or _spawn_claude_bg
 
     owns_pool = pool is None
@@ -2025,17 +2046,24 @@ async def cmd_resume(
         wake_default = settings.osiris_wake_model
         try:
             pool = await create_pool(
-                settings.database_url, min_size=1, max_size=2,
+                settings.database_url, min_size=1, max_size=3,
                 application_name="osiris-cli:resume")
         except Exception as exc:  # noqa: BLE001
             print(f"osiris resume: could not reach postgres at {settings.database_url}: "
                   f"{exc}.", file=sys.stderr)
             return 1
     try:
-        return await _cmd_resume_harness(handle, model=model, pool=pool,
-                                         wake_default=wake_default, agents_json=agents_json,
-                                         resume_spawn=resume_spawn, settings=settings,
-                                         launch_spawn=launch_spawn, verbose=verbose)
+        from src.orchestrator.trigger import SpawnInProgress, seat_spawn_lock
+        try:
+            async with seat_spawn_lock(pool, handle):
+                return await _cmd_resume_harness(
+                    handle, model=model, pool=pool, wake_default=wake_default,
+                    agents_json=agents_json, resume_spawn=resume_spawn, settings=settings,
+                    launch_spawn=launch_spawn, verbose=verbose)
+        except SpawnInProgress:
+            print(f"osiris resume: another launch or resume of {handle} is still starting. "
+                  "Nothing started; try again in a minute.", file=sys.stderr)
+            return 1
     finally:
         if owns_pool:
             await pool.close()
@@ -2082,6 +2110,11 @@ async def cmd_stop(handle: str, *, reason: str = "", as_json: bool = False,
             await pool.close()
 
     render.emit(out, as_json=as_json, title=f"stop · {handle}")
+    for b in out.get("stopped_bodies") or []:
+        print(f"osiris stop: stopped {b['name']!r} ({b['id']}, pid {b['pid']}).")
+    if out.get("list_unreadable"):
+        print("osiris stop: the claude agents list could not be read; a body may still "
+              "be running.", file=sys.stderr)
     # EXIT CODE CARRIES THE VERDICT so a script can branch on it. `no-live-body` is exit 0
     # ON PURPOSE: "there is nothing running there" is a SUCCESSFUL outcome for anyone
     # cleaning up. A teardown loop must not treat an already-dead body as a failure, or

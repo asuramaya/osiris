@@ -1196,7 +1196,7 @@ async def test_cmd_resume_refuses_an_already_live_seat_same_occupancy_gate_as_la
 
 
 async def test_cmd_launch_harness_catches_a_resumed_body_the_harness_roster_cannot_see(
-    actions: Actions, tmp_path: Path,
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Task #148's contested seam 4, the CLI's own copy of the same shared bug: `claude
     agents --json` is invisible to a resumed (`-p --resume`) body by construction, so an
@@ -1204,10 +1204,13 @@ async def test_cmd_launch_harness_catches_a_resumed_body_the_harness_roster_cann
     session at this exact cwd, reachable only via agent_mounts. Shares launch_seat's own
     _launch_twin_check now (two doors, one receipt), never a second,
     differently-shaped guard on the same class."""
+    from src.orchestrator import census
     from src.orchestrator.mounts import save_mount
 
     office = tmp_path / "resumed-cli"
     office.mkdir()
+    # a resumed body is a real process sitting in its directory
+    monkeypatch.setattr(census, "live_bodies_by_cwd", lambda: {str(office): [4242]})
     await ensure_seat(actions, house="osiris", handle="resumed-cli",
                       anchor_cwd=str(office), source="test")
     await save_mount(actions.pool, job_dir="/tmp/jobs/resumed-cli-job",

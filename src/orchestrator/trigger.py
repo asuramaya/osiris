@@ -22,6 +22,7 @@ import os
 import re
 import tempfile
 import time
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -3724,9 +3725,17 @@ async def _harness_row_seat(pool: asyncpg.Pool, row: dict[str, Any]) -> str | No
     return str(held["seat_id"]) if held and held.get("seat_id") else None
 
 
+def _row_names_handle(row: dict[str, Any], handle: str | None) -> bool:
+    """A harness roster row's window name is `[<tag>] <handle>`: true when it names `handle`."""
+    if not handle:
+        return False
+    name = str(row.get("name") or "")
+    return name == handle or name.endswith("] " + handle)
+
+
 async def _launch_twin_check(
     pool: asyncpg.Pool, agents_json: Any, launch_cwd: str, *, seat_id: str | None = None,
-    read_cmdline: Any = None,
+    read_cmdline: Any = None, handle: str | None = None, live_by_cwd: Any = None,
 ) -> dict[str, Any]:
     """The shared duplicate-session guard, reused by both launch entry points: the
     harness-native launch lane's own idempotency check used to consult only
@@ -3789,14 +3798,20 @@ async def _launch_twin_check(
     check a hit against."""
     from src.orchestrator.mounts import is_live
 
+    roster_ok = True
     try:
-        roster = await agents_json(cwd=launch_cwd)
+        roster = await agents_json(cwd=None)
     except (OSError, TimeoutError, ValueError):
         roster = []
+        roster_ok = False
     stale_harness_row: dict[str, Any] | None = None
     other_seat_rows: list[dict[str, Any]] = []
     from_harness: dict[str, Any] | None = None
-    cwd_rows = [r for r in roster if isinstance(r, dict) and r.get("cwd") == launch_cwd]
+    # A body is listed for this seat by cwd OR by its own window name: a body whose cwd
+    # moved is still this seat's, and "never launch over a listed body" cannot depend on
+    # which of the two a roster row happens to agree on.
+    cwd_rows = [r for r in roster if isinstance(r, dict)
+                and (r.get("cwd") == launch_cwd or _row_names_handle(r, handle))]
     for row in cwd_rows:
         if not _harness_row_is_live(row, read_cmdline=read_cmdline):
             if stale_harness_row is None:
@@ -3875,8 +3890,29 @@ async def _launch_twin_check(
                 from_mounts = {"agent_id": lineage_row["agent_id"],
                                "last_seen": lineage_row["last_seen"].isoformat(),
                                "cwd": lineage_row["cwd"]}
+    # A MOUNT RECORD WITH NOTHING BEHIND IT: when the roster was read and shows no body for
+    # this seat, a mount that is merely "recent" is a ghost if no OS process backs its
+    # directory (a body stopped from the harness leaves its mount row looking live for the
+    # whole liveness window). A body the roster cannot show (a resumed non-bg session) still
+    # has a process in its directory, so it still counts. A roster that could not be read,
+    # or a process census that could not be, keeps the mount verdict exactly as it was.
+    ghost_mount: dict[str, Any] | None = None
+    if roster_ok and from_harness is None and from_mounts is not None:
+        from src.orchestrator import census
+
+        row_cwd = str(from_mounts.get("cwd") or launch_cwd)
+
+        def _backed() -> bool | None:
+            by_cwd = (live_by_cwd or census.live_bodies_by_cwd)()
+            if by_cwd is None:
+                return None
+            return row_cwd in by_cwd or os.path.realpath(row_cwd) in by_cwd
+
+        if await asyncio.to_thread(_backed) is False:
+            ghost_mount, from_mounts = from_mounts, None
     return {"harness": from_harness, "mounts": from_mounts,
-            "stale_harness_row": stale_harness_row, "other_seat_rows": other_seat_rows}
+            "stale_harness_row": stale_harness_row, "other_seat_rows": other_seat_rows,
+            "roster_ok": roster_ok, "ghost_mount": ghost_mount}
 
 
 async def _launch_target_setup(
@@ -4241,7 +4277,7 @@ async def launch_seat(
         # at tree_cwd, and matching on `office` alone would never find it, duplicating on
         # relaunch.
         twin = await _launch_twin_check(pool, agents_json, launch_cwd, seat_id=target_seat,
-                                        read_cmdline=read_cmdline)
+                                        read_cmdline=read_cmdline, handle=handle)
         stale_harness_row = twin.get("stale_harness_row")
         other_seat_rows = twin.get("other_seat_rows") or []
         if twin["harness"] or twin["mounts"]:
@@ -4257,6 +4293,12 @@ async def launch_seat(
                     "seen_via": seen_via,
                     "detail": f"a live body already holds {handle}: not minting a duplicate "
                               f"(seen via {', '.join(seen_via)})"}
+
+        if not twin.get("roster_ok", True):
+            return {"status": "refused-harness-list-unreadable", "seat": target_seat,
+                    "detail": "the claude agents list could not be read, so a body already "
+                              "running for this seat cannot be ruled out: not launching "
+                              "over a body that might be listed. Try again."}
 
         # The spend gap, see the pty lane's own comment on this same check, above. Same
         # gate, same placement (after idempotency, before the real spawn), the other
@@ -4831,35 +4873,53 @@ async def _stop_orphan_harness_body(
         pool, facts.get("house"), facts.get("handle"),
         await _governed_project_name(pool, target_seat))
     seat_cwds = {c for c in (facts.get("tree_cwd"), facts.get("anchor_cwd")) if c}
-    read_roster = agents_json or _claude_agents_json
+    read_roster = agents_json or _claude_agents_json_strict
     try:
         roster = await read_roster()
     except (OSError, TimeoutError, ValueError):
-        roster = []
-    orphan = next(
-        (r for r in roster if isinstance(r, dict) and r.get("name") == expected_name
-         and r.get("cwd") in seat_cwds
-         and _harness_row_is_live(r, read_cmdline=read_cmdline)), None)
-    if orphan is None:
+        return {"status": "no-live-body", "seat": target_seat, "list_unreadable": True,
+                "detail": "the claude agents list could not be read, so this cannot say "
+                          "no body is running: try again"}
+    # Every live row this seat owns, by name at its own cwd, or by owner at its own cwd.
+    # A name or cwd alone is not enough to kill someone else's process: a cwd can be shared
+    # and a name can collide across houses.
+    owned: list[dict[str, Any]] = []
+    for r in roster:
+        if not isinstance(r, dict) or r.get("cwd") not in seat_cwds:
+            continue
+        if not _harness_row_is_live(r, read_cmdline=read_cmdline):
+            continue
+        if r.get("name") == expected_name or await _harness_row_seat(pool, r) == target_seat:
+            owned.append(r)
+    if not owned:
         return {"status": "no-live-body", "seat": target_seat,
-                "detail": "the seat has no current holder: nothing to stop"}
-    pid = orphan.get("pid")
-    if pid is None:
+                "detail": "the claude agents list shows no body for this seat"}
+    stopped: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    for row in owned:
+        try:
+            pid_int = int(row.get("pid") or "x")
+        except (TypeError, ValueError):
+            skipped.append(f"{row.get('name')!r} ({row.get('id')}): no usable pid, not "
+                           "killed")
+            continue
+        await kill(pid_int, row.get("id"))
+        stopped.append({"id": row.get("id"), "name": row.get("name"), "pid": pid_int,
+                        "session": row.get("sessionId")})
+    if not stopped:
         return {"status": "no-live-body", "seat": target_seat,
-                "detail": f"a harness row named {expected_name!r} matches this seat's own "
-                          "cwd but carries no pid: nothing safe to kill"}
-    try:
-        pid_int = int(pid)
-    except (TypeError, ValueError):
-        return {"status": "no-live-body", "seat": target_seat,
-                "detail": f"a harness row named {expected_name!r} carries a non-integer "
-                          f"pid ({pid!r}): refusing to guess what to kill"}
-    await kill(pid_int, orphan.get("id"))
+                "detail": "; ".join(skipped) or "nothing safe to stop"}
+    from src.orchestrator.mounts import suspend_mounts_for_agents
+
+    released = await suspend_mounts_for_agents(
+        pool, [f"agent:{str(b['session'])[:8]}" for b in stopped if b.get("session")])
+    named = ", ".join(f"{b['name']!r} ({b['id']}, pid {b['pid']})" for b in stopped)
     return {"status": "stopped", "seat": target_seat, "orphan": True,
-            "window": orphan.get("name"), "pid": pid_int,
-            "detail": f"killed an orphan body ({expected_name!r}, pid {pid_int}) the "
-                      "graph never bound a holder for: unaddressable via the graph's "
-                      "own holder path until now"}
+            "window": stopped[0]["name"], "pid": stopped[0]["pid"],
+            "stopped_bodies": stopped, "released_mounts": released,
+            "detail": f"stopped {len(stopped)} body(ies) the claude agents list showed for "
+                      f"this seat: {named}" + (f"; skipped {'; '.join(skipped)}"
+                                                if skipped else "")}
 
 
 async def stop_seat(
@@ -5015,9 +5075,20 @@ async def stop_seat(
     pid = match.get("pid") if match else None
     job_dir_key = match.get("job_dir_key") if match else None
     if not isinstance(pid, int):
+        # The graph's own holder has no matching process, but the harness list may still
+        # show bodies for this seat (a body mounts under its session's own identity, not
+        # the seat holder's). Stop what the list shows.
+        listed = await _stop_orphan_harness_body(
+            pool, target_seat=target_seat, kill=kill, agents_json=agents_json,
+            read_cmdline=read_cmdline)
+        if listed.get("status") == "stopped":
+            return {**listed, "holder": holder}
+        detail = (f"{holder} carries no harness/proc-confirmed live body right "
+                  "now: nothing to signal (already dead, or never really live)")
+        if listed.get("list_unreadable"):
+            detail += ". " + str(listed["detail"])
         return {"status": "no-live-body", "seat": target_seat, "holder": holder,
-                "detail": f"{holder} carries no harness/proc-confirmed live body right "
-                          "now: nothing to signal (already dead, or never really live)"}
+                "detail": detail}
     # The session anchor, before the kill: a plain SIGTERM used to leave no graph
     # session property for a clean-lineage holder. register_agent's own birth-time
     # write (agents.py) skips the `session` assert on a `--bg` seat's first-ever
@@ -5510,13 +5581,58 @@ async def _spawn_claude_bg(
     return found.group(1) if found else None
 
 
+class SpawnInProgress(RuntimeError):
+    """Another launch or resume for the same seat holds the spawn lock."""
+
+
+@contextlib.asynccontextmanager
+async def seat_spawn_lock(
+    pool: asyncpg.Pool, handle: str, *, wait: float = 45.0,
+) -> AsyncIterator[None]:
+    """One launch or resume per seat at a time, across processes: a Postgres advisory lock
+    held on its own connection from before the twin check until the new body shows in the
+    roster (or the call gives up). Two launches seconds apart used to both read "no body"
+    because the first body had not been listed yet. Waits up to `wait` seconds, then raises
+    `SpawnInProgress`. The lock dies with its connection, so a crashed launch never leaves
+    it held."""
+    key = f"osiris:spawn:{handle}"
+    conn = await pool.acquire()
+    held = False
+    try:
+        deadline = time.monotonic() + wait
+        while True:
+            held = bool(await conn.fetchval(
+                "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", key))
+            if held:
+                break
+            if time.monotonic() >= deadline:
+                raise SpawnInProgress(handle)
+            await asyncio.sleep(0.25)
+        yield
+    finally:
+        try:
+            if held:
+                await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", key)
+        finally:
+            await pool.release(conn)
+
+
+class HarnessListUnreadable(OSError):
+    """`claude agents --json` did not run or did not parse. Distinct from an empty list: an
+    empty list is an answer ("no body"), this is the lack of one."""
+
+
 async def _claude_agents_json(
-    *, cwd: str | None = None, include_completed: bool = False,
+    *, cwd: str | None = None, include_completed: bool = False, strict: bool = False,
 ) -> list[dict[str, Any]]:
     """`claude agents --json`: the harness's own front-end view (a body this cannot
     show is an orphan by definition). Fails open to `[]` on any error, the same
     discipline `_manager_windows` uses: a status read must never break a caller that
-    only wants a roster."""
+    only wants a roster.
+
+    `strict=True` is for the callers that DECIDE something from an empty answer (launch,
+    resume, stop): a spawn failure, a timeout, a non-zero exit or unparseable output raises
+    `HarnessListUnreadable` instead of reading as "no body"."""
     cmd = ["claude", "agents", "--json"]
     if cwd:
         cmd += ["--cwd", cwd]
@@ -5525,14 +5641,30 @@ async def _claude_agents_json(
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        out, _ = await proc.communicate()
-    except OSError:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=20.0 if strict else None)
+    except TimeoutError as exc:
+        if strict:
+            raise HarnessListUnreadable("claude agents --json timed out") from exc
         return []
+    except OSError as exc:
+        if strict:
+            raise HarnessListUnreadable(f"claude agents --json did not run: {exc}") from exc
+        return []
+    if strict and proc.returncode not in (0, None):
+        raise HarnessListUnreadable(f"claude agents --json exited {proc.returncode}")
     try:
         rows = json.loads(out.decode() or "[]")
-    except ValueError:
+    except ValueError as exc:
+        if strict:
+            raise HarnessListUnreadable("claude agents --json output did not parse") from exc
         return []
     return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+async def _claude_agents_json_strict(
+    *, cwd: str | None = None, include_completed: bool = False,
+) -> list[dict[str, Any]]:
+    return await _claude_agents_json(cwd=cwd, include_completed=include_completed, strict=True)
 
 
 async def _bg_session_cost(
