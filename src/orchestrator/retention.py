@@ -19,6 +19,7 @@ default, it is required explicit opt-in every time; there is no environment-vari
 just because nobody bothered to unset a flag."""
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -33,11 +34,16 @@ PauseCheck = Callable[[], Awaitable[str | None]]
 # default said 30, so the table kept three times what was meant and nothing looked wrong.
 OUTBOX_RETENTION_DAYS = 30
 
-# outbox: only PUBLISHED rows are eligible, an unpublished row (published_at IS NULL) is
-# still awaiting the worker's own drain and must never be touched, no matter its age (a
-# stuck/lagging worker is a SEPARATE alarm, reap_stale_runs's own class of problem, not
+# outbox: a row is eligible once it is older than the window AND the worker is done with it:
+# published, or CLAIMED. The drain claims a batch up front and publishes row by row, so a
+# worker restarted mid-batch leaves claimed rows that never publish, and the drain's own
+# claim predicate (`claimed_at IS NULL`) means nothing will ever pick them up again (543 of
+# them sat in the live table, the oldest 93 days old). A row that is neither published nor
+# claimed is still awaiting the worker's drain and must never be touched, no matter its age
+# (a stuck/lagging worker is a SEPARATE alarm, reap_stale_runs's own class of problem, not
 # a reason for retention to quietly erase the backlog it should be flagged for instead).
-_OUTBOX_ELIGIBLE = "published_at IS NOT NULL AND created_at < $1"
+_OUTBOX_ELIGIBLE = ("(published_at IS NOT NULL OR claimed_at IS NOT NULL) "
+                    "AND created_at < $1")
 # audit_log has no publish/consume state: pure age-based retention.
 _AUDIT_ELIGIBLE = "created_at < $1"
 
@@ -67,10 +73,17 @@ async def _dry_run(pool: asyncpg.Pool, table: str, where: str, days: int) -> dic
 
 async def _apply(
     pool: asyncpg.Pool, table: str, where: str, days: int, batch_size: int,
+    max_seconds: float | None = None,
 ) -> dict[str, Any]:
+    """Delete eligible rows in id-ordered batches, each its own short statement. With
+    `max_seconds` the run stops between batches once that time is spent, and the result's
+    `finished` says whether it ran dry (the next run simply continues): one tick never
+    holds the table for longer than its budget, however large a backlog it meets."""
     _guard_table(table)
     cutoff = datetime.now(UTC) - timedelta(days=days)
+    started = time.monotonic()
     deleted = 0
+    finished = True
     while True:
         n = await pool.execute(
             f"DELETE FROM {table} WHERE id IN "
@@ -82,25 +95,30 @@ async def _apply(
         deleted += n_deleted
         if n_deleted < batch_size:
             break
+        if max_seconds is not None and time.monotonic() - started >= max_seconds:
+            finished = False
+            break
     return {"table": table, "days": days, "cutoff": cutoff.isoformat(),
-           "deleted": deleted, "executed": True}
+           "deleted": deleted, "executed": True, "finished": finished}
 
 
 async def outbox_retention(
     pool: asyncpg.Pool, *, days: int = OUTBOX_RETENTION_DAYS, execute: bool = False,
-    batch_size: int = 5000,
+    batch_size: int = 5000, max_seconds: float | None = None,
 ) -> dict[str, Any]:
-    """PUBLISHED outbox rows older than `days`, 30 is a generous replay/debug window for
-    events the worker has already durably delivered; an unpublished row is NEVER eligible
-    regardless of age. `execute=False` (the default) only counts; `execute=True` deletes
-    in batches of `batch_size`, looping until a batch comes back short (nothing left)."""
+    """Outbox rows older than `days` that the worker is done with (published, or claimed
+    and abandoned by a restart), 30 is a generous replay/debug window for events the worker
+    has already durably delivered; a row nobody has claimed is NEVER eligible regardless of
+    age. `execute=False` (the default) only counts; `execute=True` deletes in batches of
+    `batch_size` until a batch comes back short (nothing left) or `max_seconds` is spent."""
     if execute:
-        return await _apply(pool, "outbox", _OUTBOX_ELIGIBLE, days, batch_size)
+        return await _apply(pool, "outbox", _OUTBOX_ELIGIBLE, days, batch_size, max_seconds)
     return await _dry_run(pool, "outbox", _OUTBOX_ELIGIBLE, days)
 
 
 async def audit_log_retention(
     pool: asyncpg.Pool, *, days: int = 90, execute: bool = False, batch_size: int = 5000,
+    max_seconds: float | None = None,
 ) -> dict[str, Any]:
     """audit_log rows older than `days`, 90 matches the telemetry search_log precedent
     (compositions.py:512) and stays generous enough for the rare forensic case
@@ -108,7 +126,7 @@ async def audit_log_retention(
     ample for a drop anyone would still want to reverse). `execute=False` (the default)
     only counts; `execute=True` deletes in batches of `batch_size`."""
     if execute:
-        return await _apply(pool, "audit_log", _AUDIT_ELIGIBLE, days, batch_size)
+        return await _apply(pool, "audit_log", _AUDIT_ELIGIBLE, days, batch_size, max_seconds)
     return await _dry_run(pool, "audit_log", _AUDIT_ELIGIBLE, days)
 
 
@@ -163,7 +181,6 @@ async def assert_property_audit_retirement(
     continues from where the table now stands).
     `pause_check`, when given, is asked before every batch and returns a reason to stop (the
     disk/WAL brake); the result then carries it as `paused`."""
-    import time
 
     if not execute:
         cap = batch_size * 20
@@ -224,7 +241,6 @@ async def retire_layout_history(
     deletes, stopping between windows once `max_seconds` is spent (`finished` says whether
     the whole id range was covered; a later run continues, and rows already gone cost
     nothing to skip)."""
-    import time
 
     high = await pool.fetchval("SELECT max(id) FROM assertions_hot") or 0
     where = (
