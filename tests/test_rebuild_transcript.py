@@ -210,6 +210,124 @@ async def test_the_claude_writer_refuses_the_real_session_store_and_needs_a_cwd(
         await rebuild_session(actions.pool, SID, to="claude", into=tmp_path / "p")
 
 
+async def test_no_target_may_write_into_claude_codes_session_store_by_any_route(
+    actions: Any, tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """The store guard covers every target, a sub-directory of the store, and symlinks that
+    lead into it: the store is never written, whichever way the path is spelled."""
+    import pytest
+
+    home = tmp_path / "home"
+    store = home / ".claude" / "projects"
+    store.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    cwd = "/var/tmp/osiris-scratch/replay"
+    sub = store / "-some-slug"
+    sub.mkdir()
+    for to, into in (("claude", sub), ("crush", store), ("crush", sub), ("dsh", store),
+                     ("dsh", sub)):
+        with pytest.raises(ValueError, match="held until the operator allows it"):
+            await rebuild_session(actions.pool, SID, to=to, into=into, cwd=cwd)
+    # a scratch workspace whose .crush is a link into the store
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".crush").symlink_to(sub)
+    with pytest.raises(ValueError, match="symlink"):
+        await rebuild_session(actions.pool, SID, to="crush", into=work)
+    # a scratch workspace whose .crush is real but whose crush.db is a link into the store
+    work2 = tmp_path / "work2"
+    (work2 / ".crush").mkdir(parents=True)
+    (work2 / ".crush" / "crush.db").symlink_to(sub / "crush.db")
+    with pytest.raises(ValueError, match="symlink"):
+        await rebuild_session(actions.pool, SID, to="crush", into=work2)
+    # a claude projects dir (scratch) whose slug directory is a link into the store
+    scratch = tmp_path / "scratch-projects"
+    scratch.mkdir()
+    from src.ingest.rebuild import _slug
+
+    (scratch / _slug(cwd)).symlink_to(sub)
+    with pytest.raises(ValueError, match="symlink"):
+        await rebuild_session(actions.pool, SID, to="claude", into=scratch, cwd=cwd)
+    # the same for a dsh slug directory
+    sessions = tmp_path / "dsh-sessions"
+    sessions.mkdir()
+    from src.ingest.harness.dsh import _cwd_to_slug
+
+    (sessions / _cwd_to_slug(cwd)).symlink_to(sub)
+    with pytest.raises(ValueError, match="symlink"):
+        await rebuild_session(actions.pool, SID, to="dsh", into=sessions, cwd=cwd)
+    assert not list(store.rglob("*.jsonl")) and not list(store.rglob("*.db"))
+    assert not list(store.rglob("session.jsonl*"))
+
+
+async def test_a_broken_stored_chain_is_reported_as_truncated_never_as_complete(
+    actions: Any, tmp_path: Path, capsys: Any,
+) -> None:
+    """`stream_lines` ends at the last verified line when the chain breaks. The rebuild must
+    say so: "truncated at line N of M" in the receipt, the opening note and the CLI output."""
+    from src.cli import cmd_rebuild_transcript
+
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    whole = await rebuild_session(actions.pool, SID, to="crush", into=tmp_path / "whole")
+    assert whole["truncated"] is None
+    total = await actions.pool.fetchval(
+        "SELECT last_line_idx FROM soul_sessions WHERE harness='claude-code' AND anchor_sid=$1",
+        SID)
+    await actions.pool.execute(
+        "DELETE FROM soul_lines WHERE harness='claude-code' AND anchor_sid=$1 AND line_idx=5",
+        SID)
+    cut = await rebuild_session(actions.pool, SID, to="crush", into=tmp_path / "cut")
+    assert cut["truncated"] == f"stored chain broke at line 5 of {total}"
+    conn = sqlite3.connect(tmp_path / "cut" / ".crush" / "crush.db")
+    first = conn.execute("SELECT parts FROM messages ORDER BY rowid LIMIT 1").fetchone()[0]
+    conn.close()
+    assert f"TRUNCATED: the stored chain broke at line 5 of {total}" in first
+    assert "TRUNCATED" not in sqlite3.connect(tmp_path / "whole" / ".crush" / "crush.db").execute(
+        "SELECT parts FROM messages ORDER BY rowid LIMIT 1").fetchone()[0]
+    rc = await cmd_rebuild_transcript(SID, to="crush", into=str(tmp_path / "cut2"),
+                                      pool=actions.pool)
+    assert rc == 0
+    assert f"this copy is incomplete: the stored chain broke at line 5 of {total}" in (
+        capsys.readouterr().out)
+
+
+async def test_a_failed_dsh_compress_leaves_nothing_in_the_dsh_home(
+    actions: Any, tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """zstd missing or failing must not leave a half-made session where DSH looks: the
+    session is built in a scratch directory and renamed into place only when whole."""
+    import subprocess
+
+    import pytest
+
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    sessions = tmp_path / "dsh-sessions"
+    sessions.mkdir()
+    real_run = subprocess.run
+
+    def missing(*a: Any, **k: Any) -> Any:
+        raise FileNotFoundError("zstd")
+
+    def failing(*a: Any, **k: Any) -> Any:
+        raise subprocess.CalledProcessError(1, "zstd")
+
+    for boom, exc in ((missing, FileNotFoundError), (failing, subprocess.CalledProcessError)):
+        monkeypatch.setattr(subprocess, "run", boom)
+        with pytest.raises(exc):
+            await rebuild_session(actions.pool, SID, to="dsh", into=sessions,
+                                  cwd="/var/tmp/osiris-scratch/replay")
+        assert list(sessions.rglob("*")) == [], "a failed compress left files behind"
+    monkeypatch.setattr(subprocess, "run", real_run)
+    ok = await rebuild_session(actions.pool, SID, to="dsh", into=sessions,
+                               cwd="/var/tmp/osiris-scratch/replay")
+    assert Path(ok["path"]).is_file()
+    assert not [p for p in sessions.rglob("*") if p.name.startswith(".partial-")]
+
+
 # --- the dsh writer: tmp dirs only ----------------------------------------------------------
 
 def _dsh_events(path: Path) -> list[dict[str, Any]]:

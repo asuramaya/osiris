@@ -18,8 +18,11 @@ each target writer is a plain mapping. Targets: crush (SQLite). dsh and claude a
 writers over the same turns."""
 from __future__ import annotations
 
+import contextlib
 import json
+import shutil
 import sqlite3
+import tempfile
 import uuid
 from collections import Counter
 from collections.abc import Iterable
@@ -56,6 +59,12 @@ class Rebuilt:
     first_at: datetime | None
     last_at: datetime | None
     source_lines: int
+    stored_total: int | None = None   # lines the store says the session has, when known
+
+    @property
+    def truncated(self) -> bool:
+        """The store's chain broke before the end: fewer lines read than the session holds."""
+        return self.stored_total is not None and self.source_lines < self.stored_total
 
 
 def _ts(value: Any) -> datetime | None:
@@ -161,10 +170,14 @@ def marker_text(anchor_sid: str, rebuilt: Rebuilt) -> str:
     span = (f"{rebuilt.first_at:%Y-%m-%d} to {rebuilt.last_at:%Y-%m-%d}"
             if rebuilt.first_at and rebuilt.last_at else "dates unknown")
     fold = ", ".join(f"{k} {v}" for k, v in rebuilt.folded.most_common()) or "nothing"
+    cut = (f" TRUNCATED: the stored chain broke at line {rebuilt.source_lines} of "
+           f"{rebuilt.stored_total}; everything after that line is missing from this copy."
+           if rebuilt.truncated else "")
     return (f"[osiris import] This conversation was rebuilt by osiris from stored session "
             f"{anchor_sid} ({span}; {rebuilt.source_lines} stored lines, "
             f"{len(rebuilt.turns)} turns). It is a copy, not the original: no owner or "
-            "account is recorded on it. Not carried as turns (folded): " + fold + ".")
+            "account is recorded on it." + cut + " Not carried as turns (folded): "
+            + fold + ".")
 
 
 # --- crush ---------------------------------------------------------------------------------
@@ -251,8 +264,10 @@ def write_crush(
     when absent, added to when present), opening with the marker turn. Returns the new
     session id, the database path and the folded counts."""
     data_dir = workspace / ".crush"
-    data_dir.mkdir(parents=True, exist_ok=True)
     db = data_dir / "crush.db"
+    _refuse_symlinks(data_dir, db)
+    _refuse_session_store(workspace, data_dir, db)
+    data_dir.mkdir(parents=True, exist_ok=True)
     fresh = not db.exists()
     conn = sqlite3.connect(db)
     try:
@@ -298,6 +313,28 @@ def dsh_sessions_dir() -> str:
 
 def real_claude_projects_dir() -> Path:
     return Path.home() / ".claude" / "projects"
+
+
+def _refuse_session_store(*paths: Path | str) -> None:
+    """Refuse any path that lands in Claude Code's own session store (`~/.claude/projects`),
+    whatever the target format and however it is spelled: each path is resolved first, so a
+    symlink into the store, a sub-directory of it, and the store itself are all caught."""
+    store = real_claude_projects_dir().resolve()
+    for path in paths:
+        resolved = Path(path).resolve()
+        if resolved == store or resolved.is_relative_to(store):
+            raise ValueError(
+                "writing into Claude Code's own session store "
+                f"({real_claude_projects_dir()}) is held until the operator allows it; "
+                f"{path} resolves into it. Point it at a scratch directory")
+
+
+def _refuse_symlinks(*paths: Path) -> None:
+    """A path the writer is about to create or open must not be a symlink: a link is the one
+    way a safe-looking `--into` can be made to land somewhere else."""
+    for path in paths:
+        if path.is_symlink():
+            raise ValueError(f"refusing to write through the symlink {path}")
 
 
 def _slug(cwd: str) -> str:
@@ -359,6 +396,8 @@ def write_claude(
                                    "role": "assistant", "content": [block],
                                    "stop_reason": None, "stop_sequence": None}, t.at)
     target = projects_dir / _slug(cwd) / f"{sid}.jsonl"
+    _refuse_symlinks(target.parent, target)
+    _refuse_session_store(projects_dir, target.parent, target)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("".join(json.dumps(d) + "\n" for d in out))
     return {"to": "claude", "session_id": sid, "path": str(target), "turns": len(rebuilt.turns) + 1,
@@ -386,7 +425,7 @@ def write_dsh(
     if reasoning:
         fold["reasoning carried as marked text"] += reasoning
     counted = Rebuilt(rebuilt.turns, fold, rebuilt.first_at, rebuilt.last_at,
-                      rebuilt.source_lines)
+                      rebuilt.source_lines, rebuilt.stored_total)
     sid = f"session-{uuid.uuid4()}"
     started = rebuilt.first_at or datetime.now(UTC)
     t_ms = int(started.timestamp() * 1000)
@@ -436,13 +475,29 @@ def write_dsh(
                     "content": [{"type": "tool-result", "toolCallId": p_.call_id,
                                  "content": [{"type": "text", "text": p_.text}]}]}})
     target_dir = sessions_dir / _cwd_to_slug(cwd) / sid
+    _refuse_symlinks(target_dir.parent, target_dir)
+    _refuse_session_store(sessions_dir, target_dir.parent, target_dir)
     if target_dir.exists():
         raise ValueError(f"refusing to overwrite {target_dir}")
-    target_dir.mkdir(parents=True, exist_ok=True)
-    plain = target_dir / "session.jsonl"
-    plain.write_text("".join(json.dumps(e) + "\n" for e in events))
-    subprocess.run(["zstd", "-q", "--rm", "-f", str(plain), "-o", str(plain) + ".zstd"],
-                   check=True, timeout=120)
+    # Build the session in a private scratch directory beside its final place and rename it
+    # into position only when it is whole: a failed compress (zstd missing, a full disk) leaves
+    # nothing behind in a real DSH home, never a half-made session DSH might list.
+    parent = target_dir.parent
+    made_parent = not parent.exists()
+    parent.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix=".partial-", dir=parent))
+    try:
+        plain = work / "session.jsonl"
+        plain.write_text("".join(json.dumps(e) + "\n" for e in events))
+        subprocess.run(["zstd", "-q", "--rm", "-f", str(plain), "-o", str(plain) + ".zstd"],
+                       check=True, timeout=120)
+        work.rename(target_dir)
+    except BaseException:
+        shutil.rmtree(work, ignore_errors=True)
+        if made_parent:
+            with contextlib.suppress(OSError):
+                parent.rmdir()
+        raise
     return {"to": "dsh", "session_id": sid, "path": str(target_dir / "session.jsonl.zstd"),
             "turns": len(rebuilt.turns) + 1, "events": len(events), "folded": dict(fold)}
 
@@ -455,11 +510,7 @@ def _check_target(to: str, into: Path | str, cwd: str | None) -> None:
     if to in ("claude", "dsh"):
         if cwd is None:
             raise ValueError(f"--to {to} needs --cwd, the workspace the session belongs to")
-    if to == "claude":
-        if Path(into).resolve() == real_claude_projects_dir().resolve():
-            raise ValueError("writing into Claude Code's own session store "
-                             f"({real_claude_projects_dir()}) is held until the operator "
-                             "allows it; point --into at a scratch directory")
+    _refuse_session_store(into)
 
 
 async def rebuild_session(
@@ -481,10 +532,20 @@ async def rebuild_session(
         pair async for pair in SoulStore(pool).stream_lines(anchor_sid)])
     if not rebuilt.turns:
         raise ValueError(f"the store holds no turns for session {anchor_sid!r}")
+    # `stream_lines` ends quietly at the last verified line when the stored chain breaks, so
+    # compare what it gave with what the store says the session holds, and say so if short
+    total = await pool.fetchval(
+        "SELECT last_line_idx FROM soul_sessions WHERE harness='claude-code' AND anchor_sid=$1",
+        anchor_sid)
+    rebuilt.stored_total = int(total) if total is not None else None
     if to == "claude":
         assert cwd is not None
-        return write_claude(rebuilt, anchor_sid=anchor_sid, projects_dir=Path(into), cwd=cwd)
-    if to == "dsh":
+        receipt = write_claude(rebuilt, anchor_sid=anchor_sid, projects_dir=Path(into), cwd=cwd)
+    elif to == "dsh":
         assert cwd is not None
-        return write_dsh(rebuilt, anchor_sid=anchor_sid, sessions_dir=Path(into), cwd=cwd)
-    return write_crush(rebuilt, anchor_sid=anchor_sid, workspace=Path(into), title=title)
+        receipt = write_dsh(rebuilt, anchor_sid=anchor_sid, sessions_dir=Path(into), cwd=cwd)
+    else:
+        receipt = write_crush(rebuilt, anchor_sid=anchor_sid, workspace=Path(into), title=title)
+    receipt["truncated"] = (f"stored chain broke at line {rebuilt.source_lines} of "
+                            f"{rebuilt.stored_total}" if rebuilt.truncated else None)
+    return receipt
