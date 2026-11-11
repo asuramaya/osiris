@@ -301,7 +301,7 @@ def test_log_all_thread_stacks_logs_every_live_thread() -> None:
         def __init__(self) -> None:
             self.messages: list[str] = []
 
-        def warning(self, msg: str) -> None:
+        def warning(self, msg: str, **_kw: object) -> None:
             self.messages.append(msg)
 
     log = _FakeLog()
@@ -544,3 +544,41 @@ async def test_tool_traffic_in_flight_is_empty_with_nothing_running(
 ) -> None:
     out = await srv.tool_traffic(window_minutes=5)
     assert out["in_flight"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_watchdog_prints_its_dump_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rendering the dump through the rich log handler used to hold the loop for 100 to
+    160 ms. The text is built on the loop and logged from a worker thread, with the
+    handler's highlighting and markup switched off."""
+    import asyncio
+    import logging
+    import threading
+    import time
+
+    main = threading.get_ident()
+    seen: list[tuple[int, bool]] = []
+
+    class _Tap(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            seen.append((threading.get_ident(), getattr(record, "markup", None) is False))
+
+    logger = logging.getLogger("osiris.mcp.watchdog")
+    tap = _Tap(level=logging.WARNING)
+    logger.addHandler(tap)
+    monkeypatch.setattr(srv, "_WATCHDOG_STALL_THRESHOLD_S", 0.0)
+    monkeypatch.setattr(srv, "_WATCHDOG_POLL_INTERVAL_S", 0.01)
+    monkeypatch.setattr(srv, "_WATCHDOG_REPEAT_INTERVAL_S", 60.0)
+    srv._in_flight_calls[991] = {"tool": "send", "caller": "agent:x",
+                                 "started_at": time.monotonic() - 99.0, "next_log_at": 0.0}
+    task = asyncio.create_task(srv._watchdog_loop())
+    try:
+        assert await wait_until(lambda: bool(seen))
+    finally:
+        task.cancel()
+        srv._in_flight_calls.pop(991, None)
+        logger.removeHandler(tap)
+    assert seen[0][0] != main
+    assert seen[0][1] is True  # highlighting and markup are off for the dump

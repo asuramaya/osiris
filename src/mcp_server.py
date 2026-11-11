@@ -409,16 +409,33 @@ _in_flight_next_id = itertools.count()
 _watchdog_task: asyncio.Task[None] | None = None
 
 
-def _log_all_thread_stacks(log: Any, *, reason: str) -> None:
-    """Every live thread's own Python stack, formatted and logged in one shot: the
-    exact dump SIGUSR1 (faulthandler) also produces, reused here so the automatic and
-    manual paths report identically."""
+def _thread_stacks_text(*, reason: str) -> str:
+    """Every live thread's own Python stack plus every pending task's, as one block of text:
+    the exact dump SIGUSR1 (faulthandler) also produces, reused here so the automatic and
+    manual paths report identically. Built on the event loop's own thread (the task list
+    needs it), and cheap: a few thousand characters of stack walking."""
     frames = sys._current_frames()
     parts = [f"{reason}: {len(frames)} live thread(s):"]
     for thread_id, frame in frames.items():
         parts.append(f"--- thread {thread_id} ---\n{''.join(traceback.format_stack(frame))}")
     parts.append(_format_asyncio_task_stacks())
-    log.warning("\n".join(parts))
+    return "\n".join(parts)
+
+
+def _dump_log_extra() -> dict[str, Any]:
+    """Log-record extras that stop the rich log handler highlighting and parsing markup in a
+    stack dump: the dump is plain text, and that work was most of the cost of printing it."""
+    try:
+        from rich.highlighter import NullHighlighter
+    except ImportError:
+        return {}
+    return {"highlighter": NullHighlighter(), "markup": False}
+
+
+def _log_all_thread_stacks(log: Any, *, reason: str) -> None:
+    """The dump, logged in one shot, on the calling thread (SIGUSR1 and tests). The watchdog
+    uses `_thread_stacks_text` and logs from a worker thread instead: see `_watchdog_loop`."""
+    log.warning(_thread_stacks_text(reason=reason), extra=_dump_log_extra())
 
 
 def _format_asyncio_task_stacks() -> str:
@@ -466,10 +483,13 @@ async def _watchdog_loop() -> None:
                 continue
             elapsed = now - info["started_at"]
             info["next_log_at"] = now + _WATCHDOG_REPEAT_INTERVAL_S
-            _log_all_thread_stacks(
-                log, reason=(
-                    f"SLOW TOOL CALL: {info['tool']!r} (caller={info['caller']!r}, "
-                    f"call_id={call_id}) has been in flight {elapsed:.1f}s"))
+            text = _thread_stacks_text(reason=(
+                f"SLOW TOOL CALL: {info['tool']!r} (caller={info['caller']!r}, "
+                f"call_id={call_id}) has been in flight {elapsed:.1f}s"))
+            # The server's log handler is rich, and rendering a 30k-character dump through it
+            # held the event loop for 100 to 160 ms at exactly the moment a call was already
+            # slow. Build the text here, print it on a worker thread.
+            await asyncio.to_thread(log.warning, text, extra=_dump_log_extra())
 
 
 def _loop_lag_snapshot() -> dict[str, Any] | None:
