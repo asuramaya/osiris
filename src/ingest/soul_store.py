@@ -1158,6 +1158,23 @@ class SoulStore:
         raws = [bytes(r["raw_line"]) for r in rows]
         return [(open_line(fernet, rl) if is_encrypted(rl) else rl) for rl in reversed(raws)]
 
+    async def stream_lines(
+        self, anchor_sid: str, harness: str = _HARNESS,
+    ) -> AsyncIterator[tuple[int, bytes]]:
+        """Every line of a session as (line_idx, raw line), oldest first, decrypted, read from
+        the store alone (hot rows or the cold blob) one line at a time, so a session of tens
+        of thousands of lines never sits in memory at once. For READING context, like
+        `tail_lines`: a chain that breaks partway ends the stream at the last good line
+        rather than raising, since a brief built from what verified is still worth having
+        (`rematerialize_to_disk` owns the verified emit)."""
+        idx = 0
+        try:
+            async for line in self._iter_verified_lines(harness, anchor_sid):
+                yield idx, line
+                idx += 1
+        except _ChainBroken:
+            return
+
     async def full_session_id(
         self, anchor_sid: str, harness: str = _HARNESS,
     ) -> str | None:

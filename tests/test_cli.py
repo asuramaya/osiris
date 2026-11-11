@@ -7852,7 +7852,8 @@ async def test_cmd_resume_says_so_and_launches_fresh_when_the_history_is_another
               '"{\\"sent\\":1,\\"from\\":\\"agent:cliacct01\\"}"}\n')
     t.write_text(signed + "".join(
         json.dumps({"type": "assistant", "ownerAccountUuid": old,
-                    "message": {"content": f"cli old turn {i}"}}) + "\n" for i in range(20)))
+                    "message": {"content": f"cli old turn {i}: " + "and then more " * 6}})
+        + "\n" for i in range(20)))
 
     launches: list[dict[str, Any]] = []
 
@@ -7874,7 +7875,7 @@ async def test_cmd_resume_says_so_and_launches_fresh_when_the_history_is_another
         clear_stale_record=_boom)
     assert rc == 0
     err = capsys.readouterr().err
-    assert "another Claude account" in err and "briefing" in err
+    assert "another Claude account" in err and "brief + recall" in err
     assert "fresh-launch-account-mismatch" not in err  # the path name is --verbose
     assert len(launches) == 1 and launches[0]["handle"] == "cliacct"
     assert "cli old turn 19" in launches[0]["message"]

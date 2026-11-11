@@ -101,11 +101,21 @@ async def test_the_briefing_is_built_from_the_store_and_says_why(
     assert finding is not None
     brief = await store_briefing(
         actions.pool, handle="Deckard", anchor_sid="abcd1234", finding=finding, turns=4)
-    assert "Deckard, launched FRESH" in brief and "another Claude account" in brief
+    assert "You are Deckard, in a NEW session that continues an earlier one" in brief
+    assert "another Claude account" in brief
     assert "~/.osiris/seats/deckard/charter.md" in brief
-    assert "LAST 4 TURNS" in brief and "[assistant] later" in brief
-    assert "turn 28" in brief and "turn 3" not in brief   # bounded to the last turns
-    assert len(brief) <= 7000
+    assert "HOW TO PULL DETAIL ON DEMAND" in brief and "cite_transcript(" in brief
+    assert "turn 28" in brief       # the whole stored session is read, not a tail
+    assert len(brief) <= 32000
+
+
+async def test_with_nothing_in_the_store_the_briefing_falls_back_to_the_short_one(
+    actions: Any,
+) -> None:
+    finding = {"detail": "history belongs to another Claude account"}
+    brief = await store_briefing(
+        actions.pool, handle="Deckard", anchor_sid="00000000", finding=finding)
+    assert "Deckard, launched FRESH" in brief and "~/.osiris/seats/deckard/charter.md" in brief
 
 
 async def test_the_account_question_is_answered_from_the_store_alone(

@@ -1949,7 +1949,8 @@ async def _cmd_resume_harness(
         brief = await store_briefing(
             pool, handle=handle, anchor_sid=resumed_session_id[:8], finding=finding,
             project=await _governed_project_name(
-                pool, facts["seat_id"], cwd=facts["anchor_cwd"]))
+                pool, facts["seat_id"], cwd=facts["anchor_cwd"]),
+            seat_id=facts["seat_id"])
         return await _cmd_launch_harness(
             handle, model=model, pool=pool, wake_default=wake_default,
             spawn=launch_spawn or _spawn_claude_bg, agents_json=agents_json, message=brief,

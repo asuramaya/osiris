@@ -8665,7 +8665,8 @@ async def test_resume_seat_launches_fresh_from_the_store_when_the_history_is_ano
     assert d["account_mismatch"]["history_owner"] == _OLD_ACCT
     assert len(launched) == 1
     brief = launched[0]["message"]
-    assert "AcctMis1, launched FRESH" in brief and "old turn 29" in brief
+    assert "You are AcctMis1, in a NEW session that continues an earlier one" in brief
+    assert "old turn 28" in brief   # the last instruction, with its stored line index
     # decided from the store BEFORE rematerializing: nothing was written to the seat office
     from src.orchestrator.mounts import _harness_slug
     from src.orchestrator.offices import _default_office_root

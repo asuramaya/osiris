@@ -5065,6 +5065,22 @@ async def _verify_transcript_line(
             "line_hash": row["line_hash"], "said_at": row["ingested_at"], "reason": None}
 
 
+async def _resolve_agent_generation(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
+    """The Agent generation `ref` names, for the transcript-citation door: an exact lineage
+    canonical (`agent:d6a08aaa-g67`, the form every other osiris surface shows and a brief
+    quotes) resolves by exact match; anything else takes `_resolve_ref`'s identifier-only road
+    (a UUID or a short hex id). `_resolve_ref` alone never matches a numbered canonical, so a
+    session's own agent could not be named by the id it is known by."""
+    raw = (ref or "").strip()
+    if raw.lower().startswith("agent:"):
+        oid = await pool.fetchval(
+            "SELECT id FROM objects WHERE type='Agent' AND status='active' AND canonical=$1",
+            raw.lower())
+        if oid is not None:
+            return uuid.UUID(str(oid))
+    return await _resolve_ref(pool, "Agent", ref, text_field="name", require_identifier=True)
+
+
 async def mint_transcript_citation(
     actions: Actions, from_id: uuid.UUID, agent_ref: str, line_idx: int, because: str,
     source: str = _SOURCE, *, harness: str = "claude-code",
@@ -5089,8 +5105,7 @@ async def mint_transcript_citation(
         raise ValueError("mint_transcript_citation refused: `because` is mandatory and "
                           "non-blank. A citation is a deliberate act with a reason, "
                           "never inferred from prose")
-    agent_id = await _resolve_ref(actions.pool, "Agent", agent_ref, text_field="name",
-                                  require_identifier=True)
+    agent_id = await _resolve_agent_generation(actions.pool, agent_ref)
     if agent_id is None:
         raise ValueError(f"mint_transcript_citation refused: {agent_ref!r} does not "
                           "resolve to a real Agent generation. A citation never "
@@ -5126,8 +5141,7 @@ async def read_transcript_citation(
     against itself), and returns the actual cited line. Refuses loudly on a missing
     edge, an unresolved `agent_ref`, or a hash mismatch, never a stale/wrong line
     returned silently."""
-    agent_id = await _resolve_ref(pool, "Agent", agent_ref, text_field="name",
-                                  require_identifier=True)
+    agent_id = await _resolve_agent_generation(pool, agent_ref)
     if agent_id is None:
         raise ValueError(f"read_transcript_citation refused: {agent_ref!r} does not "
                           "resolve to a real Agent generation")
