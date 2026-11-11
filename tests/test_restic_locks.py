@@ -89,7 +89,10 @@ elif cmd == "snapshots":
         save(); print(LOCKED, file=sys.stderr); sys.exit(1)
     refuse_if_locked()
 elif cmd == "ls":
-    pass
+    for node in state.get("ls_nodes", []):
+        print(json.dumps(node))
+    if state.get("ls_exit"):
+        save(); print("Fatal: ls blew up", file=sys.stderr); sys.exit(state["ls_exit"])
 elif cmd == "backup":
     state["backups"] = state.get("backups", 0) + 1
 save()
@@ -433,6 +436,70 @@ def test_the_drill_clears_and_retries_once_instead_of_claiming_a_clear(
     assert failure is not None and failure.startswith("the latest snapshot has no files")
     assert fake.commands().count("check") == 2 and fake.commands().count("unlock") >= 1
     assert any("cleared 1 stale" in n for n in restic_locks.pop_notes("fake"))
+
+
+def _file(path: str, size: int = 10) -> dict[str, Any]:
+    return {"type": "file", "path": path, "size": size}
+
+
+def test_a_snapshot_without_a_recovery_file_or_a_dump_fails_the_drill(fake: Fake) -> None:
+    fake.state["ls_nodes"] = [_file("/vault/a.txt"), _file("/vault/b.txt")]
+    fake._write()
+
+    failure = drill.run_bounded_drill("fake")
+
+    assert failure is not None
+    assert "missing the key recovery file and a database dump" in failure
+    assert "key recovery file" in failure and "database dump" in failure
+    assert "restore" not in fake.commands()  # it stopped before restoring other files
+
+
+def test_a_snapshot_with_a_dump_but_no_recovery_file_fails_naming_only_that(fake: Fake) -> None:
+    fake.state["ls_nodes"] = [_file("/vault/osiris-20261101-000000.dump"), _file("/vault/a.txt")]
+    fake._write()
+
+    failure = drill.run_bounded_drill("fake")
+
+    assert failure is not None and "key recovery file" in failure
+    assert "database dump" not in failure
+
+
+def test_a_listing_that_ends_with_a_failure_exit_fails_the_drill(fake: Fake) -> None:
+    fake.state["ls_nodes"] = [
+        _file("/vault/osiris-recovery/soul.key.recovery.json"),
+        _file("/vault/osiris-20261101-000000.dump"), _file("/vault/a.txt")]
+    fake.state["ls_exit"] = 2
+    fake._write()
+
+    failure = drill.run_bounded_drill("fake")
+
+    assert failure is not None and failure.startswith("restic ls exited 2")
+    assert "restore" not in fake.commands()
+
+
+def test_an_unlock_whose_recheck_cannot_be_read_is_not_reported_as_cleared() -> None:
+    import types
+
+    now = datetime.now(UTC)
+    stale = {"time": (now - timedelta(hours=3)).isoformat(), "exclusive": True,
+             "hostname": "other", "username": "u", "pid": 5}
+    listings = {"n": 0}
+
+    def runner(args: list[str], env: dict[str, str]) -> Any:
+        if args[:2] == ["list", "locks"]:
+            listings["n"] += 1
+            if listings["n"] > 1:  # the re-read after the unlock fails
+                return types.SimpleNamespace(returncode=1, stdout="", stderr="Fatal: link dropped")
+            return types.SimpleNamespace(returncode=0, stdout="a" * 64 + "\n", stderr="")
+        if args[:2] == ["cat", "lock"]:
+            return types.SimpleNamespace(returncode=0, stdout=json.dumps(stale), stderr="")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")  # unlock
+
+    outcome = restic_locks.clear_stale_locks({}, restic=runner, local_host="me")
+
+    assert outcome.cleared == ()
+    assert outcome.note is not None and "could not re-read" in outcome.note
+    assert "cleared" not in outcome.note
 
 
 def test_the_drill_says_so_when_the_repository_is_locked_and_nothing_is_stale(

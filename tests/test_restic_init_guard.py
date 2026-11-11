@@ -32,6 +32,8 @@ if cmd == "snapshots":
         print(state["snapshots_stderr"], file=sys.stderr)
         sys.exit(1)
     sys.exit(0)
+if cmd == "backup" and state.get("backup_sleep"):
+    time.sleep(state["backup_sleep"])
 if cmd == "backup" and state.get("backup_exit"):
     print(state.get("backup_stderr", ""), file=sys.stderr)
     sys.exit(state["backup_exit"])
@@ -142,6 +144,19 @@ def test_an_incomplete_snapshot_is_a_success_with_a_note(fake: Fake) -> None:
     assert fake.backup(notes=notes) is None
     assert len(notes) == 1 and "could not read some source files" in notes[0]
     assert "could not be read" in notes[0]
+
+
+def test_a_backup_timeout_says_it_will_resume_not_that_nothing_was_initialized(
+    fake: Fake, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(offload_runner, "_RESTIC_TIMEOUT_SECONDS", 1)
+    fake.state["backup_sleep"] = 4
+    fake.save()
+
+    failure = fake.backup()
+
+    assert failure is not None and "timed out after 1s" in failure
+    assert "will resume" in failure and "nothing was initialized" not in failure
 
 
 def test_any_other_backup_exit_is_still_a_failure(fake: Fake) -> None:

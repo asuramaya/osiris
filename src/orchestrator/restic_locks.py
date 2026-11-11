@@ -259,6 +259,13 @@ def clear_stale_locks(
         after = read_locks(env, restic)
     except (OSError, subprocess.TimeoutExpired):
         after = None
+    if after is None or isinstance(after, str):
+        # The unlock exited 0 but the check that it worked could not be read: say that, never
+        # "cleared". The caller still retries its own call (a note is enough for that).
+        where = ", ".join(sorted({describe(lock) for lock in stale}))
+        return LockOutcome(note=(
+            f"ran `restic unlock` for {len(stale)} stale repository lock(s) ({where}) but could "
+            "not re-read the lock listing to confirm they are gone"))
     if isinstance(after, list):
         left = [lock for lock in stale if any(lock.id == other.id for other in after)]
         if left:

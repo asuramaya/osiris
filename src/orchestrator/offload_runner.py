@@ -261,8 +261,13 @@ def _run_restic_backup(
         return None
     except subprocess.TimeoutExpired as exc:
         step = exc.cmd[1] if isinstance(exc.cmd, list) and len(exc.cmd) > 1 else "restic"
-        return (f"restic {step} timed out after {exc.timeout:.0f}s (a slow or unreachable "
-                "link); nothing was initialized")
+        head = f"restic {step} timed out after {exc.timeout:.0f}s (a slow or unreachable link); "
+        if step == "backup":
+            # a stopped backup keeps the data it already stored: the next run carries on from there
+            return head + "what it already copied is kept and the next run will resume"
+        if step == "init":
+            return head + "the repository may or may not exist now; the next run checks first"
+        return head + "nothing was initialized"
     except OSError as exc:
         return f"{type(exc).__name__}: {exc}"
 
