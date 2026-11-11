@@ -5205,6 +5205,17 @@ async def vacate_dead_seat(
     out = await vacate_holder(actions, seat_id=seat_id, actor=actor, because=because)
     if "error" in out:
         return {"status": "refused", "seat": seat_id, "detail": out["error"]}
+    # A founded seat's holder is a placeholder that never mounts itself: the bodies launched
+    # into the seat mount under their own ids. Report "ever_mounted" for the seat, not only for
+    # that placeholder, so the evidence does not say a seat whose bodies ran was never mounted.
+    # Evidence only: the decision above stays the holder's own liveness.
+    verdict = dict(verdict)
+    if not verdict.get("ever_mounted"):
+        where = [c for c in (office, facts.get("tree_cwd")) if c]
+        if where and await pool.fetchval(
+                "SELECT 1 FROM agent_mounts WHERE cwd = ANY($1::text[]) LIMIT 1", where):
+            verdict["ever_mounted"] = True
+            verdict["mounted_at_seat_directory"] = True
     return {"status": "vacated", "seat": seat_id, "was_held_by": out["was_held_by"],
             "evidence": {"liveness": verdict},
             "detail": f"{holder} reads dead via agent_liveness (last_seen "

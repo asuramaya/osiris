@@ -6691,6 +6691,31 @@ async def test_vacate_dead_seat_vacates_when_agent_liveness_says_dead(
     assert holder is None
 
 
+async def test_vacate_evidence_counts_bodies_that_mounted_in_the_seat_directory(
+    actions: Actions,
+) -> None:
+    """A founded seat's holder never mounts itself; its bodies mount under their own ids at
+    the seat's directory. The vacate evidence said ever_mounted False for such a seat."""
+    from src.orchestrator import mounts
+    from src.orchestrator import trigger as tm
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:vd7holdr", manager_agent="agent:vd7mgr0",
+        worker_handle="Founded-Ran", house="osiris")
+    await _office(actions, worker_seat, "/tmp/founded-ran")
+    await mounts.save_mount(actions.pool, job_dir="/test/seed/founded-ran",
+                            agent_id="agent:2a636437", project="osiris",
+                            cwd="/tmp/founded-ran", model=None, session_key=None)
+
+    async def _never_mounted(pool: Any, agent_id: str) -> dict[str, Any]:
+        return {"live": False, "last_seen": None, "ever_mounted": False}
+
+    d = await tm.vacate_dead_seat(actions, seat_id=worker_seat, actor="test",
+                                  because="holder gone", liveness_fn=_never_mounted)
+    assert d["status"] == "vacated"
+    assert d["evidence"]["liveness"]["ever_mounted"] is True
+
+
 async def test_vacate_dead_seat_uses_the_real_agent_liveness_by_default(
     actions: Actions,
 ) -> None:

@@ -25,6 +25,7 @@ import os
 import re
 import shutil
 import sys
+import textwrap
 from typing import Any, TextIO
 
 # --- the palette -------------------------------------------------------------------------
@@ -246,6 +247,14 @@ def kv_block(pairs: list[tuple[str, Any]], paint: Paint, cols: int,
     room = max(10, cols - len(indent) - kw - 2)
     lines = []
     for k, v in pairs:
+        # A sentence is wrapped onto continuation lines under its own column, never cut: the
+        # reason a command refused is the one line a reader must be able to finish.
+        if (isinstance(v, str) and " " in v and "\x1b" not in v and not _looks_like_path(v)
+                and len(v) > room):
+            wrapped = textwrap.wrap(v, width=room) or [v]
+            lines.append(f"{indent}{_pad(paint.key(str(k)), kw)}  {wrapped[0]}")
+            lines.extend(f"{indent}{' ' * kw}  {w}" for w in wrapped[1:])
+            continue
         # A path keeps its TAIL (see shorten_path); everything else truncates from the right.
         rendered = (shorten_path(v, room) if _looks_like_path(v) else
                     _truncate(fmt_value(v, paint), room))

@@ -2061,3 +2061,40 @@ async def test_workspace_sweep_defaults_to_home_code(actions: Actions) -> None:
     out = await sweep_seat_workspace(
         actions.pool, handle="no-such-handle-ever-minted-zzz", sleep=_instant_sleep)
     assert "nothing to sweep" in out["error"]
+
+
+async def test_establish_office_works_for_a_founded_seat_whose_holder_never_mounted(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """`osiris new` founds a seat and gives it a placeholder holder that no session has ever
+    mounted as, so the holder has no project label of its own. The seat itself carries its
+    house; that used to be ignored and the setup refused with "no durable project label"."""
+    from src.orchestrator.seats import ensure_seat
+
+    seat = await ensure_seat(actions, house="foundedhouse", handle="Founded", source="test")
+    seat_obj = await actions.create_or_find_object("Seat", seat["seat_id"], "test")
+    holder = await actions.create_or_find_object("Agent", "agent:seat-f0und3d1", "test")
+    await actions.assert_property(holder, "handle", "Founded", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.create_link(holder, seat_obj, "holds", "test", NOW, 0.9)
+
+    out = await establish_office(
+        actions, seat_or_agent="Founded", actor="agent:test",
+        office_root=tmp_path / "seats", projects_root=tmp_path / "projects",
+        claude_json=tmp_path / "cj.json")
+
+    assert "error" not in out, out
+    assert out["house"] == "foundedhouse"
+    assert Path(out["office"]).is_dir() and (Path(out["office"]) / "CLAUDE.md").exists()
+
+
+async def test_retire_seat_refusal_prints_the_exact_vacate_line(actions: Actions) -> None:
+    from src.orchestrator.seats import ensure_seat, retire_seat
+
+    seat = await ensure_seat(actions, house="retirehouse", handle="Retiree", source="test")
+    seat_obj = await actions.create_or_find_object("Seat", seat["seat_id"], "test")
+    holder = await actions.create_or_find_object("Agent", "agent:seat-re71ree0", "test")
+    await actions.create_link(holder, seat_obj, "holds", "test", NOW, 0.9)
+
+    out = await retire_seat(actions, seat_id=seat["seat_id"], reason="done", actor="agent:test")
+    assert f'osiris vacate-seat {seat["seat_id"]} "<why the holder is gone>"' in out["error"]

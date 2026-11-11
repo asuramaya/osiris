@@ -1945,8 +1945,8 @@ async def test_cmd_launch_harness_refuses_an_anchor_cwd_that_does_not_exist_on_d
     err = buf.getvalue()
     assert "anchor_cwd" in err
     assert "graph assertion" in err
-    assert "rebind_seat(seat='clighostanchor'" in err
-    assert "new_cwd=" in err
+    assert "osiris rebind-seat clighostanchor <the real directory>" in err  # a CLI line
+    assert "MCP" not in err
 
 
 async def test_cmd_launch_harness_spawns_into_tree_cwd_not_office(
@@ -7479,7 +7479,8 @@ async def test_cmd_new_confesses_before_writing_when_cwd_disagrees_with_the_defa
     assert out == 0  # the confession is advisory, never a refusal
     err = buf.getvalue()
     assert str(cwd_ws) in err
-    assert str(default_workspace) in err
+    assert str(default_workspace) not in err  # it no longer claims to create one there
+    assert "no separate workspace is created" in err
     assert "osiris new Workerf ." in err
     assert list(cwd_ws.iterdir()) == []  # cwd itself was never touched
 
@@ -7965,3 +7966,15 @@ async def test_launch_fails_when_the_harness_named_a_session_that_never_appears(
     err = capsys.readouterr().err
     assert rc == 1
     assert "did not start" in err and "deadbeef" in err and "claude logs deadbeef" in err
+
+
+def test_a_missing_office_names_one_cli_command_for_each_shape() -> None:
+    from src.orchestrator.offices import _default_office_root
+
+    default = str(_default_office_root() / "wardenx")
+    from src import cli
+
+    text = cli._missing_office_text("launch", "Wardenx", default)
+    assert "Fix it with: osiris establish-seat-dir Wardenx" in text and "MCP" not in text
+    elsewhere = cli._missing_office_text("resume", "Wardenx", "/srv/elsewhere/wardenx")
+    assert "osiris rebind-seat Wardenx <the real directory>" in elsewhere

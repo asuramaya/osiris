@@ -1055,6 +1055,14 @@ async def establish_office(
     # what counts as "something" moved.
     house = await project_of(actions.pool, agent_id)
     if not house:
+        # A founded seat (`osiris new`) carries its house on the Seat itself; its holder is a
+        # placeholder agent that never mounted, so it has no label of its own to read.
+        from src.orchestrator.seats import seat_facts
+
+        held = await held_seat(actions.pool, agent_id)
+        if held is not None:
+            house = (await seat_facts(actions.pool, held["seat_id"])).get("house") or None
+    if not house:
         return {"error": f"{agent_id} has no durable project label; it has never been "
                          "mounted in a project, so there is no house to pin at an office"}
     # A LIVE SEAT IS NEVER MOVED (the rollout guard): extraction relocates the lineage's
