@@ -178,6 +178,9 @@ async def seat_spawn_lock(
     finally:
         if token is not None:
             _HELD_SPAWN_LOCKS.reset(token)
+        # If this unlock is itself cancelled, the lock is still released: `pool.release` resets
+        # the connection (asyncpg runs `pg_advisory_unlock_all()` in its reset), and a connection
+        # that is dropped instead takes its session-level locks with it.
         if conn is not None:
             try:
                 await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", key)
@@ -4206,9 +4209,9 @@ async def _launch_target_setup(
             if not restored.ok:
                 return {"status": "refused-no-tree",
                         "detail": f"{handle} ({target_seat}): {restored.line}. Fix it "
-                                  "with: bind_seat_tree("
-                                  f"seat_id={target_seat!r}, tree_cwd='<the real directory>', "
-                                  "because='...')"}
+                                  f"with: osiris bind-seat-tree {target_seat} "
+                                  '<the real directory> "<why>" (the bind_seat_tree tool '
+                                  "does the same)"}
         fabricated = await fabricated_tree_verdict(pool, target_seat, tree_cwd)
         if fabricated is not None:
             repo, real_path = fabricated

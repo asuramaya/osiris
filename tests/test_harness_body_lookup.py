@@ -628,3 +628,24 @@ async def test_the_twin_checks_second_read_failing_clears_roster_ok(
                                             seat_id=seat_id, handle="secondread")
     assert calls["n"] >= 2
     assert twin["roster_ok"] is False
+
+
+async def test_the_missing_worktree_refusal_names_the_cli_command(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    await _seat(actions, tmp_path, "notree")
+    seat_id = await trigger._seat_for_target(Actions(actions.pool), "notree")
+    missing = str(tmp_path / "gone-tree")
+    await actions.assert_property(
+        await actions.create_or_find_object("Seat", seat_id, "test"),
+        "tree_cwd", missing, "test", trigger.datetime.now(trigger.UTC), 0.9)
+
+    async def _empty(**kw: Any) -> list[dict[str, Any]]:
+        return []
+
+    out = await trigger.launch_seat(Actions(actions.pool), caller="operator", target="notree",
+                                    operator_authorized=True, spawn=_no_spawn,
+                                    agents_json=_empty)
+    assert "is missing" in out["detail"] or "missing" in out["detail"]
+    assert f'osiris bind-seat-tree {seat_id} <the real directory> "<why>"' in out["detail"]
+    assert "bind_seat_tree(" not in out["detail"]

@@ -1784,9 +1784,8 @@ async def test_cmd_launch_harness_refuses_a_tree_cwd_that_does_not_exist_on_disk
                                spawn=_unreachable, agents_json=_unreachable)
     assert out == 1
     err = buf.getvalue()
-    assert "tree_cwd" in err
-    assert f"bind_seat_tree(seat_id={seat['seat_id']!r}" in err
-    assert "tree_cwd=" in err and "because=" in err
+    assert "osiris bind-seat-tree" in err
+    assert f"osiris bind-seat-tree {seat['seat_id']} <the real directory>" in err
 
 
 async def test_cmd_launch_harness_refuses_a_fabricated_tree_cwd_when_the_charter_names_a_real_tree(
