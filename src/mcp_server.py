@@ -2378,8 +2378,9 @@ async def context_window(ctx: Context | None = None) -> dict[str, Any]:
     from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
     from src.ingest.harness.crush_sqlite import CrushSqliteAdapter
     from src.ingest.transcript_store import TranscriptStore
-    path = locate_current_transcript(Path.home() / ".claude" / "projects", job,
-                                     anchored_only=True)
+    path = await asyncio.to_thread(
+        locate_current_transcript, Path.home() / ".claude" / "projects", job,
+        anchored_only=True)
     if path is not None:
         out = context_lens.detail(path, model_raw, window_hint=window_hint)
         out["agent"] = ident.agent_id
