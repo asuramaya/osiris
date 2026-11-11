@@ -42,6 +42,7 @@ from src.ingest.sessions import (
     model_of_transcript,
 )
 from src.orchestrator.offices import _default_office_root, is_bare_office_root
+from src.orchestrator.phase_clock import PhaseClock
 from src.orchestrator.swaps import classify_swap, swap_marker
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
@@ -3970,6 +3971,7 @@ def _looks_like_a_real_session(sid: str | None) -> bool:
 async def register_agent(
     actions: Actions, identity: AgentIdentity, *, actor: str, expected_model: str | None = None,
     mint_reason: str | None = None, revisit_check: bool = False,
+    clock: PhaseClock | None = None,
 ) -> uuid.UUID:
     """Mint (idempotently) the Agent object and its org-chart links. The agent attributes its
     own registration (`source = agent:<session>`), self-declared. Re-mount is a no-op
@@ -4001,6 +4003,10 @@ async def register_agent(
     confesses it. False by default: every other register_agent call site already carries its
     own attribution (a fork's spawned_by link, an office-birth's deed, a succession heir's
     own parent generation) that this check has no way to see, and must never second-guess."""
+    def lap(name: str) -> None:
+        if clock is not None:
+            clock.mark(name)
+
     now = datetime.now(UTC)
     obs: str | None = None
     # The mint lock: phases 0-1 read-then-write the succession chain; two concurrent
@@ -4134,6 +4140,7 @@ async def register_agent(
                                    # never fail quiet.
             logger.warning("notify-at-transition failed for heir %s (%s): %r",
                            src, mint_because, exc)
+    lap("ra_lock_and_succession")
     label = f"{identity.model or 'claude'} in {identity.project or '?'}"
     await actions.assert_property(a, "name", label, src, now, _CONF, evidence_class=_EC)
     # The birth-time write: the first-ever mount of a background-launched seat has nothing
@@ -4229,6 +4236,7 @@ async def register_agent(
     # Degrades, never blocks (this sits on the mount path every session in the fleet
     # traverses): a failed query here must never be the reason a mount fails. None/0/None
     # (the dataclass defaults) is an honest "could not determine", not a wrong answer.
+    lap("ra_identity_properties")
     try:
         from src.orchestrator.project_identity import _write_attribution
         wa = await _write_attribution(actions.pool, [_generation(identity.agent_id)[0]])
@@ -4378,6 +4386,7 @@ async def register_agent(
     if identity.cwd:
         # The repo path, which lets the trigger hook resolve a project to where it wakes.
         await actions.assert_property(a, "cwd", identity.cwd, src, now, _CONF, evidence_class=_EC)
+    lap("ra_project")
     principal = await actions.create_or_find_object("Person", f"principal:{actor}", src)
     await actions.assert_property(principal, "name", actor, src, now, _CONF, evidence_class=_EC)
     await _link_once(actions, a, principal, "acts_for", src, now)
