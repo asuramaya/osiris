@@ -237,6 +237,46 @@ _GOOSE_VERSIONS = (0, 20250424200609, 20250515105448, 20250624000000, 2025062700
                    20250810000000, 20250812000000, 20260127000000)
 
 
+# the columns the writer fills, per table (sessions and messages); anything else a table has
+# must be nullable or carry a default, or the insert would fail
+_CRUSH_WRITES = {
+    "sessions": {"id", "title", "message_count", "updated_at", "created_at"},
+    "messages": {"id", "session_id", "role", "parts", "model", "created_at", "updated_at",
+                 "finished_at", "provider", "is_summary_message"},
+}
+
+
+def _check_crush_schema(conn: sqlite3.Connection) -> None:
+    """Before adding to a Crush database that already exists, make sure it is one this writer
+    understands: it has the sessions and messages tables with every column we fill, and no
+    other column that is required without a default. A database from an older or newer Crush
+    that differs is refused with what differed, never half-written."""
+    problems: list[str] = []
+    for table, ours in _CRUSH_WRITES.items():
+        info = conn.execute(f"PRAGMA table_info({table})").fetchall()   # noqa: S608
+        if not info:
+            problems.append(f"no {table} table")
+            continue
+        have = {r[1] for r in info}
+        if missing := sorted(ours - have):
+            problems.append(f"{table} lacks column(s) {', '.join(missing)}")
+        # r = (cid, name, type, notnull, default, pk): a required column we never fill
+        if required := sorted(r[1] for r in info
+                              if r[3] and r[4] is None and not r[5] and r[1] not in ours):
+            problems.append(f"{table} requires column(s) {', '.join(required)} that this "
+                            "tool does not fill")
+    if problems:
+        try:
+            top = conn.execute("SELECT max(version_id) FROM goose_db_version").fetchone()[0]
+        except sqlite3.DatabaseError:
+            top = None
+        raise ValueError(
+            "the existing Crush database is not one this tool can add to ("
+            + "; ".join(problems) + (f"; its schema version is {top}, this tool knows up to "
+                                     f"{_GOOSE_VERSIONS[-1]}" if top is not None else "")
+            + "). Nothing was written; point --into at a workspace with no .crush yet.")
+
+
 def _with_writer_folds(rebuilt: Rebuilt, to: str) -> Rebuilt:
     """`rebuilt` with what THIS target cannot carry added to its folded counts, so the opening
     note and the receipt say it. Claude: a thinking block needs the provider's signature, which
@@ -297,6 +337,8 @@ def write_crush(
     fresh = not db.exists()
     conn = sqlite3.connect(db)
     try:
+        if not fresh:
+            _check_crush_schema(conn)
         if fresh:
             conn.execute("PRAGMA journal_mode=WAL")
             for ddl in _CRUSH_SCHEMA:

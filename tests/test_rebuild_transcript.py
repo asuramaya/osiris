@@ -480,6 +480,57 @@ async def test_the_cli_turns_known_failures_into_one_plain_line_each(
         assert "Traceback" not in err and err.count("\n") == 1, err
 
 
+async def test_an_existing_crush_database_this_tool_does_not_understand_is_refused_untouched(
+    actions: Any, tmp_path: Path,
+) -> None:
+    import pytest
+
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+
+    def make(name: str, ddl: list[str]) -> Path:
+        ws = tmp_path / name
+        (ws / ".crush").mkdir(parents=True)
+        db = ws / ".crush" / "crush.db"
+        conn = sqlite3.connect(db)
+        for stmt in ddl:
+            conn.execute(stmt)
+        conn.commit()
+        conn.close()
+        return ws
+
+    sessions_ok = ("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, "
+                   "message_count INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, "
+                   "created_at INTEGER NOT NULL)")
+    messages_old = ("CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, "
+                    "role TEXT NOT NULL, parts TEXT NOT NULL, model TEXT, "
+                    "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+    cases = {
+        "empty": ([], "no sessions table"),
+        "older": ([sessions_ok, messages_old],
+                  "messages lacks column(s) finished_at, is_summary_message, provider"),
+        "newer": ([sessions_ok.replace("created_at INTEGER NOT NULL)",
+                                       "created_at INTEGER NOT NULL, owner TEXT NOT NULL)"),
+                   messages_old.replace(
+                       "updated_at INTEGER NOT NULL)",
+                       "updated_at INTEGER NOT NULL, finished_at INTEGER, provider TEXT, "
+                       "is_summary_message INTEGER DEFAULT 0 NOT NULL)")],
+                  "sessions requires column(s) owner"),
+    }
+    for name, (ddl, words) in cases.items():
+        ws = make(name, ddl)
+        before = (ws / ".crush" / "crush.db").read_bytes()
+        with pytest.raises(ValueError, match="not one this tool can add to") as err:
+            await rebuild_session(actions.pool, SID, to="crush", into=ws)
+        assert words in str(err.value), (name, str(err.value))
+        assert (ws / ".crush" / "crush.db").read_bytes() == before     # untouched
+
+    # a database this tool itself made still takes a second session
+    ws = tmp_path / "mine"
+    await rebuild_session(actions.pool, SID, to="crush", into=ws)
+    await rebuild_session(actions.pool, SID, to="crush", into=ws)
+
+
 # --- the dsh writer: tmp dirs only ----------------------------------------------------------
 
 def _dsh_events(path: Path) -> list[dict[str, Any]]:
