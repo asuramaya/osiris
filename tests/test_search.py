@@ -357,3 +357,36 @@ def test_the_relaxed_leg_reads_through_the_index_not_the_whole_corpus() -> None:
     # the candidate filter uses the exact indexed expression, so ix_assertions_fts applies
     assert ("to_tsvector('english', a.value #>> '{}') @@ websearch_to_tsquery('english', $2)"
             in _RELAX_SQL)
+
+
+async def test_a_slow_search_logs_where_it_spent_its_time(
+    actions: Actions, monkeypatch, caplog,  # type: ignore[no-untyped-def]
+) -> None:
+    """Search runs inside send, record_decision and record_practice, so one slow step is paid by
+    all of them; a call past a second says which step it was (slowest first), and a fast one logs
+    nothing."""
+    import asyncio
+    import logging
+
+    from src.orchestrator import compositions
+
+    await _decision(actions, "decision:lap01", "the quick brown laptop", "agent:t",
+                    EvidenceClass.SELF_DECLARED.value)
+    real = compositions._semantic_hits
+
+    async def slow(pool, q, limit):  # type: ignore[no-untyped-def]
+        await asyncio.sleep(1.1)
+        return await real(pool, q, limit)
+
+    monkeypatch.setattr(compositions, "_semantic_hits", slow)
+    with caplog.at_level(logging.INFO, logger="osiris.compositions"):
+        out = await _search(actions, "laptop")
+    assert out["hits"]
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("search ")]
+    assert len(lines) == 1 and "steps (ms): semantic=" in lines[0]  # the slow step leads
+
+    caplog.clear()
+    monkeypatch.setattr(compositions, "_semantic_hits", real)
+    with caplog.at_level(logging.INFO, logger="osiris.compositions"):
+        await _search(actions, "laptop")
+    assert not [r for r in caplog.records if r.getMessage().startswith("search ")]

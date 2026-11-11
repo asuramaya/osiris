@@ -5488,6 +5488,18 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     Project grouping normalizes through `merged_into`. Field detail: consult_canon('fleet')."""
     pool = await _pool_get()
     rows = await pool.fetch(_FLEET_ROWS_SQL)
+    # STEP LAPS (logged only when the call passes 1 s): fleet is a chain of best-effort probes,
+    # and a slow one hides inside the tool's single wall time.
+    _laps: dict[str, int] = {}
+    _mark = [time.monotonic()]
+    _began = _mark[0]
+
+    def _lap(step: str) -> None:
+        _now = time.monotonic()
+        _laps[step] = round((_now - _mark[0]) * 1000)
+        _mark[0] = _now
+
+    _lap("rows")
     now = datetime.now(UTC)
 
     def _ts(r: Any) -> datetime | None:
@@ -5520,6 +5532,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
             "cwd": r["cwd"],
             "job_dir": r["job_dir"],
         }
+    _lap("nodes")
     # Project label normalization through merged_into: a project's raw `current_assertions`
     # label can name a SoftwareProject that has since been folded into another. Grouping on
     # the raw label would render the dead label's own group forever. Resolve each distinct
@@ -5542,6 +5555,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
                     n["project"] = label_map[n["project"]]
     except Exception:  # noqa: BLE001
         pass
+    _lap("label_norm")
     # Resolve each session's real graph project: writes `resolved_project` onto every node,
     # an active SoftwareProject's own label, a Worktree's parent, project_of's own
     # charter/lineage fallback, or None (unfiled), the key fleetview.render_fleet_tree groups
@@ -5554,6 +5568,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         await resolve_fleet_projects(pool, nodes)
     except Exception:  # noqa: BLE001
         pass
+    _lap("resolve_projects")
     # Land on counts, walk in: the roster's history is 1000+ rows and never what you came for.
     # The flat rows are the live ones (or everything, if you deliberately asked); the counts
     # below are always over the whole fleet, so nothing here undercounts, it only under-shows.
@@ -5571,6 +5586,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     # async function, so that's time the shared event loop cannot serve any other
     # concurrent tool call or request. asyncio.to_thread costs one thread-pool hop,
     # negligible next to the OS read itself.
+    _lap("pre_os")
     try:
         raw_bodies = await asyncio.to_thread(census.live_bodies)
         os_bodies = {p: len(pids) for p, pids in raw_bodies.items()}
@@ -5586,6 +5602,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     # with no netting to cancel through.
     # Non-blocking: its own separate pgrep+/proc scan, same reasoning
     # as os_bodies above, a second synchronous OS read in the same request otherwise.
+    _lap("live_bodies")
     try:
         bodies_by_cwd = await asyncio.to_thread(census.live_bodies_by_cwd) or {}
     except Exception:  # noqa: BLE001
@@ -5654,11 +5671,13 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     # reusing bodies_by_cwd/live_cwds/_resolved already computed above for ghost_gap: no
     # new OS read. Purely additive key; never touches os_bodies/ghost_gap or the row-fetch
     # SQL above it.
+    _lap("os_scans")
     try:
         from src.orchestrator.mounts import registry_census as _registry_census
         census_report = await _registry_census(pool)
     except Exception:  # noqa: BLE001, same fail-open law as os_bodies/whisper_health
         census_report = {"blind": True, "verified": [], "matched": [], "rowless": []}
+    _lap("registry_census")
     bodies = []
     for b in (*census_report.get("matched", []), *census_report.get("rowless", [])):
         rc = _resolved(b.get("harness_cwd"))
@@ -5684,6 +5703,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     # (deploy_guard.landing_audit); this is just the at-a-glance count so a coordinator sees
     # it here too, without a second call or waiting for orient's open-obligations list. Same
     # fail-open law as os_bodies/harness_registry beside it.
+    _lap("harness_fold")
     try:
         from src.orchestrator import capture as _capture
         from src.orchestrator.deploy_guard import (
@@ -5704,8 +5724,10 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         landing_audit = {"stale_unmerged_branches": 0, "graph_claim_mismatches": 0,
                          "error": "landing audit glance unavailable"}
+    _lap("landing_audit")
     from src.orchestrator.seats import fleet_occupancy
     seats = await fleet_occupancy(pool)
+    _lap("fleet_occupancy")
     # Whisper health: recent session-end/precompact/stophook alarm counts, read off the
     # same blind-spot channel every other unverifiable-from-here gap uses; a session
     # mounting via fleet() sees at a glance whether the startup path it just went through
@@ -5732,6 +5754,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     # only reads what already landed): "not recovered" and "recovered, zero harness
     # traffic" are different facts, never conflated. Batched (not per-node), same law as
     # the project-label normalization above it: fleet() can carry 500+ rows.
+    _lap("whisper_pool")
     try:
         anchor_by_canonical = {
             c: str(Path(n["job_dir"]).name) for c, n in nodes.items()
@@ -5820,6 +5843,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     # beside `count` rather than replacing it: an existing reader of the raw row total
     # keeps working unchanged. Best-effort, same fail-open shape as os_bodies/ghost_gap/
     # harness_caps above: a probe failure here must never break fleet() outright.
+    _lap("harness_counts")
     agent_classes: dict[str, int] | None = None
     try:
         from src.orchestrator.vitals import agent_class_counts
@@ -5827,6 +5851,11 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         agent_classes = await agent_class_counts(pool)
     except Exception:  # noqa: BLE001
         pass
+    _lap("agent_classes")
+    if time.monotonic() - _began > 1.0:
+        logging.getLogger("osiris.mcp").info(
+            "fleet %.1fs; steps (ms): %s", time.monotonic() - _began,
+            ", ".join(f"{k}={v}" for k, v in sorted(_laps.items(), key=lambda kv: -kv[1])))
     return {
         "connected_now": len(_agents),
         "count": len(nodes),
@@ -9012,11 +9041,15 @@ async def _surface_prior_art(
     an OPEN kind='obligation' row, or a kindless legacy row sharing this call's own
     `repo` (capture._open_obligation_thread_ids). Never a resolved thread (nothing to
     warn against re-doing) and never a kindless row admitted with no repo at all."""
+    began = time.monotonic()
     try:
         search_out = await asyncio.wait_for(comp.run_spec(
             pool, {"op": "function", "name": "search",
                    "args": {"q": text[:300], "limit": 15, "caller": actor}},
             None, name="search", caller=actor), timeout=_PRIOR_ART_SEARCH_TIMEOUT_S)
+        if time.monotonic() - began > 1.0:  # what a send / record_decision pays for prior art
+            logging.getLogger("osiris.mcp").info(
+                "prior-art search took %.1fs", time.monotonic() - began)
         hits = search_out["items"]["hits"]
         thread_hit_ids = [uuid.UUID(h["id"]) for h in hits if h.get("type") == "Thread"]
         if thread_hit_ids:
