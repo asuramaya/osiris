@@ -5494,6 +5494,11 @@ async def cmd_rebuild_transcript(
     from src.ingest.rebuild import rebuild_session
 
     if install:
+        if into:
+            print("osiris rebuild-transcript: --install places the session under "
+                  "~/.dsh/sessions itself, so it cannot be combined with --into. Use one "
+                  "or the other.", file=sys.stderr)
+            return 1
         if to != "dsh":
             print("osiris rebuild-transcript: --install is for --to dsh (it places the "
                   "session under ~/.dsh/sessions); crush joins the workspace you name with "

@@ -328,6 +328,22 @@ async def test_a_failed_dsh_compress_leaves_nothing_in_the_dsh_home(
     assert not [p for p in sessions.rglob("*") if p.name.startswith(".partial-")]
 
 
+async def test_install_with_an_into_is_refused_rather_than_ignoring_the_into(
+    actions: Any, tmp_path: Path, monkeypatch: Any, capsys: Any,
+) -> None:
+    from src.cli import cmd_rebuild_transcript
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    rc = await cmd_rebuild_transcript(
+        SID, to="dsh", into=str(tmp_path / "elsewhere"), cwd="/var/tmp/osiris-scratch/replay",
+        install=True, pool=actions.pool)
+    err = capsys.readouterr().err
+    assert rc == 1 and "cannot be combined with --into" in err
+    assert not (tmp_path / "home" / ".dsh").exists() and not (tmp_path / "elsewhere").exists()
+
+
 # --- the dsh writer: tmp dirs only ----------------------------------------------------------
 
 def _dsh_events(path: Path) -> list[dict[str, Any]]:
