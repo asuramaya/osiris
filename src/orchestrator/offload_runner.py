@@ -146,11 +146,13 @@ def _one_line(raw: bytes) -> str:
     return failure_summary(raw.decode(errors="replace"))
 
 
+_RESTIC_INCOMPLETE_SNAPSHOT = 3  # restic backup: the snapshot was created, some files unreadable
 _PROBE_TIMEOUT_SECONDS = 30  # restic snapshots and init: a slow link must not hang the tick
 
 
 def _run_restic_backup(
     *, repository: str, password: bytes, source: Path, init_if_needed: bool = True,
+    notes: list[str] | None = None,
 ) -> str | None:
     """Returns a failure string, or None on success, same return convention as
     `osiris_offbox_restore_drill.run_drill`.
@@ -160,7 +162,10 @@ def _run_restic_backup(
     turns it off for a target that has ever offloaded successfully). A timeout, a lock, a network
     or an authentication failure records its own error and skips the target: initialising over
     a repository that merely could not be read is how a slow link once tried to re-create the
-    NAS repository (restic refused, but only because the config file was there)."""
+    NAS repository (restic refused, but only because the config file was there).
+
+    restic exits 3 when it could not read some source files but still wrote the snapshot: that is
+    a success, and the caller gets the reason through `notes` (a list the call appends to)."""
     from src.orchestrator import restic_locks
 
     env = {**os.environ, "RESTIC_REPOSITORY": repository, "RESTIC_PASSWORD": password.decode()}
@@ -207,7 +212,11 @@ def _run_restic_backup(
         backup = restic_locks.run_restic(
             ["backup", str(source), "--exclude=*.tmp"], env,
             timeout=_RESTIC_TIMEOUT_SECONDS, text=False)
-        if backup.returncode != 0:
+        if backup.returncode == _RESTIC_INCOMPLETE_SNAPSHOT:
+            if notes is not None:
+                notes.append("snapshot saved, but restic could not read some source files: "
+                             + (_one_line(backup.stderr) or "see restic output"))
+        elif backup.returncode != 0:
             return f"restic backup failed: {backup.stderr.decode(errors='replace').strip()}"
         return None
     except subprocess.TimeoutExpired as exc:
@@ -377,14 +386,16 @@ async def _run_offload_tick_locked(
         repository = target.get("path_or_url", "")
         # a target that has ever offloaded has a repository: never initialise over it
         ever_offloaded = bool((_read_receipts().get(name) or {}).get("last_successful_offload"))
+        notes: list[str] = []
         fail = await asyncio.to_thread(
             _run_restic_backup, repository=repository, password=password, source=source,
-            init_if_needed=not ever_offloaded)
+            init_if_needed=not ever_offloaded, notes=notes)
         if fail is None:
             _write_receipt(name, {"last_successful_offload": now, "last_attempt_at": now,
                                   "last_error": None, "last_skip_reason": None,
-                                  "skipped_since": None, "stale_notified_clock": None})
-            results.append({"name": name, "ok": True})
+                                  "skipped_since": None, "stale_notified_clock": None,
+                                  "last_note": notes[0] if notes else None})
+            results.append({"name": name, "ok": True, **({"note": notes[0]} if notes else {})})
         elif restic_locks.is_busy(fail):
             # Somebody else holds the repository right now (the restore test, a backup started by
             # hand, another host). Nothing failed: a quiet skip, no last_error, no clobbered last
