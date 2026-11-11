@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 import time
 from typing import Any, Protocol
@@ -253,6 +254,9 @@ async def embed_backfill(
 _matrix_cache: dict[str, Any] = {}  # fingerprint → (ids, fields, numpy matrix)
 
 
+_rebuilds: dict[str, asyncio.Task[Any]] = {}  # model -> the one rebuild in flight
+
+
 async def _matrix(pool: asyncpg.Pool, model: str) -> tuple[list[Any], list[str], Any] | None:
     """The whole vector index in memory (~7MB at current scale), keyed by a cheap DB
     fingerprint (row count + freshest embedded_at), refreshed when THAT moves, exactly
@@ -270,7 +274,15 @@ async def _matrix(pool: asyncpg.Pool, model: str) -> tuple[list[Any], list[str],
     Python-list-valued asyncpg Records, transiently allocating hundreds of MB before
     np.asarray ever discarded them, on a clock unrelated to whether anything changed. The
     fix is not a smaller TTL, it is removing the wall-clock condition entirely: the
-    fingerprint alone is already authoritative."""
+    fingerprint alone is already authoritative.
+
+    STALE WHILE REVALIDATING: the worker's embed pass moves the fingerprint every ten
+    minutes, and the next search used to wait the whole rebuild (1.4 to 2.4 s) for a few
+    vectors it did not need. When a matrix for this model is already in memory it is served
+    at once, and ONE background rebuild swaps the new one in when it finishes; the matrix is
+    at most one embed pass behind. Only a process with no matrix at all waits, and every
+    caller then waits on the same single build (a first search right after a restart still
+    gets a real matrix, and ten of them do not build ten)."""
     fp_row = await pool.fetchrow(
         "SELECT count(*) AS n, max(embedded_at) AS latest FROM search_vectors WHERE model=$1",
         model)
@@ -281,6 +293,35 @@ async def _matrix(pool: asyncpg.Pool, model: str) -> tuple[list[Any], list[str],
     if hit and hit[0] == fp:
         cached: tuple[list[Any], list[str], Any] = hit[1]
         return cached
+    task = _start_rebuild(pool, model, fp)
+    if hit and str(hit[0]).startswith(f"{model}:"):
+        stale: tuple[list[Any], list[str], Any] = hit[1]
+        return stale
+    built: tuple[list[Any], list[str], Any] = await asyncio.shield(task)
+    return built
+
+
+def _start_rebuild(pool: asyncpg.Pool, model: str, fp: str) -> asyncio.Task[Any]:
+    """The one rebuild in flight for this model, started if there is none."""
+    running = _rebuilds.get(model)
+    if running is not None and not running.done():
+        return running
+    task = asyncio.get_running_loop().create_task(_build_matrix(pool, model, fp))
+    _rebuilds[model] = task
+
+    def _done(t: asyncio.Task[Any]) -> None:
+        if _rebuilds.get(model) is t:
+            _rebuilds.pop(model, None)
+        if not t.cancelled() and t.exception() is not None:
+            # the stale matrix keeps serving and the next search starts another build
+            logging.getLogger("osiris.semantics").warning(
+                "vector matrix rebuild failed: %r", t.exception())
+
+    task.add_done_callback(_done)
+    return task
+
+
+async def _build_matrix(pool: asyncpg.Pool, model: str, fp: str) -> Any:
     # Built in slices: converting 39k Python float lists to numpy holds the GIL, so a
     # worker thread would not free the loop; instead each slice is fetched, converted and
     # followed by a yield, so no one step blocks the loop for more than a slice (the single
