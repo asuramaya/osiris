@@ -291,6 +291,11 @@ def write_crush(
 _CLAUDE_VERSION = "2.1.322"   # the version whose transcript shape this follows (observed)
 
 
+def dsh_sessions_dir() -> str:
+    """Where DSH keeps its sessions (`~/.dsh/sessions`)."""
+    return str(Path.home() / ".dsh" / "sessions")
+
+
 def real_claude_projects_dir() -> Path:
     return Path.home() / ".claude" / "projects"
 
@@ -431,6 +436,8 @@ def write_dsh(
                     "content": [{"type": "tool-result", "toolCallId": p_.call_id,
                                  "content": [{"type": "text", "text": p_.text}]}]}})
     target_dir = sessions_dir / _cwd_to_slug(cwd) / sid
+    if target_dir.exists():
+        raise ValueError(f"refusing to overwrite {target_dir}")
     target_dir.mkdir(parents=True, exist_ok=True)
     plain = target_dir / "session.jsonl"
     plain.write_text("".join(json.dumps(e) + "\n" for e in events))

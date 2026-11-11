@@ -277,3 +277,77 @@ async def test_dsh_needs_a_cwd(actions: Any, tmp_path: Path) -> None:
     await _ingest(actions, tmp_path / "src", _lines())
     with pytest.raises(ValueError, match="needs --cwd"):
         await rebuild_session(actions.pool, SID, to="dsh", into=tmp_path / "d")
+
+
+# --- closing the loop for the operator: --install and the printed commands ------------------
+
+async def test_install_places_a_dsh_session_under_the_dsh_home_and_prints_how_to_open_it(
+    actions: Any, tmp_path: Path, monkeypatch: Any, capsys: Any,
+) -> None:
+    from src.cli import cmd_rebuild_transcript
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    rc = await cmd_rebuild_transcript(
+        SID, to="dsh", into=None, cwd="/var/tmp/osiris-scratch/replay", install=True,
+        pool=actions.pool)
+    out = capsys.readouterr().out
+    assert rc == 0
+    placed = list((tmp_path / "home" / ".dsh" / "sessions").rglob("session.jsonl.zstd"))
+    assert len(placed) == 1 and placed[0].parent.name.startswith("session-")
+    sid = placed[0].parent.name
+    assert f"choose session {sid}" in out
+    assert "cd /var/tmp/osiris-scratch/replay && npx @deepseek-ai/dsh web" in out
+
+
+async def test_install_is_for_dsh_only_and_an_into_is_otherwise_required(
+    actions: Any, tmp_path: Path, capsys: Any,
+) -> None:
+    from src.cli import cmd_rebuild_transcript
+
+    assert await cmd_rebuild_transcript(
+        SID, to="crush", into=None, install=True, pool=actions.pool) == 1
+    assert "--install is for --to dsh" in capsys.readouterr().err
+    assert await cmd_rebuild_transcript(SID, to="crush", into=None, pool=actions.pool) == 1
+    assert "--into is required" in capsys.readouterr().err
+
+
+async def test_crush_prints_the_one_command_that_opens_the_session(
+    actions: Any, tmp_path: Path, capsys: Any,
+) -> None:
+    from src.cli import cmd_rebuild_transcript
+
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    ws = tmp_path / "ws"
+    assert await cmd_rebuild_transcript(
+        SID, to="crush", into=str(ws), pool=actions.pool) == 0
+    out = capsys.readouterr().out
+    sid = sqlite3.connect(ws / ".crush" / "crush.db").execute(
+        "SELECT id FROM sessions").fetchone()[0]
+    assert f"open it: cd {ws} && crush --session {sid}" in out
+
+
+async def test_a_dsh_session_never_overwrites_an_existing_one(
+    actions: Any, tmp_path: Path, monkeypatch: Any,
+) -> None:
+    import uuid
+
+    import pytest
+    from src.ingest import rebuild
+
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    fixed = uuid.UUID("11111111-1111-4111-8111-111111111111")
+    monkeypatch.setattr(rebuild.uuid, "uuid4", lambda: fixed)
+    await rebuild_session(actions.pool, SID, to="dsh", into=tmp_path / "d", cwd="/x/y")
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        await rebuild_session(actions.pool, SID, to="dsh", into=tmp_path / "d", cwd="/x/y")
+
+
+def test_the_voice_names_the_alternatives_in_one_short_line() -> None:
+    from src import launch_voice
+
+    line = launch_voice.rebuild_hint("4ffb15db-0000-4000-8000-000000000000")
+    assert line == "Also: osiris rebuild-transcript 4ffb15db --to crush|dsh"
