@@ -409,16 +409,33 @@ _in_flight_next_id = itertools.count()
 _watchdog_task: asyncio.Task[None] | None = None
 
 
-def _log_all_thread_stacks(log: Any, *, reason: str) -> None:
-    """Every live thread's own Python stack, formatted and logged in one shot: the
-    exact dump SIGUSR1 (faulthandler) also produces, reused here so the automatic and
-    manual paths report identically."""
+def _thread_stacks_text(*, reason: str) -> str:
+    """Every live thread's own Python stack plus every pending task's, as one block of text:
+    the exact dump SIGUSR1 (faulthandler) also produces, reused here so the automatic and
+    manual paths report identically. Built on the event loop's own thread (the task list
+    needs it), and cheap: a few thousand characters of stack walking."""
     frames = sys._current_frames()
     parts = [f"{reason}: {len(frames)} live thread(s):"]
     for thread_id, frame in frames.items():
         parts.append(f"--- thread {thread_id} ---\n{''.join(traceback.format_stack(frame))}")
     parts.append(_format_asyncio_task_stacks())
-    log.warning("\n".join(parts))
+    return "\n".join(parts)
+
+
+def _dump_log_extra() -> dict[str, Any]:
+    """Log-record extras that stop the rich log handler highlighting and parsing markup in a
+    stack dump: the dump is plain text, and that work was most of the cost of printing it."""
+    try:
+        from rich.highlighter import NullHighlighter
+    except ImportError:
+        return {}
+    return {"highlighter": NullHighlighter(), "markup": False}
+
+
+def _log_all_thread_stacks(log: Any, *, reason: str) -> None:
+    """The dump, logged in one shot, on the calling thread (SIGUSR1 and tests). The watchdog
+    uses `_thread_stacks_text` and logs from a worker thread instead: see `_watchdog_loop`."""
+    log.warning(_thread_stacks_text(reason=reason), extra=_dump_log_extra())
 
 
 def _format_asyncio_task_stacks() -> str:
@@ -466,10 +483,13 @@ async def _watchdog_loop() -> None:
                 continue
             elapsed = now - info["started_at"]
             info["next_log_at"] = now + _WATCHDOG_REPEAT_INTERVAL_S
-            _log_all_thread_stacks(
-                log, reason=(
-                    f"SLOW TOOL CALL: {info['tool']!r} (caller={info['caller']!r}, "
-                    f"call_id={call_id}) has been in flight {elapsed:.1f}s"))
+            text = _thread_stacks_text(reason=(
+                f"SLOW TOOL CALL: {info['tool']!r} (caller={info['caller']!r}, "
+                f"call_id={call_id}) has been in flight {elapsed:.1f}s"))
+            # The server's log handler is rich, and rendering a 30k-character dump through it
+            # held the event loop for 100 to 160 ms at exactly the moment a call was already
+            # slow. Build the text here, print it on a worker thread.
+            await asyncio.to_thread(log.warning, text, extra=_dump_log_extra())
 
 
 def _loop_lag_snapshot() -> dict[str, Any] | None:
@@ -780,6 +800,31 @@ mcp = BoundedMCP(
         "them. Use send(to='operator') to reach the person operating this system."
     ),
 )
+
+
+def _use_plain_logging() -> None:
+    """Swap the SDK's rich log handler for a plain one. FastMCP's constructor installs
+    RichHandler on the root logger, which highlights, wraps and tabulates every line on the
+    event loop: 1.4 ms for an ordinary line, against 0.02 ms plain, and it is the reason a
+    30,000-character stack dump once held the loop for 160 ms. journald already stamps each
+    line, and one plain line greps better than rich's wrapped columns. Logger names and the
+    level are unchanged, and a handler that is not rich (a test's capture, an operator's own)
+    is left alone."""
+    import logging
+
+    root = logging.getLogger()
+    plain = logging.Formatter("%(levelname)s %(name)s: %(message)s")
+    for handler in list(root.handlers):
+        if type(handler).__module__.split(".")[0] != "rich":
+            continue
+        replacement = logging.StreamHandler()  # stderr, like the rich console it replaces
+        replacement.setFormatter(plain)
+        replacement.setLevel(handler.level)
+        root.removeHandler(handler)
+        root.addHandler(replacement)
+
+
+_use_plain_logging()
 # DECLARE THE listChanged CAPABILITY (see BoundedMCP/_nudge_tool_list_refresh above): FastMCP
 # never passes NotificationOptions through to the lowlevel Server's own
 # create_initialization_options(), so `tools_changed` silently defaults to False and a

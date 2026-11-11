@@ -301,7 +301,7 @@ def test_log_all_thread_stacks_logs_every_live_thread() -> None:
         def __init__(self) -> None:
             self.messages: list[str] = []
 
-        def warning(self, msg: str) -> None:
+        def warning(self, msg: str, **_kw: object) -> None:
             self.messages.append(msg)
 
     log = _FakeLog()
@@ -544,3 +544,83 @@ async def test_tool_traffic_in_flight_is_empty_with_nothing_running(
 ) -> None:
     out = await srv.tool_traffic(window_minutes=5)
     assert out["in_flight"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_watchdog_prints_its_dump_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rendering the dump through the rich log handler used to hold the loop for 100 to
+    160 ms. The text is built on the loop and logged from a worker thread, with the
+    handler's highlighting and markup switched off."""
+    import asyncio
+    import logging
+    import threading
+    import time
+
+    main = threading.get_ident()
+    seen: list[tuple[int, bool]] = []
+
+    class _Tap(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            seen.append((threading.get_ident(), getattr(record, "markup", None) is False))
+
+    logger = logging.getLogger("osiris.mcp.watchdog")
+    tap = _Tap(level=logging.WARNING)
+    logger.addHandler(tap)
+    monkeypatch.setattr(srv, "_WATCHDOG_STALL_THRESHOLD_S", 0.0)
+    monkeypatch.setattr(srv, "_WATCHDOG_POLL_INTERVAL_S", 0.01)
+    monkeypatch.setattr(srv, "_WATCHDOG_REPEAT_INTERVAL_S", 60.0)
+    srv._in_flight_calls[991] = {"tool": "send", "caller": "agent:x",
+                                 "started_at": time.monotonic() - 99.0, "next_log_at": 0.0}
+    task = asyncio.create_task(srv._watchdog_loop())
+    try:
+        assert await wait_until(lambda: bool(seen))
+    finally:
+        task.cancel()
+        srv._in_flight_calls.pop(991, None)
+        logger.removeHandler(tap)
+    assert seen[0][0] != main
+    assert seen[0][1] is True  # highlighting and markup are off for the dump
+
+
+def test_the_servers_root_logger_has_no_rich_handler_and_keeps_one_plain_line_format() -> None:
+    """FastMCP installs a rich handler that costs about 1.4 ms a line on the event loop;
+    the module swaps it for a plain single-line one at import."""
+    import logging
+
+    handlers = logging.getLogger().handlers
+    assert not [h for h in handlers if type(h).__module__.split(".")[0] == "rich"]
+    plain = [h for h in handlers if isinstance(h, logging.StreamHandler)
+             and h.formatter is not None
+             and h.formatter._fmt == "%(levelname)s %(name)s: %(message)s"]
+    # under a test runner the module may be imported after another handler already owned the
+    # root logger (so FastMCP installed none): the swap then has nothing to do, and that is fine
+    assert len(plain) <= 1
+
+
+def test_use_plain_logging_replaces_a_rich_handler_and_leaves_others() -> None:
+    import logging
+
+    from rich.logging import RichHandler
+
+    root = logging.getLogger()
+    other = logging.NullHandler()
+    rich_h = RichHandler()
+    rich_h.setLevel(logging.WARNING)
+    root.addHandler(other)
+    root.addHandler(rich_h)
+    try:
+        srv._use_plain_logging()
+        assert rich_h not in root.handlers and other in root.handlers
+        added = [h for h in root.handlers if isinstance(h, logging.StreamHandler)
+                 and not isinstance(h, logging.NullHandler)
+                 and h.formatter is not None
+                 and h.formatter._fmt == "%(levelname)s %(name)s: %(message)s"]
+        assert added and added[-1].level == logging.WARNING
+    finally:
+        for h in list(root.handlers):
+            if h is other or (isinstance(h, logging.StreamHandler)
+                              and getattr(h.formatter, "_fmt", "") ==
+                              "%(levelname)s %(name)s: %(message)s"):
+                root.removeHandler(h)
