@@ -210,6 +210,58 @@ async def test_the_claude_writer_refuses_the_real_session_store_and_needs_a_cwd(
         await rebuild_session(actions.pool, SID, to="claude", into=tmp_path / "p")
 
 
+async def test_no_target_may_write_into_claude_codes_session_store_by_any_route(
+    actions: Any, tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """The store guard covers every target, a sub-directory of the store, and symlinks that
+    lead into it: the store is never written, whichever way the path is spelled."""
+    import pytest
+
+    home = tmp_path / "home"
+    store = home / ".claude" / "projects"
+    store.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    cwd = "/var/tmp/osiris-scratch/replay"
+    sub = store / "-some-slug"
+    sub.mkdir()
+    for to, into in (("claude", sub), ("crush", store), ("crush", sub), ("dsh", store),
+                     ("dsh", sub)):
+        with pytest.raises(ValueError, match="held until the operator allows it"):
+            await rebuild_session(actions.pool, SID, to=to, into=into, cwd=cwd)
+    # a scratch workspace whose .crush is a link into the store
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".crush").symlink_to(sub)
+    with pytest.raises(ValueError, match="symlink"):
+        await rebuild_session(actions.pool, SID, to="crush", into=work)
+    # a scratch workspace whose .crush is real but whose crush.db is a link into the store
+    work2 = tmp_path / "work2"
+    (work2 / ".crush").mkdir(parents=True)
+    (work2 / ".crush" / "crush.db").symlink_to(sub / "crush.db")
+    with pytest.raises(ValueError, match="symlink"):
+        await rebuild_session(actions.pool, SID, to="crush", into=work2)
+    # a claude projects dir (scratch) whose slug directory is a link into the store
+    scratch = tmp_path / "scratch-projects"
+    scratch.mkdir()
+    from src.ingest.rebuild import _slug
+
+    (scratch / _slug(cwd)).symlink_to(sub)
+    with pytest.raises(ValueError, match="symlink"):
+        await rebuild_session(actions.pool, SID, to="claude", into=scratch, cwd=cwd)
+    # the same for a dsh slug directory
+    sessions = tmp_path / "dsh-sessions"
+    sessions.mkdir()
+    from src.ingest.harness.dsh import _cwd_to_slug
+
+    (sessions / _cwd_to_slug(cwd)).symlink_to(sub)
+    with pytest.raises(ValueError, match="symlink"):
+        await rebuild_session(actions.pool, SID, to="dsh", into=sessions, cwd=cwd)
+    assert not list(store.rglob("*.jsonl")) and not list(store.rglob("*.db"))
+    assert not list(store.rglob("session.jsonl*"))
+
+
 # --- the dsh writer: tmp dirs only ----------------------------------------------------------
 
 def _dsh_events(path: Path) -> list[dict[str, Any]]:
