@@ -391,3 +391,26 @@ async def test_a_slow_search_logs_where_it_spent_its_time(
     with caplog.at_level(logging.INFO, logger="osiris.compositions"):
         await _search(actions, "laptop")
     assert not [r for r in caplog.records if r.getMessage().startswith("search ")]
+
+
+async def test_the_typo_route_gives_up_after_its_budget_and_says_so(
+    actions: Actions, monkeypatch,  # type: ignore[no-untyped-def]
+) -> None:
+    """A word that matches nothing used to hold a connection for 5 to 12 s in the typo scan.
+    Past its budget the statement is cancelled, the search returns no fuzzy hits and a plain
+    note, and the connection is healthy afterwards."""
+    from src.orchestrator import compositions
+
+    monkeypatch.setattr(compositions, "_TYPO_BUDGET_MS", 50)
+    # a stand-in for the slow scan: sleeps far past the budget, takes the same two parameters
+    monkeypatch.setattr(compositions, "_TRGM_SQL",
+                        "SELECT pg_sleep(5), $1::text[] AS w, $2::int AS n")
+    out = await _search(actions, "zzqqxxtypo")
+    assert out["hits"] == []
+    assert out["note"] == "typo search timed out; try fewer or exact words"
+
+    monkeypatch.undo()
+    await _decision(actions, "decision:typo1", "the quick brown laptop", "agent:t",
+                    EvidenceClass.SELF_DECLARED.value)
+    again = await _search(actions, "laptop")
+    assert again["hits"]  # the pool and the search both still work

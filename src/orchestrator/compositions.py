@@ -491,7 +491,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         "FROM top, tq ORDER BY top.rank DESC")
     rows = await pool.fetch(_SQL, q, limit)
     lap("fts")
-    relaxed = fuzzy = False
+    relaxed = fuzzy = typo_timed_out = False
     # explicit syntax (quotes, OR, minus) means the asker KNEW the language: no route
     # behind this one may second-guess it (the OR-relaxation's law, inherited by trigram)
     # (`words` was already split off `q` by the id route above; q is unchanged since)
@@ -522,7 +522,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         # only runs when both exact routes missed.
         trgm_words = [w.lower() for w in re.findall(r"[a-z0-9][a-z0-9-]{2,}", q.lower())]
         if trgm_words:
-            rows = await pool.fetch(_TRGM_SQL, trgm_words, limit)
+            rows, typo_timed_out = await _trigram_rows(pool, trgm_words, limit)
             fuzzy = bool(rows)
     lap("trigram")
     lex_hits = [
@@ -663,7 +663,9 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
                         "best-covered first"} if relaxed and not fuzzy else {}),
             **({"note": "exact matches found nothing: these are spelling-tolerant "
                         "(trigram) matches"} if fuzzy else {}),
-            **({"note": "no hits: logged, the zero-hit rate is watched"} if not hits else {})}
+            **({"note": "no hits: logged, the zero-hit rate is watched"} if not hits else {}),
+            **({"note": "typo search timed out; try fewer or exact words"}
+               if typo_timed_out else {})}
 
 
 # THE RARITY-WEIGHTED RELAXATION: the ANY-term retry's rank is the sum
@@ -725,6 +727,27 @@ _RELAX_SQL = (
     "  ts_headline('english', a.value #>> '{}', websearch_to_tsquery('english', $2), "
     "   'MaxWords=20, MinWords=8, MaxFragments=1') AS snippet "
     "FROM top JOIN current_assertions a ON a.id = top.aid ORDER BY top.rank DESC")
+
+
+# THE TYPO ROUTE'S TIME BUDGET: the spelling-tolerant leg scans every searchable row with
+# word_similarity (about 59 microseconds a row, 75,000 rows, a whole pass per word), so a word that
+# matches nothing held a connection for 5 to 12 s. No index helps a real typo (a trigram index
+# returned a fifth of the rows as candidates), so the leg gets a budget instead: past it the
+# statement is cancelled, the search returns the hits it already has and says why.
+_TYPO_BUDGET_MS = 3000
+
+
+async def _trigram_rows(
+    pool: asyncpg.Pool, words: list[str], limit: int,
+) -> tuple[list[Any], bool]:
+    """(rows, timed_out). The statement runs in its own transaction with a local
+    statement_timeout, so the budget touches nothing else the search does."""
+    try:
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute(f"SET LOCAL statement_timeout = {int(_TYPO_BUDGET_MS)}")
+            return list(await conn.fetch(_TRGM_SQL, words, limit)), False
+    except asyncpg.QueryCanceledError:
+        return [], True
 
 
 _TRGM_SQL = (
