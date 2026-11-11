@@ -321,3 +321,88 @@ def test_fuse_ranked_dedupes_and_marks_both() -> None:
     assert by_id["B"]["via"] == "both"
     assert by_id["A"]["via"] == "lexical" and by_id["C"]["via"] == "semantic"
     assert len(_fuse_ranked(lex, sem, 1)) == 1  # the limit is honored post-fusion
+
+
+async def test_a_moved_fingerprint_serves_the_old_matrix_while_one_rebuild_swaps_in_the_new(
+    actions: Actions, fake_embedder: FakeEmbedder,
+) -> None:
+    """The worker's embed pass moves the fingerprint from another process (so the cache is
+    not cleared). The next search must not wait for the rebuild: it gets the matrix already in
+    memory, and one background rebuild brings the new vectors in."""
+    await _decision(actions, "decision:swr1", "the warm swap demotion ruling stands")
+    await semantics.embed_backfill(actions.pool, fake_embedder)
+    first = await semantics._matrix(actions.pool, fake_embedder.model)
+    assert first is not None
+    n_before = len(first[0])
+
+    # a write from "another process": a vector row appears, nothing clears this cache
+    obj = await actions.create_or_find_object("Decision", "decision:swr2", "test")
+    await actions.pool.execute(
+        "INSERT INTO search_vectors (object_id, field, model, text_hash, vec) "
+        "VALUES ($1,'summary',$2,'h',$3)", obj, fake_embedder.model,
+        [0.1] * len(first[2][0]))
+
+    during = await semantics._matrix(actions.pool, fake_embedder.model)
+    assert during is first  # served at once, the old matrix itself
+    task = semantics._rebuilds[fake_embedder.model]
+    await task
+    after = await semantics._matrix(actions.pool, fake_embedder.model)
+    assert after is not None and len(after[0]) == n_before + 1
+
+
+async def test_callers_with_no_matrix_share_one_build_and_all_get_a_real_matrix(
+    actions: Actions, fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A first search right after a restart has nothing to serve stale: it waits, and ten of
+    them wait on the same single build."""
+    import asyncio
+
+    await _decision(actions, "decision:swr3", "settle every inbox mail before dark")
+    await semantics.embed_backfill(actions.pool, fake_embedder)
+    semantics._matrix_cache.clear()
+    builds = 0
+    real = semantics._build_matrix
+
+    async def counting(pool, model, fp):  # type: ignore[no-untyped-def]
+        nonlocal builds
+        builds += 1
+        await asyncio.sleep(0.05)
+        return await real(pool, model, fp)
+
+    monkeypatch.setattr(semantics, "_build_matrix", counting)
+    got = await asyncio.gather(*[semantics._matrix(actions.pool, fake_embedder.model)
+                                 for _ in range(6)])
+    assert builds == 1
+    assert all(g is not None and len(g[0]) >= 1 for g in got)
+
+
+async def test_a_failed_rebuild_keeps_serving_the_old_matrix_and_the_next_search_retries(
+    actions: Actions, fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _decision(actions, "decision:swr4", "the warm swap demotion ruling stands")
+    await semantics.embed_backfill(actions.pool, fake_embedder)
+    first = await semantics._matrix(actions.pool, fake_embedder.model)
+    assert first is not None
+    obj = await actions.create_or_find_object("Decision", "decision:swr5", "test")
+    await actions.pool.execute(
+        "INSERT INTO search_vectors (object_id, field, model, text_hash, vec) "
+        "VALUES ($1,'summary',$2,'h',$3)", obj, fake_embedder.model,
+        [0.2] * len(first[2][0]))
+
+    async def boom(pool, model, fp):  # type: ignore[no-untyped-def]
+        raise RuntimeError("rebuild failed")
+
+    real = semantics._build_matrix
+    monkeypatch.setattr(semantics, "_build_matrix", boom)
+    assert await semantics._matrix(actions.pool, fake_embedder.model) is first
+    import asyncio
+
+    await asyncio.sleep(0.05)  # let the failed task finish and be forgotten
+    assert fake_embedder.model not in semantics._rebuilds
+    assert await semantics._matrix(actions.pool, fake_embedder.model) is first  # still stale-served
+
+    monkeypatch.setattr(semantics, "_build_matrix", real)
+    await semantics._matrix(actions.pool, fake_embedder.model)  # starts the retry
+    await semantics._rebuilds[fake_embedder.model]
+    after = await semantics._matrix(actions.pool, fake_embedder.model)
+    assert after is not None and len(after[0]) == len(first[0]) + 1
