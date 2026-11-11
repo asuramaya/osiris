@@ -34,6 +34,7 @@ from src.ingest.harness import (
     SessionLocator,
     TurnRow,
 )
+from src.orchestrator.phase_clock import PhaseClock
 
 _SYNTHETIC = "<synthetic>"
 
@@ -57,6 +58,7 @@ async def _read_turns_off_loop(
 async def identity_reading(
     pool: asyncpg.Pool, *, cwd: str | None, job_dir: str | None,
     root: Path | None = None, transcript_path: str | None = None,
+    clock: PhaseClock | None = None,
 ) -> ModelReading | None:
     """The identity callers' single entry point to the store: discover_and_ingest, FAIL-OPEN.
 
@@ -72,7 +74,7 @@ async def identity_reading(
     here at all."""
     try:
         return await TranscriptStore(pool).discover_and_ingest(
-            cwd=cwd, job_dir=job_dir, root=root, transcript_path=transcript_path)
+            cwd=cwd, job_dir=job_dir, root=root, transcript_path=transcript_path, clock=clock)
     except Exception:  # noqa: BLE001, identity must resolve even with the store down
         return None
 
@@ -246,6 +248,7 @@ class TranscriptStore:
         self, *, cwd: str | None, job_dir: str | None,
         adapters: list[HarnessAdapter] | None = None,
         root: Path | None = None, transcript_path: str | None = None,
+        clock: PhaseClock | None = None,
     ) -> ModelReading | None:
         """Try each adapter; ingest from the first that discovers a session.
 
@@ -280,8 +283,10 @@ class TranscriptStore:
                     locator = await asyncio.to_thread(discover_at, p)
                 except Exception:  # noqa: BLE001, an adapter failure must never block mount
                     continue
+                if clock is not None:
+                    clock.mark("id_discover")
                 if locator is not None:
-                    reading = await self._ingest_locator(adapter, locator)
+                    reading = await self._ingest_locator(adapter, locator, clock)
                     if reading is not None:
                         return reading
         for adapter in (adapters or self._default_adapters):
@@ -290,33 +295,45 @@ class TranscriptStore:
                     adapter.discover, cwd=cwd, job_dir=job_dir, root=root)
             except Exception:  # noqa: BLE001, an adapter failure must never block mount
                 continue
+            if clock is not None:
+                clock.mark("id_discover")
             if locator is None:
                 continue
-            reading = await self._ingest_locator(adapter, locator)
+            reading = await self._ingest_locator(adapter, locator, clock)
             if reading is not None:
                 return reading
         return None
 
     async def _ingest_locator(
         self, adapter: HarnessAdapter, locator: SessionLocator,
+        clock: PhaseClock | None = None,
     ) -> ModelReading | None:
         """The shared logic behind BOTH discovery lanes above (explicit-path and search):
         freshness-gated ingest, then read the reading back from the store. None means
         THIS locator yielded nothing (an empty source with no prior rows), the caller
         tries the next adapter/lane, never a hard failure."""
+        def lap(name: str) -> None:
+            if clock is not None:
+                clock.mark(name)
+
         skip, since, observed, size = await self._freshness(locator)
+        lap("id_freshness")
         if skip:
             stored = await self.model_of_session(locator.harness, locator.anchor_sid)
+            lap("id_model_read")
             if stored is not None:
                 return replace(stored, anchored=locator.anchored)
             skip, since = False, 0  # a session row without turns: eat it whole
         turns = await _read_turns_off_loop(
             adapter, locator, since, await self._resume_point(locator, since))
+        lap("id_read_new_turns")
         if turns:
             await self._upsert(locator, turns, observed_at=observed, source_bytes=size)
+            lap("id_upsert")
         elif since == 0:
             return None  # nothing in the source at all, try the next adapter/lane
         reading = await self.model_of_session(locator.harness, locator.anchor_sid)
+        lap("id_model_read")
         return replace(reading, anchored=locator.anchored) if reading else None
 
     async def model_of_session(
