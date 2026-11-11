@@ -14,6 +14,8 @@ Embodies the resolved rulings:
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -26,6 +28,8 @@ from src.db.pool import pin
 from src.ontology.catalog import check_link_type, check_object_type
 
 Json = dict[str, Any]
+
+_BUMP_FLUSH_SECS = 5.0   # a batch of observed_at bumps gets this long, never longer
 
 
 class ActionError(Exception):
@@ -49,6 +53,77 @@ class Actions:
         # transaction's own uncommitted writes (the consistent view, not a stale one).
         self.pool = pin(pool, conn) if conn is not None else pool
         self._conn = conn
+        # (assertion id, observed_at, the assert_property arguments) for each no-op bump decided
+        # while a `batched_bumps()` block is open; None when no block is open. The arguments are
+        # kept so a bump that finds its row superseded can be redone the long way.
+        self._bump_sink: list[tuple[int, datetime, dict[str, Any]]] | None = None
+
+    @asynccontextmanager
+    async def batched_bumps(self) -> AsyncIterator[None]:
+        """Within this block, an assert_property that finds its fact already current (the no-op
+        case) records the `observed_at` bump instead of committing it, and the block applies all
+        of them in ONE statement on the way out. A mount re-states about a dozen unchanged
+        facts; each bump was its own commit (about 4 ms of WAL sync), so the dozen cost about 50
+        ms and now cost one. The end state is the same: every bump lands, only the moment moves
+        from each call to the end of the block. A bound (in-transaction) Actions, or a block
+        already open, does nothing here: that caller's own transaction decides when it commits.
+
+        What a caller is told inside the block is the id that was current when the call decided.
+        If a concurrent writer supersedes that row before the block ends, the assertion is
+        redone through the locked path at the end (see `_apply_bumps`), so the stored result is
+        the same as if the call had come after the writer; only the id already handed back is
+        then the older one. Do not use an id returned inside this block to link to."""
+        if self._conn is not None or self._bump_sink is not None:
+            yield
+            return
+        self._bump_sink = []
+        try:
+            yield
+        except BaseException:
+            # the body failed: still land the bumps already decided (they are true), but a
+            # failure while doing so must never replace the error the caller is about to see
+            await self._flush_bumps_quietly()
+            raise
+        else:
+            # a bump is bookkeeping; failing to land one must not fail the caller's work
+            await self._flush_bumps_quietly()
+
+    async def _flush_bumps_quietly(self) -> None:
+        assert self._bump_sink is not None
+        sink, self._bump_sink = self._bump_sink, None
+        try:
+            await asyncio.wait_for(self._apply_bumps(sink), _BUMP_FLUSH_SECS)
+        except Exception:  # noqa: BLE001 - bounded, and never masks the caller's own error
+            logging.getLogger(__name__).warning(
+                "batched observed_at bumps for %d assertion(s) were not applied", len(sink),
+                exc_info=True)
+
+    async def _apply_bumps(self, sink: list[tuple[int, datetime, dict[str, Any]]]) -> None:
+        """Move the recorded observed_at values forward in one UPDATE per distinct timestamp
+        (one in practice: a registration uses one `now`). The UPDATE goes to `assertions_hot`
+        directly: the `assertions` view's INSTEAD OF trigger writes every column back from its
+        own snapshot, which can flip a row a concurrent writer just superseded back to current.
+        Current rows always live in the hot table. A row the UPDATE does not touch was
+        superseded (or bumped past this time) in the meantime: that assertion is redone through
+        the locked path, so what the caller was told is never a superseded id."""
+        newest: dict[int, tuple[datetime, dict[str, Any]]] = {}
+        for aid, at, kwargs in sink:
+            if aid not in newest or at > newest[aid][0]:
+                newest[aid] = (at, kwargs)
+        by_time: dict[datetime, list[int]] = {}
+        for aid, (at, _kw) in newest.items():
+            by_time.setdefault(at, []).append(aid)
+        missed: list[int] = []
+        async with self._read() as conn:
+            for at, ids in by_time.items():
+                done = await conn.fetch(
+                    "UPDATE assertions_hot SET observed_at=$2 "
+                    "WHERE id = ANY($1::bigint[]) AND is_current AND observed_at < $2 "
+                    "RETURNING id", ids, at)
+                landed = {r["id"] for r in done}
+                missed.extend(i for i in ids if i not in landed)
+        for aid in missed:
+            await self.assert_property(**newest[aid][1], _fast=False)
 
     @asynccontextmanager
     async def _tx(self) -> AsyncIterator[asyncpg.Connection]:
@@ -217,12 +292,59 @@ class Actions:
         evidence_sha256: str | None = None,
         evidence_class: str | None = None,
         actor: str | None = None,
+        _fast: bool = True,
     ) -> int:
         """Append a property assertion. Supersedes the prior non-superseded
         assertion *from the same source* (within-source supersession); other
         sources' values coexist as the multi-source set. `evidence_class` records
         HOW the fact was obtained (see parsers/evidence.py)."""
         actor = actor or source_id
+        if self._conn is None and _fast:
+            # THE NO-OP FAST PATH. Most assertions repeat what is already current (every mount
+            # and heartbeat re-states about a dozen facts), and a no-op never inserts, so it
+            # needs neither the transaction nor the advisory lock below: those exist to
+            # serialize a read-modify-write that inserts. Read the current row; when it is the
+            # same value, confidence and evidence class, the only possible effect is moving
+            # observed_at forward, one guarded UPDATE. Measured live: a no-op went from about
+            # 6.7 ms (BEGIN, lock, read, UPDATE, COMMIT) to two round trips. The UPDATE goes to
+            # `assertions_hot`, never the `assertions` view (its INSTEAD OF trigger rewrites every
+            # column from a stale snapshot and could flip a row a concurrent writer just
+            # superseded back to current), and only matches a row that is STILL current. When it
+            # touches nothing the row was superseded or bumped past us, and the assertion is done
+            # the long way below, so a superseded id is never returned. Anything that is not a
+            # no-op falls through to the locked path unchanged.
+            async with self._read() as conn:
+                quick = await conn.fetchrow(
+                    "SELECT a.id, a.value, a.observed_at, a.confidence, a.evidence_class "
+                    "FROM assertions a "
+                    "WHERE a.object_id=$1 AND a.name=$2 AND a.source_id=$3 AND a.is_current "
+                    "LIMIT 1",
+                    object_id, name, source_id)
+                if (
+                    quick is not None
+                    and quick["value"] == value
+                    and abs(float(quick["confidence"]) - float(confidence)) < 1e-6
+                    and quick["evidence_class"] == evidence_class
+                ):
+                    if observed_at <= quick["observed_at"]:
+                        return cast(int, quick["id"])
+                    if self._bump_sink is not None:
+                        self._bump_sink.append((quick["id"], observed_at, {
+                            "object_id": object_id, "name": name, "value": value,
+                            "source_id": source_id, "observed_at": observed_at,
+                            "confidence": confidence, "case_id": case_id,
+                            "helper_run_id": helper_run_id, "evidence_uri": evidence_uri,
+                            "evidence_sha256": evidence_sha256,
+                            "evidence_class": evidence_class, "actor": actor}))
+                        return cast(int, quick["id"])
+                    bumped = await conn.fetchval(
+                        "UPDATE assertions_hot SET observed_at=$2 "
+                        "WHERE id=$1 AND is_current AND observed_at < $2 RETURNING id",
+                        quick["id"], observed_at)
+                    if bumped is not None:
+                        return cast(int, bumped)
+                    # touched nothing: superseded or bumped past us in the meantime; decide
+                    # again under the lock
         async with self._tx() as conn:
             # Within-source supersession is a read-modify-write (find the non-superseded
             # prior, then INSERT pointing `supersedes` at it). Under a FLEET, the same source
