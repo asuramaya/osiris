@@ -3042,10 +3042,12 @@ async def mount(
     clock.mark("project_seat_first")
     registered = bool(lived or viewed is not None or claimed_office is not None)
     if registered:
+        expected = await _expected_model(pool, cwd, ident.project)
+        clock.mark("expected_model")
         agent_uuid = await register_agent(
             Actions(pool), ident, actor=settings.osiris_actor,
-            expected_model=await _expected_model(pool, cwd, ident.project),
-            mint_reason=mount_mint_reason)
+            expected_model=expected, mint_reason=mount_mint_reason, clock=clock)
+        clock.mark("ra_tail")
         # The harness signal: additive-only, never touching register_agent's own
         # identity/succession machinery. A fleet render needs to know which
         # ProcessAdapter's capabilities apply to this session, and until now nothing
