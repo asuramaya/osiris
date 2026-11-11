@@ -466,6 +466,7 @@ def test_repairs_panel_lists_all_eleven_targets() -> None:
         "task_sync_citation_links", "lineage_repo_links", "agent_project_links",
         "closed_by_real_sources", "operator_charter", "provenance_possible_upstream",
         "stale_in_repo_abstentions", "automated_desk_backlog", "desk_triage",
+        "abstention_churn_collapse",
     ):
         assert "'" + target + "'" in body
 
