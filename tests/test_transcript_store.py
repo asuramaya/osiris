@@ -259,6 +259,37 @@ async def test_discover_and_ingest_falls_back_to_search_when_the_path_is_unrecog
     assert reading.current == "claude-fable-5"
 
 
+async def test_identity_reading_laps_its_steps_and_gives_the_same_reading(
+    store: TranscriptStore, tmp_path: Path,
+) -> None:
+    """With a clock, the first read marks discovery, freshness, the new-turn read, the upsert and
+    the model read; the second (nothing changed) skips the read and upsert. The reading is the
+    same with or without a clock."""
+    from src.orchestrator.phase_clock import PhaseClock
+
+    sid = "d00dfeed"
+    projects = tmp_path / "projects"
+    real = projects / "-home-x-code-widget" / f"{sid}-session-uuid.jsonl"
+    real.parent.mkdir(parents=True, exist_ok=True)
+    real.write_text(json.dumps({
+        "type": "assistant", "timestamp": datetime(2026, 8, 17, tzinfo=UTC).isoformat(),
+        "message": {"model": "claude-fable-5", "usage": {}}}) + "\n")
+    first = PhaseClock()
+    read1 = await store.discover_and_ingest(
+        cwd="/home/x/code/widget", job_dir=f"/home/x/.claude/jobs/{sid}", root=projects,
+        clock=first)
+    assert list(first.phases_ms()) == ["id_discover", "id_freshness", "id_read_new_turns",
+                                       "id_upsert", "id_model_read"]
+    second = PhaseClock()
+    read2 = await store.discover_and_ingest(
+        cwd="/home/x/code/widget", job_dir=f"/home/x/.claude/jobs/{sid}", root=projects,
+        clock=second)
+    assert list(second.phases_ms()) == ["id_discover", "id_freshness", "id_model_read"]
+    bare = await store.discover_and_ingest(
+        cwd="/home/x/code/widget", job_dir=f"/home/x/.claude/jobs/{sid}", root=projects)
+    assert read1 == read2 == bare and read1 is not None and read1.current == "claude-fable-5"
+
+
 async def test_store_ingests_and_reads_back(store: TranscriptStore, tmp_path: Path) -> None:
     """A Crush session eaten into the store reads back with the right model + history."""
     sid = "deadbeef-aaaa-bbbb-cccc-dddddddddddd"

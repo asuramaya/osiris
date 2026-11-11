@@ -2913,7 +2913,7 @@ async def mount(
     # resolve_identity so non-Claude sessions mount resolved. Fails open inside the helper.
     clock.mark("pre_identity")
     store_reading = await identity_reading(pool, cwd=cwd, job_dir=job_dir,
-                                           transcript_path=transcript_path)
+                                           transcript_path=transcript_path, clock=clock)
     clock.mark("identity_reading")
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model,
                              claimed=claimed, fallback_seed=key,
