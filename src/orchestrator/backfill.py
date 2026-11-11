@@ -3,8 +3,8 @@ the CLI and MCP surfaces call the SAME orchestrator function, never one calling 
 (the house's own CLI/MCP pair convention: cmd_fleet_reconcile/fleet_reconcile.
 reconcile_execute is the template this follows).
 
-Ten structurally distinct repair verbs, no shared logic underneath, only a shared wire
-shape (dry_run default True, idempotent). `BACKFILL_TARGETS` names all ten; `run_backfill`
+Eleven structurally distinct repair verbs, no shared logic underneath, only a shared wire
+shape (dry_run default True, idempotent). `BACKFILL_TARGETS` names all eleven; `run_backfill`
 dispatches on `target`. This module owns nothing about identity/mounting: `actor` arrives
 already resolved, exactly like every other orchestrator-layer function in this codebase
 (fleet_reconcile.reconcile_execute, charter.charter_for, ...). The MCP tool layer keeps its
@@ -23,7 +23,7 @@ BACKFILL_TARGETS = frozenset({
     "bootstrap_orphan_references", "boot_alarm_commit_links", "task_sync_citation_links",
     "lineage_repo_links", "agent_project_links", "closed_by_real_sources",
     "operator_charter", "provenance_possible_upstream", "stale_in_repo_abstentions",
-    "automated_desk_backlog",
+    "automated_desk_backlog", "desk_triage",
 })
 
 # CLI-ONLY FOR APPLY: operator_charter mints a `governs` link from person:operator to EVERY
@@ -79,7 +79,7 @@ async def run_backfill(
     Dry run is the default for every target; `dry_run=False` requires `because` (except
     `agent_project_links`, which predates that convention: callers that want a stricter
     contract than this function's own must enforce it themselves, e.g. the CLI/UI entry
-    points impose `because` unconditionally at their own layer). All ten idempotent.
+    points impose `because` unconditionally at their own layer). All eleven idempotent.
 
     `limit`/`newest_first` are consulted ONLY by `provenance_possible_upstream`; every
     other target ignores them, unchanged."""
@@ -121,6 +121,9 @@ async def run_backfill(
     if target == "automated_desk_backlog":
         from src.orchestrator.mailbox import settle_automated_desk_backlog as _f_desk_backlog
         return await _f_desk_backlog(pool, actor=actor, dry_run=dry_run, because=because)
+    if target == "desk_triage":
+        from src.orchestrator.mailbox import triage_agent_desk_backlog as _f_desk_triage
+        return await _f_desk_triage(pool, actor=actor, dry_run=dry_run, because=because)
     if target == "stale_in_repo_abstentions":
         from src.orchestrator.capture import (
             backfill_stale_in_repo_abstentions as _f_stale_abstentions,

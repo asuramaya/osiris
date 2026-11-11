@@ -6928,16 +6928,16 @@ async def backfill(
     only_bases: list[str] | None = None, limit: int | None = None,
     newest_first: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Repair tool, dispatched over `target`: ten distinct backfills, run through
+    """Repair tool, dispatched over `target`: eleven distinct backfills, run through
     `src.orchestrator.backfill.run_backfill`, the same function the CLI's `osiris backfill`
     and the UI's Repairs panel call. Dry run is the default for every target;
     `dry_run=False` requires `because` (except `agent_project_links`). All are idempotent.
 
-    `target=`: "bootstrap_orphan_references" (links an orphaned `ref:osiris`-stamped
-    Reference to the SoftwareProject its own canonical prefix names) |
-    "boot_alarm_commit_links" (links a zero-link boot-alarm Thread to the Commit its
-    summary cites) | "task_sync_citation_links" (links a zero-link task_sync Thread to
-    the Thread it names) | "lineage_repo_links" (links a zero-link Decision/Thread to its
+    `target=`: "bootstrap_orphan_references" (links an orphaned `ref:osiris` Reference
+    to its project) |
+    "boot_alarm_commit_links" (links a boot-alarm Thread to the Commit it cites) |
+    "task_sync_citation_links" (links a task_sync Thread to the Thread it names) |
+    "lineage_repo_links" (links a zero-link Decision/Thread to its
     author's lineage project) | "agent_project_links" (moves works_in/governs off an
     outdated Agent record onto its current one; the one target taking `only_bases` to scope the
     write) | "closed_by_real_sources" (re-points a `closed_by` edge off
@@ -6947,7 +6947,8 @@ async def backfill(
     `governs` link from `person:operator` to every active SoftwareProject it doesn't
     already govern, so the operator stays chartered over everything) |
     "stale_in_repo_abstentions" (retires an in_repo abstention on a linked object) |
-    "automated_desk_backlog" (settles old cron/system notices on the desk) |
+    "automated_desk_backlog" (settles old cron notices on the desk) |
+    "desk_triage" (settles old agent desk mail by named rules) |
     "provenance_possible_upstream" (back-stamps `possible_upstream` onto
     historical Decision/Thread writes via each write's transcript record. `limit`/
     `newest_first` are consulted by this target only. Runs in the background and
