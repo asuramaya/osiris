@@ -2272,7 +2272,7 @@ async def _dispatch_dm_body(
     fresh_spawn = fresh_spawn or _spawn_claude_bg
     windows = windows or _manager_windows
     poke = poke or _poke_window
-    agents_json = agents_json or _claude_agents_json
+    agents_json = agents_json or _claude_agents_json_strict
     sleep = sleep or asyncio.sleep
     if jobs is None or nudge is None:
         # The injection point: `nudge` defaults to claude_daemon.reply, the daemon
@@ -4322,7 +4322,7 @@ async def launch_seat(
     manager = manager or _manager_control
     windows = windows or _manager_windows
     spawn = spawn or _spawn_claude_bg
-    agents_json = agents_json or _claude_agents_json
+    agents_json = agents_json or _claude_agents_json_strict
     cost_reader = cost_reader or _bg_session_cost
     if sleep is None:
         sleep = asyncio.sleep
@@ -4809,7 +4809,7 @@ async def resume_seat(
     pool = actions.pool
     from src.orchestrator.agents import _generation, project_of
     from src.orchestrator.seats import seat_receipt
-    agents_json = agents_json or _claude_agents_json
+    agents_json = agents_json or _claude_agents_json_strict
     resume_spawn = resume_spawn or _spawn_claude
     clear_stale_record = clear_stale_record or _clear_stale_stopped_record
 

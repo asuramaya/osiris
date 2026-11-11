@@ -503,3 +503,30 @@ async def test_stop_waits_for_a_launch_in_its_spawn_window_and_then_sees_the_bod
         read_cmdline=lambda p: b"claude\x00--bg")
     await launching
     assert out["status"] == "stopped" and killed == ["sw1sw1sw"]
+
+
+async def test_mcp_and_wake_lanes_default_to_the_strict_reader(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """launch_seat and resume_seat used the fail-open reader by default, so an unreadable
+    list read as "no body" on the MCP and wake lanes. The default is now the strict one."""
+    await _seat(actions, tmp_path, "strictdefault")
+    calls: list[str] = []
+
+    async def _strict(**kw: Any) -> list[dict[str, Any]]:
+        calls.append("strict")
+        raise trigger.HarnessListUnreadable("down")
+
+    async def _loose(**kw: Any) -> list[dict[str, Any]]:
+        calls.append("loose")
+        return []
+
+    monkeypatch.setattr(trigger, "_claude_agents_json_strict", _strict)
+    monkeypatch.setattr(trigger, "_claude_agents_json", _loose)
+    out = await trigger.launch_seat(Actions(actions.pool), caller="operator",
+                                    target="strictdefault", operator_authorized=True,
+                                    spawn=_no_spawn)
+    assert out["status"] == "refused-harness-list-unreadable"
+    await trigger.resume_seat(Actions(actions.pool), caller="operator",
+                              target="strictdefault", resume_spawn=_no_spawn)
+    assert "loose" not in calls and "strict" in calls
