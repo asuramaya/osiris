@@ -1282,3 +1282,19 @@ async def test_lint_does_not_flag_a_correctly_flipped_supersession(actions: Acti
 
     assert [f for f in _by_check(out, "stale-current-flag")
             if f["subject"] == str(obj)] == []
+
+
+async def test_lint_timings_are_opt_in_and_name_every_check_that_ran(actions: Actions) -> None:
+    """`timings=true` says where a slow lint spends its time (it takes minutes at the live
+    graph's scale and `check=` only filters the listing, so nothing else could say). Without it
+    the output is exactly what it always was."""
+    plain = await _fn(actions, "lint", {})
+    timed = await _fn(actions, "lint", {"timings": True})
+
+    assert "timings_ms" not in plain
+    assert set(timed["timings_ms"]) == set(timed["counts"])  # one entry per check that landed
+    assert all(isinstance(ms, int) and ms >= 0 for ms in timed["timings_ms"].values())
+    timed.pop("timings_ms")
+    for report in (plain, timed):
+        report.pop("ran_at")
+    assert plain == timed  # asking for timings changes nothing else
