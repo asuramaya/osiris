@@ -12,6 +12,7 @@ Every call is bounded the way the offload runner's `restic snapshots` probe is. 
 runs unless it is handed a repository environment; tests drive it with a fake `restic`."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
@@ -29,6 +30,9 @@ CALL_TIMEOUT_SECONDS = 30  # the same bound the offload runner gives `restic sna
 # before it is killed. A SIGKILL leaves the lock behind, which is how osiris's own runs kept
 # locking the repository against the next one.
 STOP_GRACE_SECONDS = 15
+# After a stopped restic has exited, how long to keep reading its output before giving up on pipes a
+# surviving child (ssh) still holds.
+POST_STOP_DRAIN_SECONDS = 5
 
 Runner = Callable[[list[str], dict[str, str]], "subprocess.CompletedProcess[str]"]
 
@@ -73,13 +77,27 @@ def run_restic(args: list[str], env: dict[str, str], *, timeout: float, text: bo
     that holds the repository lock: on timeout the process is asked to stop first
     (`stop_restic`), and the same `TimeoutExpired` is raised for the caller."""
     cmd = ["restic", *args]
+    # Its own session: the ssh process behind an sftp repository is restic's child and inherits
+    # our pipes, so when the run is stopped the whole group can be cleaned up together.
     proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=text)
+                            text=text, start_new_session=True)
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         stop_restic(proc, grace)
-        out, err = proc.communicate()  # unbounded-wait-ok: stop_restic has ended the process
+        try:
+            out, err = proc.communicate(timeout=POST_STOP_DRAIN_SECONDS)
+        except subprocess.TimeoutExpired as drain:
+            # restic is gone but a child (the ssh behind the sftp backend) still holds the pipes
+            # open, so reading to the end would wait on a dead link forever. Keep what arrived,
+            # close the pipes and end whatever is left of the group.
+            out, err = drain.output, drain.stderr
+            for stream in (proc.stdout, proc.stderr):
+                if stream is not None:
+                    with contextlib.suppress(OSError, ValueError):
+                        stream.close()
+            with contextlib.suppress(OSError):
+                os.killpg(proc.pid, signal.SIGKILL)
         raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err) from None
     except BaseException:
         stop_restic(proc, grace)

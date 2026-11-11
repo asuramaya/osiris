@@ -471,6 +471,11 @@ _SLEEPER = '''#!{python}
 import os, signal, sys, time
 marker = os.environ["FAKE_RESTIC_MARKER"]
 open(marker, "w").write("holding")
+if os.environ.get("FAKE_RESTIC_CHILD_PID_FILE"):
+    # like the ssh behind an sftp repository: a child that inherits our pipes and outlives us
+    import subprocess
+    child = subprocess.Popen(["sleep", "60"])
+    open(os.environ["FAKE_RESTIC_CHILD_PID_FILE"], "w").write(str(child.pid))
 if os.environ.get("FAKE_RESTIC_IGNORE_SIGINT"):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 else:
@@ -624,3 +629,34 @@ async def test_a_tick_started_while_the_drill_holds_the_lock_skips_as_already_ru
         out = await offload_runner.run_offload_tick(actions.pool)
     assert out == {"skipped": "already running", "targets": []}
     assert fake.commands() == []
+
+
+def test_a_child_that_keeps_the_pipes_open_cannot_hang_the_run_after_restic_is_stopped(
+    sleeper: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After a timeout restic is stopped, but the ssh process behind an sftp repository can
+    still hold the output pipes, and reading them to the end waited on a dead link forever (the
+    unit has no start timeout either). The read after the stop is bounded, the pipes are closed,
+    and the leftover group is ended."""
+    import subprocess
+    import time
+
+    pid_file = tmp_path / "child.pid"
+    monkeypatch.setenv("FAKE_RESTIC_CHILD_PID_FILE", str(pid_file))
+    monkeypatch.setattr(restic_locks, "POST_STOP_DRAIN_SECONDS", 1)
+    started = time.monotonic()
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        restic_locks.run_restic(["backup"], dict(os.environ), timeout=1.0, grace=3.0)
+
+    assert time.monotonic() - started < 15.0  # not the child's 60 s
+    child = int(pid_file.read_text())
+    for _ in range(50):  # the leftover child is ended with the group
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    else:
+        os.kill(child, 9)
+        raise AssertionError("the child that held the pipes was left running")

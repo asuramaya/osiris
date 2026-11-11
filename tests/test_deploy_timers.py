@@ -99,3 +99,16 @@ def test_the_wal_pull_runs_on_its_own_frequent_timer_apart_from_the_dump() -> No
     assert "pg_dump" in dump_script and "osiris_disk_guard.py" in dump_script
     pull_script = (ROOT / "scripts" / "osiris_wal_pull.sh").read_text()
     assert "wal_archive" in pull_script and "docker exec osiris-pg pg_dump" not in pull_script
+
+
+def test_the_offload_unit_has_a_start_timeout_so_a_wedged_tick_cannot_hold_it_forever() -> None:
+    """A oneshot has no start timeout by default: a tick stuck on a dead link would hold the unit,
+    the tick's file lock and the timer's next firing for good."""
+    import re
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parent.parent / "deploy" / "osiris-offload.service"
+            ).read_text()
+    match = re.search(r"^TimeoutStartSec=(\d+)$", text, re.M)
+    assert match, "osiris-offload.service needs a TimeoutStartSec"
+    assert 3600 <= int(match.group(1)) <= 4 * 3600  # long enough for a first copy, finite
