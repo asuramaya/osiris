@@ -4,7 +4,8 @@ The harness computes its own `used_percentage` and hands it to hooks and the sta
 only; osiris derives its figure from the transcript (see context_lens). The two have never
 been compared on paired readings. This keeps the evidence: the status line hook, which holds
 both numbers on every render, appends one JSON line here when they differ by MORE than one
-point, and nothing at all when they agree, so a healthy install writes nothing.
+point, and nothing at all when they agree or when either side reads zero (no reading yet),
+so a healthy install writes nothing.
 
 Stdlib only, like context_lens: the status line hook imports it and must stay cheap and
 fail-open. The log is small and capped, an identical repeat of the last line is dropped, and
@@ -75,6 +76,13 @@ def record_if_different(
     if harness_pct is None or derived_pct is None:
         return False
     if abs(harness_pct - derived_pct) <= THRESHOLD_POINTS:
+        return False
+    # A zero on either side is "no reading yet", not a measurement: of the first 217 entries
+    # 193 were the harness at 0% against a high derived figure and the other ten large gaps
+    # were osiris at 0% against a real harness figure, so they were one side with nothing
+    # to say (a render before the first response, or right after a compaction), not two
+    # figures that disagree. They buried the genuine ones, a steady two-point gap.
+    if harness_pct == 0 or derived_pct == 0:
         return False
     p = log_path(path)
     entry = {

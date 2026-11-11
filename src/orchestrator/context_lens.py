@@ -23,10 +23,10 @@ the model id (flagged assumed, and never alarmed on). The harness also computes 
 sources exist for one figure: the status line and the settle gate prefer the harness's, while
 settle(), the stop hook's stamped reading and `context_window` use this module's. They share
 the input-plus-cache-read-plus-cache-creation formula and the harness's window, and settle()
-and `context_window` report the same percentage on the same transcript. But this module has
-never been compared against the harness's own number on a paired reading, so rounding and
-the exact usage block each picks are unconfirmed. Treat a one-point difference as unexplained
-rather than as an error until that comparison exists.
+and `context_window` report the same percentage on the same transcript. This module has since
+been compared against the harness's own number on paired readings (`osiris context-pct-log`
+keeps the ones that differ): at the 1M window the harness reads about 2 points higher; osiris
+counts only the transcript's usage record, and that figure is not adjusted.
 """
 from __future__ import annotations
 
