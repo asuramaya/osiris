@@ -5536,6 +5536,9 @@ async def cmd_rebuild_transcript(
     print(f"rebuilt {anchor_sid} as {to} session {receipt['session_id']} "
           f"({receipt['turns']} turns) in {receipt['path']}")
     print(f"not carried as turns, folded into the opening note: {folded}")
+    if receipt.get("truncated"):
+        print(f"WARNING: this copy is incomplete: the {receipt['truncated']}. The opening "
+              "note in the copy says so too.")
     print(voice.how_to_open(to, receipt["session_id"], into, cwd))
     return 0
 

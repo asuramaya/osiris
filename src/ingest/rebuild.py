@@ -56,6 +56,12 @@ class Rebuilt:
     first_at: datetime | None
     last_at: datetime | None
     source_lines: int
+    stored_total: int | None = None   # lines the store says the session has, when known
+
+    @property
+    def truncated(self) -> bool:
+        """The store's chain broke before the end: fewer lines read than the session holds."""
+        return self.stored_total is not None and self.source_lines < self.stored_total
 
 
 def _ts(value: Any) -> datetime | None:
@@ -161,10 +167,14 @@ def marker_text(anchor_sid: str, rebuilt: Rebuilt) -> str:
     span = (f"{rebuilt.first_at:%Y-%m-%d} to {rebuilt.last_at:%Y-%m-%d}"
             if rebuilt.first_at and rebuilt.last_at else "dates unknown")
     fold = ", ".join(f"{k} {v}" for k, v in rebuilt.folded.most_common()) or "nothing"
+    cut = (f" TRUNCATED: the stored chain broke at line {rebuilt.source_lines} of "
+           f"{rebuilt.stored_total}; everything after that line is missing from this copy."
+           if rebuilt.truncated else "")
     return (f"[osiris import] This conversation was rebuilt by osiris from stored session "
             f"{anchor_sid} ({span}; {rebuilt.source_lines} stored lines, "
             f"{len(rebuilt.turns)} turns). It is a copy, not the original: no owner or "
-            "account is recorded on it. Not carried as turns (folded): " + fold + ".")
+            "account is recorded on it." + cut + " Not carried as turns (folded): "
+            + fold + ".")
 
 
 # --- crush ---------------------------------------------------------------------------------
@@ -412,7 +422,7 @@ def write_dsh(
     if reasoning:
         fold["reasoning carried as marked text"] += reasoning
     counted = Rebuilt(rebuilt.turns, fold, rebuilt.first_at, rebuilt.last_at,
-                      rebuilt.source_lines)
+                      rebuilt.source_lines, rebuilt.stored_total)
     sid = f"session-{uuid.uuid4()}"
     started = rebuilt.first_at or datetime.now(UTC)
     t_ms = int(started.timestamp() * 1000)
@@ -505,10 +515,20 @@ async def rebuild_session(
         pair async for pair in SoulStore(pool).stream_lines(anchor_sid)])
     if not rebuilt.turns:
         raise ValueError(f"the store holds no turns for session {anchor_sid!r}")
+    # `stream_lines` ends quietly at the last verified line when the stored chain breaks, so
+    # compare what it gave with what the store says the session holds, and say so if short
+    total = await pool.fetchval(
+        "SELECT last_line_idx FROM soul_sessions WHERE harness='claude-code' AND anchor_sid=$1",
+        anchor_sid)
+    rebuilt.stored_total = int(total) if total is not None else None
     if to == "claude":
         assert cwd is not None
-        return write_claude(rebuilt, anchor_sid=anchor_sid, projects_dir=Path(into), cwd=cwd)
-    if to == "dsh":
+        receipt = write_claude(rebuilt, anchor_sid=anchor_sid, projects_dir=Path(into), cwd=cwd)
+    elif to == "dsh":
         assert cwd is not None
-        return write_dsh(rebuilt, anchor_sid=anchor_sid, sessions_dir=Path(into), cwd=cwd)
-    return write_crush(rebuilt, anchor_sid=anchor_sid, workspace=Path(into), title=title)
+        receipt = write_dsh(rebuilt, anchor_sid=anchor_sid, sessions_dir=Path(into), cwd=cwd)
+    else:
+        receipt = write_crush(rebuilt, anchor_sid=anchor_sid, workspace=Path(into), title=title)
+    receipt["truncated"] = (f"stored chain broke at line {rebuilt.source_lines} of "
+                            f"{rebuilt.stored_total}" if rebuilt.truncated else None)
+    return receipt

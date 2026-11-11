@@ -262,6 +262,38 @@ async def test_no_target_may_write_into_claude_codes_session_store_by_any_route(
     assert not list(store.rglob("session.jsonl*"))
 
 
+async def test_a_broken_stored_chain_is_reported_as_truncated_never_as_complete(
+    actions: Any, tmp_path: Path, capsys: Any,
+) -> None:
+    """`stream_lines` ends at the last verified line when the chain breaks. The rebuild must
+    say so: "truncated at line N of M" in the receipt, the opening note and the CLI output."""
+    from src.cli import cmd_rebuild_transcript
+
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    whole = await rebuild_session(actions.pool, SID, to="crush", into=tmp_path / "whole")
+    assert whole["truncated"] is None
+    total = await actions.pool.fetchval(
+        "SELECT last_line_idx FROM soul_sessions WHERE harness='claude-code' AND anchor_sid=$1",
+        SID)
+    await actions.pool.execute(
+        "DELETE FROM soul_lines WHERE harness='claude-code' AND anchor_sid=$1 AND line_idx=5",
+        SID)
+    cut = await rebuild_session(actions.pool, SID, to="crush", into=tmp_path / "cut")
+    assert cut["truncated"] == f"stored chain broke at line 5 of {total}"
+    conn = sqlite3.connect(tmp_path / "cut" / ".crush" / "crush.db")
+    first = conn.execute("SELECT parts FROM messages ORDER BY rowid LIMIT 1").fetchone()[0]
+    conn.close()
+    assert f"TRUNCATED: the stored chain broke at line 5 of {total}" in first
+    assert "TRUNCATED" not in sqlite3.connect(tmp_path / "whole" / ".crush" / "crush.db").execute(
+        "SELECT parts FROM messages ORDER BY rowid LIMIT 1").fetchone()[0]
+    rc = await cmd_rebuild_transcript(SID, to="crush", into=str(tmp_path / "cut2"),
+                                      pool=actions.pool)
+    assert rc == 0
+    assert f"this copy is incomplete: the stored chain broke at line 5 of {total}" in (
+        capsys.readouterr().out)
+
+
 # --- the dsh writer: tmp dirs only ----------------------------------------------------------
 
 def _dsh_events(path: Path) -> list[dict[str, Any]]:
