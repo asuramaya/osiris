@@ -154,6 +154,94 @@ async def test_batched_bumps_land_every_noop_bump_once_at_the_end(
     assert await seen(a2) == datetime(2026, 7, 1, tzinfo=UTC)
 
 
+async def _race_a_noop_against_a_supersede(
+    actions: Actions, case_id: str, *, batched: bool,
+) -> None:
+    """A writer supersedes A with B (transaction held open) while the same source re-asserts A.
+    The re-assertion read A as current; its bump must NOT flip A back (the `assertions` view's
+    INSTEAD OF trigger once did, leaving two current rows). Afterwards exactly one row is
+    current, it is the re-assertion's own answer, and its value is A, as if the call had come
+    after the writer."""
+    import asyncio
+    from datetime import timedelta
+
+    pool = actions.pool
+    t0 = datetime(2026, 5, 27, tzinfo=UTC)
+    obj = await actions.create_or_find_object(
+        "Domain", f"race-{batched}.com", "analyst:test", case_id)
+    r1 = await actions.assert_property(obj, "p", "A", "src:x", t0, 0.9)
+    writer = await pool.acquire()
+    tx = writer.transaction()
+    await tx.start()
+    # the writer the way the locked path does it: lock the triple, insert, flip, stay open
+    await writer.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"{obj}:p:src:x")
+    await writer.fetchval(
+        "INSERT INTO assertions (object_id,name,value,source_id,observed_at,confidence,"
+        "supersedes,evidence_class) VALUES ($1,'p','\"B\"'::jsonb,'src:x',$2,0.9,$3,NULL) "
+        "RETURNING id", obj, t0 + timedelta(minutes=1), r1)
+    await writer.execute("UPDATE assertions SET is_current=false WHERE id=$1", r1)
+
+    async def reassert() -> int:
+        if batched:
+            async with actions.batched_bumps():
+                return await actions.assert_property(
+                    obj, "p", "A", "src:x", t0 + timedelta(minutes=2), 0.9)
+        return await actions.assert_property(
+            obj, "p", "A", "src:x", t0 + timedelta(minutes=2), 0.9)
+
+    task = asyncio.create_task(reassert())
+    await asyncio.sleep(0.5)             # let it read A as current and reach its bump
+    await tx.commit()
+    await pool.release(writer)
+    got = await asyncio.wait_for(task, 20)
+    rows = await pool.fetch(
+        "SELECT id, value #>> '{}' AS v, is_current FROM assertions "
+        "WHERE object_id=$1 AND name='p' ORDER BY id", obj)
+    current = [r for r in rows if r["is_current"]]
+    assert len(current) == 1, [dict(r) for r in rows]
+    assert current[0]["v"] == "A"
+    if batched:
+        # the bump was deferred, so the caller was told the id that was current when it
+        # decided; the redo at the end of the block then re-asserted A over B
+        assert got in (r1, current[0]["id"])
+    else:
+        assert got == current[0]["id"] and got != r1    # never the superseded row
+
+
+async def test_a_noop_bump_racing_a_supersede_leaves_exactly_one_current_row(
+    actions: Actions, case_id: str,
+) -> None:
+    await _race_a_noop_against_a_supersede(actions, case_id, batched=False)
+
+
+async def test_a_batched_noop_bump_racing_a_supersede_leaves_exactly_one_current_row(
+    actions: Actions, case_id: str,
+) -> None:
+    await _race_a_noop_against_a_supersede(actions, case_id, batched=True)
+
+
+async def test_a_failing_bump_flush_never_hides_the_callers_error_or_fails_the_caller(
+    actions: Actions, case_id: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bumps are bookkeeping: an error while landing them is logged, not raised, and an error
+    from inside the block reaches the caller unchanged."""
+    obj = await actions.create_or_find_object("Domain", "flush.com", "analyst:test", case_id)
+    await actions.assert_property(obj, "registrar", "GoDaddy", "helper:rdap", NOW, 0.9)
+    later = datetime(2026, 6, 1, tzinfo=UTC)
+
+    async def broken(self: Actions, sink: object) -> None:
+        raise RuntimeError("the flush failed")
+
+    monkeypatch.setattr(Actions, "_apply_bumps", broken)
+    with pytest.raises(ValueError, match="the caller's own error"):
+        async with actions.batched_bumps():
+            await actions.assert_property(obj, "registrar", "GoDaddy", "helper:rdap", later, 0.9)
+            raise ValueError("the caller's own error")
+    async with actions.batched_bumps():      # success path: a failed flush does not raise
+        await actions.assert_property(obj, "registrar", "GoDaddy", "helper:rdap", later, 0.9)
+    assert actions._bump_sink is None
+
+
 async def test_assert_property_flips_is_current_on_the_exact_row_it_supersedes(
     actions: Actions, case_id: str,
 ) -> None:
