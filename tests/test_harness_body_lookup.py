@@ -180,3 +180,38 @@ async def test_the_strict_list_raises_when_claude_will_not_run(
     assert await trigger._claude_agents_json() == []
     with pytest.raises(trigger.HarnessListUnreadable):
         await trigger._claude_agents_json(strict=True)
+
+
+async def test_a_working_body_wearing_a_spare_command_line_is_a_body(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Measured live: the harness reuses a pre-warmed spare as the body without changing its
+    argv, so a busy, listed body showed `claude bg-spare --bg-spare <sock>`. The twin check
+    read it as "not a session" and a second launch spawned a second body."""
+    import os
+
+    office = await _seat(actions, tmp_path, "claimed")
+    spare_argv = b"claude\x00bg-spare\x00--bg-spare\x00/tmp/cc/spare/x.claim.sock"
+    busy = {"name": "[SC] claimed", "cwd": str(office), "pid": os.getpid(), "id": "c1c1c1c1",
+            "sessionId": "c1c1c1c1-0000", "status": "busy", "state": "working"}
+    idle_unclaimed = {**busy, "status": "idle", "state": "running"}
+
+    async def _busy(**kw: Any) -> list[dict[str, Any]]:
+        return [busy]
+
+    async def _idle(**kw: Any) -> list[dict[str, Any]]:
+        return [idle_unclaimed]
+
+    twin = await trigger._launch_twin_check(
+        actions.pool, _busy, str(office), handle="claimed", read_cmdline=lambda p: spare_argv)
+    assert twin["harness"] is not None and twin["stale_harness_row"] is None
+    # a spare that never claimed (idle, never mounted) is still not a body
+    twin = await trigger._launch_twin_check(
+        actions.pool, _idle, str(office), handle="claimed", read_cmdline=lambda p: spare_argv)
+    assert twin["harness"] is None and twin["stale_harness_row"] is not None
+    # ...until it mounts: a fresh mount under its own session identity makes it a body
+    await save_mount(actions.pool, job_dir="/tmp/jobs/claimed-job", agent_id="agent:c1c1c1c1",
+                     project="p", cwd=str(office), model=None, session_key=None)
+    twin = await trigger._launch_twin_check(
+        actions.pool, _idle, str(office), handle="claimed", read_cmdline=lambda p: spare_argv)
+    assert twin["harness"] is not None
