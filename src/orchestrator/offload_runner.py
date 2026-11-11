@@ -204,7 +204,7 @@ _PROBE_TIMEOUT_SECONDS = 30  # restic snapshots and init: a slow link must not h
 
 def _run_restic_backup(
     *, repository: str, password: bytes, source: Path, init_if_needed: bool = True,
-    notes: list[str] | None = None,
+    notes: list[str] | None = None, no_init_reason: str | None = None,
 ) -> str | None:
     """Returns a failure string, or None on success, same return convention as
     `osiris_offbox_restore_drill.run_drill`.
@@ -255,8 +255,9 @@ def _run_restic_backup(
                 return f"restic snapshots failed, not initializing: {_one_line(probe.stderr)}"
         if probe.returncode != 0:
             if not init_if_needed:
-                return ("the repository looks missing but this target has offloaded before; "
-                        "not initializing over it (is the target reachable?)")
+                return no_init_reason or (
+                    "the repository looks missing but this target has offloaded before; "
+                    "not initializing over it (is the target reachable?)")
             init = restic_locks.run_restic(
                 ["init"], env, timeout=_PROBE_TIMEOUT_SECONDS, text=False)
             if init.returncode != 0:
@@ -445,10 +446,18 @@ async def _run_offload_tick_locked(
         receipts, untrusted = _load_receipts()
         ever_offloaded = untrusted or bool(
             (receipts.get(name) or {}).get("last_successful_offload"))
+        why_not = None
+        if untrusted and not (receipts.get(name) or {}).get("last_successful_offload"):
+            why_not = (
+                f"the repository looks missing, but the offload receipts could not be read "
+                f"({_quarantine_path()} holds the damaged copy), so this box cannot tell whether "
+                f"{name} has offloaded before; not initializing. If {name} is a new target, run "
+                f"`restic init` on it by hand; once the receipts are sound again, remove that "
+                "file to let first-time setup run on its own")
         notes: list[str] = []
         fail = await asyncio.to_thread(
             _run_restic_backup, repository=repository, password=password, source=source,
-            init_if_needed=not ever_offloaded, notes=notes)
+            init_if_needed=not ever_offloaded, notes=notes, no_init_reason=why_not)
         if fail is None:
             _write_receipt(name, {"last_successful_offload": now, "last_attempt_at": now,
                                   "last_error": None, "last_skip_reason": None,
