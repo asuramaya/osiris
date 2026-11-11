@@ -216,7 +216,11 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
     "lint": lambda a: cmd_lint(pool=a.pool),
     "graph-export": lambda a: cmd_graph_export(as_json=True, pool=a.pool),
     "audit": lambda a: cmd_audit("the-wall", pool=a.pool),
-    "search": lambda a: cmd_search("no-such-query-anywhere-xyz", limit=1),
+    # A QUOTED phrase on purpose: a bare word that matches nothing reaches the spelling-tolerant
+    # leg, which scans every searchable row (5 to 9 s of database time). This probe runs against
+    # the live server on every commit gate across the fleet, every few minutes, and was by itself
+    # all of the slow searches in the server's journal for an hour. A quoted phrase skips that leg.
+    "search": lambda a: cmd_search('"no-such-query-anywhere-xyz"', limit=1),
     "launch": lambda a: cmd_launch(
         "no-such-handle-at-all", model=None, pool=a.pool, manager=_unreachable, debug=True),
     "resume": lambda a: cmd_resume(
