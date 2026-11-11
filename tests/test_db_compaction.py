@@ -54,6 +54,25 @@ def test_a_table_is_worth_rewriting_only_above_both_thresholds() -> None:
     assert worth_rewriting(0, 0) is False
 
 
+def test_the_outbox_is_rewritten_at_a_smaller_floor_than_the_big_tables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The live outbox: 709 MB reclaimable of 1.08 GB. Under the 2 GB floor it was skipped
+    every night; its own floor lets it through, as does the audit log's, and the
+    assertions tables' floor did not move."""
+    monkeypatch.setattr(db_compaction, "MIN_BLOAT_BYTES", 2 * GB)  # the real floor
+    mb = 1024 ** 2
+    assert worth_rewriting(1083 * mb, 709 * mb, "outbox") is True
+    assert worth_rewriting(1083 * mb, 709 * mb, "audit_log") is True  # the same reduced floor
+    assert worth_rewriting(1667 * mb, 1219 * mb, "audit_log") is True  # the live audit log
+    assert worth_rewriting(1083 * mb, 200 * mb, "audit_log") is False
+    assert worth_rewriting(1913 * mb, 1091 * mb, "assertions_hot") is False  # unchanged
+    assert worth_rewriting(1764 * mb, 648 * mb, "assertions_cold") is False  # unchanged
+    assert worth_rewriting(1083 * mb, 709 * mb) is False
+    assert worth_rewriting(1083 * mb, 200 * mb, "outbox") is False  # still needs real bloat
+    assert worth_rewriting(100 * GB, 20 * GB, "outbox") is False  # still needs 30% bloat
+
+
 async def test_a_rewrite_gives_the_space_back(actions: Actions) -> None:
     await _bloated(actions)
     before = (await table_sizes(actions.pool, SCRATCH))["total_bytes"]
@@ -80,6 +99,7 @@ async def test_without_pgstattuple_the_statistics_estimate_is_used_and_labelled(
     async def _none(pool: Any, oid_sql: str, table: str) -> None:
         return None
 
+    await _bloated(actions)  # it used to lean on a table an earlier test happened to leave
     monkeypatch.setattr(db_compaction, "_approx", _none)
     _, method = await reclaimable_bytes(actions.pool, SCRATCH)
     assert method.startswith("statistics")
