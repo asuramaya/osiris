@@ -471,6 +471,11 @@ _SLEEPER = '''#!{python}
 import os, signal, sys, time
 marker = os.environ["FAKE_RESTIC_MARKER"]
 open(marker, "w").write("holding")
+if os.environ.get("FAKE_RESTIC_CHILD_PID_FILE"):
+    # like the ssh behind an sftp repository: a child that inherits our pipes and outlives us
+    import subprocess
+    child = subprocess.Popen(["sleep", "60"])
+    open(os.environ["FAKE_RESTIC_CHILD_PID_FILE"], "w").write(str(child.pid))
 if os.environ.get("FAKE_RESTIC_IGNORE_SIGINT"):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 else:
@@ -535,6 +540,45 @@ def test_the_drill_readers_stop_restic_without_a_kill(sleeper: Path) -> None:
 
     assert proc.poll() is not None and sleeper.read_text() == "released"
 
+
+
+def test_a_stalled_listing_read_ends_at_the_budget_and_releases_the_lock(sleeper: Path) -> None:
+    """`restic ls` that stops answering must not hold the drill past its time budget: the read has
+    no timeout of its own, so the budget stops the process."""
+    import random
+    import time
+
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="time budget"):
+        drill._pick_samples(dict(os.environ), drill._Budget(2.0), random.Random(0))
+
+    assert time.monotonic() - started < 8.0
+    assert sleeper.read_text() == "released"  # asked to unlock, not killed
+
+
+def test_a_stalled_dump_read_ends_at_the_budget_and_ends_the_ssh_child(
+    sleeper: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    pid_file = tmp_path / "child.pid"
+    monkeypatch.setenv("FAKE_RESTIC_CHILD_PID_FILE", str(pid_file))
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="time budget"):
+        drill._dump_header_failure("/x/osiris-20260101-000000.dump", dict(os.environ),
+                                   drill._Budget(2.0))
+
+    assert time.monotonic() - started < 8.0
+    child = int(pid_file.read_text())
+    for _ in range(50):
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    else:
+        os.kill(child, 9)
+        pytest.fail("the ssh-like child outlived the stopped restic")
 
 
 # ---- a busy repository is a quiet skip, and the tick and the restore test never meet ----
@@ -624,3 +668,34 @@ async def test_a_tick_started_while_the_drill_holds_the_lock_skips_as_already_ru
         out = await offload_runner.run_offload_tick(actions.pool)
     assert out == {"skipped": "already running", "targets": []}
     assert fake.commands() == []
+
+
+def test_a_child_that_keeps_the_pipes_open_cannot_hang_the_run_after_restic_is_stopped(
+    sleeper: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After a timeout restic is stopped, but the ssh process behind an sftp repository can
+    still hold the output pipes, and reading them to the end waited on a dead link forever (the
+    unit has no start timeout either). The read after the stop is bounded, the pipes are closed,
+    and the leftover group is ended."""
+    import subprocess
+    import time
+
+    pid_file = tmp_path / "child.pid"
+    monkeypatch.setenv("FAKE_RESTIC_CHILD_PID_FILE", str(pid_file))
+    monkeypatch.setattr(restic_locks, "POST_STOP_DRAIN_SECONDS", 1)
+    started = time.monotonic()
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        restic_locks.run_restic(["backup"], dict(os.environ), timeout=1.0, grace=3.0)
+
+    assert time.monotonic() - started < 15.0  # not the child's 60 s
+    child = int(pid_file.read_text())
+    for _ in range(50):  # the leftover child is ended with the group
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    else:
+        os.kill(child, 9)
+        raise AssertionError("the child that held the pipes was left running")

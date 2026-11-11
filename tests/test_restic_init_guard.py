@@ -32,6 +32,9 @@ if cmd == "snapshots":
         print(state["snapshots_stderr"], file=sys.stderr)
         sys.exit(1)
     sys.exit(0)
+if cmd == "backup" and state.get("backup_exit"):
+    print(state.get("backup_stderr", ""), file=sys.stderr)
+    sys.exit(state["backup_exit"])
 if cmd == "init":
     print("Fatal: create repository failed: config file already exists", file=sys.stderr)
     sys.exit(1)
@@ -127,6 +130,29 @@ def test_a_positively_missing_repository_is_initialised(fake: Fake, stderr: str)
 def test_an_existing_repository_just_backs_up(fake: Fake) -> None:
     assert fake.backup() is None
     assert "init" not in fake.commands() and "backup" in fake.commands()
+
+
+def test_an_incomplete_snapshot_is_a_success_with_a_note(fake: Fake) -> None:
+    # restic exits 3 when some files could not be read but the snapshot was still written
+    fake.state["backup_exit"] = 3
+    fake.state["backup_stderr"] = "Warning: at least one source file could not be read"
+    fake.save()
+    notes: list[str] = []
+
+    assert fake.backup(notes=notes) is None
+    assert len(notes) == 1 and "could not read some source files" in notes[0]
+    assert "could not be read" in notes[0]
+
+
+def test_any_other_backup_exit_is_still_a_failure(fake: Fake) -> None:
+    fake.state["backup_exit"] = 1
+    fake.state["backup_stderr"] = "Fatal: boom"
+    fake.save()
+    notes: list[str] = []
+
+    failure = fake.backup(notes=notes)
+
+    assert failure is not None and failure.startswith("restic backup failed") and not notes
 
 
 def test_a_target_that_ever_offloaded_is_never_initialised(fake: Fake) -> None:

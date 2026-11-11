@@ -33,4 +33,9 @@ Environment=REDIS_URL=redis://127.0.0.1:6396/0
 # at read time. When ABSENT, the unit still runs (a oneshot, not a persistent
 # daemon) and degrades one tick to a single named `error`, never a crash.
 ImportCredential=restic.password
+# A oneshot has no start timeout by default, so a tick wedged on a dead link (an ssh child holding
+# the pipes, a stalled restic) would hold this unit, the tick's file lock and the timer's next
+# firing forever. Each restic call is bounded and a first copy can be long, so two hours is far
+# past any healthy tick and ends a stuck one.
+TimeoutStartSec=7200
 ExecStart=%h/code/osiris/.venv/bin/python -m src.cli offload-runner tick

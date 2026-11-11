@@ -61,11 +61,42 @@ def _receipts_path() -> Path:
 
 
 def _read_receipts() -> dict[str, Any]:
+    return _load_receipts()[0]
+
+
+def _quarantine_path() -> Path:
+    path = _receipts_path()
+    return path.with_name(path.name + ".unreadable")
+
+
+def _load_receipts() -> tuple[dict[str, Any], bool]:
+    """The receipts and whether they are UNTRUSTWORTHY: a file that exists but does not parse
+    (half-written, damaged), or one that did not parse earlier and was set aside. Receipts are what
+    says a target has offloaded before, so an unreadable file must never read as 'never offloaded'
+    (that is the one fact that stands between a bad day and `restic init` on a repository that
+    exists)."""
     path = _receipts_path()
     try:
-        return dict(json.loads(path.read_text()))
-    except (OSError, ValueError):
-        return {}
+        text = path.read_text()
+    except FileNotFoundError:
+        return {}, _quarantine_path().exists()
+    except OSError:
+        return {}, True
+    try:
+        return dict(json.loads(text)), _quarantine_path().exists()
+    except (ValueError, TypeError):
+        return {}, True
+
+
+def _set_aside_unreadable_receipts() -> None:
+    """Keep a receipts file that does not parse (never overwrite it): the copy is both the
+    evidence and the standing mark that this box can no longer prove what it offloaded."""
+    path = _receipts_path()
+    quarantine = _quarantine_path()
+    if quarantine.exists():
+        return
+    with contextlib.suppress(OSError):
+        os.replace(path, quarantine)
 
 
 def _write_receipt(name: str, receipt: dict[str, Any]) -> None:
@@ -75,7 +106,9 @@ def _write_receipt(name: str, receipt: dict[str, Any]) -> None:
     `last_error` alongside whatever succeeded most recently."""
     path = _receipts_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    receipts = _read_receipts()
+    receipts, untrusted = _load_receipts()
+    if untrusted and path.exists():
+        _set_aside_unreadable_receipts()
     existing = receipts.get(name, {})
     if receipt.get("last_successful_offload"):
         # the moment this target FIRST held a good backup, kept for good (a receipt written
@@ -86,7 +119,14 @@ def _write_receipt(name: str, receipt: dict[str, Any]) -> None:
             existing.get("last_successful_offload") or receipt["last_successful_offload"])
     existing.update(receipt)
     receipts[name] = existing
-    path.write_text(json.dumps(receipts, indent=2))
+    # temp file then rename: a crash or a stopped run leaves the old file or the new one, never half
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps(receipts, indent=2))
+        os.replace(tmp, path)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
 
 
 def _note_skip(name: str, reason: str, now: str) -> None:
@@ -146,11 +186,13 @@ def _one_line(raw: bytes) -> str:
     return failure_summary(raw.decode(errors="replace"))
 
 
+_RESTIC_INCOMPLETE_SNAPSHOT = 3  # restic backup: the snapshot was created, some files unreadable
 _PROBE_TIMEOUT_SECONDS = 30  # restic snapshots and init: a slow link must not hang the tick
 
 
 def _run_restic_backup(
     *, repository: str, password: bytes, source: Path, init_if_needed: bool = True,
+    notes: list[str] | None = None,
 ) -> str | None:
     """Returns a failure string, or None on success, same return convention as
     `osiris_offbox_restore_drill.run_drill`.
@@ -160,7 +202,10 @@ def _run_restic_backup(
     turns it off for a target that has ever offloaded successfully). A timeout, a lock, a network
     or an authentication failure records its own error and skips the target: initialising over
     a repository that merely could not be read is how a slow link once tried to re-create the
-    NAS repository (restic refused, but only because the config file was there)."""
+    NAS repository (restic refused, but only because the config file was there).
+
+    restic exits 3 when it could not read some source files but still wrote the snapshot: that is
+    a success, and the caller gets the reason through `notes` (a list the call appends to)."""
     from src.orchestrator import restic_locks
 
     env = {**os.environ, "RESTIC_REPOSITORY": repository, "RESTIC_PASSWORD": password.decode()}
@@ -207,7 +252,11 @@ def _run_restic_backup(
         backup = restic_locks.run_restic(
             ["backup", str(source), "--exclude=*.tmp"], env,
             timeout=_RESTIC_TIMEOUT_SECONDS, text=False)
-        if backup.returncode != 0:
+        if backup.returncode == _RESTIC_INCOMPLETE_SNAPSHOT:
+            if notes is not None:
+                notes.append("snapshot saved, but restic could not read some source files: "
+                             + (_one_line(backup.stderr) or "see restic output"))
+        elif backup.returncode != 0:
             return f"restic backup failed: {backup.stderr.decode(errors='replace').strip()}"
         return None
     except subprocess.TimeoutExpired as exc:
@@ -376,15 +425,19 @@ async def _run_offload_tick_locked(
         name = target.get("name", "<unnamed>")
         repository = target.get("path_or_url", "")
         # a target that has ever offloaded has a repository: never initialise over it
-        ever_offloaded = bool((_read_receipts().get(name) or {}).get("last_successful_offload"))
+        receipts, untrusted = _load_receipts()
+        ever_offloaded = untrusted or bool(
+            (receipts.get(name) or {}).get("last_successful_offload"))
+        notes: list[str] = []
         fail = await asyncio.to_thread(
             _run_restic_backup, repository=repository, password=password, source=source,
-            init_if_needed=not ever_offloaded)
+            init_if_needed=not ever_offloaded, notes=notes)
         if fail is None:
             _write_receipt(name, {"last_successful_offload": now, "last_attempt_at": now,
                                   "last_error": None, "last_skip_reason": None,
-                                  "skipped_since": None, "stale_notified_clock": None})
-            results.append({"name": name, "ok": True})
+                                  "skipped_since": None, "stale_notified_clock": None,
+                                  "last_note": notes[0] if notes else None})
+            results.append({"name": name, "ok": True, **({"note": notes[0]} if notes else {})})
         elif restic_locks.is_busy(fail):
             # Somebody else holds the repository right now (the restore test, a backup started by
             # hand, another host). Nothing failed: a quiet skip, no last_error, no clobbered last
