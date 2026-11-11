@@ -13,6 +13,7 @@ real Postgres + real Redis with deterministic responses.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
@@ -210,8 +211,23 @@ async def fire_triggers(
     return outcomes
 
 
+async def _release_claims(pool: asyncpg.Pool, ids: list[int]) -> None:
+    """Hand claimed-but-unpublished rows back so the next drain picks them up."""
+    if ids:
+        await pool.execute(
+            "UPDATE outbox SET claimed_at=NULL WHERE id = ANY($1::bigint[]) "
+            "AND published_at IS NULL", ids)
+
+
 async def drain_outbox(ctx: CascadeContext, *, limit: int = 100) -> int:
-    """Claim and process a batch of unpublished outbox events. Returns count."""
+    """Claim and process a batch of unpublished outbox events. Returns count.
+
+    The batch is claimed up front and published row by row, and a claimed row is never
+    claimed again, so anything left claimed when this stops would be lost for good. When the
+    drain is cancelled (a worker shutting down, a deploy restart) the row in hand and every
+    row after it are released for the next drain. When one row raises, the rest are released
+    and that row alone stays claimed, so a row that always fails cannot block the ones
+    behind it on every later run."""
     rows = await ctx.pool.fetch(
         "UPDATE outbox SET claimed_at=now() WHERE id IN ("
         "  SELECT id FROM outbox WHERE published_at IS NULL AND claimed_at IS NULL "
@@ -219,10 +235,20 @@ async def drain_outbox(ctx: CascadeContext, *, limit: int = 100) -> int:
         ") RETURNING id, event_type, object_id, case_id",
         limit,
     )
-    for row in rows:
-        if row["object_id"] is not None and row["case_id"] is not None:
-            await fire_triggers(ctx, row["event_type"], row["object_id"], row["case_id"])
-        await ctx.pool.execute("UPDATE outbox SET published_at=now() WHERE id=$1", row["id"])
+    pending = [r["id"] for r in rows]
+    try:
+        for row in rows:
+            if row["object_id"] is not None and row["case_id"] is not None:
+                await fire_triggers(ctx, row["event_type"], row["object_id"], row["case_id"])
+            await ctx.pool.execute(
+                "UPDATE outbox SET published_at=now() WHERE id=$1", row["id"])
+            pending.remove(row["id"])
+    except asyncio.CancelledError:
+        await asyncio.shield(_release_claims(ctx.pool, pending))
+        raise
+    except Exception:
+        await _release_claims(ctx.pool, pending[1:])
+        raise
     return len(rows)
 
 

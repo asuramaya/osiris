@@ -39,6 +39,10 @@ GB = 1024 ** 3
 TABLES = ("soul_lines", "assertions_hot", "assertions_cold", "audit_log", "outbox")
 MIN_BLOAT_FRACTION = 0.30
 MIN_BLOAT_BYTES = 2 * GB
+# A table that is small by design (its live rows fit in a few hundred MB) can be mostly empty
+# space and still never reach the 2 GB floor above, so it would never be rewritten: the
+# outbox sat at 709 MB reclaimable of 1.08 GB (65%) and was skipped night after night.
+MIN_BLOAT_BYTES_BY_TABLE = {"outbox": 256 * 1024 ** 2}
 LOCK_TIMEOUT_SECS = 30
 RECEIPT_KEY = "compaction:last"
 DRAIN_KEY = "drain:"
@@ -90,8 +94,9 @@ async def reclaimable_bytes(pool: asyncpg.Pool, table: str) -> tuple[int, str]:
     return int(row["heap"] * share), "statistics (dead tuples only)"
 
 
-def worth_rewriting(total_bytes: int, reclaimable: int) -> bool:
-    return total_bytes > 0 and reclaimable > MIN_BLOAT_BYTES \
+def worth_rewriting(total_bytes: int, reclaimable: int, table: str | None = None) -> bool:
+    floor = min(MIN_BLOAT_BYTES, MIN_BLOAT_BYTES_BY_TABLE.get(table or "", MIN_BLOAT_BYTES))
+    return total_bytes > 0 and reclaimable > floor \
         and reclaimable / total_bytes > MIN_BLOAT_FRACTION
 
 
@@ -193,7 +198,7 @@ async def compact_tonight(
                 "reclaimable_bytes": reclaim, "measured_by": method,
                 "at": datetime.now(UTC).isoformat()}
         left = window_secs - (clock() - started)
-        if not worth_rewriting(sizes["total_bytes"], reclaim):
+        if not worth_rewriting(sizes["total_bytes"], reclaim, table):
             receipts[table] = {**base, "action": "skipped", "reason": "not enough dead space"}
         elif left <= 60:
             receipts[table] = {**base, "action": "skipped", "reason": "the window is over"}
