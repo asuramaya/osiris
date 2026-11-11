@@ -1661,8 +1661,7 @@ async def _cmd_launch_harness(
     if dormant is not None and verbose:
         from src.ingest.sessions import dormant_history_note
         why = ("--fresh asked for a new session" if fresh else
-               "the seat's own record names no session to continue, so `osiris resume` "
-               "would refuse it too")
+               f"`osiris resume {handle} --verbose` says why")
         print(f"osiris launch: {handle!r}: "
               f"{dormant_history_note(dormant, not_continued=why)}", file=sys.stderr)
 
