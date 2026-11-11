@@ -589,3 +589,42 @@ def test_waiters_wait_longer_than_the_hold_bound() -> None:
 
     default = inspect.signature(trigger.seat_spawn_lock).parameters["wait"].default
     assert default > trigger.SPAWN_HOLD_BOUND
+
+
+async def test_a_listed_body_matches_the_handle_whatever_the_case(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    office = await _seat(actions, tmp_path, "casey")
+
+    async def _roster(**kw: Any) -> list[dict[str, Any]]:
+        return [{"name": "[SC] Casey", "cwd": "/elsewhere", "id": "ca5e0001",
+                 "sessionId": "ca5e0001-0000", "state": "working"}]
+
+    twin = await trigger._launch_twin_check(actions.pool, _roster, str(office),
+                                            handle="casey")
+    assert twin["harness"] is not None and twin["harness"]["id"] == "ca5e0001"
+
+
+async def test_the_twin_checks_second_read_failing_clears_roster_ok(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The session-match read after the cwd read swallowed an unreadable list into [] and
+    left roster_ok True. It now fails closed."""
+    office = await _seat(actions, tmp_path, "secondread")
+    seat_id = await trigger._seat_for_target(Actions(actions.pool), "secondread")
+    # a seat with a holder reaches the second (session-match) read
+    from src.orchestrator.seats import bind_holder
+
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:secondread-h", source="test")
+    calls = {"n": 0}
+
+    async def _roster(**kw: Any) -> list[dict[str, Any]]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return []
+        raise trigger.HarnessListUnreadable("down on the second read")
+
+    twin = await trigger._launch_twin_check(actions.pool, _roster, str(office),
+                                            seat_id=seat_id, handle="secondread")
+    assert calls["n"] >= 2
+    assert twin["roster_ok"] is False

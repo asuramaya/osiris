@@ -3934,8 +3934,11 @@ def _row_names_handle(row: dict[str, Any], handle: str | None) -> bool:
     """A harness roster row's window name is `[<tag>] <handle>`: true when it names `handle`."""
     if not handle:
         return False
-    name = str(row.get("name") or "")
-    return name == handle or name.endswith("] " + handle)
+    # Handles resolve case-insensitively everywhere else, so a body whose name differs from the
+    # typed handle only in case must still match.
+    name = str(row.get("name") or "").casefold()
+    want = handle.casefold()
+    return name == want or name.endswith("] " + want)
 
 
 async def _launch_twin_check(
@@ -4078,6 +4081,7 @@ async def _launch_twin_check(
                 everywhere = await agents_json()
             except (OSError, TimeoutError, ValueError):
                 everywhere = []
+                roster_ok = False  # fail closed: this read matters as much as the first
             session_match = next(
                 (r for r in everywhere if isinstance(r, dict)
                  and any(str(r.get("sessionId") or "").startswith(sid) for sid in sessions)),
