@@ -4374,9 +4374,16 @@ async def candidates(project: str | None = None, limit: int = 50,
     this project's own session has standing to judge these candidates.
 
     Read-only. Reading costs nothing and commits nothing. Returned oldest first."""
+
+    clock = PhaseClock()
     ident = await _ident_for(ctx)
     proj = project or (ident.project if ident else None)
-    return await dispose_seam.candidates(await _pool_get(), project=proj, limit=limit)
+    clock.mark("identity")
+    out = await dispose_seam.candidates(await _pool_get(), project=proj, limit=limit,
+                                        clock=clock)
+    if clock.total_ms() > 1000.0:
+        logging.getLogger("osiris.mcp").info("candidates phases: %s", clock.line())
+    return out
 
 
 @mcp.tool()
