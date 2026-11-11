@@ -1537,6 +1537,13 @@ _SPAWN_AWARE = {
     "mcp__osiris__hold_memory", "mcp__osiris__annotate_thread", "mcp__osiris__amend_decision",
     "mcp__osiris__amend_practice", "mcp__osiris__ack_handoff",
     "mcp__osiris__correct_thread_summary", "mcp__osiris__stop",
+    # the consolidated tools that replaced several of the names above: a spawn writing
+    # through them was attributed to its parent because only the old names were stamped
+    "mcp__osiris__thread", "mcp__osiris__practice", "mcp__osiris__lease",
+    "mcp__osiris__record_artifact", "mcp__osiris__record_evaluation",
+    "mcp__osiris__cite_transcript", "mcp__osiris__read_citation",
+    # a spawn asking who it is must not be told its parent's name
+    "mcp__osiris__get_status",
 }
 
 # tools whose server signature accepts `session_anchor`, ported verbatim, same source.

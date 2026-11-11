@@ -1022,6 +1022,54 @@ def test_anchor_SPAWN_AWARE_stays_in_lockstep_with_the_server() -> None:
             f"{name} is in _SPAWN_AWARE but its signature does not accept `subagent_id`")
 
 
+# Tools that accept a spawn stamp but must never receive one from the hook: each changes
+# something no sub-agent should do in its own name (settings, backups, machine identity,
+# resuming another session).
+_SPAWN_DELIBERATELY_UNSTAMPED = {
+    "backup_settings": "a spawn never changes the backup configuration",
+    "declare_machine_identity": "a spawn never declares what machine this is",
+    "resume": "a spawn never resumes another session",
+    "settings": "a spawn never writes the settings registry",
+}
+
+
+async def test_anchor_every_tool_that_takes_a_spawn_stamp_is_stamped_by_the_hook() -> None:
+    """The other half of the lockstep: the test above proves every stamped name exists and
+    accepts the field; this proves no tool that accepts it is left out. The closed list went
+    stale when several tools were consolidated: a spawn writing through the new names was
+    attributed to its parent, and asking who it was returned the parent's name."""
+    import src.mcp_server as srv
+    from scripts.osiris_hook import _SPAWN_AWARE
+
+    listed = await srv.mcp.list_tools()
+    stampable = set()
+    for tool in listed:
+        schema = tool.inputSchema
+        branches = schema.get("anyOf") or schema.get("oneOf") or []
+        takes = "subagent_id" in schema.get("properties", {}) or (
+            bool(branches) and all("subagent_id" in b.get("properties", {}) for b in branches))
+        if takes:
+            stampable.add(tool.name)
+    stamped = {n.removeprefix("mcp__osiris__") for n in _SPAWN_AWARE}
+    missing = sorted(stampable - stamped - set(_SPAWN_DELIBERATELY_UNSTAMPED))
+    assert not missing, (
+        f"tools that take `subagent_id` but are not in the hook's _SPAWN_AWARE: {missing}. "
+        "Add each, or list it in _SPAWN_DELIBERATELY_UNSTAMPED with the reason.")
+    assert set(_SPAWN_DELIBERATELY_UNSTAMPED) <= stampable, "an exclusion names a tool that no "\
+        "longer takes the stamp: remove it from _SPAWN_DELIBERATELY_UNSTAMPED"
+
+
+def test_anchor_a_spawn_is_stamped_on_the_consolidated_write_tools_and_get_status() -> None:
+    for tool in ("thread", "practice", "lease", "record_artifact", "record_evaluation",
+                 "get_status"):
+        out = _run_anchor({"tool_name": f"mcp__osiris__{tool}",
+                           "session_id": "513aa520-6f1e-4807-948d-2e0820af1574",
+                           "agent_id": "agent-abc", "agent_type": "worker",
+                           "tool_input": {}})
+        ti = out["hookSpecificOutput"]["updatedInput"]  # type: ignore[index]
+        assert ti["subagent_id"] == "agent-abc", f"{tool} was not stamped for a spawn"
+
+
 def test_anchor_rides_every_call_not_only_mount() -> None:
     for tool in ("inbox", "send", "orient", "record_decision", "open_thread", "resolve_thread"):
         out = _run_anchor({"tool_name": f"mcp__osiris__{tool}",
