@@ -108,3 +108,40 @@ def test_the_batch_uses_two_git_processes_however_many_claims(
 
     assert out is not None and len(out) == len(claims)
     assert len(calls) == 2, calls
+
+
+async def test_a_slow_audit_logs_which_step_was_slow(
+    repo: dict[str, str], actions: object, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """fleet's landing audit still cost 2.6 s after the git calls were batched, so the audit logs
+    its own steps (main lookup, the text query, the regex pass, the git batch, the notes) when it
+    passes a second; a fast audit logs nothing."""
+    import logging
+    import time
+
+    from src.actions.core import Actions
+
+    assert isinstance(actions, Actions)
+    d = await actions.create_or_find_object("Decision", "decision:claimlog", "agent:t")
+    from datetime import UTC, datetime
+
+    await actions.assert_property(d, "summary", "we merge side (abc1234) today", "agent:t",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    real = dg._batch_claim_notes
+
+    def slow(*a: object, **k: object) -> object:
+        time.sleep(1.1)
+        return real(*a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(dg, "_batch_claim_notes", slow)
+    with caplog.at_level(logging.INFO, logger="osiris.deploy_guard"):
+        await dg.audit_graph_merge_claims(actions.pool, Path(repo["root"]))
+    lines = [r.getMessage() for r in caplog.records if "merge-claim audit" in r.getMessage()]
+    assert len(lines) == 1 and "steps (ms): git_batch=" in lines[0]
+
+    caplog.clear()
+    monkeypatch.setattr(dg, "_batch_claim_notes", real)
+    with caplog.at_level(logging.INFO, logger="osiris.deploy_guard"):
+        await dg.audit_graph_merge_claims(actions.pool, Path(repo["root"]))
+    assert not [r for r in caplog.records if "merge-claim audit" in r.getMessage()]

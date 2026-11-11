@@ -6347,3 +6347,62 @@ async def test_the_seat_holder_lint_and_the_readiness_step_carry_the_command(
     assert step["status"] == "needs_attention" and hit["command"] in step["reason"]
     assert _seat_capture_step([])["status"] == "done"
     assert _seat_capture_step(None)["status"] == "done"
+
+
+async def test_fleet_occupancy_in_parallel_equals_asking_each_seat_in_turn(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """fleet_occupancy reads ~40 seats' occupancy and house four at a time (it cost 1 to 1.4 s of
+    every fleet() call one after another). The rows must be exactly what asking each seat in turn
+    gives, in the same order, for every state a seat can be in; and the reads really overlap."""
+    import asyncio
+
+    from src.orchestrator import seats as seats_mod
+    from src.orchestrator.seats import derive_house, fleet_occupancy, seat_occupancy
+
+    made = []
+    for i in range(9):
+        made.append(await ensure_seat(
+            actions, house="osiris" if i % 2 else "rotten-apple", handle=f"Par{i:02d}",
+            source="test"))
+    # occupied (a live mount), cold (held, nobody live), vacant (never held)
+    for i, state in ((0, "occupied"), (1, "occupied"), (2, "cold"), (3, "cold")):
+        agent = f"agent:par{i:04d}"
+        await actions.create_or_find_object("Agent", agent, "test")
+        await bind_holder(actions, seat_id=made[i]["seat_id"], agent_id=agent)
+        if state == "occupied":
+            await save_mount(actions.pool, job_dir=f"/jobs/par{i}", agent_id=agent,
+                             project="osiris", cwd="/w/osiris", model="claude-sonnet-5",
+                             session_key=None)
+
+    in_turn = []
+    for r in await actions.pool.fetch(
+            "SELECT o.canonical AS seat_id, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "   AS handle FROM objects o WHERE o.type='Seat' AND o.status='active' "
+            "ORDER BY o.canonical"):
+        in_turn.append({"seat_id": r["seat_id"], "handle": r["handle"],
+                        "house": await derive_house(actions.pool, r["seat_id"]),
+                        **await seat_occupancy(actions.pool, r["seat_id"])})
+
+    assert await fleet_occupancy(actions.pool) == in_turn
+    assert {row["state"] for row in in_turn} >= {"occupied", "cold", "vacant"}
+
+    # and the per-seat reads do overlap (the point), capped at the parallel limit
+    running = peak = 0
+    real = seats_mod.seat_occupancy
+
+    async def watched(*a, **k):  # type: ignore[no-untyped-def]
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.05)
+        try:
+            return await real(*a, **k)
+        finally:
+            running -= 1
+
+    monkeypatch.setattr(seats_mod, "seat_occupancy", watched)
+    await fleet_occupancy(actions.pool)
+    assert 1 < peak <= seats_mod._OCCUPANCY_PARALLEL
