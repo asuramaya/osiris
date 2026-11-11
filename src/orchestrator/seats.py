@@ -593,9 +593,6 @@ async def seat_occupancy(
     return {"state": "occupied" if live else "cold", "holder": holder, "live": live}
 
 
-_OCCUPANCY_PARALLEL = 4
-
-
 async def fleet_occupancy(
     pool: asyncpg.Pool, *, live_secs: int = _LIVE_SECS,
 ) -> list[dict[str, Any]]:
@@ -612,19 +609,13 @@ async def fleet_occupancy(
         "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "   AS handle "
         "FROM objects o WHERE o.type='Seat' AND o.status='active' ORDER BY o.canonical")
-    # FOUR AT A TIME (the same cap fleet_digest's streams use, under the pool's 8 connections):
-    # each seat's occupancy and house are independent reads of the same functions as before, so
-    # the rows are identical and keep the seat order; one after another they cost about 1 to
-    # 1.4 s of every fleet() call across the ~40 active seats (measured, fleet step timings).
-    gate = asyncio.Semaphore(_OCCUPANCY_PARALLEL)
-
-    async def one(row: Any) -> dict[str, Any]:
-        async with gate:
-            occ = await seat_occupancy(pool, row["seat_id"], live_secs=live_secs)
-            house = await derive_house(pool, row["seat_id"])
-        return {"seat_id": row["seat_id"], "handle": row["handle"], "house": house, **occ}
-
-    return list(await asyncio.gather(*(one(row) for row in seats)))
+    out: list[dict[str, Any]] = []
+    for row in seats:
+        occ = await seat_occupancy(pool, row["seat_id"], live_secs=live_secs)
+        house = await derive_house(pool, row["seat_id"])
+        out.append({"seat_id": row["seat_id"], "handle": row["handle"], "house": house,
+                    **occ})
+    return out
 
 
 _ROSTER_CAVEATS = (
