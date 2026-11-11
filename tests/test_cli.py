@@ -1083,8 +1083,11 @@ async def test_cmd_launch_harness_lane_delegates_to_launch_seat_not_a_reimplemen
     async def _unreachable(*a: Any, **k: Any) -> Any:
         raise AssertionError("should never be called, launch_seat is a fake here")
 
+    async def _empty_roster(**k: Any) -> list[dict[str, Any]]:
+        return []  # the post-launch wait reads the roster once; launch_seat itself is fake
+
     out = await cmd_launch("delegates-to-launch-seat", model=None, pool=actions.pool,
-                           spawn=_unreachable, agents_json=_unreachable)
+                           spawn=_unreachable, agents_json=_empty_roster)
     assert out == 0
     assert len(calls) == 1
     kw = calls[0]
