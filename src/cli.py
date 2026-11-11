@@ -1444,12 +1444,7 @@ async def _resolve_and_guard_launch(
     # operator decision, not a guess either side should make; this only refuses loudly and
     # names which field disagrees.
     if not _tree_exists(office):
-        print(f"osiris {verb}: {handle!r} names anchor_cwd={office!r} but it does not "
-              "exist on disk. Repoint it or create the directory before launch; osiris "
-              "never provisions one itself. The anchor is a graph assertion, not a "
-              f".osiris pin file. Fix it with: rebind_seat(seat={handle!r}, "
-              "new_cwd='<the real directory>') via the osiris MCP tools, or by creating "
-              f"{office!r} at that exact path.", file=sys.stderr)
+        print(_missing_office_text(verb, handle, office), file=sys.stderr)
         return 1
     launch_cwd = office
     if tree_cwd:
@@ -1460,9 +1455,9 @@ async def _resolve_and_guard_launch(
                 print(voice.tree_restored(verb, restored.line))
             elif not restored.ok:
                 print(f"osiris {verb}: {handle!r}: {restored.line}. Fix it with: "
-                      f"bind_seat_tree(seat_id={facts['seat_id']!r}, "
-                      "tree_cwd='<the real directory>', because='...') via the osiris "
-                      "MCP tools, or by creating it at that exact path.", file=sys.stderr)
+                      f"osiris bind-seat-tree {facts['seat_id']} <the real directory> "
+                      "\"<why>\", or create the directory at that exact path.",
+                      file=sys.stderr)
                 return 1
         # THE FABRICATED-TREE CASE: launch could land the agent in the wrong cwd via a
         # mint-time ~/code/<handle> with no git tree while the charter governs a real tree
@@ -1474,9 +1469,9 @@ async def _resolve_and_guard_launch(
             print(f"osiris {verb}: {handle!r} names tree_cwd={tree_cwd!r}, which holds no "
                   f"git tree, while its charter governs {repo!r} at {real_path!r}, a real "
                   "tree. A body spawned there lands in "
-                  "the wrong cwd. Fix it with: bind_seat_tree(seat_id="
-                  f"{facts['seat_id']!r}, tree_cwd={real_path!r}, because='...') via the "
-                  "osiris MCP tools.", file=sys.stderr)
+                  "the wrong cwd. Fix it with: "
+                  f"osiris bind-seat-tree {facts['seat_id']} {real_path} \"<why>\"",
+                  file=sys.stderr)
             return 1
         launch_cwd = tree_cwd
 
@@ -1549,6 +1544,21 @@ async def _launch_resumes_instead(
     return gate is None
 
 
+def _missing_office_text(verb: str, handle: str, office: str) -> str:
+    """The refusal for a seat whose anchor directory is not on disk, ending in ONE command
+    that fixes it. A seat at its default seat-directory path is fixed by writing the directory
+    there (`establish-seat-dir`, which now also works for a founded seat nothing has mounted
+    yet); a seat anchored somewhere else is fixed by pointing it at the real directory."""
+    from src.orchestrator.offices import _default_office_root
+
+    at_default = Path(office) == _default_office_root() / handle.lower()
+    fix = (f"osiris establish-seat-dir {handle}" if at_default else
+           f"osiris rebind-seat {handle} <the real directory> --because \"<why>\"")
+    return (f"osiris {verb}: {handle!r} names anchor_cwd={office!r} but it does not exist "
+            "on disk. The anchor is a graph assertion, not a .osiris pin file, and osiris "
+            f"never provisions the directory behind your back. Fix it with: {fix}")
+
+
 async def _cmd_launch_harness(
     handle: str, *, model: str | None, pool: asyncpg.Pool, wake_default: str | None,
     spawn: SpawnClaudeBg, agents_json: AgentsJson,
@@ -1595,12 +1605,7 @@ async def _cmd_launch_harness(
     # THE ONE-SIDED GUARD FAMILY: see this function's own docstring for why this stays
     # here rather than in the shared trigger.py shell.
     if not _tree_exists(office):
-        print(f"osiris launch: {handle!r} names anchor_cwd={office!r} but it does not "
-              "exist on disk. Repoint it or create the directory before launch; osiris "
-              "never provisions one itself. The anchor is a graph assertion, not a "
-              f".osiris pin file. Fix it with: rebind_seat(seat={handle!r}, "
-              "new_cwd='<the real directory>') via the osiris MCP tools, or by creating "
-              f"{office!r} at that exact path.", file=sys.stderr)
+        print(_missing_office_text("launch", handle, office), file=sys.stderr)
         return 1
 
     from src.config.settings import get_settings
@@ -6966,10 +6971,10 @@ async def cmd_new(
         cwd = Path.cwd()
         default_workspace = Path.home() / "code" / handle.lower()
         if cwd != Path.home() and cwd != default_workspace:
-            print(f"osiris new: standing in {cwd}, but no path given. This creates "
-                  f"{default_workspace} instead (osiris never assumes your current "
-                  f"directory is the workspace). To use where you are: "
-                  f"osiris new {handle} .",
+            print(f"osiris new: standing in {cwd}, but no path given, so no separate "
+                  "workspace is created: the seat runs from its own seat directory "
+                  "(osiris never assumes your current directory is the workspace). To "
+                  f"use where you are: osiris new {handle} .",
                   file=sys.stderr)
 
     owns_pool = pool is None

@@ -3322,8 +3322,9 @@ async def retire_seat(actions: Actions, seat_id: str, *, reason: str = "", actor
         "WHERE l.to_id=$1 AND l.type='holds' "
         "AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1", row["id"])
     if holder:
-        return {"error": f"{seat_id} is actively held by {holder}, retire_seat never "
-                         "evicts a live agent; transfer or vacate the seat first"}
+        return {"error": f"{seat_id} is actively held by {holder}, and retiring never "
+                         "evicts a live agent. Vacate it first, then retire: "
+                         f"osiris vacate-seat {seat_id} \"<why the holder is gone>\""}
     peer = await _active_peer(actions.pool, row["id"])
     if peer is not None:
         return {"error": f"{seat_id} is peered with {peer['peer']}, retiring it would "

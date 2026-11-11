@@ -271,3 +271,16 @@ def test_emit_with_text_is_ignored_in_json_mode(capsys: pytest.CaptureFixture[st
     out = capsys.readouterr().out
     assert "should never appear" not in out
     assert '"a":1' in out
+
+
+def test_a_long_sentence_value_wraps_under_its_column_instead_of_being_cut() -> None:
+    """stop's `detail` was cut to "carries no harness/proc-confirmed live body ri…": the reason
+    a command refused is the one line a reader has to be able to finish."""
+    paint = r.Paint(False)
+    detail = ("agent:seat-de979439-ii carries no harness/proc-confirmed live body right now, "
+              "so there is nothing to stop")
+    lines = r.kv_block([("status", "no-live-body"), ("detail", detail)], paint, cols=60)
+    assert not any("…" in ln for ln in lines)
+    joined = " ".join(ln.strip() for ln in lines[1:])
+    assert "so there is nothing to stop" in joined and "detail" in lines[1]
+    assert all(len(ln) <= 60 for ln in lines)
