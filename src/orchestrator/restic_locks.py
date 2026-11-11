@@ -259,6 +259,19 @@ def pop_notes(repo_url: str) -> list[str]:
         return _notes.pop(repo_url, [])
 
 
+# Every message that means "somebody else holds this repository right now" starts with this, so the
+# callers can tell a busy repository (a quiet SKIP: try again later, nothing failed) from a real
+# failure. The tick and the drill used to collide on the repository (`restic check` is exclusive),
+# and the loser was recorded as a failure: a drill held off for six hours, a backup that never ran
+# reading `ok: False`.
+BUSY_PREFIX = "repository busy"
+
+
+def is_busy(message: str | None) -> bool:
+    """Is this failure string a busy-repository answer (see BUSY_PREFIX)?"""
+    return bool(message) and str(message).startswith(BUSY_PREFIX)
+
+
 def holder_line(text: str) -> str | None:
     """restic's own account of who holds the repository ("repository is already locked
     exclusively by PID 12 on host by user ... lock was created at ..."), from a failed run's

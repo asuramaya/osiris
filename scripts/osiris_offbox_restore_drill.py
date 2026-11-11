@@ -84,14 +84,16 @@ def _check_retrying_on_a_lock(
     if not (outcome.cleared or outcome.note):
         held = restic_locks.holder_line(text) or "restic did not say who"
         why = f" (lock listing: {outcome.unreadable})" if outcome.unreadable else ""
-        return check, f"repository is locked and none of its locks is stale: {held}{why}"
+        return check, (f"{restic_locks.BUSY_PREFIX} (locked, none of its locks is stale): "
+                       f"{held}{why}")
     check = run_check()
     if check.returncode == 0:
         return check, None
     text = f"{check.stdout}\n{check.stderr}"
     if restic_locks.is_lock_failure(text):
         held = restic_locks.holder_line(text) or "restic did not say who"
-        return check, f"repository was still locked after clearing stale locks: {held}"
+        return check, (f"{restic_locks.BUSY_PREFIX} (still locked after clearing stale "
+                       f"locks): {held}")
     return check, None
 
 
