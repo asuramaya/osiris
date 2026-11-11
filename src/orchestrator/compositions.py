@@ -137,6 +137,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable
@@ -2210,7 +2211,20 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     orphan_census_result: dict[str, Any] = {"by_type": {}, "abstained_total": 0}
     traceability_census_result: dict[str, Any] = {"by_type": {}}
 
+    # STEP TIMINGS: the time spent since the previous check landed, i.e. the SQL and Python that
+    # produced this check, so a slow lint says where its minutes go. Work shared by several
+    # checks (the Agent lineage fetch) lands on the FIRST check that uses it. Always logged (one
+    # line, the slowest steps first); returned as `timings_ms` only when asked (`timings=true`,
+    # composition level: the MCP tool's contract is size-capped and does not carry the switch).
+    want_timings = bool(args.get("timings"))
+    timings_ms: dict[str, int] = {}
+    lap = [time.monotonic()]
+    started = lap[0]
+
     def land(check: str, severity: str, rows: list[dict[str, Any]]) -> None:
+        mark = time.monotonic()
+        timings_ms[check] = round((mark - lap[0]) * 1000)
+        lap[0] = mark
         counts[check] = len(rows)
         severity_by_check[check] = severity
         if check_filter is not None:
@@ -3286,6 +3300,9 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             if _check_name not in counts:
                 could_not_evaluate[_check_name] = reason
 
+    logger.info("graph_lint %.1fs; slowest steps (ms): %s", time.monotonic() - started,
+              ", ".join(f"{k}={v}" for k, v in sorted(timings_ms.items(),
+                                                       key=lambda kv: -kv[1])[:10]))
     findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
     if check_filter is not None:
         # a per-check ask paginates ONE check's full set, "capped" now names how much of
@@ -3322,6 +3339,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "clean": sorted(c for c, n in counts.items() if n == 0),
         **({"could_not_evaluate": could_not_evaluate} if could_not_evaluate else {}),
         **({"capped": capped, "note": note} if capped else {}),
+        **({"timings_ms": timings_ms} if want_timings else {}),
         "orphan_by_type": orphan_census_result["by_type"],
         "orphan_abstained_total": orphan_census_result["abstained_total"],
         "untraceable_by_type": traceability_census_result["by_type"],
