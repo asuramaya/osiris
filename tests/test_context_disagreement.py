@@ -41,6 +41,17 @@ def test_a_two_point_difference_writes_one_json_line(tmp_path: Path) -> None:
         "window": 1_000_000, "model": "claude-sonnet-5"}
 
 
+def test_a_zero_on_either_side_is_no_reading_and_writes_nothing(tmp_path: Path) -> None:
+    """The first log was 193 harness-0% lines against a high derived figure, and ten more
+    with osiris at 0% against a real harness figure: one side with nothing to say, not a
+    disagreement. A real gap with both sides reading still lands."""
+    log = tmp_path / "log.jsonl"
+    assert _record(log, 0, 71) is False
+    assert _record(log, 66, 0) is False
+    assert not log.exists()
+    assert _record(log, 35, 33) is True
+
+
 def test_an_unknown_figure_writes_nothing(tmp_path: Path) -> None:
     log = tmp_path / "log.jsonl"
     assert _record(log, None, 40) is False
