@@ -13,6 +13,61 @@ coordinating only through Postgres + Redis (no RPC mesh between them):
 This is **Cut 1** of the deployment sequence in [`../ROADMAP.md`](../ROADMAP.md): same
 machine, two units, fate-isolated. Everything before this ran in one process.
 
+## What changed on 2026-11-11
+
+A day of fixes, grouped by what you feel. Speed figures are measured on the live machine
+(the box was busy, so a quiet box is faster still).
+
+**Backups and the NAS.** A NAS backup no longer fails on a lock an earlier run left behind:
+locks are read without taking one, and a stale lock is cleared or its holder is named.
+
+**The desk.** 232 old agent-written messages on your desk were settled (marked read, nothing
+deleted) by a triage with five named rules; it can be run again. The desk is otherwise unchanged.
+
+**Launch, resume and stop.** Whether a body exists now comes from the harness's own list. A
+body you just stopped no longer makes launch refuse for 15 minutes, a second launch a few seconds
+after the first can no longer start two bodies, `osiris stop` finds and names the bodies the
+harness lists, and an unreadable list refuses rather than guessing. Launch says "started a new
+session" and no longer points at a resume that would refuse. Every refusal now ends in one
+`osiris` command that fixes it (`establish-seat-dir`, `rebind-seat`, `bind-seat-tree`,
+`vacate-seat`), `osiris new` with no path says no separate workspace is created, and stop's
+explanation is no longer cut off. Tool and command messages are in plain words (no internal
+jargon, no em dashes), and a test keeps them that way.
+
+**Rebuilding a transcript.** `osiris rebuild-transcript <session> --to crush|dsh|claude --into
+<dir>` writes a stored session out as a brand new session; the original is never touched. A
+resume from another Claude account continues from a whole-session brief plus on-demand recall,
+in one line, and names the ready alternatives.
+
+**Speed (before, after).**
+- Search for a long text, which every message to an agent and every recorded decision runs: about
+  4 s (10 to 12 s under load), now about 0.5 s, with the same hits. It also fixes a defect that made
+  some of those checks silently return nothing.
+- The first search after a background embedding pass: 1.5 s, now 25 ms. A search for a word that
+  matches nothing is capped at 3 s (it took 5 to 12 s).
+- The fleet digest: about 1.1 s, now about 0.4 s. `candidates`: 2 s, now 60 ms. Your inbox once
+  caught up: 100 to 130 ms, now 27 ms.
+- The server's event loop no longer stalls on its slowest paths: the decision duplicate check 222 ms
+  to 21 ms, a vector rebuild 275 ms to about 20, a transcript lookup 158 ms to 3, the slow-call
+  report 164 ms to about 10; each log line is about 85 times cheaper.
+- Status line refresh about 210 ms and turn-end check about 110 ms, typical on a busy box.
+- Arriving with the next deploy: the hook that runs before every osiris tool call drops from about
+  87 ms to about 52 ms, and the turn-end hook of a session near its limit from about 200 ms to
+  about 150 ms.
+
+**Storage.** The outbox now removes rows a worker restart had left half-delivered, and a worker
+that is shutting down hands back what it had not finished. The nightly compaction now also
+rewrites the outbox and the audit log, which it used to skip (about 700 MB and 1.2 GB reclaimable).
+The abstention miner no longer rewrites about 26,600 rows a day.
+
+**Waiting on you.**
+- The Claude rebuild probe: `rebuild-transcript --to claude` refuses `~/.claude/projects` until
+  the probe that checks an unstamped resume gets your permission to run.
+- The custody ladder pieces still unbuilt: the multi-recipient key envelope with countersigned
+  seals, the iCloud ciphertext mirror, and the self-host recipe.
+- The abstention churn collapse: ready as a repair target (`osiris backfill`), dry run by default,
+  and it waits for your word before it rewrites 1.66 million rows (776 MB, 277 objects).
+
 ## Routine deploys: `osiris deploy`
 
 Everything below this section is about standing the system up for the first time. Once
