@@ -30,6 +30,15 @@ from typing import Any, Protocol
 
 import asyncpg
 
+# the two pure verdicts live in settle_boxes.py (stdlib only, so the Stop hook can read them
+# without importing this module and asyncpg); re-exported here for every existing caller
+from src.orchestrator.settle_boxes import (
+    missing_boxes as missing_boxes,
+)
+from src.orchestrator.settle_boxes import (
+    unevaluated_boxes as unevaluated_boxes,
+)
+
 
 class _Fetchable(Protocol):
     async def fetchval(self, query: str, *args: Any) -> Any: ...
@@ -436,27 +445,6 @@ async def seat_chartered(conn_or_pool: _Fetchable, seat_id: str | None) -> bool 
             "LIMIT 1", seat_id))
     except Exception:  # noqa: BLE001, fail open, same principle as every box above
         return None
-
-
-def missing_boxes(boxes: dict[str, bool | None]) -> list[str]:
-    """The labels of any box explicitly False, never None (fog-of-war, could not be
-    evaluated) or True (satisfied). Pure; the one line both the hook's verdict and
-    /settle's own confirm step share instead of each re-deriving it."""
-    return [label for label, ok in boxes.items() if ok is False]
-
-
-def unevaluated_boxes(boxes: dict[str, bool | None]) -> list[str]:
-    """The labels of any box that is None, COULD NOT BE EVALUATED, a DIFFERENT thing
-    from missing (False) or satisfied (True), and deliberately never folded into either:
-    a check that silently never runs and a check that genuinely ran and found nothing
-    satisfied must never collapse onto the same signal, the exact class of defect that let
-    an earlier standing_orders_touched cwd bug hide behind `complete:true` for eleven days
-    of a real, untouched charter.md. Fog-of-war stays non-blocking (a box that is
-    structurally inapplicable, e.g. an unseated session with no standing-orders file to
-    check, must not permanently red every settle it will ever call), but it must never
-    again be invisible: a caller SEES this list, distinctly from `missing_boxes`, whether
-    or not it changes what they decide to do about it."""
-    return [label for label, ok in boxes.items() if ok is None]
 
 
 async def uncommitted_git_work(repo_dir: str | None, *, timeout_s: float = 2.0) -> list[str] | None:

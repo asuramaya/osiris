@@ -128,13 +128,28 @@ if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "statusline":
         sys.exit(0)
 
 # the heavier standard-library imports come after the fast path on purpose (urllib alone costs
-# tens of milliseconds of CPU on every start)
-import socket  # noqa: E402
-import subprocess  # noqa: E402
-import urllib.error  # noqa: E402
-import urllib.request  # noqa: E402
+# tens of milliseconds of CPU on every start). socket, subprocess and urllib are NOT imported
+# here at all: each is imported inside the function that uses it, so a hook that never talks to
+# the server (the PreToolUse anchor, a pure stdin filter that runs before every osiris tool call)
+# never pays for them. tests/test_osiris_hook_imports.py pins it.
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
+
+
+def __getattr__(name: str) -> Any:
+    """`hook.subprocess`, `hook.socket` and `hook.urllib` still resolve (the tests patch through
+    them), importing the module the first time something asks, never at start-up."""
+    if name in ("subprocess", "socket"):
+        import importlib
+
+        return importlib.import_module(name)
+    if name == "urllib":
+        import urllib.error
+        import urllib.request
+
+        return urllib
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # Single source of truth for the two-tier compaction thresholds
 # (src/orchestrator/context_lens.py's own ALARM_PCT/HARD_ALARM_PCT), never a second,
@@ -301,6 +316,8 @@ def _first_dead_unit(*, timeout: float = 0.3) -> str | None:
     chrome render. Returns the first unreachable `name:port`, or None when all three
     accept a connection (the failure is something else, a slow query, a transient
     blip, never fabricated as a dead unit that answered fine)."""
+    import socket
+
     for name, port in _PORT_PROBES:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=timeout):
@@ -311,6 +328,9 @@ def _first_dead_unit(*, timeout: float = 0.3) -> str | None:
 
 
 def _post(url: str, data: dict[str, Any], *, timeout: int = 3) -> Any | None:
+    import urllib.error
+    import urllib.request
+
     try:
         req = urllib.request.Request(url, data=json.dumps(data).encode(),
                                      headers={"Content-Type": "application/json"},
@@ -1003,7 +1023,9 @@ def _missing_boxes(boxes: dict[str, Any]) -> list[str]:
     verdict already share. Delegates instead of re-deriving; fails open to the empty list
     (never blocks) if settle.py can't be imported at all."""
     try:
-        from src.orchestrator.settle import missing_boxes
+        # the pure function lives in a stdlib-only module: importing settle.py itself drags in
+        # asyncpg, about 100 ms on every Stop of a session past the self-compact threshold
+        from src.orchestrator.settle_boxes import missing_boxes
     except Exception:  # noqa: BLE001, fail-open: a hook must never crash the harness
         return []
     return missing_boxes(boxes)
@@ -1425,6 +1447,8 @@ def _git_status_porcelain(repo_dir: str, *, timeout_s: float = 2.0) -> str:
     such path, a timeout); the fallback marker still mints without it."""
     if not repo_dir:
         return ""
+    import subprocess
+
     try:
         proc = subprocess.run(["git", "-C", repo_dir, "status", "--porcelain"],
                               capture_output=True, text=True, timeout=timeout_s,
@@ -1462,6 +1486,8 @@ def _mint_machine_handoff(hook: dict[str, Any], boxes: dict[str, Any]) -> None:
         "summary": summary, "kind": "ruling", "rationale": rationale,
         "is_handoff": True,
     }])
+    import subprocess
+
     try:
         subprocess.run([_OSIRIS_BIN, "settle", "--decisions", decisions],
                        capture_output=True, text=True, timeout=8, check=False)
@@ -1771,6 +1797,8 @@ def _cmd_read(hook: dict[str, Any]) -> int:
         # is the safe failure; guessing at a scope is not.
         return 0
     cli_args.append("--text")
+    import subprocess
+
     try:
         proc = subprocess.run(cli_args, capture_output=True, text=True, timeout=8,
                               check=False)
