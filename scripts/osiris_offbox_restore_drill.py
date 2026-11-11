@@ -77,7 +77,7 @@ def _check_retrying_on_a_lock(
     if check.returncode == 0:
         return check, None
     text = f"{check.stdout}\n{check.stderr}"
-    if not restic_locks.is_lock_failure(text):
+    if not restic_locks.is_lock_failure(text, check.returncode):
         return check, None
     outcome = restic_locks.clear_stale_locks(env, after_lock_failure=True)
     if outcome.note:
@@ -93,7 +93,7 @@ def _check_retrying_on_a_lock(
     if check.returncode == 0:
         return check, None
     text = f"{check.stdout}\n{check.stderr}"
-    if restic_locks.is_lock_failure(text):
+    if restic_locks.is_lock_failure(text, check.returncode):
         held = restic_locks.holder_line(text) or "restic did not say who"
         return check, (f"{restic_locks.BUSY_PREFIX} (still locked after clearing stale "
                        f"locks): {held}")

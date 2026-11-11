@@ -168,12 +168,20 @@ _NOT_MISSING = (
 )
 
 
-def repository_is_missing(output: str) -> bool:
-    """True only when restic's own output says the repository does not exist, and nothing in it
-    points at a transient or access failure instead."""
+def repository_is_missing(output: str, returncode: int | None = None) -> bool:
+    """True only when restic says the repository does not exist, and nothing in its output points
+    at a transient or access failure instead. restic's exit code is the primary signal (10 missing;
+    11 locked and 12 wrong password mean it EXISTS); the output text decides when there is no
+    usable code (an older restic, or a code that was not kept)."""
+    from src.orchestrator import restic_locks
+
     text = output.lower()
+    if returncode in (restic_locks.EXIT_REPOSITORY_LOCKED, restic_locks.EXIT_WRONG_PASSWORD):
+        return False
     if any(sign in text for sign in _NOT_MISSING):
         return False
+    if returncode == restic_locks.EXIT_REPOSITORY_MISSING:
+        return True
     if any(sign in text for sign in _MISSING_REPO):
         return True
     return (any(sign in text for sign in _MISSING_CONFIG)
@@ -228,7 +236,7 @@ def _run_restic_backup(
         probe = snapshots()
         if probe.returncode != 0:
             detail = (probe.stdout + b"\n" + probe.stderr).decode(errors="replace")
-            if restic_locks.is_lock_failure(detail):
+            if restic_locks.is_lock_failure(detail, probe.returncode):
                 # The pre-check let a lock through (or could not read the listing): look again
                 # now that we KNOW the repository is locked, clear what is stale, retry once.
                 again = restic_locks.clear_stale_locks(
@@ -238,12 +246,12 @@ def _run_restic_backup(
                 if again.cleared or again.note:
                     probe = snapshots()
                     detail = (probe.stdout + b"\n" + probe.stderr).decode(errors="replace")
-            if probe.returncode != 0 and restic_locks.is_lock_failure(detail):
+            if probe.returncode != 0 and restic_locks.is_lock_failure(detail, probe.returncode):
                 held = restic_locks.holder_line(detail) or _one_line(probe.stderr)
                 why = f" (lock listing: {outcome.unreadable})" if outcome.unreadable else ""
                 return (f"{restic_locks.BUSY_PREFIX} (locked by another run, nothing was "
                         f"initialized): {held}{why}")
-            if probe.returncode != 0 and not repository_is_missing(detail):
+            if probe.returncode != 0 and not repository_is_missing(detail, probe.returncode):
                 return f"restic snapshots failed, not initializing: {_one_line(probe.stderr)}"
         if probe.returncode != 0:
             if not init_if_needed:
