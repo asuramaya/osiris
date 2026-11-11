@@ -1673,7 +1673,29 @@ async def _cmd_launch_harness(
         print(f"osiris launch: spawned {window!r} via claude --bg, requested model="
               f"{out.get('spawned_model') or '(claude CLI default)'}")
 
+    async def _hold_until_claimed(row: dict[str, Any] | None) -> None:
+        # LISTED IS NOT YET A BODY THE NEXT LAUNCH CAN SEE: a freshly claimed spare can be
+        # listed before it is working or mounted, and the per-seat lock is released when this
+        # command returns. Hold it until the row is working or mounted (bounded: a body that
+        # never gets there must not hang the command).
+        from src.orchestrator.trigger import _row_is_claimed
+
+        for _ in range(20):
+            try:
+                roster = await agents_json(cwd=launch_cwd)
+            except (OSError, TimeoutError, ValueError):
+                return
+            row = next((r for r in roster if isinstance(r, dict)
+                        and (r.get("id") == (row or {}).get("id") if row
+                             else r.get("cwd") == launch_cwd)), row)
+            if row is None or ("state" not in row and "status" not in row):
+                return  # a row that reports no state gives nothing to wait for
+            if await _row_is_claimed(pool, row):
+                return
+            await sleep(1.0)
+
     if out.get("can_receive"):
+        await _hold_until_claimed(None)
         print(voice.started_new(handle, window))
         return 0
 
@@ -1698,6 +1720,7 @@ async def _cmd_launch_harness(
     if alive_row is None:
         print(voice.started_not_visible("launch", handle))
         return 0
+    await _hold_until_claimed(alive_row)
     print(voice.started_new(handle, window))
     if verbose and alive_row.get("sessionId"):
         print(f"  session {alive_row.get('sessionId')}")

@@ -1549,6 +1549,21 @@ async def _adopt_resumed_body(
         await asyncio.sleep(delay)
     if row is None:
         return {"session_id": None, "copied": False, "adopted": False}
+    # Listed is not yet a body the next launch can see (a freshly claimed spare can be listed
+    # before it is working or mounted), and the caller's per-seat lock is released when it
+    # returns: hold until the row is working or mounted, bounded like the poll above.
+    for _ in range(attempts * 3):
+        if "state" not in row and "status" not in row:
+            break  # a row that reports no state gives nothing to wait for
+        if await _row_is_claimed(pool, row):
+            break
+        await asyncio.sleep(min(delay, 1.0))
+        try:
+            rows = await agents_json(cwd=office)
+        except (OSError, TimeoutError, ValueError):
+            break
+        row = next((r for r in rows if isinstance(r, dict) and r.get("id") == row.get("id")),
+                   row)
     sid = str(row["sessionId"])
     if sid.startswith(req8):
         return {"session_id": sid, "copied": False, "adopted": False}

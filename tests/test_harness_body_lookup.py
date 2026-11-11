@@ -215,3 +215,48 @@ async def test_a_working_body_wearing_a_spare_command_line_is_a_body(
     twin = await trigger._launch_twin_check(
         actions.pool, _idle, str(office), handle="claimed", read_cmdline=lambda p: spare_argv)
     assert twin["harness"] is not None
+
+
+async def test_launch_keeps_the_lock_until_the_listed_body_is_working_or_mounted(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A row can be listed before it is working or mounted. The second launch must not get
+    the lock in that window: the first call waits for the row to be claimed."""
+    office = await _seat(actions, tmp_path, "settle")
+    polls = {"n": 0}
+    spawned: list[str] = []
+
+    async def _spawn(repo: str, *, name: str, model: str | None, prompt: str) -> None:
+        spawned.append(name)
+
+    async def _roster(**kw: Any) -> list[dict[str, Any]]:
+        if not spawned:
+            return []
+        polls["n"] += 1
+        busy = polls["n"] >= 5  # listed idle at first, working a few polls later
+        return [{"name": spawned[0], "cwd": str(office), "id": "s1s1s1s1",
+                 "sessionId": "s1s1s1s1-0000", "status": "busy" if busy else "idle",
+                 "state": "working" if busy else "running"}]
+
+    out = await cmd_launch("settle", model=None, pool=actions.pool, spawn=_spawn,
+                           agents_json=_roster)
+    assert out == 0 and polls["n"] >= 5
+
+
+async def test_resume_adoption_holds_until_the_listed_body_is_working_or_mounted(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    office = str(tmp_path / "resumewait")
+    polls = {"n": 0}
+
+    async def _roster(**kw: Any) -> list[dict[str, Any]]:
+        polls["n"] += 1
+        busy = polls["n"] >= 4
+        return [{"cwd": office, "id": "r1r1r1r1", "sessionId": "r1r1r1r1-0000",
+                 "status": "busy" if busy else "idle",
+                 "state": "working" if busy else "running"}]
+
+    out = await trigger._adopt_resumed_body(
+        actions.pool, agents_json=_roster, office=office, requested_sid="r1r1r1r1-0000",
+        holder="agent:resumewait", project=None, delay=0.01)
+    assert out["session_id"] == "r1r1r1r1-0000" and polls["n"] >= 4
