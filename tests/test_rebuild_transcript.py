@@ -443,6 +443,43 @@ async def test_tool_errors_summaries_and_unsigned_thinking_are_carried_or_counte
     assert "compaction summaries carried as marked text" in texts[0]    # the opening note says so
 
 
+async def test_the_cli_turns_known_failures_into_one_plain_line_each(
+    actions: Any, tmp_path: Path, monkeypatch: Any, capsys: Any,
+) -> None:
+    """A locked or damaged crush db, a missing or failing zstd, a missing soul key and a
+    permission error each print one plain line and return 1: never a traceback."""
+    import subprocess
+
+    from cryptography.fernet import InvalidToken
+    from src import cli
+    from src.ingest import rebuild
+    from src.ingest.soul_crypto import SoulKeyMissing
+
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+
+    def raising(exc: BaseException) -> Any:
+        async def boom(*a: Any, **k: Any) -> Any:
+            raise exc
+        return boom
+
+    cases = [
+        (sqlite3.OperationalError("database is locked"), "could not be written"),
+        (subprocess.CalledProcessError(1, ["zstd", "-q"]), "zstd failed (exit 1)"),
+        (FileNotFoundError(2, "No such file", "zstd"), "usually zstd"),
+        (SoulKeyMissing("no key"), "could not be decrypted"),
+        (InvalidToken(), "could not be decrypted"),
+        (PermissionError(13, "Permission denied"), "could not write the copy"),
+    ]
+    for exc, words in cases:
+        monkeypatch.setattr(rebuild, "rebuild_session", raising(exc))
+        rc = await cli.cmd_rebuild_transcript(
+            SID, to="crush", into=str(tmp_path / "ws"), pool=actions.pool)
+        err = capsys.readouterr().err
+        assert rc == 1 and words in err, (exc, err)
+        assert "Traceback" not in err and err.count("\n") == 1, err
+
+
 # --- the dsh writer: tmp dirs only ----------------------------------------------------------
 
 def _dsh_events(path: Path) -> list[dict[str, Any]]:
