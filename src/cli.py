@@ -1943,6 +1943,7 @@ async def _cmd_resume_harness(
     if finding is not None:
         from src.orchestrator.trigger import _spawn_claude_bg
         print(voice.other_account(verb, handle), file=sys.stderr)
+        print(voice.rebuild_hint(resumed_session_id), file=sys.stderr)
         if verbose:
             print(f"  why: {finding['detail']} (path: fresh-launch-account-mismatch)",
                   file=sys.stderr)
@@ -5420,14 +5421,27 @@ async def cmd_rematerialize(
 
 
 async def cmd_rebuild_transcript(
-    anchor_sid: str, *, to: str, into: str, title: str | None = None,
-    cwd: str | None = None, pool: asyncpg.Pool | None = None,
+    anchor_sid: str, *, to: str, into: str | None, title: str | None = None,
+    cwd: str | None = None, install: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris rebuild-transcript <anchor_sid> --to crush --into <workspace> - write a stored
     session (any harness, any account) as a NEW session in another harness's native format.
     The original is never touched and no owner or account stamp is written."""
     from src.ingest.rebuild import rebuild_session
 
+    if install:
+        if to != "dsh":
+            print("osiris rebuild-transcript: --install is for --to dsh (it places the "
+                  "session under ~/.dsh/sessions); crush joins the workspace you name with "
+                  "--into", file=sys.stderr)
+            return 1
+        from src.ingest.rebuild import dsh_sessions_dir
+
+        into = dsh_sessions_dir()
+    if not into:
+        print("osiris rebuild-transcript: --into is required (or --install with --to dsh)",
+              file=sys.stderr)
+        return 1
     owns_pool = pool is None
     if pool is None:
         from src.config.dev_env import apply_dev_fallback
@@ -5458,6 +5472,7 @@ async def cmd_rebuild_transcript(
     print(f"rebuilt {anchor_sid} as {to} session {receipt['session_id']} "
           f"({receipt['turns']} turns) in {receipt['path']}")
     print(f"not carried as turns, folded into the opening note: {folded}")
+    print(voice.how_to_open(to, receipt["session_id"], into, cwd))
     return 0
 
 
@@ -8132,6 +8147,13 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         bootstrap, retention, rematerialize, rebuild-transcript,
                         fleet-reconcile, fleet-prune, backfill, graph-migrate, layout
 
+When osiris resume says a session's history is from another Claude account, the session is
+continued from osiris's own copy. To carry it into another harness instead, run
+`osiris rebuild-transcript <sid> --to crush --into <workspace>` or
+`osiris rebuild-transcript <sid> --to dsh --install --cwd <workspace>`: each writes a new
+session, records no owner, lists anything it folded, and prints the command that opens it.
+Nothing is ever written under ~/.claude/projects.
+
 Every read verb takes --json: one compact line for a script or an agent, instead of the
 human view. Run `osiris <command> --help` for that command's own flags and a worked example.
 """
@@ -9575,7 +9597,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_rebuild.add_argument("anchor_sid", help="the 8-char anchor of the stored session")
     p_rebuild.add_argument("--to", required=True, choices=["crush", "claude", "dsh"],
                            help="the harness to write the new session for")
-    p_rebuild.add_argument("--into", required=True,
+    p_rebuild.add_argument("--install", action="store_true",
+                           help="--to dsh: place the session under ~/.dsh/sessions (it never "
+                                "overwrites) and print the command that opens it")
+    p_rebuild.add_argument("--into", default=None,
                            help="crush: the workspace directory whose data the session joins; "
                                 "claude: a projects directory to write the session file under; "
                                 "dsh: a sessions directory")
@@ -10233,8 +10258,9 @@ def main(argv: list[str] | None = None) -> int:
             args.seat, args.source_paths, apply=args.apply, because=args.because))
     if args.command == "rebuild-transcript":
         return asyncio.run(cmd_rebuild_transcript(
-            args.anchor_sid, to=args.to, into=os.path.expanduser(args.into),
-            title=args.title, cwd=args.cwd))
+            args.anchor_sid, to=args.to,
+            into=os.path.expanduser(args.into) if args.into else None,
+            title=args.title, cwd=args.cwd, install=args.install))
     if args.command == "rematerialize":
         return asyncio.run(cmd_rematerialize(args.anchor_sid, dest=args.dest,
                                              force=args.force))

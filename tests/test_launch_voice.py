@@ -420,7 +420,8 @@ async def test_resume_of_another_accounts_history_says_so_in_one_line(
         actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     code, out, err = await scenario_resume_other_account(actions, tmp_path, monkeypatch)
     assert code == 0
-    (note,) = _lines(err)
+    note, hint = _lines(err)
+    assert hint.startswith("Also: osiris rebuild-transcript ") and hint.endswith("--to crush|dsh")
     assert "another Claude account" in note and "work@example.com" not in note
     assert "resacct is running" in out
 

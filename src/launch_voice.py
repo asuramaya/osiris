@@ -97,6 +97,21 @@ def other_account(verb: str, handle: str) -> str:
             "from osiris's copy (brief + recall).")
 
 
+def rebuild_hint(sid: str) -> str:
+    """The ready alternatives, one short line, after the other-account note."""
+    return f"Also: osiris rebuild-transcript {sid[:8]} --to crush|dsh"
+
+
+def how_to_open(to: str, session_id: str, where: str, cwd: str | None) -> str:
+    """The one command that opens a rebuilt session, so nobody has to look it up."""
+    if to == "crush":
+        return f"open it: cd {home_short(where)} && crush --session {session_id}"
+    if to == "dsh":
+        return (f"open it: cd {home_short(cwd or where)} && npx @deepseek-ai/dsh web, then "
+                f"choose session {session_id}")
+    return f"open it from {home_short(where)}"
+
+
 def would_not_start(verb: str, handle: str, reason: object) -> str:
     return (f"osiris {verb}: Claude Code would not start {handle}: "
             f"{first_sentence(reason).rstrip('.')}. Nothing is running.")
