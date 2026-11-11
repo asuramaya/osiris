@@ -32,14 +32,17 @@ long-standing rule; never logged or included in any error message this script pr
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import random
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -182,10 +185,45 @@ def _restic(args: list[str], env: dict[str, str], budget: _Budget, step: str,
 
 def _stop(proc: subprocess.Popen[Any]) -> None:
     """These two readers stop a restic that is still running on purpose (they want only the first
-    bytes); a SIGKILL there left a repository lock behind on every drill."""
+    bytes); a SIGKILL there left a repository lock behind on every drill. Whatever the restic left
+    behind in its own session (the ssh behind an sftp repository) is ended after it."""
     from src.orchestrator import restic_locks
 
     restic_locks.stop_restic(proc)
+    with contextlib.suppress(OSError):
+        os.killpg(proc.pid, signal.SIGKILL)
+
+
+class _Watched:
+    """A streaming restic reader the budget can still stop: reading a pipe has no timeout of its
+    own, so on a stalled link `for line in proc.stdout` would wait past the drill's whole budget.
+    A timer stops the process when the budget runs out (which closes the pipe and ends the read);
+    `expired()` then says why the stream ended."""
+
+    def __init__(self, args: list[str], env: dict[str, str], budget: _Budget, step: str, *,
+                 text: bool) -> None:
+        self.step = step
+        self.budget = budget
+        self._fired = threading.Event()
+        self.proc: subprocess.Popen[Any] = subprocess.Popen(
+            ["restic", *args], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=text, start_new_session=True)
+        self._timer = threading.Timer(max(budget.timeout(step), 0.0), self._fire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _fire(self) -> None:
+        self._fired.set()
+        _stop(self.proc)
+
+    def close(self) -> None:
+        self._timer.cancel()
+        _stop(self.proc)
+
+    def check(self) -> None:
+        if self._fired.is_set():
+            raise TimeoutError(f"the drill ran out of its {self.budget.seconds:.0f}s time budget "
+                               f"before {self.step}")
 
 
 def _glob_escape(path: str) -> str:
@@ -198,8 +236,9 @@ def _pick_samples(env: dict[str, str], budget: _Budget, rng: random.Random,
     path or None, newest database dump path or None, small sample files [(path, size)]).
     Samples prefer transcript files and are drawn at random, so successive drills cover
     different files."""
-    proc = subprocess.Popen(["restic", "ls", "latest", "--json", "--recursive"], env=env,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    watched = _Watched(["ls", "latest", "--json", "--recursive"], env, budget,
+                       "the file listing finished", text=True)
+    proc = watched.proc
     recovery: str | None = None
     newest_dump: str | None = None
     transcripts: list[tuple[str, int]] = []
@@ -239,7 +278,8 @@ def _pick_samples(env: dict[str, str], budget: _Budget, rng: random.Random,
                     if j < SAMPLE_FILES:
                         bucket[j] = (path, size)
     finally:
-        _stop(proc)
+        watched.close()
+    watched.check()
     chosen = (transcripts + others)[:SAMPLE_FILES]
     return recovery, newest_dump, chosen
 
@@ -247,13 +287,14 @@ def _pick_samples(env: dict[str, str], budget: _Budget, rng: random.Random,
 def _dump_header_failure(path: str, env: dict[str, str], budget: _Budget) -> str | None:
     """Streams the first bytes of the newest dump out of the repository and checks they look
     like a database dump, without restoring the whole file."""
-    proc = subprocess.Popen(["restic", "dump", "latest", path], env=env,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    watched = _Watched(["dump", "latest", path], env, budget,
+                       "the dump header check finished", text=False)
     try:
-        assert proc.stdout is not None
-        head = proc.stdout.read(4096)
+        assert watched.proc.stdout is not None
+        head = watched.proc.stdout.read(4096)
     finally:
-        _stop(proc)
+        watched.close()
+    watched.check()
     budget.timeout("the dump header check finished")
     if path.endswith(".dump"):
         return None if head.startswith(b"PGDMP") else (

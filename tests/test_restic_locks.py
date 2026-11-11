@@ -542,6 +542,45 @@ def test_the_drill_readers_stop_restic_without_a_kill(sleeper: Path) -> None:
 
 
 
+def test_a_stalled_listing_read_ends_at_the_budget_and_releases_the_lock(sleeper: Path) -> None:
+    """`restic ls` that stops answering must not hold the drill past its time budget: the read has
+    no timeout of its own, so the budget stops the process."""
+    import random
+    import time
+
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="time budget"):
+        drill._pick_samples(dict(os.environ), drill._Budget(2.0), random.Random(0))
+
+    assert time.monotonic() - started < 8.0
+    assert sleeper.read_text() == "released"  # asked to unlock, not killed
+
+
+def test_a_stalled_dump_read_ends_at_the_budget_and_ends_the_ssh_child(
+    sleeper: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    pid_file = tmp_path / "child.pid"
+    monkeypatch.setenv("FAKE_RESTIC_CHILD_PID_FILE", str(pid_file))
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="time budget"):
+        drill._dump_header_failure("/x/osiris-20260101-000000.dump", dict(os.environ),
+                                   drill._Budget(2.0))
+
+    assert time.monotonic() - started < 8.0
+    child = int(pid_file.read_text())
+    for _ in range(50):
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    else:
+        os.kill(child, 9)
+        pytest.fail("the ssh-like child outlived the stopped restic")
+
+
 # ---- a busy repository is a quiet skip, and the tick and the restore test never meet ----
 
 
