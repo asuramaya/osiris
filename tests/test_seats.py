@@ -6347,3 +6347,36 @@ async def test_the_seat_holder_lint_and_the_readiness_step_carry_the_command(
     assert step["status"] == "needs_attention" and hit["command"] in step["reason"]
     assert _seat_capture_step([])["status"] == "done"
     assert _seat_capture_step(None)["status"] == "done"
+
+
+async def test_a_slow_fleet_occupancy_logs_which_read_was_slow(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """fleet_occupancy asks each active seat for ever_held, holder, liveness and house, so its
+    cost (0.3 to 1.5 s of a fleet() call) hides in one of four reads. A call past half a second
+    logs the summed time per read, slowest first; a fast one logs nothing."""
+    import asyncio
+    import logging
+
+    from src.orchestrator import seats as seats_mod
+    from src.orchestrator.seats import fleet_occupancy
+
+    await ensure_seat(actions, house="osiris", handle="LapSeat", source="test")
+    real = seats_mod.derive_house
+
+    async def slow_house(pool, seat_id, **kw):  # type: ignore[no-untyped-def]
+        await asyncio.sleep(0.6)
+        return await real(pool, seat_id, **kw)
+
+    monkeypatch.setattr(seats_mod, "derive_house", slow_house)
+    with caplog.at_level(logging.INFO, logger="osiris.seats"):
+        await fleet_occupancy(actions.pool)
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("fleet_occupancy")]
+    assert len(lines) == 1 and "steps (ms, summed): derive_house=" in lines[0]
+    assert "ever_held=" in lines[0]
+
+    caplog.clear()
+    monkeypatch.setattr(seats_mod, "derive_house", real)
+    with caplog.at_level(logging.INFO, logger="osiris.seats"):
+        await fleet_occupancy(actions.pool)
+    assert not [r for r in caplog.records if r.getMessage().startswith("fleet_occupancy")]
