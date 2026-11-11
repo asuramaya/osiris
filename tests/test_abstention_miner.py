@@ -504,3 +504,63 @@ async def test_a_name_that_collides_with_nothing_still_counts_as_a_bare_word(
     ramstein = await actions.create_or_find_object("SoftwareProject", "repo:ramstein", "test")
     await _seat_named(actions, "Somebody else")
     assert await _pick(actions, "ramstein ramstein harness") == ramstein
+
+
+async def _projects(actions: Actions, *names: str) -> None:
+    for n in names:
+        await actions.create_or_find_object("SoftwareProject", f"repo:{n}", "test")
+
+
+async def _verdict(actions: Actions, text: str) -> tuple[uuid.UUID | None, str]:
+    d = await _abstained_decision(actions, text)
+    picked, _t, signal = await _dominant_project(actions.pool, ("summary",), d)
+    return picked, signal
+
+
+async def test_a_note_naming_five_projects_abstains_even_when_one_leads(
+    actions: Actions,
+) -> None:
+    """A state-of-the-board for the whole family named one repo eleven times and the others a
+    few, so the dominance rule filed it under that one: wrong, since it has no single home."""
+    await _projects(actions, "alpharepo", "betarepo", "gammarepo", "deltarepo", "epsilonrepo")
+    text = ("STATE OF THE BOARD: the family is converged. alpharepo alpharepo alpharepo "
+            "alpharepo alpharepo alpharepo alpharepo, betarepo, gammarepo and deltarepo, "
+            "epsilonrepo too")
+    picked, signal = await _verdict(actions, text)
+    assert picked is None and signal == "family_note"
+
+
+async def test_a_note_naming_four_projects_with_a_clear_lead_still_proposes(
+    actions: Actions,
+) -> None:
+    await _projects(actions, "alpharepo", "betarepo", "gammarepo", "deltarepo")
+    picked, signal = await _verdict(
+        actions, "alpharepo alpharepo alpharepo alpharepo ships; betarepo gammarepo deltarepo")
+    assert picked is not None and signal == "dominance"
+
+
+async def test_the_family_threshold_is_a_named_constant_that_moves_the_line(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import abstention_miner
+
+    await _projects(actions, "alpharepo", "betarepo", "gammarepo")
+    text = "alpharepo alpharepo alpharepo alpharepo then betarepo and gammarepo"
+    assert (await _verdict(actions, text))[1] == "dominance"
+    monkeypatch.setattr(abstention_miner, "_FAMILY_NOTE_MIN_PROJECTS", 3)
+    assert (await _verdict(actions, text))[1] == "family_note"
+
+
+async def test_the_tick_skips_a_family_note_and_the_survey_says_why(actions: Actions) -> None:
+    await _projects(actions, "alpharepo", "betarepo", "gammarepo", "deltarepo", "epsilonrepo")
+    await _abstained_decision(
+        actions, "alpharepo alpharepo alpharepo betarepo gammarepo deltarepo epsilonrepo")
+    out = await _tick_decision_lane(actions)
+    assert out["action"] == "skipped"
+    lane = next(r for r in (await abstention_survey(actions.pool))["lanes"]
+                if r["lane"] == "Decision:in_repo")
+    row = lane["next"][0]
+    assert row["picks"] is None and row["signal"] == "family_note"
+    assert "a family note has no single home" in row["abstain_reason"]
+    assert lane["if_taken"]["abstain"] == 1
+    assert lane["class2_samples"][0]["signal"] == "family_note"

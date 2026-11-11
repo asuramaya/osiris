@@ -178,6 +178,15 @@ async def _advance_position(pool: asyncpg.Pool, lane: _Lane, obj_id: uuid.UUID) 
 
 _WORD_RE_CACHE: dict[str, re.Pattern[str]] = {}
 _DOMINANCE_FACTOR = 2
+# A note that names this many DIFFERENT projects is about the family, not about one of them:
+# the project it names most often is only the one it names most often, and a proposal to file
+# it there was wrong more often than right (a state-of-the-board for eight repos went to
+# sutra, 11 mentions to 4). Abstain: a family note has no single home.
+_FAMILY_NOTE_MIN_PROJECTS = 5
+
+
+def _is_family_note(counts: dict[uuid.UUID, int]) -> bool:
+    return len(counts) >= _FAMILY_NOTE_MIN_PROJECTS
 
 
 # Plain words a repository could be named for, so that the word in a sentence is not evidence of
@@ -333,10 +342,12 @@ async def _dominant_project(
     since the runner-up is then 0); tied or non-dominant falls back to the object's own
     author's `works_in` project; neither signal firing means abstain. Returns
     (candidate_id_or_None, joined_text, signal) where `signal` is "dominance",
-    "author_tiebreak", or "none", named so the miner's own outcome record and the lane
+    "author_tiebreak", "family_note" or "none", named so the miner's own outcome record and the lane
     telemetry can say which produced (or failed to produce) a proposal, never leave that
     invisible."""
     counts, text = await _mention_counts(pool, text_fields, obj_id, patterns)
+    if _is_family_note(counts):
+        return None, text, "family_note"         # not even the author's project is a home
     top = _pick_dominant(counts)
     if top is not None:
         return top, text, "dominance"
@@ -512,7 +523,9 @@ async def _lane_scan(
         counts = _count_mentions(text, patterns) if text.strip() else {}
         dominant = _pick_dominant(counts)
         out.append({"id": r["id"], "created": r["created_at"], "text": text, "counts": counts,
-                    "dominant": dominant, "has_author": r["id"] in with_author})
+                    "dominant": None if _is_family_note(counts) else dominant,
+                    "family": _is_family_note(counts),
+                    "has_author": r["id"] in with_author and not _is_family_note(counts)})
     return out
 
 
@@ -551,9 +564,11 @@ async def abstention_survey(
             if picked is None and x["has_author"]:
                 picked, signal = await _author_works_in(pool, r["id"]), "author_tiebreak"
             if picked is None:
-                signal = "none"
+                signal = "family_note" if x["family"] else "none"
             if picked is not None:
                 reason = None
+            elif x["family"]:
+                reason = (f"names {len(x['counts'])} projects: a family note has no single home")
             elif x["counts"]:
                 reason = "mentions are split and there is no author project"
             else:
@@ -584,7 +599,8 @@ async def abstention_survey(
                 "object": str(x["id"]), "created": x["created"].date().isoformat(),
                 "mentions": _top_mentions(x["counts"], names),
                 "signal": "dominance" if x["dominant"] is not None else (
-                    "author_tiebreak" if x["has_author"] else "none"),
+                    "author_tiebreak" if x["has_author"] else (
+                        "family_note" if x["family"] else "none")),
                 "picks": names.get(x["dominant"]) if x["dominant"] is not None else None}
             if excerpts:
                 row["excerpt"] = x["text"][:240]
