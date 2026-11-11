@@ -137,7 +137,7 @@ async def test_an_unknown_session_or_target_refuses(actions: Any, tmp_path: Path
     with pytest.raises(ValueError, match="holds no turns"):
         await rebuild_session(actions.pool, "00000000", to="crush", into=tmp_path)
     with pytest.raises(ValueError, match="not available yet"):
-        await rebuild_session(actions.pool, SID, to="dsh", into=tmp_path)  # dsh is the next writer
+        await rebuild_session(actions.pool, SID, to="nonesuch", into=tmp_path)
 
 
 # --- the claude writer: tmp dirs only -------------------------------------------------------
@@ -208,3 +208,72 @@ async def test_the_claude_writer_refuses_the_real_session_store_and_needs_a_cwd(
                               cwd="/var/tmp/osiris-scratch/replay")
     with pytest.raises(ValueError, match="needs --cwd"):
         await rebuild_session(actions.pool, SID, to="claude", into=tmp_path / "p")
+
+
+# --- the dsh writer: tmp dirs only ----------------------------------------------------------
+
+def _dsh_events(path: Path) -> list[dict[str, Any]]:
+    from src.ingest.harness.dsh import _decompress
+
+    return [json.loads(ln) for ln in (_decompress(path) or [])]
+
+
+async def test_a_stored_session_is_rebuilt_as_a_new_dsh_session_with_no_owner(
+    actions: Any, tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    sessions = tmp_path / "dsh-sessions"
+    out = await rebuild_session(actions.pool, SID, to="dsh", into=sessions,
+                                cwd="/var/tmp/osiris-scratch/replay")
+    path = Path(out["path"])
+    assert path.name == "session.jsonl.zstd" and path.parent.name == out["session_id"]
+    assert path.parent.parent.parent == sessions
+    assert not (path.parent / "session.jsonl").exists()          # only the compressed file
+    events = _dsh_events(path)
+    assert events[0]["type"] == "session" and events[0]["id"] == out["session_id"]
+    assert events[0]["cwd"] == "/var/tmp/osiris-scratch/replay"
+    assert [e["seq"] for e in events[1:]] == list(range(1, len(events)))
+    blob = json.dumps(events)
+    assert OLD not in blob and "ownerAccountUuid" not in blob and "accountUuid" not in blob
+    kinds = [e["type"] for e in events[1:]]
+    assert kinds == ["request/header", "user/message", "user/message", "assistant/message",
+                     "tool/result", "assistant/message", "tool/result", "tool/result"]
+    note = events[2]["data"]["content"][0]["text"]
+    assert f"rebuilt by osiris from stored session {SID}" in note
+    assert "reasoning carried as marked text 1" in note
+
+
+async def test_the_dsh_session_reads_back_through_the_dsh_adapter(
+    actions: Any, tmp_path: Path,
+) -> None:
+    """Round trip: the existing dsh adapter reads the same roles, in order, from the new
+    session, and the tool call and its result keep their ids and text."""
+    from src.ingest.harness.dsh import DshSessionAdapter
+
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    out = await rebuild_session(actions.pool, SID, to="dsh", into=tmp_path / "dsh",
+                                cwd="/var/tmp/osiris-scratch/replay")
+    loc = DshSessionAdapter().discover_at(Path(out["path"]))
+    assert loc is not None
+    read = list(DshSessionAdapter().read_turns(loc))
+    assert [t.role for t in read] == ["user", "user", "assistant", "assistant"]
+    assert read[2].model == "claude-opus-5" or read[2].model is None
+    events = _dsh_events(Path(out["path"]))
+    call = events[4]["data"]["message"]["content"][1]
+    assert call["type"] == "tool-call" and call["id"] == "toolu_01" and call["name"] == "Bash"
+    assert json.loads(call["arguments"]) == {"command": "ls"}
+    res = events[5]["data"]["message"]["content"][0]
+    assert res["toolCallId"] == "toolu_01" and res["content"][0]["text"].startswith("widget.py")
+    reasoning = events[6]["data"]["message"]["content"][0]["text"]
+    assert reasoning == "[reasoning] the file exists"
+
+
+async def test_dsh_needs_a_cwd(actions: Any, tmp_path: Path) -> None:
+    import pytest
+
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    with pytest.raises(ValueError, match="needs --cwd"):
+        await rebuild_session(actions.pool, SID, to="dsh", into=tmp_path / "d")

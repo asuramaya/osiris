@@ -9573,14 +9573,15 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog="example: osiris rebuild-transcript 4ffb15db --to crush "
                "--into ~/code/handlingtheloop")
     p_rebuild.add_argument("anchor_sid", help="the 8-char anchor of the stored session")
-    p_rebuild.add_argument("--to", required=True, choices=["crush", "claude"],
+    p_rebuild.add_argument("--to", required=True, choices=["crush", "claude", "dsh"],
                            help="the harness to write the new session for")
     p_rebuild.add_argument("--into", required=True,
                            help="crush: the workspace directory whose data the session joins; "
-                                "claude: a projects directory to write the session file under")
+                                "claude: a projects directory to write the session file under; "
+                                "dsh: a sessions directory")
     p_rebuild.add_argument("--title", default=None, help="the new session's title")
     p_rebuild.add_argument("--cwd", default=None,
-                           help="--to claude: the workspace the session belongs to")
+                           help="--to claude or dsh: the workspace the session belongs to")
 
     p_mint_seat = sub.add_parser(
         "mint-seat", description=_d(

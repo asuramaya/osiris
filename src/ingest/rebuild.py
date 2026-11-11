@@ -360,14 +360,95 @@ def write_claude(
             "lines": len(out), "folded": dict(rebuilt.folded)}
 
 
+# --- dsh -----------------------------------------------------------------------------------
+
+def write_dsh(
+    rebuilt: Rebuilt, *, anchor_sid: str, sessions_dir: Path, cwd: str,
+) -> dict[str, Any]:
+    """A NEW DSH session: `<sessions_dir>/<slug of cwd>/session-<new uuid>/session.jsonl.zstd`,
+    the zstd-compressed event stream DSH keeps, with a session header, a request header naming
+    the model, and user/assistant/tool-result events for every turn, opening with the import
+    note. DSH has no slot for a model's reasoning outside streaming chunks, so reasoning is
+    carried as clearly marked text and counted in the fold report. No owner or account is
+    recorded. The event shapes follow a real DSH session; whether DSH itself loads the result
+    is its own decision and was not tested against a running DSH."""
+    import subprocess
+
+    from src.ingest.harness.dsh import _cwd_to_slug
+
+    fold: Counter[str] = Counter(rebuilt.folded)
+    reasoning = sum(1 for t in rebuilt.turns for p_ in t.parts if p_.kind == "reasoning")
+    if reasoning:
+        fold["reasoning carried as marked text"] += reasoning
+    counted = Rebuilt(rebuilt.turns, fold, rebuilt.first_at, rebuilt.last_at,
+                      rebuilt.source_lines)
+    sid = f"session-{uuid.uuid4()}"
+    started = rebuilt.first_at or datetime.now(UTC)
+    t_ms = int(started.timestamp() * 1000)
+    seq = 0
+    events: list[dict[str, Any]] = [{
+        "type": "session", "version": 0, "id": sid, "createdAt": t_ms, "cwd": cwd,
+        "delegationDepth": 0, "agentPreset": "standard"}]
+
+    def emit(kind: str, at: datetime | None, data: dict[str, Any]) -> None:
+        nonlocal seq
+        seq += 1
+        events.append({"type": kind, "seq": seq,
+                       "time": int((at or started).timestamp() * 1000), "data": data})
+
+    model = next((t.model for t in rebuilt.turns if t.role == "assistant" and t.model), None)
+    emit("request/header", started, {"header": {"config": {
+        "provider": "osiris-import", "model": model or "unknown"}}})
+    emit("user/message", started, {
+        "content": [{"type": "text", "text": marker_text(anchor_sid, counted)}],
+        "source": {"kind": "osiris-import"}, "role": "user", "id": str(uuid.uuid4())})
+    turn, step = 0, 0
+    for t in rebuilt.turns:
+        if t.role == "user":
+            turn, step = turn + 1, 0
+            emit("user/message", t.at, {
+                "content": [{"type": "text", "text": "\n".join(
+                    p_.text for p_ in t.parts if p_.kind == "text")}],
+                "source": {"kind": "user"}, "role": "user", "id": str(uuid.uuid4())})
+        elif t.role == "assistant":
+            step += 1
+            content: list[dict[str, Any]] = []
+            for p_ in t.parts:
+                if p_.kind == "text":
+                    content.append({"type": "text", "text": p_.text})
+                elif p_.kind == "reasoning":
+                    content.append({"type": "text", "text": "[reasoning] " + p_.text})
+                elif p_.kind == "tool_call":
+                    content.append({"type": "tool-call", "id": p_.call_id, "name": p_.name,
+                                    "arguments": p_.input})
+            emit("assistant/message", t.at, {
+                "turn": max(turn, 1), "step": step,
+                "message": {"role": "assistant", "content": content}})
+        else:
+            for p_ in t.parts:
+                emit("tool/result", t.at, {"turn": max(turn, 1), "step": max(step, 1), "message": {
+                    "source": {"kind": "tool", "callId": p_.call_id},
+                    "content": [{"type": "tool-result", "toolCallId": p_.call_id,
+                                 "content": [{"type": "text", "text": p_.text}]}]}})
+    target_dir = sessions_dir / _cwd_to_slug(cwd) / sid
+    target_dir.mkdir(parents=True, exist_ok=True)
+    plain = target_dir / "session.jsonl"
+    plain.write_text("".join(json.dumps(e) + "\n" for e in events))
+    subprocess.run(["zstd", "-q", "--rm", "-f", str(plain), "-o", str(plain) + ".zstd"],
+                   check=True, timeout=120)
+    return {"to": "dsh", "session_id": sid, "path": str(target_dir / "session.jsonl.zstd"),
+            "turns": len(rebuilt.turns) + 1, "events": len(events), "folded": dict(fold)}
+
+
 def _check_target(to: str, into: Path | str, cwd: str | None) -> None:
     """Refuse what cannot or must not be written: an unknown target, a claude target with no
     workspace, and Claude Code's own session store."""
-    if to not in ("crush", "claude"):
-        raise ValueError(f"rebuild target {to!r} is not available yet (crush, claude)")
-    if to == "claude":
+    if to not in ("crush", "claude", "dsh"):
+        raise ValueError(f"rebuild target {to!r} is not available yet (crush, claude, dsh)")
+    if to in ("claude", "dsh"):
         if cwd is None:
-            raise ValueError("--to claude needs --cwd, the workspace the session belongs to")
+            raise ValueError(f"--to {to} needs --cwd, the workspace the session belongs to")
+    if to == "claude":
         if Path(into).resolve() == real_claude_projects_dir().resolve():
             raise ValueError("writing into Claude Code's own session store "
                              f"({real_claude_projects_dir()}) is held until the operator "
@@ -379,7 +460,7 @@ async def rebuild_session(
     cwd: str | None = None,
 ) -> dict[str, Any]:
     """Read stored session `anchor_sid` (any account) and write it as a NEW session for `to`
-    ('crush' or 'claude'). `into` is the workspace directory (crush) or a Claude projects
+    ('crush', 'claude' or 'dsh'). `into` is the workspace directory (crush) or a Claude projects
     directory (claude, with `cwd` naming the workspace the session belongs to). Writes only
     there; the store and the original session are untouched.
 
@@ -396,4 +477,7 @@ async def rebuild_session(
     if to == "claude":
         assert cwd is not None
         return write_claude(rebuilt, anchor_sid=anchor_sid, projects_dir=Path(into), cwd=cwd)
+    if to == "dsh":
+        assert cwd is not None
+        return write_dsh(rebuilt, anchor_sid=anchor_sid, sessions_dir=Path(into), cwd=cwd)
     return write_crush(rebuilt, anchor_sid=anchor_sid, workspace=Path(into), title=title)
