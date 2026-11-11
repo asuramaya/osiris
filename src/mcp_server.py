@@ -5710,7 +5710,6 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     # (deploy_guard.landing_audit); this is just the at-a-glance count so a coordinator sees
     # it here too, without a second call or waiting for orient's open-obligations list. Same
     # fail-open law as os_bodies/harness_registry beside it.
-    _lap("harness_fold")
     try:
         from src.orchestrator import capture as _capture
         from src.orchestrator.deploy_guard import (
@@ -5720,11 +5719,14 @@ async def fleet(full: bool = False) -> dict[str, Any]:
             audit_graph_merge_claims,
             stale_unmerged_branches,
         )
+        _lap("harness_fold")
         _held = await _capture.open_held_work(pool)
+        _lap("audit_held_work")
         _claimed = {h["branch"] for h in _held if h.get("branch")}
+        _stale_n = len(await stale_unmerged_branches(_DG_REPO_ROOT, claimed=_claimed))
+        _lap("audit_branches")
         landing_audit: dict[str, Any] = {
-            "stale_unmerged_branches": len(
-                await stale_unmerged_branches(_DG_REPO_ROOT, claimed=_claimed)),
+            "stale_unmerged_branches": _stale_n,
             "graph_claim_mismatches": len(
                 await audit_graph_merge_claims(pool, _DG_REPO_ROOT)),
         }

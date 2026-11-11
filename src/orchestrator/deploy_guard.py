@@ -1270,6 +1270,79 @@ async def _verify_graph_claim(
     return f"names {branch!r} but it is NOT an ancestor of main"
 
 
+def _batch_claim_notes(
+    repo_root: Path, main_sha: str, claims: list[tuple[str, str | None]],
+) -> dict[tuple[str, str | None], str | None] | None:
+    """`_verify_graph_claim` for MANY claims with two git processes in all, not two to four per
+    claim. The graph holds hundreds of "merge <branch> (<sha>)" mentions and `fleet` paid a
+    process spawn per ancestry test: 3.5 to 4.8 s of every call (measured, fleet step timings).
+
+    One `git rev-list <main>` gives every ancestor of main; one `git cat-file --batch-check`
+    resolves each claim's names the way `merge-base --is-ancestor` and `rev-parse --verify`
+    would (`<name>^{commit}` for the commit tests, the full `refs/heads/<name>` for existence).
+    A name resolving to a commit is an ancestor exactly when it is in that set. Same three
+    answers as the per-claim path (proven ancestor / proven not / unknown) and the same notes.
+    None means git failed and the caller must use the per-claim path; a claim whose name could
+    be read as an option (a leading "-") is left to that path too."""
+    if any(b.startswith("-") or (c or "").startswith("-") for b, c in claims):
+        return None
+    try:
+        walked = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-list", main_sha],
+            capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if walked.returncode != 0:
+        return None
+    ancestors = set(walked.stdout.split())
+    queries: list[str] = []
+    seen_q: set[str] = set()
+    for branch, cited in claims:
+        for q in ((f"{cited}^{{commit}}",) if cited else ()) + (
+                f"refs/heads/{branch}", f"{branch}^{{commit}}"):
+            if q not in seen_q:
+                seen_q.add(q)
+                queries.append(q)
+    try:
+        checked = subprocess.run(
+            ["git", "-C", str(repo_root), "cat-file", "--batch-check"],
+            input="\n".join(queries) + "\n", capture_output=True, text=True, timeout=60,
+            check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = checked.stdout.splitlines()
+    if checked.returncode != 0 or len(lines) != len(queries):
+        return None
+    resolved: dict[str, str | None] = {}
+    for q, line in zip(queries, lines, strict=True):
+        parts = line.split()
+        # "<oid> <type> <size>" when it resolves; "<input> missing" / "<input> ambiguous" else
+        resolved[q] = parts[0] if len(parts) == 3 and len(parts[0]) in (40, 64) else None
+
+    def ancestor(name: str) -> bool | None:
+        oid = resolved.get(f"{name}^{{commit}}")
+        return None if oid is None else (oid in ancestors)
+
+    out: dict[tuple[str, str | None], str | None] = {}
+    for branch, cited in claims:
+        if cited:
+            proof = ancestor(cited)
+            if proof is False:
+                out[(branch, cited)] = (
+                    f"names {branch!r}, cites {cited[:8]}, but it is NOT an ancestor of main")
+                continue
+            if proof is True:
+                out[(branch, cited)] = None
+                continue
+        if resolved.get(f"refs/heads/{branch}") is None:
+            out[(branch, cited)] = None  # not a real local branch: unverifiable, not false
+            continue
+        proof = ancestor(branch)
+        out[(branch, cited)] = (
+            f"names {branch!r} but it is NOT an ancestor of main" if proof is False else None)
+    return out
+
+
 async def audit_graph_merge_claims(
     pool: asyncpg.Pool, repo_root: Path,
 ) -> list[dict[str, Any]]:
@@ -1294,6 +1367,7 @@ async def audit_graph_merge_claims(
         return []
     findings: list[dict[str, Any]] = []
     seen: set[str] = set()
+    pending: list[tuple[str, str, str | None]] = []
     for r in rows:
         text = r["text"] or ""
         for m in _MERGE_CLAIM_IN_TEXT.finditer(text):
@@ -1306,9 +1380,18 @@ async def audit_graph_merge_claims(
             if key in seen:
                 continue
             seen.add(key)
+            pending.append((r["canonical"], branch, cited))
+    # two git processes for every claim at once; the per-claim path remains the answer whenever
+    # git cannot give the batch (and is what the batch is tested equal to)
+    batch = await asyncio.to_thread(
+        _batch_claim_notes, repo_root, main_sha, list({(b, c) for _, b, c in pending}))
+    for canonical, branch, cited in pending:
+        if batch is not None:
+            note = batch[(branch, cited)]
+        else:
             note = await _verify_graph_claim(repo_root, main_sha, branch, cited)
-            if note is not None:
-                findings.append({"canonical": r["canonical"], "note": note})
+        if note is not None:
+            findings.append({"canonical": canonical, "note": note})
     return findings
 
 
