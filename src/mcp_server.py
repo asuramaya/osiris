@@ -9012,11 +9012,15 @@ async def _surface_prior_art(
     an OPEN kind='obligation' row, or a kindless legacy row sharing this call's own
     `repo` (capture._open_obligation_thread_ids). Never a resolved thread (nothing to
     warn against re-doing) and never a kindless row admitted with no repo at all."""
+    began = time.monotonic()
     try:
         search_out = await asyncio.wait_for(comp.run_spec(
             pool, {"op": "function", "name": "search",
                    "args": {"q": text[:300], "limit": 15, "caller": actor}},
             None, name="search", caller=actor), timeout=_PRIOR_ART_SEARCH_TIMEOUT_S)
+        if time.monotonic() - began > 1.0:  # what a send / record_decision pays for prior art
+            logging.getLogger("osiris.mcp").info(
+                "prior-art search took %.1fs", time.monotonic() - began)
         hits = search_out["items"]["hits"]
         thread_hit_ids = [uuid.UUID(h["id"]) for h in hits if h.get("type") == "Thread"]
         if thread_hit_ids:

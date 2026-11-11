@@ -394,6 +394,17 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     with which routes answered (relaxed / fuzzy / semantic), the quality telemetry this
     engine is judged by."""
     q = str(args.get("q", "")).strip()[:300]  # a 50KB paste is not a query
+    # STEP LAPS: where a slow search spends its time (it runs inside send, record_decision and
+    # record_practice too, so one slow step is paid by all of them). Logged only past 1 s.
+    laps: dict[str, int] = {}
+    mark = [time.monotonic()]
+    began = mark[0]
+
+    def lap(step: str) -> None:
+        now = time.monotonic()
+        laps[step] = round((now - mark[0]) * 1000)
+        mark[0] = now
+
     limit = max(1, min(int(args.get("limit") or 15), 50))  # a negative limit is a PG error
     # GRAPH SCOPE (Phase 2): restrict search to a project, agent lineage, or subgraph
     scope_project = str(args.get("project") or "").strip() or None
@@ -460,6 +471,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     # expensive part and a broad query can match thousands of candidates. ts_rank
     # normalization 1 divides by 1+log(doc length) so a long rationale can't outrank a
     # short summary on term frequency alone.
+    lap("id_route")
     _SQL = (
         "WITH tq AS (SELECT websearch_to_tsquery('english', $1) AS v), "
         "cand AS ("
@@ -478,6 +490,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         "         'MaxWords=20, MinWords=8, MaxFragments=1') AS snippet "
         "FROM top, tq ORDER BY top.rank DESC")
     rows = await pool.fetch(_SQL, q, limit)
+    lap("fts")
     relaxed = fuzzy = False
     # explicit syntax (quotes, OR, minus) means the asker KNEW the language: no route
     # behind this one may second-guess it (the OR-relaxation's law, inherited by trigram)
@@ -500,6 +513,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
                 "SELECT websearch_to_tsquery('english', $1)::text", or_q):
             rows = await pool.fetch(_RELAX_SQL, [w.lower() for w in words], or_q, limit)
             relaxed = bool(rows)
+    lap("relax")
     if not rows and plain_bag:
         # THE TRIGRAM ROUTE: a misspelled word survives no tsquery,
         # 'compositon' matches nothing lexically forever. word_similarity is strict-AND
@@ -510,6 +524,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         if trgm_words:
             rows = await pool.fetch(_TRGM_SQL, trgm_words, limit)
             fuzzy = bool(rows)
+    lap("trigram")
     lex_hits = [
         {"id": str(r["id"]), "type": r["type"], "canonical": r["canonical"],
          "field": r["field"], "snippet": r["snippet"], "source": r["source_id"],
@@ -521,6 +536,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     # matches where words don't ('model downgrade' -> the warm-swap rulings). Closed (no
     # embedder / empty index / any error) it contributes nothing and costs nothing.
     sem_hits = await _semantic_hits(pool, q, limit)
+    lap("semantic")
     hits = _fuse_ranked(lex_hits, sem_hits, limit)
     if id_hits:
         # an id token embedded in the query found an exact match: it leads, the fused
@@ -532,7 +548,9 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     # strict, relaxed, trigram and semantic alike (id_hits were already filtered when
     # computed, so re-filtering here is a no-op for them and real work for the rest)
     hits = await _hide_foreign_reflections(pool, hits, caller)
+    lap("reflections")
     hits = await _attach_labels(pool, hits)
+    lap("labels")
     semantic = any(h["via"] in ("semantic", "both") for h in hits)
     # a superseded decision must not read as live testimony (the supersedes verb):
     # one batched lookup marks such hits, still findable, honestly flagged
@@ -575,6 +593,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
                 h["scope_limited_by"] = (f"decision {str(narrowed[h['id']])[:8]}: "
                                          "read it for the boundary")
 
+    lap("flags")
     # GRAPH SCOPE FILTER (Phase 2): hit-set filtering by project and/or lineage scope
     if (scope_project or scope_lineage) and hits:
         filters = []
@@ -627,6 +646,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             for h in hits:
                 h["neighborhood_size"] = len(visited) - 1
 
+    lap("scope")
     await pool.execute(
         "INSERT INTO search_log (query, caller, hits, top_rank, relaxed, fuzzy, semantic) "
         "VALUES ($1,$2,$3,$4,$5,$6,$7)",
@@ -634,6 +654,10 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     # opportunistic retention: telemetry keeps 90 days (indexed delete, usually 0 rows)
     await pool.execute(
         "DELETE FROM search_log WHERE searched_at < now() - interval '90 days'")
+    lap("log")
+    if time.monotonic() - began > 1.0:
+        logger.info("search %.1fs; steps (ms): %s", time.monotonic() - began,
+                    ", ".join(f"{k}={v}" for k, v in sorted(laps.items(), key=lambda kv: -kv[1])))
     return {"hits": hits, "q": q,
             **({"note": "strict match (ALL terms) found nothing: these hits match ANY term, "
                         "best-covered first"} if relaxed and not fuzzy else {}),
