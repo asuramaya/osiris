@@ -531,6 +531,37 @@ async def test_an_existing_crush_database_this_tool_does_not_understand_is_refus
     await rebuild_session(actions.pool, SID, to="crush", into=ws)
 
 
+async def test_a_dsh_copy_keeps_the_originals_time_so_it_is_not_the_newest_session(
+    actions: Any, tmp_path: Path, capsys: Any,
+) -> None:
+    """DSH opens the workspace's most recently touched session. The copy takes the original's
+    last-activity time, not the moment it was written, and the CLI says so."""
+    from src.cli import cmd_rebuild_transcript
+    from src.ingest.harness.dsh import _cwd_to_slug, _session_dirs_in
+
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", _lines())
+    cwd = "/var/tmp/osiris-scratch/replay"
+    sessions = tmp_path / "dsh-sessions"
+    # a session the operator is using right now
+    mine = sessions / _cwd_to_slug(cwd) / "session-11111111-2222-4333-8444-555555555555"
+    mine.mkdir(parents=True)
+    (mine / "session.jsonl.zstd").write_bytes(b"x")
+    out = await rebuild_session(actions.pool, SID, to="dsh", into=sessions, cwd=cwd)
+    copy = Path(out["path"])
+    original_last = turns_from_claude_lines(
+        (i, ln.encode()) for i, ln in enumerate(_lines())).last_at
+    assert original_last is not None
+    assert abs(copy.stat().st_mtime - original_last.timestamp()) < 1
+    assert out["mtime"] == original_last.isoformat()
+    ranked = [pair[0].name for pair in _session_dirs_in(sessions / _cwd_to_slug(cwd))]
+    assert ranked[0] == mine.name                     # the operator's own stays newest
+    rc = await cmd_rebuild_transcript(SID, to="dsh", into=str(tmp_path / "d2"), cwd=cwd,
+                                      pool=actions.pool)
+    assert rc == 0
+    assert "does not become this workspace's newest session" in capsys.readouterr().out
+
+
 # --- the dsh writer: tmp dirs only ----------------------------------------------------------
 
 def _dsh_events(path: Path) -> list[dict[str, Any]]:
