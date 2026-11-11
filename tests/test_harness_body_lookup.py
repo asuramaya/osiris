@@ -368,3 +368,31 @@ async def test_strict_a_printed_empty_list_is_an_answer(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
     assert await trigger._claude_agents_json(strict=True) == []
+
+
+async def test_waiting_for_the_spawn_lock_pins_no_pool_connection(actions: Actions) -> None:
+    """While one launch holds a seat's lock, others queued on it hold no connection: the
+    pool's in-use count stays at one (the holder) however many wait."""
+    pool = actions.pool
+    in_use: list[int] = []
+
+    async def _waiter() -> None:
+        try:
+            async with trigger.seat_spawn_lock(pool, "pinless", wait=1.5):
+                raise AssertionError("must not get the lock while it is held")
+        except trigger.SpawnInProgress:
+            return
+
+    async with trigger.seat_spawn_lock(pool, "pinless"):
+        waiters = [asyncio.create_task(_waiter()) for _ in range(4)]
+        for _ in range(10):
+            await asyncio.sleep(0.1)
+            in_use.append(pool.get_size() - pool.get_idle_size())
+        await asyncio.gather(*waiters)
+    # Before: each of the four waiters held a connection for its whole wait, so five were in
+    # use at every sample. Now a waiter borrows one only for an instant per try, so some
+    # sample sees just the holder's.
+    assert min(in_use) == 1
+    # the lock is free again afterwards
+    async with trigger.seat_spawn_lock(pool, "pinless", wait=1.0):
+        pass

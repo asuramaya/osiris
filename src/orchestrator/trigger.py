@@ -5696,25 +5696,35 @@ async def seat_spawn_lock(
     `SpawnInProgress`. The lock dies with its connection, so a crashed launch never leaves
     it held."""
     key = f"osiris:spawn:{handle}"
-    conn = await pool.acquire()
-    held = False
+    conn: Any = None
+    deadline = time.monotonic() + wait
     try:
-        deadline = time.monotonic() + wait
         while True:
-            held = bool(await conn.fetchval(
-                "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", key))
-            if held:
+            # A connection is held only while the lock is HELD (a session-level advisory
+            # lock lives on its connection). Waiting holds none: each try borrows one and
+            # gives it straight back, so several launches queued on one seat never pin the
+            # shared pool while they wait.
+            candidate = await pool.acquire()
+            try:
+                got = bool(await candidate.fetchval(
+                    "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", key))
+            except BaseException:
+                await pool.release(candidate)
+                raise
+            if got:
+                conn = candidate
                 break
+            await pool.release(candidate)
             if time.monotonic() >= deadline:
                 raise SpawnInProgress(handle)
             await asyncio.sleep(0.25)
         yield
     finally:
-        try:
-            if held:
+        if conn is not None:
+            try:
                 await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", key)
-        finally:
-            await pool.release(conn)
+            finally:
+                await pool.release(conn)
 
 
 class HarnessListUnreadable(OSError):
