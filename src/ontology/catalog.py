@@ -1,5 +1,5 @@
-"""THE CATALOG STORE (task #97 workstream 1, ruling 52daab71) — the runtime type
-catalog, graph-backed. A Type is an Object with type='Type' — fractal, exactly as the
+"""THE CATALOG STORE (task #97 workstream 1, ruling 52daab71), the runtime type
+catalog, graph-backed. A Type is an Object with type='Type', fractal, exactly as the
 operator asked for by name: it inherits search, links, decisions ABOUT types, threads
 ON types, the same as anything else in the graph, instead of living in a side table.
 
@@ -13,26 +13,26 @@ deploy) direction schema.py's tuples flow: INTO the graph, never derived back ou
 THE BOOTSTRAP AXIOM: `Actions.create_or_find_object` is the only object-creation
 primitive in the system, and it validates its own `type_` argument via
 `check_object_type` before the insert. So creating the FIRST Type object would need
-"Type" already declared as a known object type — which needs a Type object to exist.
+"Type" already declared as a known object type, which needs a Type object to exist.
 One hardcoded exception breaks the cycle: `check_object_type("Type")` is always valid,
 unconditionally, never consulting the catalog. This is the one axiom every
 self-describing meta-schema needs; nothing else gets this treatment.
 
-THE CACHE — FINGERPRINT-PER-CALL, not TTL-only (Thoth's ruling, msg 2099). The naive
+THE CACHE, FINGERPRINT-PER-CALL, not TTL-only (Thoth's ruling, msg 2099). The naive
 read is a real cost this migration INTRODUCES, not one it fixes: today's
 check_object_type/check_link_type are pure in-memory dict lookups, zero I/O, because
 the old catalog is fully resident at import. A bare per-process module-dict cache with
 a TTL would trade that for a NEW bug class: osiris runs >=3 processes (mcp/console/
 worker) sharing one Postgres, so a type minted through the MCP surface would render
-_DEFAULT grey in the console for up to the TTL — a freshly-accreted type invisible
+_DEFAULT grey in the console for up to the TTL, a freshly-accreted type invisible
 cross-process. Checking a cheap fingerprint (count + max(created_at) over the Type
 catalog's own assertions) UNCONDITIONALLY on every call closes that gap outright: the
 full catalog only re-loads when the fingerprint has actually moved. Call volume stays
-low regardless — check_object_type/check_link_type fire only from
+low regardless, check_object_type/check_link_type fire only from
 create_or_find_object/create_link/invalidate_link, never from assert_property (the
 system's actual highest-frequency write), so the added query is a small fraction of
 the transaction cost already sitting on that path. The module dict + TTL is kept ONLY
-as a defensive fallback if the fingerprint query itself ever errors — never the
+as a defensive fallback if the fingerprint query itself ever errors, never the
 primary freshness mechanism.
 """
 from __future__ import annotations
@@ -60,9 +60,9 @@ _CONF = 0.9
 
 @dataclass(frozen=True)
 class TypeRecord:
-    """The runtime shape of a declared Type — object-kind and link-kind share one
+    """The runtime shape of a declared Type, object-kind and link-kind share one
     record; fields irrelevant to a given `kind` simply stay at their default. `category`
-    is a SET (tuple), not schema.py's old scalar — the operator's objection was
+    is a SET (tuple), not schema.py's old scalar, the operator's objection was
     literally "categories overlap," so overlap is represented, never resolved by
     force."""
 
@@ -116,7 +116,7 @@ async def _usage_counts(pool: _PoolOrConn) -> tuple[dict[str, int], dict[str, in
     """(object type name -> live instance count, link type name -> live instance count).
     'Live' mirrors the rest of the codebase's own definitions: objects.status='active'
     (seats.py, dossier.py's own convention), links valid_until IS NULL OR > now() (the
-    same predicate dossier.py/seats.py already use everywhere else) — a merged object or
+    same predicate dossier.py/seats.py already use everywhere else), a merged object or
     an invalidated link should not inflate a type's apparent relevance."""
     hit = _usage_cache.get("v")
     if hit and time.monotonic() - hit[0] < _USAGE_TTL:
@@ -137,9 +137,9 @@ def _canonical(name: str, kind: str) -> str:
 
 
 async def _fingerprint(pool: _PoolOrConn) -> str | None:
-    """A cheap, cheap-to-invalidate-on signal for "has the catalog changed" — count of
+    """A cheap, cheap-to-invalidate-on signal for "has the catalog changed", count of
     Type-object assertions plus the freshest write time. None on a genuinely empty
-    catalog (nothing seeded yet — the fresh-container / not-yet-migrated case)."""
+    catalog (nothing seeded yet, the fresh-container / not-yet-migrated case)."""
     row = await pool.fetchrow(
         "SELECT count(*) AS n, max(a.created_at) AS latest "
         "FROM objects o JOIN current_assertions a ON a.object_id = o.id "
@@ -176,7 +176,7 @@ async def _load_catalog(pool: _PoolOrConn) -> dict[tuple[str, str], TypeRecord]:
 
 
 async def _catalog(pool: _PoolOrConn) -> dict[tuple[str, str], TypeRecord]:
-    """The fingerprint-checked read — the cache's only entry point. Every caller goes
+    """The fingerprint-checked read, the cache's only entry point. Every caller goes
     through here; nothing reads `_cache` directly."""
     fp = await _fingerprint(pool)
     if fp is None:
@@ -190,7 +190,7 @@ async def _catalog(pool: _PoolOrConn) -> dict[tuple[str, str], TypeRecord]:
 
 
 def _invalidate() -> None:
-    """Called at the end of every `ensure_type` write — same idiom as
+    """Called at the end of every `ensure_type` write, same idiom as
     semantics.py's `_matrix_cache.clear()` on its own writes."""
     _cache.clear()
 
@@ -204,7 +204,7 @@ async def get_type(
 
 async def object_type(pool: _PoolOrConn, name: str) -> TypeRecord:
     """The declared object type, or a neutral default (so the UI never breaks on a
-    new type) — schema.py's old object_type() contract, now graph-backed."""
+    new type), schema.py's old object_type() contract, now graph-backed."""
     return await get_type(pool, name, "object") or _DEFAULT_OBJECT
 
 
@@ -222,7 +222,7 @@ async def is_known_link_type(pool: _PoolOrConn, name: str) -> bool:
 
 async def categories(pool: _PoolOrConn) -> list[str]:
     """Every category tag currently in use, deduped, first-appearance order (by the
-    owning Type's own creation order) — the graph-backed replacement for schema.py's
+    owning Type's own creation order), the graph-backed replacement for schema.py's
     old scalar-category categories()."""
     cat = await _catalog(pool)
     out: list[str] = []
@@ -234,11 +234,11 @@ async def categories(pool: _PoolOrConn) -> list[str]:
 
 
 async def full_catalog(pool: _PoolOrConn) -> dict[str, Any]:
-    """JSON-serializable catalog for the API/UI — the live, graph-backed semantic
+    """JSON-serializable catalog for the API/UI, the live, graph-backed semantic
     layer as data. Replaces schema.py's old catalog().
 
     TASK #121 (ruling a4bd555c, the half of the flat-catalog design left unbuilt): the
-    catalog is COMPLETE AT THE RECORD — every declared type is always present here,
+    catalog is COMPLETE AT THE RECORD, every declared type is always present here,
     never trimmed, never retired; that was explicitly ruled out (a journalist's graph
     and this graph disagree on which 24 of 25 STIX/ATT&CK types read as noise, so
     neither reading gets to delete the other's vocabulary). What's new is BOUNDED AT
@@ -247,7 +247,7 @@ async def full_catalog(pool: _PoolOrConn) -> dict[str, Any]:
     "reveal by summoning," instance count standing in for the summon signal, never a
     declared category/domain tag deciding for the reader. A type with zero live
     instances still ships, just last. Recency and co-occurrence (the ruling's other two
-    named relevance signals) are natural next steps, not built here — count alone
+    named relevance signals) are natural next steps, not built here, count alone
     already answers the question this task was dispatched to answer."""
     cat = await _catalog(pool)
     obj_counts, link_counts = await _usage_counts(pool)
@@ -290,7 +290,7 @@ def set_strict(strict: bool) -> None:
 
 
 def _complain(kind: str, name: str) -> None:
-    msg = f"undeclared {kind} {name!r} — add it to the catalog (ensure_type)"
+    msg = f"undeclared {kind} {name!r}, add it to the catalog (ensure_type)"
     if _STRICT:
         raise UnknownTypeError(msg)
     logger.warning(msg)
@@ -340,7 +340,7 @@ async def ensure_type(
     domain: list[str] | None = None, range: list[str] | None = None,
     required_link_kinds: list[str] | None = None,
 ) -> TypeRecord:
-    """Find-or-mint the Type for (kind, name) — idempotent, stub-on-miss, never raises.
+    """Find-or-mint the Type for (kind, name), idempotent, stub-on-miss, never raises.
     The write path's own tolerance for a novel type (schema.py's original _DEFAULT
     contract) is preserved by this existing; Seshat's accretion hook calls this bare
     (`ensure_type(actions, name=X, kind=Y, actor=Z)`) the moment `check_object_type`/
@@ -348,7 +348,7 @@ async def ensure_type(
     of merely logging.
 
     KEEP-PRIOR-ON-OMISSION (the section/room_id discipline, decision 89e67c49,
-    generalized): a field left at its `None` default is NEVER asserted — only
+    generalized): a field left at its `None` default is NEVER asserted, only
     explicitly-passed fields write. A bare call on an ALREADY-RICH Type (one the seed
     step or a human already described) can never blank its description, label_field,
     or category out from under it; that hazard is invisible at the call site and would
@@ -386,9 +386,9 @@ async def ensure_type(
 
 async def seed_catalog(actions: Actions, *, actor: str = "system:catalog-seed") -> dict[str, int]:
     """Migrate schema.py's declared `_OBJECT_TYPES`/`_LINK_TYPES` into graph Type
-    objects. Idempotent (ensure_type's own guarantee) — safe to call every deploy, every
+    objects. Idempotent (ensure_type's own guarantee), safe to call every deploy, every
     test setup, as many times as needed. ONE-DIRECTIONAL: schema.py's tuples are the
-    seed SOURCE, never rewritten from the graph — docs/REFERENCE.md and this seed both
+    seed SOURCE, never rewritten from the graph, docs/REFERENCE.md and this seed both
     read the same static manifest, so neither drifts from a live, accretive catalog
     (Thoth's ruling, msg 2099)."""
     from src.ontology import schema

@@ -8062,7 +8062,7 @@ yet brings that house/project into existence in this same act too. --project def
 to the house name.)
 
 COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
-  start a mind          new, launch, resume, mint-seat, attach
+  start an agent          new, launch, resume, mint-seat, attach
   end one               stop
   see the fleet         fleet, roster, backlog, team, status, boot-status, smoke, lint,
                         audit, graph-export, digest, context-pct-log
@@ -8299,7 +8299,7 @@ def _build_parser() -> argparse.ArgumentParser:
              "with --finish once the report is clean. enroll-recovery: wrap the "
              "current key with a hardware security key (PIN plus touch). "
              "verify-recovery: prove that recovery works without changing anything "
-             "(PIN plus touch) and record a receipt. recover: restore a key from a "
+             "(PIN plus touch) and record the result. recover: restore a key from a "
              "security-key recovery enrollment onto a box with no live key yet. "
              "restore-drill: prove that an off-box backup repository actually "
              "restores. reseal: move the existing key onto this machine's TPM once "

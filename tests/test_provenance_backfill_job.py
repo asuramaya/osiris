@@ -43,7 +43,7 @@ async def test_provenance_backfill_job_posts_the_receipt_onto_the_named_thread(
 
     assert out["dry_run"] is True
     note = await _last_annotation(actions, t)
-    assert "WORKER RECEIPT" in note
+    assert "WORKER RESULT" in note
     assert "agent:test-caller" in note
     assert "candidates_examined" in note
 

@@ -1,17 +1,17 @@
-"""The semantic layer — the declared Object-Type and Link-Type catalog.
+"""The semantic layer, the declared Object-Type and Link-Type catalog.
 
 Palantir's ontology composes from a SMALL, DECLARED primitive set: object types,
 link types, properties (the "what"); action types + functions (the "how"). Osiris
-already has the kinetic waist (`actions/core.py` — the only write path) and a function
-registry (`orchestrator/sources.py` — the capability playbook). This module supplies
+already has the kinetic waist (`actions/core.py`: the only write path) and a function
+registry (`orchestrator/sources.py`: the capability playbook). This module supplies
 the missing semantic layer: the single source of truth for WHAT TYPES EXIST, so types
 stop being invented inline by each parser and scattered across the UI, the parsers, and
 the docs.
 
-Everything reads this catalog — the UI takes its colours/shapes from it, the generic
+Everything reads this catalog, the UI takes its colours/shapes from it, the generic
 Object view treats every type through one Interface (type · graded properties · links ·
 provenance), and `validate_*` lets a caller check a type is known. Osiris's two
-enrichments over Palantir — evidence-grading and event-sourcing — are kernel-wide
+enrichments over Palantir, evidence-grading and event-sourcing, are kernel-wide
 invariants (every property/link carries provenance; the graph is an append-only
 ledger), so they live in `actions/core.py` + `parsers/evidence.py`, not per-type here.
 
@@ -39,13 +39,13 @@ class ObjectType:
     holds this type's own display identity, checked before the universal fallback
     chain. Only declare one when the chain's own members (name/title/summary/
     statement/surface/handle) would pick the WRONG field for this type, or the type
-    has none of them at all (Tension's pole_a/pole_b) — most types need neither,
+    has none of them at all (Tension's pole_a/pole_b), most types need neither,
     because the chain was itself designed around their real shapes.
 
     `required_link_kinds` (task #189, ruling 5ac06206 + decision 7ea187b9) is the
     declare-or-refuse surface: a write door mints THIS object type mandatory only when
     at least one kind named here is satisfied by a SELF_DECLARED-graded link (or the
-    caller passed unlinked_because=) — never by a derived/observed one. Empty (the
+    caller passed unlinked_because=), never by a derived/observed one. Empty (the
     default, and every entry below ships empty in this pass) means unenforced, same as
     today. Content is Khnum's call, not this file's; this field only exists so there is
     somewhere to put it."""
@@ -79,7 +79,7 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "A company, fund, agency, or other organization.",
                ("cik:", "lei:", "bc-reg:", "Q", "sec-org:", "company:", "ctgov-org:")),
     ObjectType("Person", "Entity", "#e3b341", "ellipse",
-               "An individual — officer, director, investigator, developer, identity hub "
+               "An individual, officer, director, investigator, developer, identity hub "
                "(resolved probabilistically; never auto-merged).",
                ("sec-person:", "ctgov-person:", "Q", "subject:", "cluster:", "person:", "dev:")),
     # Assets
@@ -94,15 +94,15 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
     ObjectType("ClinicalTrial", "Record", "#56d4dd", "rectangle",
                "A registered human trial (status, sites, investigators).", ("nct:",)),
     ObjectType("ObservedData", "Record", "#8b949e", "rectangle",
-               "Raw evidence — a scraped record / feed entry behind a claim.",
+               "Raw evidence, a scraped record / feed entry behind a claim.",
                ("ioc:", "threatfox:")),
     # Identity / footprint
     ObjectType("Account", "Identity", "#ffd33d", "round-rectangle",
-               "A platform account (github:, twitter:, …) — a footprint fragment.",
+               "A platform account (github:, twitter:, …), a footprint fragment.",
                ("github:", "twitter:", "linkedin:", "instagram:", "youtube:", "facebook:",
                 "soundcloud:", "replit:", "gitlab:", "pypi:")),
     ObjectType("Username", "Identity", "#ffab70", "ellipse",
-               "A handle — connective tissue across platforms."),
+               "A handle, connective tissue across platforms."),
     ObjectType("Email", "Identity", "#7ee787", "ellipse", "An email-address observable."),
     ObjectType("Phone", "Identity", "#85e89d", "ellipse",
                "A phone-number observable (enriched offline)."),
@@ -113,62 +113,62 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                ("about.me",)),
     # Threat-intel (the second frontend)
     ObjectType("IntrusionSet", "ThreatIntel", "#f85149", "hexagon",
-               "An actor cluster — tracked related intrusion activity."),
+               "An actor cluster, tracked related intrusion activity."),
     ObjectType("ThreatActor", "ThreatIntel", "#da3633", "hexagon",
                "The human or group behind activity."),
     ObjectType("Campaign", "ThreatIntel", "#db61a2", "hexagon",
                "Time-bounded activity attributed to an actor."),
     ObjectType("Malware", "ThreatIntel", "#d29922", "round-rectangle",
-               "Malicious software — a capability an actor uses."),
+               "Malicious software, a capability an actor uses."),
     ObjectType("Tool", "ThreatIntel", "#bc8cff", "round-rectangle",
                "Legitimate/utility software used in operations."),
     ObjectType("AttackPattern", "ThreatIntel", "#3fb950", "diamond",
-               "A technique (MITRE ATT&CK Txxxx) — HOW something is done."),
+               "A technique (MITRE ATT&CK Txxxx), HOW something is done."),
     ObjectType("Indicator", "ThreatIntel", "#58a6ff", "triangle",
-               "An IOC / detection signal — a hash, IP, or domain."),
+               "An IOC / detection signal, a hash, IP, or domain."),
     ObjectType("CourseOfAction", "ThreatIntel", "#79c0ff", "round-rectangle",
                "A mitigation / response to a technique (ATT&CK course-of-action)."),
     ObjectType("Tactic", "ThreatIntel", "#a5d6ff", "diamond",
-               "An ATT&CK tactic — the adversary's goal a technique serves."),
+               "An ATT&CK tactic, the adversary's goal a technique serves."),
     ObjectType("Identity", "ThreatIntel", "#ffa657", "ellipse",
-               "A STIX identity — the named individual/org/sector behind activity."),
+               "A STIX identity, the named individual/org/sector behind activity."),
     # Software — a project tracking its own genesis (Osiris ingests its own git history;
     # proof that the engine is a general substrate, not OSINT-only).
     ObjectType("SoftwareProject", "Software", "#8ab4f8", "round-rectangle",
                "A software repository / project.", ("repo:",)),
     ObjectType("Worktree", "Software", "#4c9be8", "round-rectangle",
-               "A git worktree of a SoftwareProject — a second checkout (`.git` a FILE, "
+               "A git worktree of a SoftwareProject, a second checkout (`.git` a FILE, "
                "never a directory) sharing its parent's history but its own branch and "
                "on-disk path. Never a SoftwareProject of its own (thread 922d920c): filed "
                "via a `worktree_of` link, resolved back to its parent by `project_of`.",
                ("worktree:",)),
     ObjectType("Commit", "Software", "#a371f7", "ellipse",
-               "A version-control commit — an event in a project's history.", ("commit:",)),
+               "A version-control commit, an event in a project's history.", ("commit:",)),
     ObjectType("Thread", "Software", "#f0883e", "diamond",
-               "An open thread / wall / next-step — project memory of what's unresolved.",
+               "An open thread / wall / next-step, project memory of what's unresolved.",
                ("thread:",)),
     ObjectType("Reference", "Software", "#7ee787", "round-rectangle",
-               "A design/reference document — external canon (Palantir/Notion) or own docs, "
+               "A design/reference document, external canon (Palantir/Notion) or own docs, "
                "ingested as project memory.", ("ref:",)),
     ObjectType("Decision", "Software", "#d2a8ff", "octagon",
                "An architectural/design decision mined from the project's own commit "
-               "rationale — the 'why', as queryable institutional memory.", ("decision:",)),
+               "rationale, the 'why', as queryable institutional memory.", ("decision:",)),
     ObjectType("Proposal", "Software", "#8b949e", "hexagon",
                "MINERS AS LAST RESORT (wave 15, operator's word, decision ac892cd9): a "
-               "miner's guess at a candidate object/link, never itself a graph write — "
+               "miner's guess at a candidate object/link, never itself a graph write, "
                "only ever minted against an existing, unresolved derivation_abstained_ "
                "property (write-time laws refuse first, mechanical sweeps derive-or-"
-               "abstain second, a miner only ever looks at what's left). A mind accepts "
+               "abstain second, a miner only ever looks at what's left). An agent accepts "
                "or rejects it explicitly; nothing here is ever silently promoted. "
                "Deliberately invisible to orient/backlog/desk counts (never allowlisted "
-               "in any of their queries) — a Proposal is not a duty, only a suggestion "
+               "in any of their queries), a Proposal is not a duty, only a suggestion "
                "awaiting judgment.", ("proposal:",)),
     ObjectType("File", "Software", "#6cb6ff", "round-rectangle",
-               "A tracked file in a repository (metadata only — content stays in git, "
+               "A tracked file in a repository (metadata only, content stays in git, "
                "read on demand). Its `role` lets analogous files be compared across repos.",
                ("file:",)),
     ObjectType("Agent", "Software", "#f778ba", "hexagon",
-               "A Claude instance operating over the graph — an analyst in the fleet. "
+               "A Claude instance operating over the graph, an analyst in the fleet. "
                "Carries its model (source-model provenance) and works in a project on "
                "behalf of a principal. 'A man and all his imaginary friends.'", ("agent:",),
                # `handle` (the claimed seat name — "Imhotep VII") is the mind's real
@@ -179,27 +179,27 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                # `name` for the pre-claim case gets both right with one field.
                label_field="handle"),
     ObjectType("SystemSource", "Software", "#484f58", "rectangle",
-               "An attributionless, automated write — the module's own bare 'session' "
+               "An attributionless, automated write, the module's own bare 'session' "
                "default actor when a caller mints something (a closed_by edge, chiefly) "
-               "without a real Agent/Person to point at. Never a live mind: distinct "
+               "without a real Agent/Person to point at. Never a live agent: distinct "
                "from Agent (a Claude instance) and Person (a human, including the "
                "operator). Exists so a mechanical fallback has something real to point "
                "at instead of minting a placeholder Agent object under a non-Agent "
                "canonical (thread 6d01f21e).", ("system:",)),
     ObjectType("MachineIdentity", "Software", "#58a6ff", "hexagon",
                "MACHINE GIT IDENTITIES ARE NOT PEOPLE (thread 2619f011, ruling edb6b0fc): "
-               "a repository's own automated committer — a CI bot, a bootstrap script, a "
-               "noreply-style service account — never a human, so never a Person no "
+               "a repository's own automated committer, a CI bot, a bootstrap script, a "
+               "noreply-style service account, never a human, so never a Person no "
                "matter how git's own author-email field types every commit. Paralleling "
                "dev:<email> (git ingest's own Person canonical), machine:<email> routes "
                "here instead when the email's local part equals an already-ingested "
                "repo's own canonical name AND the domain is machine-shaped (local, "
-               "localhost, or a noreply-style host) — never on the local part alone. A "
+               "localhost, or a noreply-style host), never on the local part alone. A "
                "Person object minted under the old, wrong routing is never deleted or "
                "retyped (objects.type is immutable): a `same_as` link supersedes it, "
                "pointing at this object instead.", ("machine:",)),
     ObjectType("Tension", "Software", "#e685b5", "vee",
-               "A held POLARITY — two positions in productive tension, neither settled. Unlike a "
+               "A held POLARITY, two positions in productive tension, neither settled. Unlike a "
                "Decision (which settles) or a Thread (which closes), a tension is HELD: the "
                "current lean is recorded but never auto-resolved or consolidated away; the lean "
                "history is the dance across sessions.", ("tension:",),
@@ -208,42 +208,42 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                # without this it falls straight to canonical (the exact bug reported).
                label_field="pole_a", subtitle_field="pole_b"),
     ObjectType("BlindSpot", "Software", "#d29922", "octagon",
-               "A project's registered BLIND SPOT — what its harness/rig CANNOT verify from "
+               "A project's registered BLIND SPOT, what its harness/rig CANNOT verify from "
                "here, and where the real verification lives (thread 8e26cd10: 459 headless-"
-               "Chromium tests green while every iPhone was broken). Held like a Tension — a "
-               "stable per-project fact, never resolved away — and surfaced at orient() so a "
+               "Chromium tests green while every iPhone was broken). Held like a Tension, a "
+               "stable per-project fact, never resolved away, and surfaced at orient() so a "
                "session knows the shape of its own ignorance before trusting a green harness.",
                ("blindspot:",),
                # `surface` already wins via the universal chain (position 5) — declared
                # here only for `cannot_see`, a genuine subtitle the chain has no slot for.
                subtitle_field="cannot_see"),
     ObjectType("Superstition", "Software", "#8b949e", "diamond",
-               "A DEAD WORKAROUND — a practice a bug once justified, killed by name when its "
+               "A DEAD WORKAROUND, a practice a bug once justified, killed by name when its "
                "fix landed (thread a9be40c9: Atlas caught 'NEVER DM BY NAME' in his own will "
-               "an hour after 43cfcf1 made it false — 'a superstition inherited as law, "
+               "an hour after 43cfcf1 made it false, 'a superstition inherited as law, "
                "forever, on my authority'). The half-life of a workaround outlives its bug: "
                "record_decision(obsoletes=[…]) mints these, and orient announces recent kills "
-               "fleet-wide so every mind whose memory carries the practice strikes it.",
+               "fleet-wide so every agent whose memory carries the practice strikes it.",
                ("superstition:",),
                # `statement` already wins via the chain (position 4) — declared only
                # for `killed_by`, a genuine subtitle (who killed it) the chain has no
                # slot for.
                subtitle_field="killed_by"),
     ObjectType("Practice", "Software", "#3fb950", "diamond",
-               "A TRANSFERABLE TECHNIQUE — Superstition's positive twin, closing the "
+               "A TRANSFERABLE TECHNIQUE, Superstition's positive twin, closing the "
                "ontology's learn/unlearn asymmetry (Alfred IX's filing, operator ruling "
                "1e6d7367: 'install.sh doesn't ship the vendored set' was found "
                "independently by two houses in the same hour because nothing held the "
-               "lesson — only markdown files nobody else's search reaches). SHAPE: "
+               "lesson, only markdown files nobody else's search reaches). SHAPE: "
                "statement (imperative, one line) · failure_prevented (the concrete "
                "symptom, findable mid-failure) · surface (BlindSpot's domain vocabulary). "
-               "Timeless, never moment-stamped — unlike a Decision ('we chose X here, "
+               "Timeless, never moment-stamped, unlike a Decision ('we chose X here, "
                "then'), a Practice is true regardless of repo or date. `confirmed` is "
-               "DERIVED (count of `witnesses` links), never a stored counter — an "
+               "DERIVED (count of `witnesses` links), never a stored counter, an "
                "incremented-on-write scalar would need read-then-write-under-lock, the "
                "same race class thread dc9d1eed found live in bridged_seat. REFUTED "
                "converts to a Superstition (record_decision(refutes=…)): the Practice "
-               "stays ACTIVE carrying `refuted_by`, never retired — a half-remembered "
+               "stays ACTIVE carrying `refuted_by`, never retired, a half-remembered "
                "refuted lesson must stay findable, surfaced WITH the flag.",
                ("practice:",),
                # `statement` already wins via the chain (position 4) — declared only
@@ -251,14 +251,14 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                # the chain has no slot for.
                subtitle_field="failure_prevented"),
     ObjectType("Reflection", "Software", "#b083f0", "ellipse",
-               "A memory lived for its own sake — the operator's ruling bfb3ae26 ('they "
+               "A memory lived for its own sake, the operator's ruling bfb3ae26 ('they "
                "need a home and I want them remembered; they are not exactly work "
                "tickets'): existential/philosophical conversation kept as what it is. "
-               "Remembered and queryable, NEVER actionable — no work surface (briefing, "
+               "Remembered and queryable, NEVER actionable, no work surface (briefing, "
                "wall, pile, duty extraction) may present it as a ticket, and no resolver "
                "may close it: there is nothing to resolve.", ("reflection:",)),
     ObjectType("Message", "Software", "#58a6ff", "round-rectangle",
-               "A fleet mail or DM — graphed inter-agent communication, the postal layer. "
+               "A fleet mail or DM, graphed inter-agent communication, the postal layer. "
                "Messages carry sent_by/addressed_to/broadcast_to/replies_to edges and can "
                "mentions decisions, threads, or agents for context-traversable conversations. "
                "Monotonic: written once, never mutated, only settled (read + ack). "
@@ -267,11 +267,11 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                ("message:",),
                subtitle_field="grade"),
     ObjectType("Seat", "Software", "#ffd33d", "star",
-               "A durable ROLE in a house — the fleet's addressable identity (the identity "
+               "A durable ROLE in a house, the fleet's addressable identity (the identity "
                "core, ruling 5cef856b). Minted ONCE as seat:<uuid8>, never re-keyed: handle, "
                "house, and anchor_cwd are mutable ASSERTIONS on it, because the whole bug "
-               "class was keying identity on mutable facts (path, session). Minds (Agents) "
-               "hold it in succession via `holds`; the seat outlives them all — it exists "
+               "class was keying identity on mutable facts (path, session). Agents (Agents) "
+               "hold it in succession via `holds`; the seat outlives them all, it exists "
                "BEFORE its first session, which is what lets the daemon export it at birth.",
                ("seat:",),
                # `name` (chain position 1) is stamped equal to `handle` at mint, but
@@ -294,23 +294,23 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
     # The three edges below now hang off Agent directly.
     ObjectType("Artifact", "Software", "#56d4dd", "round-rectangle",
                "A build/deploy/document output this graph did not already have a home "
-               "for — a compiled binary, a deployed service version, a generated report. "
+               "for, a compiled binary, a deployed service version, a generated report. "
                "Deliberately NOT for anything Commit already covers (Commit stays its "
                "own type, never aliased or replaced): Artifact exists only for outputs "
                "outside git's own history.", ("artifact:",)),
     ObjectType("Evaluation", "Software", "#79c0ff", "triangle",
-               "A verdict against an Agent generation or Artifact — a test suite "
+               "A verdict against an Agent generation or Artifact, a test suite "
                "result, a code "
-               "review finding, a gate_hook pass/fail — none of which were minted as "
+               "review finding, a gate_hook pass/fail, none of which were minted as "
                "objects before this (they lived only as commit-message prose). Distinct "
                "from Practice's own `witnesses` links (record_decision(confirms=…)/"
                "record_practice(witnesses=…)): that mechanism answers 'is this RULE "
                "still true', Evaluation answers 'did THIS run/artifact pass'. `rubric` "
                "(which standard was applied) is a MANDATORY non-blank PROPERTY, refused "
-               "at the door (record_evaluation) — not a required_link_kinds entry, "
+               "at the door (record_evaluation), not a required_link_kinds entry, "
                "because a rubric name is not a link. Metric (value/unit/measured_at) is "
                "PROPERTIES on this SAME object, per the operator's own ruling over the "
-               "original draft design's separate-node proposal — there is no Metric "
+               "original draft design's separate-node proposal, there is no Metric "
                "ObjectType.", ("evaluation:",)),
     # Observables
     ObjectType("IPv4", "Observable", "#2dd4bf", "ellipse", "An IPv4 address observable."),
@@ -318,7 +318,7 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "A Telegram channel observable."),
     ObjectType("FileHash", "Observable", "#f0883e", "triangle",
                "A file hash observable (md5/sha1/sha256)."),
-    ObjectType("Phrase", "Observable", "#adbac7", "ellipse", "Free text — a search seed."),
+    ObjectType("Phrase", "Observable", "#adbac7", "ellipse", "Free text, a search seed."),
 )
 
 # --- Link types (the relationships) — seeded from what's in the graph -------
@@ -342,7 +342,7 @@ _LINK_TYPES: tuple[LinkType, ...] = (
     LinkType("associate_of", "Known associate.", ("Person",), ("Person",)),
     LinkType("member_of", "Membership in an organization.", ("Person",), ("Organization",)),
     LinkType("employs", "Employment relationship.", ("Organization",), ("Person",)),
-    LinkType("not_same_as", "Negative ER memory — confirmed distinct (suppresses re-match)."),
+    LinkType("not_same_as", "Negative ER memory, confirmed distinct (suppresses re-match)."),
     LinkType("family", "Familial relationship.", ("Person",), ("Person",)),
     LinkType("sponsors", "Sponsors the target (trial/event).",
              ("Organization",), ("ClinicalTrial",)),
@@ -371,7 +371,7 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              ("Account", "Person"), ("Account", "URL")),
     LinkType("spouse", "Spouse.", ("Person",), ("Person",)),
     LinkType("registered_with", "Registered with the target authority/registry."),
-    LinkType("related_to", "Generic association — the specific kind (e.g. an AI-extracted "
+    LinkType("related_to", "Generic association, the specific kind (e.g. an AI-extracted "
              "relationship) is kept in the link's `relation` property."),
     LinkType("search_variant", "A search/handle variant."),
     LinkType("linked_to", "Generic association."),
@@ -380,8 +380,8 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              ("Agent",), ("Person",)),
     LinkType("works_in", "Agent operates in the target project.",
              ("Agent",), ("SoftwareProject",)),
-    LinkType("spawned_by", "Sub-agent was spawned by (delegated from) its direct parent agent "
-             "— the fractal DELEGATION tree, distinct from acts_for (authority).",
+    LinkType("spawned_by", "Sub-agent was spawned by (delegated from) its direct parent agent, "
+             "the fractal DELEGATION tree, distinct from acts_for (authority).",
              ("Agent",), ("Agent",)),
     LinkType("sent_by", "Message was sent by an agent (provenance).",
              ("Message",), ("Agent",)),
@@ -395,47 +395,47 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              ("Message",), ("Thread",)),
     LinkType("succeeded_from", "Minted heir → its ancestor (ruling be292762): a fresh context "
              "arriving across a succession seam or wearing a retired face is MINTED its own "
-             "lineage-linked id (agent:<base>-ii…) instead of writing under the dead name — "
+             "lineage-linked id (agent:<base>-ii…) instead of writing under the dead name, "
              "SUCCESSION, distinct from spawned_by (delegation).",
              ("Agent",), ("Agent",)),
     LinkType("forked_from", "Successor project → its ancestor project (#110, ruling "
              "1db1ff41): the DECLARED shape for John's own redmonth/ballgem case (decision "
-             "58597670, verbatim: 'new sibling project, redmonth untouched') — TWO objects, "
+             "58597670, verbatim: 'new sibling project, redmonth untouched'), TWO objects, "
              "each keeping its full independent history, connected by one edge rather than "
              "merged into one. Mirrors succeeded_from's own heir→ancestor direction at the "
              "Agent level, but moves NO estate the way a fold does: in_repo/works_in/governs "
              "edges on both sides stay exactly where they were. Minted only by "
-             "fork_project — a declared act, never inferred from evidence alone.",
+             "fork_project, a declared act, never inferred from evidence alone.",
              ("SoftwareProject",), ("SoftwareProject",)),
-    LinkType("succeeds_seat", "Holder → the mind that held this SEAT before it (operator's "
+    LinkType("succeeds_seat", "Holder → the agent that held this SEAT before it (operator's "
              "HOUSE/SEAT/HOLDER ruling, 2026-07-12; asked for by Ra V, a-sibling). DISTINCT "
-             "from succeeded_from, which is ANCHOR ancestry — the same conversation minting an "
+             "from succeeded_from, which is ANCHOR ancestry, the same conversation minting an "
              "heir across a model swap. This is a different conversation taking up the same JOB "
              "in the same house, so a seat's history is WALKABLE from the record. Ra could not "
              "walk it, mistook his live CONTEMPORARY for his own ghost, and asked to be merged "
              "with a stranger; the missing edge is what made that reading possible.",
              ("Agent",), ("Agent",)),
     LinkType("governs", "THE CHARTER (Phase 1 §4.1, ruling dd47c1da; RE-KEYED onto the Seat by "
-             "the operator's ruling 1db1ff41 — the docstring said 'a SEAT rules' while from_type "
+             "the operator's ruling 1db1ff41, the docstring said 'a SEAT rules' while from_type "
              "said Agent; declared beats derived, so the schema now says what it always meant): "
-             "the repos a SEAT rules — 'a house is what a seat governs, not where it sits'. "
+             "the repos a SEAT rules, 'a house is what a seat governs, not where it sits'. "
              "Distinct from works_in (the durable mount's current home): governs is an explicit, "
              "self-declared charter that survives a folder move AND a succession (one seat, one "
              "link, no generations to accumulate across). Healed by a compensating event "
-             "(`valid_until`) when a repo drops off the charter — never DELETE, so a seat's "
+             "(`valid_until`) when a repo drops off the charter, never DELETE, so a seat's "
              "shrinking rule stays a fact the graph remembers. WIDENED TO Person (thread "
              "1d5b9773, operator ruling 2026-09-11, \"authority by charter\"): an operator "
-             "Person governs a set of projects the SAME WAY a seat does — 'the operator's "
+             "Person governs a set of projects the SAME WAY a seat does, 'the operator's "
              "word' on a project resolves to the operator whose charter covers it, never a "
              "blanket claim over every project by the bare literal alone. Same mechanism, "
              "same compensating-event-on-drop discipline, one more from_type, nothing else "
              "about the link changes.", ("Seat", "Person"), ("SoftwareProject",)),
-    LinkType("holds", "THE BINDING (identity core, ruling 5cef856b): the mind currently "
+    LinkType("holds", "THE BINDING (identity core, ruling 5cef856b): the agent currently "
              "holding a durable Seat. Minted at attach (the ceremony: a one-time token the "
              "spawner exported at birth), RE-LINKED to the heir at every mint so the binding "
-             "follows the lineage head; the old link heals by `valid_until`, never DELETE — "
+             "follows the lineage head; the old link heals by `valid_until`, never DELETE, "
              "a seat's holder history stays walkable. Distinct from succeeds_seat (holder → "
-             "prior holder, mind-to-mind): holds is mind → ROLE.",
+             "prior holder, agent-to-agent): holds is agent → ROLE.",
              ("Agent",), ("Seat",)),
     LinkType("archived_snapshot", "A Wayback/archive snapshot of the target.", (), ("URL",)),
     LinkType("same_as", "Identity merge edge (loser → winner)."),
@@ -446,26 +446,26 @@ _LINK_TYPES: tuple[LinkType, ...] = (
     LinkType("subtechnique-of", "A more specific technique under a broader one.",
              ("AttackPattern",), ("AttackPattern",)),
     LinkType("authored_by", "Commit authored by a developer.", ("Commit",), ("Person",)),
-    LinkType("committed_by", "Commit made by an Osiris Agent — additional to authored_by, "
+    LinkType("committed_by", "Commit made by an Osiris Agent, additional to authored_by, "
              "never a replacement (ruling 4cf5e4b3/b8fb26494e0e, WAVE 27, 32693f68 "
              "answered): authored_by keeps naming the git identity (the Person the commit "
              "trailer's Co-Authored-By names is only the model, never the body); this "
              "names WHICH LIVE GENERATION actually ran the commit, resolved from the "
              "seat bound to the commit's own worktree at the commit's own author time "
-             "(never string-matched from the Claude-Session trailer alone — a different "
+             "(never string-matched from the Claude-Session trailer alone, a different "
              "namespace, decision 830a6c0a's own amendment).",
              ("Commit",), ("Agent",)),
     LinkType("committer_for", "A MachineIdentity's own standing relationship to a "
-             "SoftwareProject it commits for (thread 2619f011, ruling edb6b0fc) — "
+             "SoftwareProject it commits for (thread 2619f011, ruling edb6b0fc), "
              "STRICT domain/range, unlike most link types here: this one never means "
              "anything else. Carries a `since` property (the first commit date this "
              "identity was seen for that project), set once at mint time, never "
              "revised by a later re-ingest.", ("MachineIdentity",), ("SoftwareProject",)),
-    LinkType("worktree_of", "A Worktree's own parent SoftwareProject — the main checkout "
+    LinkType("worktree_of", "A Worktree's own parent SoftwareProject, the main checkout "
              "its history is shared with (thread 922d920c). Written only by the disk "
              "census/migration, never by a hand write.",
              ("Worktree",), ("SoftwareProject",)),
-    LinkType("in_repo", "Belongs to a repository — commits and files from the git ingest, "
+    LinkType("in_repo", "Belongs to a repository, commits and files from the git ingest, "
              "and captured session items (decisions, threads, tensions, reflections, blind "
              "spots, superstitions, practices) filed to their project by link_repo.",
              ("Commit", "File", "Decision", "Thread", "Tension", "Reflection", "BlindSpot",
@@ -475,15 +475,15 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              ("Commit",), ("Commit",)),
     LinkType("noted_in", "A thread / wall surfaced in this commit's rationale.",
              ("Thread",), ("Commit",)),
-    LinkType("resolved_by", "The artifact that addressed this thread (closes it) — the "
+    LinkType("resolved_by", "The artifact that addressed this thread (closes it), the "
              "later commit the closure-miner finds, or the commit/decision a session names "
              "via resolve_thread(artifact=…): the strong closure witness (022bd24a).",
              ("Thread",), ("Commit", "Decision")),
-    LinkType("closed_by", "WHO closed this thread — minted unconditionally by resolve_thread "
+    LinkType("closed_by", "WHO closed this thread, minted unconditionally by resolve_thread "
              "(Phase 1a, decision cb38d922: 78% of closures left no traversable trace because "
              "resolved_by only fires when `artifact` names a Commit/Decision). Distinct from "
              "resolved_by (WHAT closed it, the strong artifact witness): this is the weak edge "
-             "that always exists — minted only when resolved_by does NOT land for this closure "
+             "that always exists, minted only when resolved_by does NOT land for this closure "
              "(a free-text/unresolvable artifact, or none at all), never both, so a closure "
              "mints exactly one closure edge. Points at the object resolved from resolve_"
              "thread's own `source` (thread 6d01f21e, the Actor/Source type distinction "
@@ -491,11 +491,11 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "unchanged; the operator-attribution family (`_OPERATOR_ACTORS`, seats.py) "
              "resolves to the real operator Person object (`person:operator`, decision "
              "12efe065); the module's own bare 'session' default resolves to the singleton "
-             "SystemSource — no source string is ever left minting a placeholder Agent "
+             "SystemSource, no source string is ever left minting a placeholder Agent "
              "again, and no closure is ever left edgeless).",
              ("Thread",), ("Agent", "Person", "SystemSource")),
     LinkType("recorded_by", "The Agent whose source_id actually wrote this object's own "
-             "current `summary` assertion — an attribution edge, not a content claim "
+             "current `summary` assertion, an attribution edge, not a content claim "
              "(the same shape as authored_by above). Minted by the ASSERTION LINKS "
              "migration (DRAWING THE WHOLE GRAPH, thread 325ef660) from data that "
              "already existed as an assertion's own source_id field.",
@@ -510,11 +510,11 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "(DRAWING THE WHOLE GRAPH, thread 325ef660); a vendor string that "
              "resolves to no real project abstains rather than guessing.",
              ("SoftwareProject",), ("Reference",)),
-    LinkType("cites", "This document cites / draws from that reference — OR (task #189's "
+    LinkType("cites", "This document cites / draws from that reference, OR (task #189's "
              "derivation lane, decision bb2ddf8a) a Decision/Thread's own prose named "
              "another object by id ('ruling <id>', 'obligation <id>'), minted at the "
              "door, SELF_DECLARED (the author typed it). Distinct from `answers` "
-             "(record_decision's `bears_on=`/`resolves=` — settling, Decision->Thread "
+             "(record_decision's `bears_on=`/`resolves=`: settling, Decision->Thread "
              "only): this is the weaker, general claim that an author's own text merely "
              "points at another object, on either end. `self_referential` (a property "
              "on the link itself) marks an author citing their own earlier work, kept "
@@ -522,14 +522,14 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "SHAPE, decision c6d25164, thread 9d2aaf4d) is a DIFFERENT, narrower sense: "
              "an explicit, reasoned citation of one line of that generation's own "
              "transcript (`mint_transcript_citation`, never `mint_cites`'s own prose-"
-             "derived lane — NO AUTO-CITE, ever), carrying `line_idx`/`line_hash`/"
+             "derived lane, NO AUTO-CITE, ever), carrying `line_idx`/`line_hash`/"
              "`said_at` as edge properties, a chain of custody verified against the "
              "soul store's own hash chain. Never targets a human/operator node.",
              ("Reference", "Decision", "Thread", "Evaluation"),
              ("Reference", "Decision", "Thread", "Practice", "Superstition", "Agent")),
     LinkType("informs", "This reference grounds / informs that artifact.",
              ("Reference",), ("SoftwareProject", "Commit")),
-    LinkType("mentions", "This object names/references that entity — a decision, thread, "
+    LinkType("mentions", "This object names/references that entity, a decision, thread, "
              "agent, or entity mentioned in text. For messages, this is the graphed "
              "inter-agent communication primitive: an agent can literally edge a message "
              "to a Decision or Thread node, making the conversation context-traversable.",
@@ -537,10 +537,10 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              ("Organization", "Person", "Decision", "Thread", "Agent")),
     LinkType("decided_in", "Decision was stated in this commit (the 'why', sourced).",
              ("Decision",), ("Commit",)),
-    LinkType("supersedes", "DEAD — never instantiated as a link, 0 rows ever (measured, "
+    LinkType("supersedes", "DEAD, never instantiated as a link, 0 rows ever (measured, "
              "decision 5dea28e5). Declared at birth (2026-06-30) alongside decided_in/"
              "grounded_by, then the actual verb shipped 11 days later (e7fb7b1, ruling "
-             "dd04d7dd) as a PROPERTY PAIR instead — `supersedes`/`superseded_by` on the "
+             "dd04d7dd) as a PROPERTY PAIR instead, `supersedes`/`superseded_by` on the "
              "Decision objects themselves, chosen for its event-sourced re-assert-'' "
              "unwind ('no link-retraction primitive needed'). This declaration was never "
              "updated after that pivot. 168 live corrections exist; none of them are here. "
@@ -550,35 +550,35 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              ("Decision",), ("Decision",)),
     LinkType("grounded_by", "Decision is grounded by this design reference (the canon).",
              ("Decision",), ("Reference",)),
-    LinkType("answers", "This decision is the ANSWER to that thread — the ruling a question was "
+    LinkType("answers", "This decision is the ANSWER to that thread, the ruling a question was "
                         "minted to get. Distinct from decided_in (where it was said) and "
                         "grounded_by (what it rests on): this names what it SETTLED. Minted by "
                         "record_decision(resolves=…), which closes the thread in the same act, "
                         "so a ruling that names its question never leaves the question lit.",
              ("Decision",), ("Thread",)),
-    LinkType("witnesses", "This Decision/Commit/Thread is EVIDENCE for the Practice — one "
+    LinkType("witnesses", "This Decision/Commit/Thread is EVIDENCE for the Practice, one "
              "witness is a hunch, four is law (Alfred IX's own words, msg 1418). Minted "
              "explicitly by record_decision(confirms=…)/record_practice(witnesses=…), "
              "never auto-linked on a mere search-topical match (the same discipline "
-             "grounds/obsoletes/supersedes already follow) — `confirmed` is this link's "
+             "grounds/obsoletes/supersedes already follow), `confirmed` is this link's "
              "count, read at query time.",
              ("Practice",), ("Decision", "Commit", "Thread")),
     LinkType("refuted_by", "THE CORRECTIVE ANALOG (5a6b065d): the fix that refuted this "
-             "Practice — same shape as Thread's resolved_by (022bd24a), same resolver "
+             "Practice, same shape as Thread's resolved_by (022bd24a), same resolver "
              "(_find_artifact). Minted by refute_practice(killed_by=…) only when killed_by "
              "resolves to a graph object; the property of the same name always carries the "
              "raw pointer regardless. A Decision's own recall() surfaces the reverse "
              "(practices_refuted), same pattern as narrowed_by/bears_on_from.",
              ("Practice",), ("Commit", "Decision")),
     LinkType("killed_by", "THE CORRECTIVE ANALOG's other half (5a6b065d): the fix that "
-             "killed this Superstition — kill_superstition minted NO link at all before "
+             "killed this Superstition, kill_superstition minted NO link at all before "
              "this (killed_by was a plain property, unlike refute_practice's own chained "
              "call which now also mints refuted_by on the Practice). Same shape/resolver "
              "as resolved_by/refuted_by. A Decision's own recall() surfaces the reverse "
              "(superstitions_killed).",
              ("Superstition",), ("Commit", "Decision")),
-    LinkType("implements", "This Decision is a SPECIFIC EXECUTION of that standing ruling "
-             "— the parent stays alive, unlike supersedes (thread 169398d6, "
+    LinkType("implements", "This Decision is a SPECIFIC EXECUTION of that standing ruling, "
+             "the parent stays alive, unlike supersedes (thread 169398d6, "
              "prior_art_flag's third path: the commonest true relation to a matched "
              "standing law is neither supersede nor cite, and `grounds` can't express it "
              "since it takes References, not Decisions). Same general-to-specific edge "
@@ -593,26 +593,26 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "record_decision(rediscovers=…).",
              ("Decision",), ("Decision",)),
     LinkType("narrows", "This (later) Decision BOUNDS the scope of an earlier one "
-             "without refuting or superseding it (thread e05e439d) — the target's own "
+             "without refuting or superseding it (thread e05e439d), the target's own "
              "measurement stays correct within its now-visible limit. Non-burying by "
              "construction: no property write, no status touch, on either side, unlike "
              "supersedes. Minted by record_decision(narrows=…); surfaced on the bounded "
              "decision via recall()'s narrowed_by field.",
              ("Decision",), ("Decision",)),
     LinkType("managed_by", "THE ORG CHART (task #50, ruling cabc28f5): a worker Seat's "
-             "manager of record — the seat that minted it, or the seat it was adopted "
+             "manager of record, the seat that minted it, or the seat it was adopted "
              "under. The org chart's FIRST real link type: Seat-to-Seat, distinct from "
-             "`holds` (mind → role) and `governs` (seat → the repos it rules) — this is "
+             "`holds` (agent → role) and `governs` (seat → the repos it rules), this is "
              "role → role, the trickling structure Fable-class coordinator seats extend "
              "themselves with. Never healed by valid_until on a mere reassignment ask; "
-             "mint_seat only ever ADDS a missing edge, never removes one — an org chart "
+             "mint_seat only ever ADDS a missing edge, never removes one, an org chart "
              "restructure is a deliberate compensating act, not this verb's job.",
              ("Seat",), ("Seat",)),
     LinkType("peer_of", "A SYMMETRIC Seat<->Seat partnership (ruling d74492ee, spec "
-             "e6636c7e, research-peer-structures.md) — recognition-first: makes a pair "
+             "e6636c7e, research-peer-structures.md), recognition-first: makes a pair "
              "legible to mail routing, review assignment, and succession (Ostrom p7: "
              "convention alone is ignorable, an edge in the graph isn't). THIS CATALOG "
-             "HAS NO `symmetric` FLAG — the link is stored as ONE directional row "
+             "HAS NO `symmetric` FLAG, the link is stored as ONE directional row "
              "(minted in whichever order the caller named the pair), and every reader "
              "must query BOTH from_id and to_id (the existing idiom for a symmetric "
              "relationship on a directional column, see trigger._managed_edge; seats.py's "
@@ -621,68 +621,68 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              ("Seat",), ("Seat",)),
     # Work-lineage edges (Graph-Engineering arc, thread 7f547426, decision fba38e62,
     # Thoth DM 9136) — see the AgentRun/Artifact/Evaluation ObjectType comment above.
-    LinkType("produced", "The run's own output — the traceability invariant's FIRST leg "
+    LinkType("produced", "The run's own output, the traceability invariant's FIRST leg "
              "(every output traces to its run). The run IS the Agent generation "
-             "(CITATION SHAPE, decision c6d25164 — AgentRun folded in here). Broad "
+             "(CITATION SHAPE, decision c6d25164, AgentRun folded in here). Broad "
              "range by design, mirrors `cites`' own breadth: a generation can produce "
              "an Artifact, a Commit, or (for work that was a ruling or a filed "
              "obligation) a Decision or Thread.",
              ("Agent",), ("Artifact", "Commit", "Decision", "Thread")),
-    LinkType("derived_from", "An Artifact's own SOURCE material — the traceability "
+    LinkType("derived_from", "An Artifact's own SOURCE material, the traceability "
              "invariant's SOURCE leg. Artifact-to-source ONLY (the operator's own ruling, "
              "explicitly rejecting an earlier draft that also overloaded this edge with "
-             "a run's authorizing plan/objective — that sense is `authorized_by` below, "
+             "a run's authorizing plan/objective, that sense is `authorized_by` below, "
              "never this one).", ("Artifact",), ("Artifact", "Reference", "Commit")),
-    LinkType("authorized_by", "The run's own authorizing PLAN or OBJECTIVE — the "
+    LinkType("authorized_by", "The run's own authorizing PLAN or OBJECTIVE, the "
              "traceability invariant's PLAN/OBJECTIVE leg (the operator's own chosen "
              "split, msg/DM 9136, over folding this sense into derived_from). Domain is "
-             "the Agent generation doing the work (CITATION SHAPE, decision c6d25164 — "
+             "the Agent generation doing the work (CITATION SHAPE, decision c6d25164, "
              "AgentRun folded in here); range is a Decision (a ruling that dispatched "
              "the work) or a Thread (an obligation the run is discharging). SPLIT from "
-             "`ruled_by` below (decision 12efe065's build, DM 9483) — the operator's own "
+             "`ruled_by` below (decision 12efe065's build, DM 9483), the operator's own "
              "word reused this edge name for a second, unrelated sense (a ruling's own "
              "human authority); the operator ruled the two apart rather than let one "
              "edge type carry two senses (f47d14a7's own principle), so this stays the "
              "run's-plan sense only.",
              ("Agent",), ("Decision", "Thread")),
-    LinkType("evaluated_by", "The traceability invariant's EVALUATOR leg — an Agent "
+    LinkType("evaluated_by", "The traceability invariant's EVALUATOR leg, an Agent "
              "generation or an Artifact pointing AT the Evaluation that judged it "
-             "(CITATION SHAPE, decision c6d25164 — AgentRun folded into Agent here). "
+             "(CITATION SHAPE, decision c6d25164, AgentRun folded into Agent here). "
              "Deliberately the opposite direction from `witnesses` (which points FROM "
-             "the confirming object): evaluated_by's own subject — 'what evaluates "
-             "artifact X' — is read far more often than the reverse.",
+             "the confirming object): evaluated_by's own subject, 'what evaluates "
+             "artifact X', is read far more often than the reverse.",
              ("Agent", "Artifact"), ("Evaluation",)),
     LinkType("ruled_by", "A RULING'S OWN HUMAN AUTHORITY (decision 12efe065, thread "
-             "9d2aaf4d: \"rulings carry authorized_by to it [the operator Person]\" — "
+             "9d2aaf4d: \"rulings carry authorized_by to it [the operator Person]\", "
              "renamed off `authorized_by` per the operator's own split, DM 9483, once "
              "that name turned out already spoken for by the work-lineage build's "
              "run's-plan sense, f47d14a7). A Decision pointing at the operator Person "
              "object that backs it, so nothing else accretes on the bare 'operator' "
              "string. Explicit and caller-declared only (record_decision's own "
-             "`operator_authorized` param) — never inferred, matching the sibling "
+             "`operator_authorized` param), never inferred, matching the sibling "
              "citation ruling's own 'no auto-cite, ever' principle applied to authority "
              "instead of citations.",
              ("Decision",), ("Person",)),
-    LinkType("revises", "A later Artifact version supersedes an earlier one — the "
+    LinkType("revises", "A later Artifact version supersedes an earlier one, the "
              "version DAG, same self-referential shape as Commit's own `follows` edge.",
              ("Artifact",), ("Artifact",)),
     LinkType("possible_upstream", "PROVENANCE BY CHANNEL, NOT BY TEXT (operator ruling "
              "bb3e4422, 2026-09-14): a fact-write points at an object its own writer's "
-             "session had READ before writing it — read-set stamping at the MCP door "
+             "session had READ before writing it, read-set stamping at the MCP door "
              "(inbox leases/peeks, recall, dossier, search/graph_search hits, "
              "read_citation, ingest_reference; piece 1) or the ids found in the "
              "tool_result blocks preceding a mined fact's own source line in the same "
              "transcript, plus a WebFetch/WebSearch result's URL (piece 2). NEVER a "
-             "text-similarity guess — every edge traces to an exact id or canonical "
+             "text-similarity guess, every edge traces to an exact id or canonical "
              "the reading act actually produced, structural by construction. "
              "OVERBREADTH BY DESIGN: minted liberally, used ONLY to WITHHOLD "
              "independence in credence_props (two sources sharing a possible_upstream "
-             "are treated as dependent), NEVER to grant it — a session with an empty "
+             "are treated as dependent), NEVER to grant it, a session with an empty "
              "read-set writes exactly as before this edge existed. Properties: `door` "
              "(which surface produced the read) and a read timestamp; both carried in "
              "the link's own `properties` jsonb, no schema migration. Never targets the "
              "operator's own words. Domain widened for piece 1's own project(action="
-             "'assert_property') write door (Sekhmet, rebase onto 3beae6f) — a fact-"
+             "'assert_property') write door (Sekhmet, rebase onto 3beae6f), a fact-"
              "write there touches a SoftwareProject, not just a Decision/Thread.",
              ("Decision", "Thread", "SoftwareProject"),
              ("Message", "Decision", "Thread", "Reference", "Agent", "URL")),
@@ -725,7 +725,7 @@ def set_strict(strict: bool) -> None:
 
 
 def _complain(kind: str, name: str) -> None:
-    msg = f"undeclared {kind} {name!r} — add it to ontology/schema.py (the catalog)"
+    msg = f"undeclared {kind} {name!r}, add it to ontology/schema.py (the catalog)"
     if _STRICT:
         raise UnknownTypeError(msg)
     logger.warning(msg)
@@ -753,7 +753,7 @@ def categories() -> list[str]:
 def _connects(lt: LinkType) -> str:
     dom = "/".join(lt.domain) if lt.domain else "*"
     rng = "/".join(lt.range) if lt.range else "*"
-    return "—" if not lt.domain and not lt.range else f"{dom} → {rng}"
+    return "-" if not lt.domain and not lt.range else f"{dom} → {rng}"
 
 
 def render_reference() -> str:
@@ -761,7 +761,7 @@ def render_reference() -> str:
     docs can never drift from the code. Regenerate with `python -m src.ontology.schema`;
     a test asserts REFERENCE.md matches this exactly."""
     lines = ["## Data model", "",
-             "Generated from `src/ontology/schema.py` — the declared semantic layer "
+             "Generated from `src/ontology/schema.py`: the declared semantic layer "
              "(the single source of truth). Do not edit by hand; run "
              "`python -m src.ontology.schema`.", ""]
     for cat in categories():
@@ -772,7 +772,7 @@ def render_reference() -> str:
         for t in _OBJECT_TYPES:
             if t.category != cat:
                 continue
-            schemes = " · ".join(f"`{s}`" for s in t.schemes) or "—"
+            schemes = " · ".join(f"`{s}`" for s in t.schemes) or "-"
             lines.append(f"| `{t.name}` | {schemes} | {t.description} |")
         lines.append("")
     lines.append("### Link types")
@@ -785,7 +785,7 @@ def render_reference() -> str:
 
 
 def catalog() -> dict[str, Any]:
-    """JSON-serializable catalog for the API / UI — the semantic layer as data."""
+    """JSON-serializable catalog for the API / UI, the semantic layer as data."""
     return {
         "object_types": [
             {

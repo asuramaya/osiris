@@ -501,7 +501,7 @@ async def orphans(pool: asyncpg.Pool) -> dict[str, Any]:
 # by default, mechanical, and it never guesses a disposition on anyone's behalf; judging the
 # pile stays the seat's own job (rule 1 above).
 _STALE_PILE_RE = re.compile(
-    r"^DISPOSE OF YOUR MINER PILE — (\d+) candidates on ")
+    r"^DISPOSE OF YOUR MINER PILE(?: —|,|:) (\d+) candidates on ")
 
 
 async def repair_stale_pile_summons(
@@ -594,7 +594,7 @@ async def repair_stale_pile_summons(
             artifact=None, source=actor)
     for entry in to_correct:
         corrected = _STALE_PILE_RE.sub(
-            f"DISPOSE OF YOUR MINER PILE — {entry['live']} candidates on ", entry["summary"])
+            f"DISPOSE OF YOUR MINER PILE: {entry['live']} candidates on ", entry["summary"])
         await correct_thread_summary(
             actions, entry["id"], corrected,
             because=f"the thread's own count ({entry['frozen']}) was frozen at mint time "

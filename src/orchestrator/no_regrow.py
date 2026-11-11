@@ -195,7 +195,7 @@ async def apply_no_regrow(
 
     plan.update({
         "reclassified": reclassified,
-        "note": "EXECUTED: kind='task' and a receipt attempted for every row named above.",
+        "note": "EXECUTED: kind='task' and a result recorded for every row named above.",
     })
     return plan
 

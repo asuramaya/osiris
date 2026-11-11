@@ -2508,7 +2508,7 @@ async def test_divergent_leans_say_two_minds_lean_apart(actions: Actions) -> Non
     div = await divergent_leans(actions.pool)
     assert len(div) == 1
     line = next(iter(div.values()))
-    assert line.startswith("two minds lean apart: ")
+    assert line.startswith("two agents lean apart: ")
     assert "agent:one" in line and "agent:two" in line
     # ...and orient's scoped briefing carries the confession on the right row
     await seed_default_compositions(actions.pool)

@@ -5560,7 +5560,7 @@ async def divergent_leans(pool: asyncpg.Pool) -> dict[str, str]:
     """Tensions where two agents' current leans disagree, keyed by the tension's
     canonical, valued with the line the lens must speak. This traces to an earlier audit
     that found the assertion set honestly keeps both leans, but any single-winner reader
-    silently shows one, so orient must say 'two minds lean apart' instead. Per-source
+    silently shows one, so orient must say 'two agents lean apart' instead. Per-source
     current lean = that source's latest; divergence = more than one distinct value among
     them. Report-only: nothing here resolves anything (a Tension is held by design)."""
     rows = await pool.fetch(
@@ -5575,7 +5575,7 @@ async def divergent_leans(pool: asyncpg.Pool) -> dict[str, str]:
         "                 ORDER BY p.source_id) AS voices "
         "FROM per_source p GROUP BY p.object_id "
         "HAVING count(DISTINCT p.lean) > 1")
-    return {str(r["canon"]): "two minds lean apart: " + "; ".join(r["voices"][:4])
+    return {str(r["canon"]): "two agents lean apart: " + "; ".join(r["voices"][:4])
             for r in rows}
 
 

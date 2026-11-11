@@ -4468,7 +4468,7 @@ async def _project_briefing(
     if echoes:
         out["unread_echoes"] = {
             "count": len(echoes),
-            "note": (f"{len(echoes)} open threads off the wall: miner echoes no mind has "
+            "note": (f"{len(echoes)} open threads off the wall: miner echoes no agent has "
                      "touched, plus judged questions. Still OPEN in the record; "
                      "run_composition('echoes') lists them all"),
             "triage": [{"id": e["id"], "born": e["born"],
@@ -9825,7 +9825,7 @@ async def record_decision(
             out["superstitions_killed"] = killed
             out["superstitions_note"] = (
                 "each is a dead Superstition on the record; orient announces recent kills "
-                "fleet-wide for 14 days so minds carrying the practice strike it")
+                "fleet-wide for 14 days so agents carrying the practice strike it")
     if not protocol and capture.measurement_smell(f"{summary} {rationale or ''}"):
         # `protocol` is this tool's best field and nothing asked for it: advice in the
         # result, never a gate (the decision is recorded either way).
@@ -10407,7 +10407,7 @@ async def open_thread(
     doesn't resolve refuses, naming what was tried. Unowned obligations default to
     the caller's own seat; unowned general threads stay legitimately unowned.
     `kind='obligation'` additionally refuses from an unmounted caller (no live
-    agent/operator identity behind this call): a duty is a mind's own testimony,
+    agent/operator identity behind this call): a duty is an agent's testimony,
     never an anonymous write's. This rule is scoped to this tool alone, never to
     capture.open_thread itself; internal callers (settle(), fleet_reconcile.py,
     the miner's own _emit_thread) keep their own, already-correct conventions.
@@ -10442,7 +10442,7 @@ async def open_thread(
         # "derived/anonymous write" shape this refusal targets. A real agent (mounted, or
         # a registered subagent) always resolves to `agent:<id>` here instead.
         return {"error": "an unmounted caller cannot declare kind='obligation'. A duty "
-                         "is a mind's own testimony; mount first, or "
+                         "is an agent's own testimony; mount first, or "
                          "use kind='question'/'task' instead"}
     # An unfiled thread is invisible to its own project: a past handoff thread opened
     # without repo= stayed hidden from orient and the succession note until the next
