@@ -190,9 +190,12 @@ async def test_the_claude_file_reads_back_to_the_same_turns(
         (i, ln.encode()) for i, ln in enumerate(Path(out["path"]).read_text().splitlines()))
     assert [t.role for t in again.turns[1:]] == [t.role for t in original.turns]
     for a, b in zip(again.turns[1:], original.turns, strict=True):
+        # reasoning is the one thing not carried: a thinking block needs a provider signature
         assert [(p.kind, p.text, p.name, p.call_id) for p in a.parts] == [
-            (p.kind, p.text, p.name, p.call_id) for p in b.parts]
+            (p.kind, p.text, p.name, p.call_id) for p in b.parts if p.kind != "reasoning"]
         assert a.model == b.model
+    assert not any(p.kind == "reasoning" for t in again.turns for p in t.parts)
+    assert "reasoning (a thinking block needs a signature" in out["folded"].__repr__()
 
 
 async def test_the_claude_writer_refuses_the_real_session_store_and_needs_a_cwd(
@@ -383,6 +386,61 @@ async def test_rebuilt_sessions_are_private_to_their_owner(
             d = d.parent
     for extra in (made[0].parent).glob("crush.db-*"):
         assert mode(extra) == 0o600, extra
+
+
+async def test_tool_errors_summaries_and_unsigned_thinking_are_carried_or_counted(
+    actions: Any, tmp_path: Path,
+) -> None:
+    """A failed tool result keeps its error flag where the target has a slot (claude, crush) and
+    is counted where it has none (dsh). A thinking block is never written with an empty
+    signature (claude drops it and counts it). A compaction summary is marked in dsh, which has
+    no field for one, and counted."""
+    from src.ingest.harness.dsh import _decompress
+
+    lines = [
+        _u("Please run it."),
+        json.dumps({"type": "assistant", "timestamp": "2026-09-01T10:01:00.000Z", "message": {
+            "id": "msg_a", "model": "claude-opus-5", "content": [
+                {"type": "thinking", "thinking": "plan"},
+                {"type": "tool_use", "id": "toolu_e", "name": "Bash",
+                 "input": {"command": "false"}}]}}),
+        json.dumps({"type": "user", "timestamp": "2026-09-01T10:02:00.000Z", "message": {
+            "content": [{"type": "tool_result", "tool_use_id": "toolu_e", "is_error": True,
+                         "content": "exit 1"}]}}),
+        json.dumps({"type": "user", "isCompactSummary": True,
+                    "timestamp": "2026-09-01T10:03:00.000Z",
+                    "message": {"content": "Summary of what came before."}}),
+        _a([_text("Carrying on.")]),
+    ]
+    (tmp_path / "src").mkdir()
+    await _ingest(actions, tmp_path / "src", lines)
+    cwd = "/var/tmp/osiris-scratch/replay"
+
+    crush = await rebuild_session(actions.pool, SID, to="crush", into=tmp_path / "ws")
+    conn = sqlite3.connect(crush["path"])
+    results = [json.loads(r[0])[0]["data"] for r in conn.execute(
+        "SELECT parts FROM messages WHERE role='tool'")]
+    conn.close()
+    assert results == [{"tool_call_id": "toolu_e", "name": "Bash", "content": "exit 1",
+                        "is_error": True}]
+
+    cl = await rebuild_session(actions.pool, SID, to="claude", into=tmp_path / "p", cwd=cwd)
+    written = [json.loads(ln) for ln in Path(cl["path"]).read_text().splitlines()]
+    blocks = [b for d in written if isinstance(d["message"].get("content"), list)
+              for b in d["message"]["content"]]
+    assert not [b for b in blocks if b["type"] == "thinking"]
+    assert [b.get("is_error") for b in blocks if b["type"] == "tool_result"] == [True]
+    assert any(d.get("isCompactSummary") for d in written)
+    assert any("a thinking block needs a signature" in k for k in cl["folded"])
+
+    dsh = await rebuild_session(actions.pool, SID, to="dsh", into=tmp_path / "dsh", cwd=cwd)
+    events = [json.loads(ln) for ln in (_decompress(Path(dsh["path"])) or [])]
+    texts = [e["data"]["content"][0]["text"] for e in events if e["type"] == "user/message"]
+    assert any(t.startswith("[compaction summary of the earlier conversation] Summary")
+               for t in texts)
+    assert dsh["folded"]["compaction summaries carried as marked text"] == 1
+    assert dsh["folded"]["tool-error flags (DSH has no slot for them)"] == 1
+    assert "compaction summaries carried as marked text" in texts[0]    # the opening note says so
 
 
 # --- the dsh writer: tmp dirs only ----------------------------------------------------------

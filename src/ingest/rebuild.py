@@ -40,6 +40,7 @@ class Part:
     call_id: str = ""
     name: str = ""
     input: str = ""               # tool_call: the JSON-encoded input
+    is_error: bool = False        # tool_result: the tool reported a failure
 
 
 @dataclass
@@ -126,7 +127,8 @@ def turns_from_claude_lines(lines: Iterable[tuple[int, bytes]]) -> Rebuilt:
                     turns.append(Turn("tool", [
                         Part("tool_result", _result_text(b.get("content"), folded),
                              call_id=str(b.get("tool_use_id") or ""),
-                             name=call_names.get(str(b.get("tool_use_id") or ""), ""))
+                             name=call_names.get(str(b.get("tool_use_id") or ""), ""),
+                             is_error=bool(b.get("is_error")))
                         for b in results], at, None, False, idx))
                 texts = [str(b.get("text", "")) for b in content
                          if isinstance(b, dict) and b.get("type") == "text"]
@@ -235,6 +237,28 @@ _GOOSE_VERSIONS = (0, 20250424200609, 20250515105448, 20250624000000, 2025062700
                    20250810000000, 20250812000000, 20260127000000)
 
 
+def _with_writer_folds(rebuilt: Rebuilt, to: str) -> Rebuilt:
+    """`rebuilt` with what THIS target cannot carry added to its folded counts, so the opening
+    note and the receipt say it. Claude: a thinking block needs the provider's signature, which
+    the store never had for a rebuilt copy, so reasoning is left out rather than written with
+    an empty one. DSH: no error flag on a tool result and no compaction-summary marker."""
+    fold: Counter[str] = Counter(rebuilt.folded)
+    parts = [p_ for t in rebuilt.turns for p_ in t.parts]
+    if to == "claude":
+        n = sum(1 for p_ in parts if p_.kind == "reasoning")
+        if n:
+            fold["reasoning (a thinking block needs a signature this copy cannot have)"] += n
+    if to == "dsh":
+        n = sum(1 for p_ in parts if p_.kind == "tool_result" and p_.is_error)
+        if n:
+            fold["tool-error flags (DSH has no slot for them)"] += n
+        n = sum(1 for t in rebuilt.turns if t.summary)
+        if n:
+            fold["compaction summaries carried as marked text"] += n
+    return Rebuilt(rebuilt.turns, fold, rebuilt.first_at, rebuilt.last_at,
+                   rebuilt.source_lines, rebuilt.stored_total)
+
+
 def _crush_parts(turn: Turn, at: int) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for p in turn.parts:
@@ -250,7 +274,8 @@ def _crush_parts(turn: Turn, at: int) -> list[dict[str, Any]]:
                 "provider_executed": False, "finished": True}})
         elif p.kind == "tool_result":
             out.append({"type": "tool_result", "data": {
-                "tool_call_id": p.call_id, "name": p.name, "content": p.text}})
+                "tool_call_id": p.call_id, "name": p.name, "content": p.text,
+                "is_error": p.is_error}})
     if turn.role == "assistant":
         calls = any(p.kind == "tool_call" for p in turn.parts)
         out.append({"type": "finish", "data": {
@@ -375,6 +400,7 @@ def write_claude(
     or organization stamp of any account. The first line is the import note. This is a copy
     made by osiris, claiming nobody's ownership; whether Claude Code will load it is the
     harness's own decision, and nothing here tries to influence that."""
+    rebuilt = _with_writer_folds(rebuilt, "claude")
     sid = str(uuid.uuid4())
     started = rebuilt.first_at or datetime.now(UTC)
     out: list[dict[str, Any]] = []
@@ -397,7 +423,8 @@ def write_claude(
                 **({"isCompactSummary": True} if t.summary else {}))
         elif t.role == "tool":
             emit("user", {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": p_.call_id, "content": p_.text}
+                {"type": "tool_result", "tool_use_id": p_.call_id, "content": p_.text,
+                 **({"is_error": True} if p_.is_error else {})}
                 for p_ in t.parts if p_.kind == "tool_result"]}, t.at)
         else:
             mid = "msg_osiris_" + uuid.uuid4().hex[:24]
@@ -405,7 +432,7 @@ def write_claude(
                 if p_.kind == "text":
                     block: dict[str, Any] = {"type": "text", "text": p_.text}
                 elif p_.kind == "reasoning":
-                    block = {"type": "thinking", "thinking": p_.text, "signature": ""}
+                    continue      # counted in the fold: it would need a signature
                 else:
                     try:
                         tool_input = json.loads(p_.input) if p_.input else {}
@@ -441,12 +468,11 @@ def write_dsh(
 
     from src.ingest.harness.dsh import _cwd_to_slug
 
-    fold: Counter[str] = Counter(rebuilt.folded)
+    counted = _with_writer_folds(rebuilt, "dsh")
+    fold = counted.folded
     reasoning = sum(1 for t in rebuilt.turns for p_ in t.parts if p_.kind == "reasoning")
     if reasoning:
         fold["reasoning carried as marked text"] += reasoning
-    counted = Rebuilt(rebuilt.turns, fold, rebuilt.first_at, rebuilt.last_at,
-                      rebuilt.source_lines, rebuilt.stored_total)
     sid = f"session-{uuid.uuid4()}"
     started = rebuilt.first_at or datetime.now(UTC)
     t_ms = int(started.timestamp() * 1000)
@@ -471,9 +497,11 @@ def write_dsh(
     for t in rebuilt.turns:
         if t.role == "user":
             turn, step = turn + 1, 0
+            body = "\n".join(p_.text for p_ in t.parts if p_.kind == "text")
             emit("user/message", t.at, {
-                "content": [{"type": "text", "text": "\n".join(
-                    p_.text for p_ in t.parts if p_.kind == "text")}],
+                "content": [{"type": "text", "text": (
+                    "[compaction summary of the earlier conversation] " + body
+                    if t.summary else body)}],
                 "source": {"kind": "user"}, "role": "user", "id": str(uuid.uuid4())})
         elif t.role == "assistant":
             step += 1
