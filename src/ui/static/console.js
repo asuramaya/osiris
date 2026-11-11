@@ -868,7 +868,7 @@ async function rotateSecret(key) {
 }
 
 // ── Repairs Panel ──────────────────────────────────────────────────────────
-// The ten backfill repair targets, one dry-run/apply endpoint each, all through POST
+// The eleven backfill repair targets, one dry-run/apply endpoint each, all through POST
 // /backfill, which itself calls orchestrator.backfill.run_backfill, the SAME function
 // the MCP tool and the CLI's `osiris backfill` command call. operator_charter's own apply
 // control is DELIBERATELY OMITTED here: its blast radius (fleet-wide operator authority)
@@ -883,6 +883,7 @@ var REPAIRS_TARGETS = [
   { key: 'agent_project_links', hint: 'Move works_in/governs off an off-head Agent onto its living head.' },
   { key: 'closed_by_real_sources', hint: 'Re-point closed_by edges off placeholder Agents onto the real Person/SystemSource, then retire the placeholder.' },
   { key: 'operator_charter', hint: 'Mint governs from person:operator to every active SoftwareProject it doesn’t already cover. Fleet-wide authority scope. Apply is CLI-only: osiris backfill operator_charter --apply --because "..."', cliOnly: true },
+  { key: 'desk_triage', hint: 'Settle old agent-written operator mail by five named rules (noise, informational, corrected, unanswered asks, spent manifests). Counts by rule first.' },
   { key: 'automated_desk_backlog', hint: 'Settle the operator desk’s unread automated notices (cron and system senders) older than a day; asks and decisions are kept.' },
   { key: 'stale_in_repo_abstentions', hint: 'Retire in_repo abstentions on objects that already have a live in_repo link.' },
   { key: 'provenance_possible_upstream', hint: 'Backfill possible_upstream provenance edges onto historical Decision/Thread writes made before the live upstream detector existed.' },

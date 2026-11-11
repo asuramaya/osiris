@@ -458,14 +458,14 @@ def test_repairs_panel_has_a_palette_entry() -> None:
     assert "run: () => renderRepairsPanel()" in _JS
 
 
-def test_repairs_panel_lists_all_ten_targets() -> None:
+def test_repairs_panel_lists_all_eleven_targets() -> None:
     body = _JS.split("var REPAIRS_TARGETS", 1)[1].split(
         "\nfunction renderRepairsPanel", 1)[0]
     for target in (
         "bootstrap_orphan_references", "boot_alarm_commit_links",
         "task_sync_citation_links", "lineage_repo_links", "agent_project_links",
         "closed_by_real_sources", "operator_charter", "provenance_possible_upstream",
-        "stale_in_repo_abstentions", "automated_desk_backlog",
+        "stale_in_repo_abstentions", "automated_desk_backlog", "desk_triage",
     ):
         assert "'" + target + "'" in body
 

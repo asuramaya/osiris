@@ -1365,6 +1365,94 @@ async def settle_automated_desk_backlog(
             "older_than_days": older_than_days, "because": because if not dry_run else None}
 
 
+_DESK_NOISE_RE = (r"model (divergence|check|downgrade)|identity (check|\+ model|confession)"
+                  r"|model-divergence|divergence at mount")
+_DESK_TRIAGE_RULES = {
+    "N1": "noise: a fold receipt, or a model or identity confession",
+    "N2": "an informational brief (not an ask) older than the informational window",
+    "S1": "the sender's own later message corrects, replaces or withdraws it",
+    "S2": "an ask, decision or hands brief nobody answered, older than the ask window",
+    "S3": "a prune-ladder manifest whose planned removal date has passed",
+}
+
+# One classifier for the dry run and the apply, so they can never disagree. A row gets the
+# first rule that fits; no rule means it is kept. Only unread, un-dimmed operator mail.
+_DESK_TRIAGE_SQL = """
+SELECT id, from_agent, created_at, rule FROM (
+  SELECT m.id, m.from_agent, m.created_at,
+    CASE
+      WHEN m.from_agent = 'system:prune-ladder'
+           AND m.created_at < now() - interval '2 days' THEN 'S3'
+      WHEN m.from_agent NOT LIKE 'agent:%' THEN NULL
+      WHEN lower(left(m.body, 400)) ~ $4
+           OR lower(left(m.body, 10)) = 'great fold' THEN 'N1'
+      WHEN COALESCE(m.desk_kind, '') NOT IN ('decision', 'hands') AND COALESCE(m.grade, '') <> 'ask'
+           AND m.created_at < now() - make_interval(days => $1) THEN 'N2'
+      WHEN m.created_at < now() - make_interval(days => $2) AND EXISTS (
+             SELECT 1 FROM fleet_messages l WHERE l.to_project = $3 AND l.from_agent = m.from_agent
+               AND l.id > m.id AND l.created_at < m.created_at + interval '3 days'
+               AND (l.reply_to = m.id
+                    OR l.body ~* '(supersede|replaces|correction|withdraw|retract|resolved|amend)')
+           ) THEN 'S1'
+      WHEN (COALESCE(m.desk_kind, '') IN ('decision', 'hands') OR m.grade = 'ask')
+           AND m.created_at < now() - make_interval(days => $2) THEN 'S2'
+    END AS rule
+  FROM fleet_messages m
+  WHERE m.to_project = $3 AND m.to_agent IS NULL AND m.read_at IS NULL AND m.moot_at IS NULL
+) t
+"""
+
+
+async def triage_agent_desk_backlog(
+    pool: asyncpg.Pool, *, actor: str, dry_run: bool = True, because: str | None = None,
+    informational_days: int = 30, ask_days: int = 42,
+) -> dict[str, Any]:
+    """The old, agent-written operator mail nobody should have to read one by one: five named
+    rules (`_DESK_TRIAGE_RULES`), first match wins. Each settled row stays in the record, marked
+    read and moot, with its rule and the reason in the note. Never touched: a row no rule
+    fits (anything recent, any ask newer than `ask_days`, and any current notice from a job).
+
+    DRY RUN IS THE DEFAULT and returns the counts by rule and by sender, and how many rows no
+    rule fits; `dry_run=False` REQUIRES a non-blank `because`. Idempotent: a settled row is no
+    longer unread."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "settling the operator's desk without a because is an un-audited "
+                         "repair: cite who authorized it"}
+    rows = await pool.fetch(_DESK_TRIAGE_SQL, informational_days, ask_days, OPERATOR_ADDR,
+                            _DESK_NOISE_RE)
+    by_rule: dict[str, int] = {}
+    by_sender: dict[str, dict[str, int]] = {}
+    ids: dict[str, list[int]] = {}
+    kept = 0
+    for r in rows:
+        if r["rule"] is None:
+            kept += 1
+            continue
+        by_rule[r["rule"]] = by_rule.get(r["rule"], 0) + 1
+        lineage = r["from_agent"].split(":", 1)[-1].split("-")[0] if r["from_agent"].startswith(
+            "agent:") else r["from_agent"]
+        senders = by_sender.setdefault(r["rule"], {})
+        senders[lineage] = senders.get(lineage, 0) + 1
+        ids.setdefault(r["rule"], []).append(r["id"])
+    settled = 0
+    if not dry_run:
+        for rule, rule_ids in ids.items():
+            res = await pool.execute(
+                "UPDATE fleet_messages SET read_at=now(), moot_at=now(), moot_by=$2, "
+                "moot_note=$3 WHERE id = ANY($1::bigint[]) AND read_at IS NULL",
+                rule_ids, actor,
+                f"settled by the desk triage, rule {rule} ({_DESK_TRIAGE_RULES[rule]}): "
+                f"{because}")
+            settled += int(res.split()[-1])
+    return {"dry_run": dry_run, "to_settle": sum(by_rule.values()), "settled": settled,
+            "by_rule": dict(sorted(by_rule.items())),
+            "by_sender": {k: dict(sorted(v.items(), key=lambda kv: -kv[1])[:8])
+                          for k, v in sorted(by_sender.items())},
+            "kept": kept, "rules": _DESK_TRIAGE_RULES,
+            "informational_days": informational_days, "ask_days": ask_days,
+            "because": because if not dry_run else None}
+
+
 async def dim_brief(
     pool: asyncpg.Pool, message_id: int, *, because: str, by: str,
 ) -> dict[str, Any]:
