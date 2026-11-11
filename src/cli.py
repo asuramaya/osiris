@@ -113,6 +113,7 @@ import os
 import re
 import sys
 import textwrap
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -1676,21 +1677,26 @@ async def _cmd_launch_harness(
     async def _hold_until_claimed(row: dict[str, Any] | None) -> None:
         # LISTED IS NOT YET A BODY THE NEXT LAUNCH CAN SEE: a freshly claimed spare can be
         # listed before it is working or mounted, and the per-seat lock is released when this
-        # command returns. Hold it until the row is working or mounted (bounded: a body that
-        # never gets there must not hang the command).
-        from src.orchestrator.trigger import _row_is_claimed
+        # command returns. Hold it until the row is working or mounted, bounded by
+        # SPAWN_HOLD_BOUND. Fails CLOSED once a row has been seen: a vanished row or a list
+        # error is not a claimed body, so only the bound ends the wait.
+        from src.orchestrator.trigger import SPAWN_HOLD_BOUND, _row_is_claimed
 
-        for _ in range(20):
+        hold_until = time.monotonic() + SPAWN_HOLD_BOUND
+        while True:
             try:
                 roster = await agents_json(cwd=launch_cwd)
             except (OSError, TimeoutError, ValueError):
-                return
-            row = next((r for r in roster if isinstance(r, dict)
-                        and (r.get("id") == (row or {}).get("id") if row
-                             else r.get("cwd") == launch_cwd)), row)
+                roster = None
+            if roster is not None:
+                found = next((r for r in roster if isinstance(r, dict)
+                              and (r.get("id") == (row or {}).get("id") if row
+                                   else r.get("cwd") == launch_cwd)), None)
+                if found is not None:
+                    row = found
             if row is None or ("state" not in row and "status" not in row):
-                return  # a row that reports no state gives nothing to wait for
-            if await _row_is_claimed(pool, row):
+                return  # never saw a row, or it reports no state: nothing to wait for
+            if await _row_is_claimed(pool, row) or time.monotonic() >= hold_until:
                 return
             await sleep(1.0)
 
@@ -2009,6 +2015,7 @@ async def _cmd_resume_harness(
             spawn=launch_spawn or _spawn_claude_bg, agents_json=agents_json, message=brief,
             verbose=verbose, fresh=True)
     cleared = await clear_stale_record(resumed_session_id[:8])
+    spawn_started = time.time()
     try:
         await resume_spawn(spawn_cwd, prompt=_DM_RESUME_PROMPT,
                            resume_session=resumed_session_id, name=name,
@@ -2028,7 +2035,7 @@ async def _cmd_resume_harness(
     # unattributed session.
     adoption = await _adopt_resumed_body(
         pool, agents_json=agents_json, office=spawn_cwd, requested_sid=resumed_session_id,
-        holder=str(holder), project=facts.get("house"))
+        holder=str(holder), project=facts.get("house"), started_after=spawn_started)
     if verbose and adoption.get("copied"):
         print(f"  note: the harness started a copy (session "
               f"{str(adoption['session_id'])[:8]}) instead of continuing "

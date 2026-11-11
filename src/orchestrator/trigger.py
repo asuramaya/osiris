@@ -130,16 +130,22 @@ class SpawnInProgress(RuntimeError):
     """Another launch or resume for the same seat holds the spawn lock."""
 
 
+# The longest a launch or resume holds a seat's lock after spawning, waiting for the body to
+# be working or mounted. Waiters wait longer than this plus a spawn, so a refusal means a
+# genuinely stuck spawn, not an ordinary slow one.
+SPAWN_HOLD_BOUND = 30.0
+
+
 @contextlib.asynccontextmanager
 async def seat_spawn_lock(
-    pool: asyncpg.Pool, handle: str, *, wait: float = 45.0,
+    pool: asyncpg.Pool, handle: str, *, wait: float = 90.0,
 ) -> AsyncIterator[None]:
     """One launch or resume per seat at a time, across processes: a Postgres advisory lock
     held on its own connection from before the twin check until the new body shows in the
     roster (or the call gives up). Two launches seconds apart used to both read "no body"
-    because the first body had not been listed yet. Waits up to `wait` seconds, then raises
-    `SpawnInProgress`. The lock dies with its connection, so a crashed launch never leaves
-    it held."""
+    because the first body had not been listed yet. Waits up to `wait` seconds (longer than
+    `SPAWN_HOLD_BOUND` plus a spawn), then raises `SpawnInProgress`. The lock dies with its
+    connection, so a crashed launch never leaves it held."""
     key = f"osiris:spawn:{handle}"
     if key in _HELD_SPAWN_LOCKS.get():
         yield  # this task already holds it (a door called inside a door): never wait on self
@@ -1651,9 +1657,24 @@ async def _resume_office(
     return office or fallback or ""
 
 
+def _row_is_this_spawn(row: dict[str, Any], req8: str, started_after: float | None) -> bool:
+    """Is this roster row the body the resume just started? The continued session itself
+    (its id starts with the requested one), or, for the copy the harness makes of a stopped
+    record, a row started after the spawn call. A leftover idle row at the same directory is
+    neither and is not adopted. With no spawn time to compare, any row at the directory
+    counts, as before."""
+    if str(row.get("sessionId") or "").startswith(req8):
+        return True
+    started = row.get("startedAt")
+    if started_after is None or started is None:
+        return True
+    return float(started) / 1000.0 >= started_after - 5.0
+
+
 async def _adopt_resumed_body(
     pool: asyncpg.Pool, *, agents_json: Any, office: str, requested_sid: str,
     holder: str, project: str | None, attempts: int = 6, delay: float = 2.0,
+    started_after: float | None = None,
 ) -> dict[str, Any]:
     """What the harness actually started, measured directly against harness version
     2.1.259: `claude --bg --resume <id>` continues the session under its own id, OR, when
@@ -1685,7 +1706,8 @@ async def _adopt_resumed_body(
         except (OSError, TimeoutError, ValueError):
             rows = []
         row = next((r for r in rows if isinstance(r, dict) and r.get("cwd") == office
-                    and r.get("sessionId")), None)
+                    and r.get("sessionId")
+                    and _row_is_this_spawn(r, req8, started_after)), None)
         if row is not None:
             break
         await asyncio.sleep(delay)
@@ -1693,17 +1715,18 @@ async def _adopt_resumed_body(
         return {"session_id": None, "copied": False, "adopted": False}
     # Listed is not yet a body the next launch can see (a freshly claimed spare can be listed
     # before it is working or mounted), and the caller's per-seat lock is released when it
-    # returns: hold until the row is working or mounted, bounded like the poll above.
-    for _ in range(attempts * 3):
-        if "state" not in row and "status" not in row:
-            break  # a row that reports no state gives nothing to wait for
-        if await _row_is_claimed(pool, row):
+    # returns: hold until the row is working or mounted, bounded by SPAWN_HOLD_BOUND. It fails
+    # CLOSED: a row that vanished, or a list that errored, is not a claimed body, so neither
+    # ends the wait early; only the bound does.
+    hold_until = time.monotonic() + SPAWN_HOLD_BOUND
+    while "state" in row or "status" in row:
+        if await _row_is_claimed(pool, row) or time.monotonic() >= hold_until:
             break
         await asyncio.sleep(min(delay, 1.0))
         try:
             rows = await agents_json(cwd=office)
         except (OSError, TimeoutError, ValueError):
-            break
+            continue
         row = next((r for r in rows if isinstance(r, dict) and r.get("id") == row.get("id")),
                    row)
     sid = str(row["sessionId"])

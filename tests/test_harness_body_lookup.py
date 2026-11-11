@@ -530,3 +530,62 @@ async def test_mcp_and_wake_lanes_default_to_the_strict_reader(
     await trigger.resume_seat(Actions(actions.pool), caller="operator",
                               target="strictdefault", resume_spawn=_no_spawn)
     assert "loose" not in calls and "strict" in calls
+
+
+async def test_adoption_skips_a_leftover_row_and_takes_the_one_this_spawn_started(
+    actions: Actions,
+) -> None:
+    import time
+
+    office = "/tmp/adopt-office"
+    spawned_at = time.time()
+    leftover = {"cwd": office, "id": "old11111", "sessionId": "old11111-0000",
+                "status": "idle", "state": "running",
+                "startedAt": int((spawned_at - 3600) * 1000)}
+    fresh = {"cwd": office, "id": "new22222", "sessionId": "new22222-0000",
+             "status": "busy", "state": "working",
+             "startedAt": int((spawned_at + 1) * 1000)}
+
+    async def _roster(**kw: Any) -> list[dict[str, Any]]:
+        return [leftover, fresh]
+
+    out = await trigger._adopt_resumed_body(
+        actions.pool, agents_json=_roster, office=office, requested_sid="req33333-0000",
+        holder="agent:adoptholder", project=None, delay=0.01, started_after=spawned_at)
+    assert out["session_id"] == "new22222-0000" and out["copied"] is True
+
+
+async def test_the_hold_fails_closed_on_a_vanished_row_and_a_list_error(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row that vanished, or a list that errored, is not a claimed body: neither ends the
+    wait early, only the bound does."""
+    import time
+
+    monkeypatch.setattr(trigger, "SPAWN_HOLD_BOUND", 0.6)
+    office = "/tmp/hold-office"
+    row = {"cwd": office, "id": "hh111111", "sessionId": "hh111111-0000",
+           "status": "idle", "state": "running"}
+    calls = {"n": 0}
+
+    async def _roster(**kw: Any) -> list[dict[str, Any]]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return [row]            # listed, idle, unmounted
+        if calls["n"] == 2:
+            raise OSError("list failed")   # an error is not "claimed"
+        return []                   # then the row vanished
+
+    started = time.monotonic()
+    await trigger._adopt_resumed_body(
+        actions.pool, agents_json=_roster, office=office, requested_sid="hh111111-0000",
+        holder="agent:holdholder", project=None, delay=0.05)
+    assert time.monotonic() - started >= 0.5  # waited out the bound, did not return early
+    assert calls["n"] >= 4
+
+
+def test_waiters_wait_longer_than_the_hold_bound() -> None:
+    import inspect
+
+    default = inspect.signature(trigger.seat_spawn_lock).parameters["wait"].default
+    assert default > trigger.SPAWN_HOLD_BOUND
