@@ -49,6 +49,7 @@ from typing import Any
 import asyncpg
 
 from src.actions.core import Actions
+from src.orchestrator.phase_clock import PhaseClock
 
 _EC = "self_declared"   # a disposition is a human/seat's word, never the machine's
 _CONF = 0.9
@@ -79,11 +80,19 @@ _MINER_ORIGIN = (
     # filter; none reads a non-Thread row from it). Threads carry only 25,841 of those
     # assertions (0.8%). Scoping the CTE's own FROM clause to exactly that population is a pure
     # narrowing: identical rows out, ~99% less to sort to get them.
-    "WITH origin AS (SELECT DISTINCT ON (a.object_id) a.object_id, a.source_id, "
-    "                a.evidence_class ec FROM assertions a "
-    "                WHERE a.object_id IN (SELECT id FROM objects WHERE type='Thread') "
-    "                ORDER BY a.object_id, a.observed_at, a.id) "
+    "WITH origin AS (SELECT t.id AS object_id, f.source_id, f.ec "
+    "                FROM objects t CROSS JOIN LATERAL ("
+    "                  SELECT a.source_id, a.evidence_class AS ec FROM assertions a "
+    "                  WHERE a.object_id = t.id ORDER BY a.observed_at, a.id LIMIT 1) f "
+    "                WHERE t.type='Thread') "
 )
+# The origin of a Thread is its FIRST assertion (earliest observed_at, then id). This used to
+# be `SELECT DISTINCT ON (a.object_id) ... FROM assertions a WHERE a.object_id IN (Threads)
+# ORDER BY a.object_id, a.observed_at, a.id`, which sorts every Thread assertion (415,876 rows
+# on the live graph) to keep one per Thread: 887 of the 909 ms of one `candidates` count, run
+# twice per call, 2.3 s per call on average. A per-Thread lookup of the first assertion reads
+# the same rows without the global sort: 30 to 44 ms, and the CTE returns the identical 5,068
+# rows (checked live, row for row). Objects with no assertion yield no row either way.
 
 # A candidate is: the miner's own output (derived, from a mining source), that no human/seat has
 # ever touched, not already disposed of, and still open. The moment a human/seat lays a
@@ -104,6 +113,7 @@ _CANDIDATE_WHERE = (
 
 async def candidates(
     pool: asyncpg.Pool, *, project: str | None = None, limit: int = 100,
+    clock: PhaseClock | None = None,
 ) -> dict[str, Any]:
     """The pile this seat must judge, oldest first, because triage drains from the bottom.
 
@@ -135,11 +145,15 @@ async def candidates(
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL " +
         _CANDIDATE_WHERE +
         f"ORDER BY o.created_at LIMIT {int(limit)}", *args)
+    if clock is not None:
+        clock.mark("rows")
     total = await pool.fetchval(
         _MINER_ORIGIN +
         "SELECT count(*) FROM objects o JOIN origin g ON g.object_id=o.id " + scope +
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL " +
         _CANDIDATE_WHERE, *args)
+    if clock is not None:
+        clock.mark("count")
     out: dict[str, Any] = {
         "project": project,
         "count": int(total or 0),

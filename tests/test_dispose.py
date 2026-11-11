@@ -466,3 +466,49 @@ async def test_repair_stale_pile_never_touches_a_hand_written_thread(actions: Ac
     out = await repair_stale_pile_summons(actions, actor="agent:test", dry_run=True)
     ids = {e["id"] for e in out["to_resolve"] + out["to_correct"]}
     assert str(t) not in ids
+
+
+async def test_the_origin_of_a_thread_is_its_FIRST_assertion_and_matches_the_old_formulation(
+    actions: Actions,
+) -> None:
+    """`_MINER_ORIGIN` reads each Thread's first assertion (earliest observed_at, then id) by a
+    per-Thread lookup instead of sorting every Thread assertion. It must return exactly the
+    rows the old `DISTINCT ON` formulation returned, and a Thread stays a candidate when a
+    later assertion by another source arrives."""
+    from datetime import timedelta
+
+    from src.orchestrator.dispose import _MINER_ORIGIN
+
+    await _mined(actions, "thread:first-miner", "a guess", repo="osiris")
+    late = await actions.create_or_find_object("Thread", "thread:first-miner", "session-miner")
+    await actions.assert_property(late, "note", "later, by someone else", "agent:other",
+                                  NOW + timedelta(hours=1), 0.9, evidence_class="derived")
+    # a Thread whose FIRST assertion is a mind's own word is never a candidate
+    mind = await actions.create_or_find_object("Thread", "thread:first-mind", "agent:a")
+    await actions.assert_property(mind, "summary", "mine", "agent:a", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(mind, "note", "mined later", "session-miner",
+                                  NOW + timedelta(hours=1), 0.4, evidence_class="derived")
+
+    old = await actions.pool.fetch(
+        "WITH origin AS (SELECT DISTINCT ON (a.object_id) a.object_id, a.source_id, "
+        "a.evidence_class ec FROM assertions a "
+        "WHERE a.object_id IN (SELECT id FROM objects WHERE type='Thread') "
+        "ORDER BY a.object_id, a.observed_at, a.id) "
+        "SELECT object_id, source_id, ec FROM origin ORDER BY object_id")
+    new = await actions.pool.fetch(
+        _MINER_ORIGIN + "SELECT object_id, source_id, ec FROM origin ORDER BY object_id")
+    assert [tuple(r) for r in new] == [tuple(r) for r in old] and len(new) == 2
+
+    got = await candidates(actions.pool)
+    assert got["count"] == 1 and got["candidates"][0]["summary"] == "a guess"
+
+
+async def test_candidates_records_its_steps_on_a_clock(actions: Actions) -> None:
+    from src.orchestrator.phase_clock import PhaseClock
+
+    await _mined(actions, "thread:clocked", "a guess", repo="osiris")
+    clock = PhaseClock()
+    got = await candidates(actions.pool, project="osiris", clock=clock)
+    assert got["count"] == 1
+    assert list(clock.phases_ms()) == ["rows", "count"]
