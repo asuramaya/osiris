@@ -580,5 +580,32 @@ class Settings(BaseSettings):
     osiris_layout_tick_seconds: int = 300
 
 
+_settings_cache: tuple[object, Settings] | None = None
+
+
+def _settings_signature() -> object:
+    """Everything a Settings() read depends on: the whole environment, the working directory
+    and the `.env` file in it (its size and modification time). Equal signatures mean the same
+    object would be built again."""
+    import os
+
+    try:
+        st = os.stat(".env")
+        env_file: tuple[int, int] | None = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        env_file = None
+    return (tuple(sorted(os.environ.items())), os.getcwd(), env_file)
+
+
 def get_settings() -> Settings:
-    return Settings()
+    """A Settings built from the environment and `.env`. Building one costs about 7 ms (it walks
+    every field's annotations), and a per-seat roster made over thirty of them, so the object is
+    kept while its inputs are unchanged. Every caller still gets its own copy, so one caller
+    changing a field never shows up in another's."""
+    global _settings_cache
+    sig = _settings_signature()
+    if _settings_cache is not None and _settings_cache[0] == sig:
+        return _settings_cache[1].model_copy()
+    fresh = Settings()
+    _settings_cache = (sig, fresh)
+    return fresh.model_copy()
