@@ -1513,12 +1513,13 @@ async def db_compaction_heartbeat(ctx: dict[str, Any]) -> int:
     tables that are mostly dead or free space (src.orchestrator.db_compaction holds all of
     it) so the space the clean-ups freed goes back to the disk. One table at a time inside
     a 03:00 to 05:00 window; skips a table while the disk/WAL brake is paused, while the disk
-    could not hold the rewrite, or while a bulk drain is still emptying it. Not at startup.
+    could not hold the rewrite, or while a bulk drain is still emptying it. Not at startup, and
+    not when a slept-through slot fires on wake: outside the window it does nothing.
     Gated on the retention flag (true by default). A desk receipt only when a table was
     rewritten or a rewrite failed. Returns the bytes given back."""
     import os
 
-    from src.orchestrator.db_compaction import compact_tonight
+    from src.orchestrator.db_compaction import compact_tonight, night_seconds_left
     from src.orchestrator.mailbox import send_message
     from src.orchestrator.settings_service import settings_with_overlay
 
@@ -1526,8 +1527,16 @@ async def db_compaction_heartbeat(ctx: dict[str, Any]) -> int:
     pool = actions.pool
     if not (await settings_with_overlay(pool)).osiris_retention_heartbeat_enabled:
         return 0
+    # arq fires a slot the box slept through as soon as the worker wakes, which can be the
+    # middle of the day; a rewrite only ever starts inside the night window, and never runs
+    # past its end.
+    left = night_seconds_left()
+    if left <= 0:
+        _log.info("db compaction: not in the 03:00 to 05:00 window, left for tonight")
+        return 0
     receipts = await compact_tonight(
-        pool, window_secs=_COMPACTION_WINDOW_SECS, dsn=os.environ.get("DATABASE_URL"))
+        pool, window_secs=min(_COMPACTION_WINDOW_SECS, left),
+        dsn=os.environ.get("DATABASE_URL"))
     done = [r for r in receipts.values() if r.get("action") == "rewritten"]
     failed = [r for r in receipts.values() if r.get("action") == "failed"]
     freed = int(sum(max(0, r["before_bytes"] - r["after_bytes"]) for r in done))

@@ -234,6 +234,7 @@ async def test_the_night_heartbeat_compacts_and_tells_the_desk(
 
     await _bloated(actions)
     monkeypatch.setattr(db_compaction, "TABLES", (SCRATCH,))
+    monkeypatch.setattr(db_compaction, "night_seconds_left", lambda now=None: 6900.0)
     monkeypatch.setattr(disk_brake, "disk_usage", lambda: (900 * GB, 2000 * GB))
     captured: dict[str, Any] = {}
 
@@ -255,6 +256,7 @@ async def test_the_night_heartbeat_pauses_with_the_disk_brake(
 
     await _bloated(actions)
     monkeypatch.setattr(db_compaction, "TABLES", (SCRATCH,))
+    monkeypatch.setattr(db_compaction, "night_seconds_left", lambda now=None: 6900.0)
     monkeypatch.setattr(disk_brake, "disk_usage", lambda: (10 * GB, 2000 * GB))
     assert await db_compaction_heartbeat({"cascade": SimpleNamespace(actions=actions)}) == 0
     receipts = await last_receipts(actions.pool)
@@ -541,3 +543,32 @@ def test_an_archive_step_that_left_rows_holds_the_flag_however_few_it_moved() ->
     quiet = dict(layout_finished=True, fold_finished=True, tiering_paused=False)
     assert hot_cold_drain_running(rows_moved=40, more_remain=True, **quiet) is True
     assert hot_cold_drain_running(rows_moved=40, more_remain=False, **quiet) is False
+
+
+def test_the_night_window_is_open_only_between_three_and_five_local() -> None:
+    from datetime import datetime
+
+    from src.orchestrator.db_compaction import night_seconds_left
+
+    def at(h: int, m: int = 0) -> datetime:
+        return datetime(2026, 11, 12, h, m).astimezone()
+
+    assert night_seconds_left(at(10, 54)) == 0.0  # the lid-open wake that started a rewrite
+    assert night_seconds_left(at(2, 59)) == 0.0
+    assert night_seconds_left(at(5, 0)) == 0.0
+    assert night_seconds_left(at(3, 0)) == 7200.0
+    assert night_seconds_left(at(4, 30)) == 1800.0
+
+
+async def test_a_slept_through_slot_that_fires_by_day_rewrites_nothing(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.workers.arq_worker import db_compaction_heartbeat
+
+    await _bloated(actions)
+    monkeypatch.setattr(db_compaction, "TABLES", (SCRATCH,))
+    monkeypatch.setattr(db_compaction, "night_seconds_left", lambda now=None: 0.0)
+    before = await last_receipts(actions.pool)
+    assert await db_compaction_heartbeat({"cascade": SimpleNamespace(actions=actions)}) == 0
+    assert await last_receipts(actions.pool) == before
+    assert (await db_compaction.table_sizes(actions.pool, SCRATCH))["total_bytes"] > 0
