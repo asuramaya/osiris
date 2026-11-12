@@ -50,6 +50,10 @@ async def test_a_verbose_mount_reports_its_phases_and_logs_them(
     phases = out["phase_ms"]
     for name in ("identity_reading", "register_agent", "unread_counts", "save_mount"):
         assert name in phases and phases[name] >= 0
-    assert any("mount phases: total=" in r.getMessage() for r in caplog.records)
+    line = next(r.getMessage() for r in caplog.records if "mount phases: total=" in r.getMessage())
+    # the caller kind: no hook-stamped path, a job_dir, which harness, and which agent mounted
+    assert "[transcript_path=none job_dir=given harness=" in line
+    assert f" agent={out['agent']}]" in line
+    assert str(tmp_path) not in line                      # flags only, never a path
     terse = await mcp_server.mount(cwd=str(office), job_dir=str(tmp_path / "jobs" / "abcd1234"))
     assert "phase_ms" not in terse
