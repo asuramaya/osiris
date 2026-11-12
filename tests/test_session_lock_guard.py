@@ -129,3 +129,40 @@ async def test_without_a_side_connection_it_falls_back_to_a_pool_slot(
         async with sl.session_lock_connection(actions.pool) as conn:
             assert await conn.fetchval("SELECT 1") == 1
     assert "pool slot" in caplog.text
+
+
+async def test_a_full_server_is_waited_out_never_answered_with_a_pool_slot(
+        actions: Actions, monkeypatch) -> None:
+    import asyncpg
+    import src.db.session_lock as sl
+
+    real = sl.open_side_connection
+    calls = []
+
+    async def full_twice(pool):
+        calls.append(1)
+        if len(calls) <= 2:
+            raise asyncpg.TooManyConnectionsError("sorry, too many clients already")
+        return await real(pool)
+
+    monkeypatch.setattr(sl, "open_side_connection", full_twice)
+    monkeypatch.setattr(sl, "FULL_SERVER_STEP", 0.01)
+    async with sl.session_lock_connection(actions.pool) as conn:
+        assert await conn.fetchval("SELECT 1") == 1
+    assert len(calls) == 3
+
+
+async def test_a_server_that_stays_full_raises_after_the_wait(
+        actions: Actions, monkeypatch) -> None:
+    import asyncpg
+    import src.db.session_lock as sl
+
+    async def full(pool):
+        raise asyncpg.TooManyConnectionsError("sorry, too many clients already")
+
+    monkeypatch.setattr(sl, "open_side_connection", full)
+    monkeypatch.setattr(sl, "FULL_SERVER_WAIT", 0.05)
+    monkeypatch.setattr(sl, "FULL_SERVER_STEP", 0.01)
+    with pytest.raises(asyncpg.TooManyConnectionsError):
+        async with sl.session_lock_connection(actions.pool):
+            raise AssertionError("must not hand out a pool slot")

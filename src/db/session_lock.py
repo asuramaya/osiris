@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -27,6 +28,11 @@ from src.db.pool import open_side_connection
 _log = logging.getLogger(__name__)
 
 CLOSE_BOUND = 5.0
+# how long a holder waits for the server to have a connection free before it gives up and
+# raises (a nightly job is retried by its next slot; a full server is never answered by quietly
+# taking a pool slot, which is the pattern this module exists to end)
+FULL_SERVER_WAIT = 60.0
+FULL_SERVER_STEP = 1.0
 
 
 async def close_side_connection(side: asyncpg.Connection) -> None:
@@ -47,8 +53,19 @@ async def close_side_connection(side: asyncpg.Connection) -> None:
 @contextlib.asynccontextmanager
 async def session_lock_connection(pool: Any) -> AsyncIterator[asyncpg.Connection]:
     """The connection a session-level advisory lock is taken and held on (see the module
-    docstring). Closed (or released) on every exit."""
-    side = await open_side_connection(pool)
+    docstring). Closed (or released) on every exit. `open_side_connection` returns None only
+    when the pool did not record how it connects (the pool-slot fallback); a failed connect
+    raises, and a full server is waited out for `FULL_SERVER_WAIT` before the raise is passed
+    on."""
+    deadline = time.monotonic() + FULL_SERVER_WAIT
+    while True:
+        try:
+            side = await open_side_connection(pool)
+            break
+        except asyncpg.TooManyConnectionsError:
+            if time.monotonic() >= deadline:
+                raise
+            await asyncio.sleep(FULL_SERVER_STEP)
     if side is None:
         _log.warning("no side connection for a session lock: holding a pool slot instead")
         async with pool.acquire() as conn:
