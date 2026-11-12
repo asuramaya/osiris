@@ -538,6 +538,8 @@ async def test_backup_status_lists_a_backup_that_finished_with_unread_files(
 
     attempts = res["items"]["offbox"]["recent_attempts"]
     assert [(a["name"], a["outcome"]) for a in attempts] == [("nas", "failed")]
+    nas = res["items"]["offbox"]["offload_targets"][0]
+    assert nas["days_since_last_success"] >= 0 and nas["offload_verdict"]
     warnings = res["items"]["offbox"]["warnings"]
     assert len(warnings) == 1 and warnings[0].startswith("nas: snapshot saved")
 

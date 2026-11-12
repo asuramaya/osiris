@@ -113,6 +113,37 @@ def test_readiness_does_not_stay_green_when_the_last_backup_left_files_unread() 
     assert _steps(offload_targets=[clean], stale_offload=[])["offload_current"]["status"] == "done"
 
 
+def test_a_target_is_annotated_with_days_since_success_and_a_verdict() -> None:
+    from src.orchestrator.offload_staleness import annotate_target
+
+    now = NOW
+    stale = annotate_target({"last_successful_offload": _ago(10)}, now=now, stale_days=7)
+    assert stale["days_since_last_success"] == 10
+    assert stale["offload_verdict"] == "stale: no successful offload for 10 days (limit 7)"
+    fresh = annotate_target({"last_successful_offload": _ago(2)}, now=now, stale_days=7)
+    assert fresh["offload_verdict"] == "current: last success 2 days ago"
+    never = annotate_target({}, now=now)
+    assert never["days_since_last_success"] is None
+    assert never["offload_verdict"] == "no successful offload yet"
+
+
+def test_last_error_is_marked_as_from_the_last_attempt_when_skips_came_after_it() -> None:
+    from src.orchestrator.offload_staleness import annotate_target
+
+    now = NOW
+    target = {"last_error": "restic snapshots failed: locked",
+              "last_attempt_at": "2026-11-10T16:30:05+00:00",
+              "last_skip_reason": "reachable only over tailscale0",
+              "skipped_since": "2026-11-10T17:02:27+00:00"}
+    note = annotate_target(target, now=now)["last_error_from"]
+    assert note == ("the last attempt (2026-11-10); the target has been skipped since "
+                    "2026-11-10")
+    # no skips after it: plain attribution; no error at all: no note
+    plain = annotate_target({**target, "last_skip_reason": None}, now=now)["last_error_from"]
+    assert plain == "the last attempt (2026-11-10)"
+    assert "last_error_from" not in annotate_target({"last_attempt_at": "2026-11-10"}, now=now)
+
+
 # --- the tick: receipts and the desk, once -------------------------------------------------
 
 

@@ -5353,9 +5353,19 @@ async def _fn_backup_status(
         receipts = {}
         attempts = []
     offload_targets = list((settings or {}).get("offload_targets", []) or [])
+    try:
+        from src.orchestrator.settings_service import settings_with_overlay
+
+        offload_stale_days = int(
+            (await settings_with_overlay(pool)).osiris_offload_stale_days) if pool else 7
+    except Exception:  # noqa: BLE001 - the limit is display only: fall back to the default
+        offload_stale_days = 7
+    from src.orchestrator.offload_staleness import annotate_target
+
     for t in offload_targets:
         if isinstance(t, dict) and isinstance(t.get("name"), str):
             t.update(receipts.get(t["name"], {}))
+            t.update(annotate_target(t, now=now, stale_days=offload_stale_days))
     offbox_section = {
         "wired": True,
         "offload_targets": offload_targets,

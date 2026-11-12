@@ -77,3 +77,34 @@ def stale_sentence(entry: dict[str, Any], stale_days: int) -> str:
     """One line for the readiness step and the desk."""
     return (f"{entry['name']}: no successful offload for {entry['days']} days "
             f"(limit {stale_days}): {entry['reason']}")
+
+
+def annotate_target(target: dict[str, Any], *, now: datetime,
+                    stale_days: int = DEFAULT_STALE_DAYS) -> dict[str, Any]:
+    """What an operator reads off one target without doing date sums: days since the last
+    successful offload, a verdict against the limit, and, when the target has been skipped since
+    its last attempt, a note that the `last_error` is from that attempt and not from the skips.
+    Returns the new fields only; nothing is stored."""
+    out: dict[str, Any] = {}
+    success = _parse(target.get("last_successful_offload"))
+    if success is not None and success.tzinfo is None:
+        success = success.replace(tzinfo=now.tzinfo)
+    if success is not None:
+        days = (now - success).days
+        out["days_since_last_success"] = days
+        out["offload_verdict"] = (
+            f"stale: no successful offload for {days} days (limit {stale_days})"
+            if days >= stale_days else f"current: last success {days} days ago")
+    else:
+        out["days_since_last_success"] = None
+        out["offload_verdict"] = "no successful offload yet"
+    attempted = _parse(target.get("last_attempt_at"))
+    skipped = _parse(target.get("skipped_since") or target.get("last_skip_at"))
+    if target.get("last_error") and attempted is not None:
+        if skipped is not None and target.get("last_skip_reason") and skipped >= attempted:
+            out["last_error_from"] = (
+                f"the last attempt ({_date(target.get('last_attempt_at'))}); the target has been "
+                f"skipped since {_date(target.get('skipped_since') or target.get('last_skip_at'))}")
+        else:
+            out["last_error_from"] = f"the last attempt ({_date(target.get('last_attempt_at'))})"
+    return out
