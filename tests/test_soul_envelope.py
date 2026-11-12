@@ -1,0 +1,134 @@
+"""The soul key's envelope, read-only half: who the key is sealed to, and the unattended check.
+
+These read a recovery file and never open the key. The files here are built the way the real
+enrollment builds them (a Fernet token, base64url-wrapped again), so the shape check is
+exercised on real tokens, not on hand-made strings."""
+from __future__ import annotations
+
+import base64
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+from cryptography.fernet import Fernet
+from src.ingest import soul_envelope
+from src.ingest.soul_crypto import key_fingerprint, recovery_file_path
+
+
+def _wrapped(secret: bytes = b"k" * 32) -> str:
+    """A wrapped key as `_enroll_and_wrap` writes it: a Fernet token, base64url'd again."""
+    token = Fernet(Fernet.generate_key()).encrypt(secret)
+    return base64.urlsafe_b64encode(token).decode()
+
+
+def _b64(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode()
+
+
+@pytest.fixture
+def keyfile(tmp_path: Path) -> str:
+    return str(tmp_path / "soul.key")
+
+
+def _write(keyfile: str, blob: dict[str, Any]) -> Path:
+    path = recovery_file_path(path=keyfile)
+    path.write_text(json.dumps(blob))
+    return path
+
+
+def _v1(fingerprint: str = "abcd1234abcd1234") -> dict[str, Any]:
+    return {"credential_id": _b64(b"cred"), "salt": _b64(b"s" * 32), "wrapped_key": _wrapped(),
+            "key_fingerprint": fingerprint, "rp_id": "localhost"}
+
+
+def _hw(rid: str = "k1", label: str = "yubikey A") -> dict[str, Any]:
+    return {"id": rid, "kind": "fido2-prf", "label": label, "added_at": "2026-11-12T00:00:00Z",
+            "last_opened_at": None, "credential_id": _b64(b"cred-" + rid.encode()),
+            "salt": _b64(b"s" * 32), "wrapped_key": _wrapped(), "rp_id": "localhost"}
+
+
+def _code(rid: str = "c1") -> dict[str, Any]:
+    return {"id": rid, "kind": "recovery-code", "label": "printed code",
+            "added_at": "2026-11-12T00:00:00Z", "last_opened_at": None,
+            "salt": _b64(b"c" * 16), "wrapped_key": _wrapped()}
+
+
+def test_no_file_means_no_recipients_and_a_plain_not_ok(keyfile: str) -> None:
+    assert soul_envelope.envelope_recipients(path=keyfile) == []
+    out = soul_envelope.envelope_check(path=keyfile)
+    assert out["ok"] is False and out["recipients"] == 0
+    assert "no recovery file" in out["problems"][0]
+
+
+def test_a_version_1_file_reads_as_one_hardware_recipient_called_r0(keyfile: str) -> None:
+    _write(keyfile, _v1())
+    recs = soul_envelope.envelope_recipients(path=keyfile)
+    assert [(r["id"], r["kind"], r["unattended"]) for r in recs] == [("r0", "fido2-prf", False)]
+    out = soul_envelope.envelope_check(path=keyfile)
+    assert out["ok"] is True and out["recipients"] == 1 and out["hardware"] == 1
+
+
+def test_the_listing_never_carries_a_secret(keyfile: str) -> None:
+    blob = {"version": 2, "key_fingerprint": "f" * 16, "recipients": [_hw(), _code()]}
+    _write(keyfile, blob)
+    recs = soul_envelope.envelope_recipients(path=keyfile)
+    assert [r["id"] for r in recs] == ["k1", "c1"]
+    for r in recs:
+        assert set(r) == {"id", "kind", "label", "added_at", "last_opened_at", "unattended"}
+    dumped = json.dumps(recs)
+    for secret in (blob["recipients"][0]["wrapped_key"], blob["recipients"][0]["salt"],
+                   blob["recipients"][0]["credential_id"], blob["recipients"][1]["wrapped_key"]):
+        assert secret not in dumped
+
+
+def test_a_good_two_recipient_envelope_checks_ok(keyfile: str) -> None:
+    _write(keyfile, {"version": 2, "key_fingerprint": "f" * 16, "recipients": [_hw(), _code()]})
+    out = soul_envelope.envelope_check(path=keyfile)
+    assert out == {"ok": True, "problems": [], "recipients": 2, "hardware": 1, "stale": None}
+
+
+@pytest.mark.parametrize("mutate,words", [
+    (lambda b: b["recipients"].append(_hw("k1")), "appears more than once"),
+    (lambda b: b["recipients"][0].update(kind="gpg"), "unknown kind"),
+    (lambda b: b["recipients"][0].pop("salt"), "is missing salt"),
+    (lambda b: b["recipients"][0].update(wrapped_key="not-a-token"), "not a well-formed token"),
+    (lambda b: b["recipients"][0].update(wrapped_key=_b64(b"\x00" * 90)),
+     "not a well-formed token"),
+    (lambda b: b["recipients"].__setitem__(slice(None), [_code()]),
+     "no recipient is a hardware key"),
+    (lambda b: b["recipients"].clear(), "no recipients"),
+    (lambda b: b.pop("key_fingerprint"), "no key fingerprint"),
+])
+def test_each_structural_fault_is_named_in_plain_words(
+    keyfile: str, mutate: Any, words: str,
+) -> None:
+    blob = {"version": 2, "key_fingerprint": "f" * 16, "recipients": [_hw()]}
+    mutate(blob)
+    _write(keyfile, blob)
+    out = soul_envelope.envelope_check(path=keyfile)
+    assert out["ok"] is False
+    assert any(words in p for p in out["problems"]), out["problems"]
+
+
+def test_an_unreadable_file_is_reported_not_raised(keyfile: str) -> None:
+    recovery_file_path(path=keyfile).write_text("{not json")
+    assert soul_envelope.envelope_recipients(path=keyfile) == []
+    out = soul_envelope.envelope_check(path=keyfile)
+    assert out["ok"] is False and "cannot be read" in out["problems"][0]
+    recovery_file_path(path=keyfile).write_text("[1, 2]")
+    assert "not a JSON object" in soul_envelope.envelope_check(path=keyfile)["problems"][0]
+
+
+def test_a_file_for_an_older_key_than_the_live_one_is_stale(
+    keyfile: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live = key_fingerprint(b"the live key bytes")
+    _write(keyfile, {"version": 2, "key_fingerprint": live, "recipients": [_hw()]})
+    monkeypatch.setattr(soul_envelope, "cached_key_fingerprint", lambda path=None: live)
+    assert soul_envelope.envelope_check(path=keyfile)["stale"] is False
+    monkeypatch.setattr(soul_envelope, "cached_key_fingerprint",
+                        lambda path=None: key_fingerprint(b"a newer key"))
+    out = soul_envelope.envelope_check(path=keyfile)
+    assert out["stale"] is True and out["ok"] is False
+    assert any("older key than the live one" in p for p in out["problems"])
