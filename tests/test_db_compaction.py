@@ -58,16 +58,21 @@ def test_the_outbox_is_rewritten_at_a_smaller_floor_than_the_big_tables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The live outbox: 709 MB reclaimable of 1.08 GB. Under the 2 GB floor it was skipped
-    every night; its own floor lets it through, as does the audit log's, and the
-    assertions tables' floor did not move."""
+    every night; its own floor lets it through, as does the audit log's, and now the
+    assertions tables'."""
     monkeypatch.setattr(db_compaction, "MIN_BLOAT_BYTES", 2 * GB)  # the real floor
     mb = 1024 ** 2
     assert worth_rewriting(1083 * mb, 709 * mb, "outbox") is True
     assert worth_rewriting(1083 * mb, 709 * mb, "audit_log") is True  # the same reduced floor
     assert worth_rewriting(1667 * mb, 1219 * mb, "audit_log") is True  # the live audit log
     assert worth_rewriting(1083 * mb, 200 * mb, "audit_log") is False
-    assert worth_rewriting(1913 * mb, 1091 * mb, "assertions_hot") is False  # unchanged
-    assert worth_rewriting(1764 * mb, 648 * mb, "assertions_cold") is False  # unchanged
+    # the assertions tables have the reduced floor too (they are mostly empty since the fold)
+    assert worth_rewriting(1913 * mb, 1091 * mb, "assertions_hot") is True
+    assert worth_rewriting(1764 * mb, 648 * mb, "assertions_cold") is True
+    assert worth_rewriting(1682 * mb, 1311 * mb, "assertions_cold") is True  # the live cold table
+    assert worth_rewriting(1825 * mb, 1172 * mb, "assertions_hot") is True  # the live hot table
+    assert worth_rewriting(1825 * mb, 200 * mb, "assertions_hot") is False  # still needs bloat
+    assert worth_rewriting(100 * GB, 20 * GB, "assertions_cold") is False  # still needs 30%
     assert worth_rewriting(1083 * mb, 709 * mb) is False
     assert worth_rewriting(1083 * mb, 200 * mb, "outbox") is False  # still needs real bloat
     assert worth_rewriting(100 * GB, 20 * GB, "outbox") is False  # still needs 30% bloat

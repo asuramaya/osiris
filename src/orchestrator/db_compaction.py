@@ -43,7 +43,13 @@ MIN_BLOAT_BYTES = 2 * GB
 # space and still never reach the 2 GB floor above, so it would never be rewritten: the
 # outbox sat at 709 MB reclaimable of 1.08 GB (65%) and was skipped night after night.
 # The audit log is the same shape: mostly retired duplicate rows, 1.28 GB reclaimable of 1.67 GB.
-MIN_BLOAT_BYTES_BY_TABLE = {"outbox": 256 * 1024 ** 2, "audit_log": 256 * 1024 ** 2}
+# The assertions tables are the same shape since the history fold and the duplicate-abstention
+# collapse: assertions_cold is 78% empty (1.3 GB of 1.7 GB) and assertions_hot 64% empty, both
+# under the 2 GB floor, so neither would ever be rewritten.
+MIN_BLOAT_BYTES_BY_TABLE = {
+    "outbox": 256 * 1024 ** 2, "audit_log": 256 * 1024 ** 2,
+    "assertions_hot": 256 * 1024 ** 2, "assertions_cold": 256 * 1024 ** 2,
+}
 # VACUUM FULL needs ACCESS EXCLUSIVE, and a queued exclusive request blocks every new reader and
 # writer of the table behind it while it waits. A short wait that is retried later costs the fleet
 # at most a few seconds; a long one stalls it that long and then fails anyway.
