@@ -3352,11 +3352,12 @@ async def mount(
     # guidance. Stays in both modes here too, matching orient()'s own fix.
     clock.mark("while_away_and_memory_custody")
     # which kind of caller this was: whether the hook stamped a transcript path (that skips the
-    # directory search), and the harness the anchor's shape names. Flags only, never paths.
+    # directory search), the harness the anchor's shape names, and which agent mounted (its
+    # short id, so a steady caller that never carries the path can be named). Never paths.
     logging.getLogger("osiris.mcp").info(
-        "mount phases: %s [transcript_path=%s job_dir=%s harness=%s]", clock.line(),
+        "mount phases: %s [transcript_path=%s job_dir=%s harness=%s agent=%s]", clock.line(),
         "given" if transcript_path else "none", "given" if job_dir else "none",
-        _infer_harness(cwd, job_dir))
+        _infer_harness(cwd, job_dir), ident.agent_id)
     if verbose:
         out["phase_ms"] = clock.phases_ms()
     return out if verbose else _terse(
