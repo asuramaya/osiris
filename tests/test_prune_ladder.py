@@ -419,6 +419,69 @@ def test_the_dry_run_report_names_a_held_file(tmp_path, chicago) -> None:  # typ
     assert "HELD (kept, not trusted to delete)" in text and odd.name in text
 
 
+@pytest.fixture
+def utc_box(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+    """A prune run in a container whose zone is UTC, over files named by a box in Chicago."""
+    monkeypatch.setenv("TZ", "UTC")
+    _time.tzset()
+    yield
+    monkeypatch.undo()
+    _time.tzset()
+
+
+def test_a_prune_run_in_utc_over_chicago_named_files_removes_nothing_it_cannot_date(  # type: ignore[no-untyped-def]
+    tmp_path, utc_box,
+) -> None:
+    """The names say 04:30 (Chicago wall time); read in UTC they are 6 h early, which would push
+    every dump 6 h older than it is. The mtime shows the disagreement, so each is held, and the
+    ladder, which would otherwise have thinned them, removes none."""
+    from scripts.osiris_prune_ladder import _scan, plan_prune, plan_prune_dumps
+
+    written = [(f"2026110{d}-043007", datetime(2026, 11, d, 10, 40, 19, tzinfo=UTC))
+               for d in (1, 2, 3, 4, 5, 6)]
+    paths = [_dump_at(tmp_path, stamp, at) for stamp, at in written]
+    now = datetime(2026, 12, 20, 12, 0, 0, tzinfo=UTC)  # far past every window
+    files = _scan(tmp_path)
+
+    assert all(f.held for f in files) and len(files) == 6
+    assert plan_prune(files, now=now)["remove"] == []
+    assert plan_prune_dumps(files, now=now, verified=None)["remove"] == []
+    assert {f.path for f in plan_prune(files, now=now)["keep"]} == {str(p) for p in paths}
+
+
+def test_a_dump_written_in_the_repeated_hour_stays_newer_than_the_verified_base(  # type: ignore[no-untyped-def]
+    tmp_path, chicago,
+) -> None:
+    """The base backup is written 01:50 CDT (06:50 UTC), the dump 01:10 CST (07:10 UTC): the dump's
+    stamp is numerically EARLIER, but it is the newer file. 'Never remove a dump newer than the
+    newest verified base backup' needs the real order."""
+    import os
+
+    from scripts.osiris_prune_ladder import DumpFile, _scan, plan_prune_dumps
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    base = vault / "osiris-basebackup-20261101-015000.tar.gz"
+    dump = vault / "osiris-20261101-011000.dump"
+    for f, at in ((base, datetime(2026, 11, 1, 6, 55, 0, tzinfo=UTC)),
+                  (dump, datetime(2026, 11, 1, 7, 15, 0, tzinfo=UTC))):
+        f.write_bytes(b"x")
+        os.utime(f, (at.timestamp(), at.timestamp()))
+    [verified] = [f for f in _scan(vault) if "basebackup" in f.path]
+    [scanned] = [f for f in _scan(vault) if f.path == str(dump)]
+    now = datetime(2026, 11, 20, 12, 0, 0, tzinfo=UTC)  # the dump is long past its windows
+
+    assert scanned.when > verified.when  # written later, so newer, whatever the stamps read
+    kept = plan_prune_dumps([scanned], now=now, verified=verified)
+    assert str(dump) in {f.path for f in kept["keep"]} and kept["remove"] == []
+
+    # the control: read with no mtime to break the tie (the first reading of 01:10), the dump
+    # looks OLDER than the base, is past the windows, and is removed
+    naive = DumpFile(str(dump), datetime(2026, 11, 1, 1, 10, 0).astimezone(), 1)
+    assert [f.path for f in plan_prune_dumps([naive], now=now, verified=verified)["remove"]] == [
+        str(dump)]
+
+
 def test_the_old_utc_reading_would_have_removed_one_of_them(tmp_path) -> None:
     """The control for the test above: with the stamps read as UTC (the old behaviour) both dumps
     land in the daily tier (55.5 h and 49.5 h), share one day bucket, and the older one is
