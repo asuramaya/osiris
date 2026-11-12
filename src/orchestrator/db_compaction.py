@@ -58,6 +58,8 @@ DRAIN_KEY = "drain:"
 # table from ever being compacted.
 BACKFILL_DRAIN_KEY = "drain:backfill:"
 BACKFILL_DRAIN_LAPSE = timedelta(days=7)
+# The nightly housekeeping rewrites the flag; one older than this was left by a step that stopped.
+DRAIN_FLAG_MAX_AGE = timedelta(hours=36)
 
 
 # --- measuring ------------------------------------------------------------------------------
@@ -165,9 +167,20 @@ async def drain_running(pool: asyncpg.Pool, table: str) -> bool:
     if not raw:
         return False
     try:
-        return bool(json.loads(raw).get("running"))
-    except ValueError:
+        flag = json.loads(raw)
+        running = bool(flag.get("running"))
+        stamped = datetime.fromisoformat(str(flag["at"])) if flag.get("at") else None
+    except (ValueError, TypeError, AttributeError):
         return False
+    # A flag that nothing has rewritten for a day and a half is stale, not a drain in
+    # progress: the housekeeping that sets it runs nightly, so a failing step would otherwise
+    # leave "running" on forever and the table would never be rewritten.
+    if running and stamped is not None:
+        if stamped.tzinfo is None:
+            stamped = stamped.replace(tzinfo=UTC)
+        if datetime.now(UTC) - stamped > DRAIN_FLAG_MAX_AGE:
+            return False
+    return running
 
 
 # --- rewriting ------------------------------------------------------------------------------
