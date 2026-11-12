@@ -129,7 +129,7 @@ async def test_a_table_with_little_dead_space_is_left_alone(actions: Actions) ->
         f"INSERT INTO {SCRATCH} SELECT g, repeat('x', 1000) FROM generate_series(1, 2000) g")
     out = await compact_tonight(actions.pool, window_secs=600, tables=(SCRATCH,), brake=_roomy)
     assert out[SCRATCH]["action"] == "skipped"
-    assert out[SCRATCH]["reason"] == "not enough dead space"
+    assert "floor" in out[SCRATCH]["reason"] and "minimum" in out[SCRATCH]["reason"]
 
 
 async def test_a_running_drain_defers_the_table(actions: Actions) -> None:
@@ -482,3 +482,23 @@ async def test_a_failed_step_leaves_the_flag_as_it_was(
     flag = json.loads(
         await get_cursor(actions.pool, db_compaction.DRAIN_KEY + "assertions_hot") or "{}")
     assert flag.get("running") is True
+
+
+def test_a_skip_names_the_rule_and_the_numbers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The live cold table: 1.3 GB reclaimable of 1.7 GB used to be skipped with "not enough
+    dead space", which read as a contradiction."""
+    from src.orchestrator.db_compaction import skip_reason
+
+    monkeypatch.setattr(db_compaction, "MIN_BLOAT_BYTES", 2 * GB)  # the real floor
+    mb = 1024 ** 2
+    assert skip_reason(1682 * mb, 1311 * mb, "soul_lines") == (
+        "1.3 GB reclaimable is at or below this table's 2.0 GB floor")
+    assert skip_reason(100 * GB, 20 * GB, "outbox") == (
+        "20% reclaimable is at or below the 30% minimum")
+    assert "256 MB floor" in skip_reason(1000 * mb, 200 * mb, "audit_log")
+    assert skip_reason(0, 0, "outbox").endswith("minimum")
+
+
+async def test_the_status_says_what_a_size_means(actions: Actions) -> None:
+    status = await compaction_status(actions.pool)
+    assert "heap, indexes and toast" in status["sizes"]
