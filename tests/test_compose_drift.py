@@ -108,9 +108,23 @@ def test_postgres_and_redis_restart_unless_stopped(compose: dict) -> None:
     assert compose["services"]["redis"]["restart"] == "unless-stopped"
 
 
-def test_postgres_image_is_16_in_both_compose_files() -> None:
-    assert _pg_service(COMPOSE_YML)["image"] == "postgres:16"
-    assert _pg_service(COMPOSE_FULL_YML)["image"] == "postgres:16"
+def test_postgres_image_is_the_repack_build_in_both_compose_files() -> None:
+    """osiris-pg is postgres:16 plus pg_repack, built from deploy/pg/Dockerfile."""
+    assert _pg_service(COMPOSE_YML)["image"] == "osiris-pg:16-repack"
+    assert _pg_service(COMPOSE_FULL_YML)["image"] == "osiris-pg:16-repack"
+    assert (REPO_ROOT / _pg_service(COMPOSE_YML)["build"] / "Dockerfile").is_file()
+    assert (REPO_ROOT / "deploy" / _pg_service(COMPOSE_FULL_YML)["build"] / "Dockerfile").is_file()
+
+
+def test_repack_image_pins_its_base_and_installs_pg_repack() -> None:
+    dockerfile = (REPO_ROOT / "deploy" / "pg" / "Dockerfile").read_text()
+    assert "FROM postgres:16@sha256:" in dockerfile
+    assert "postgresql-16-repack" in dockerfile
+
+
+def test_up_sh_builds_and_runs_the_repack_image() -> None:
+    assert "docker build -q -t osiris-pg:16-repack deploy/pg" in UP_SH_CODE
+    assert "osiris-pg:16-repack" in UP_SH_CODE.split("docker run -d --name osiris-pg", 1)[1]
 
 
 # --- static: deploy/up.sh (bash, not yaml, text checks) --------------------------

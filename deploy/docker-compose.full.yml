@@ -12,7 +12,8 @@
 # post-boot; a hardcoded value here would silently down-tune a recreated box).
 services:
   postgres:
-    image: postgres:16
+    image: osiris-pg:16-repack
+    build: ./pg
     environment:
       POSTGRES_USER: osiris
       POSTGRES_PASSWORD: osiris

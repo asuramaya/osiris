@@ -43,7 +43,7 @@ docker run -d --name osiris-pg \
   -e POSTGRES_PASSWORD=osiris \
   -e POSTGRES_DB=osiris \
   -p 127.0.0.1:5432:5432 \
-  postgres:16
+  osiris-pg:16-repack   # postgres:16 plus pg_repack; build it first: docker build -t osiris-pg:16-repack deploy/pg
 
 docker run -d --name osiris-redis \
   -p 127.0.0.1:6379:6379 \
