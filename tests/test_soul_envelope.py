@@ -272,3 +272,82 @@ def test_marking_a_recipient_opened_is_the_only_change_and_is_private(keyfile: s
     assert soul_envelope.envelope_check(path=keyfile)["unproven"] == []
     assert soul_envelope.mark_opened("nope", path=keyfile) is False
     assert soul_envelope.mark_opened("k1", path=keyfile + "-nope") is False
+
+
+# --- adding a hardware key (no real hardware: the same deterministic fake the soul-key tests use)
+
+class _TwoFakeKeys:
+    """Two fake security keys; `plug_in` chooses which one the next call talks to."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from src.ingest import soul_crypto
+
+        from tests.test_soul_crypto import _FakeFido2Client
+
+        self.keys = {"A": _FakeFido2Client(b"secret-of-key-A"),
+                     "B": _FakeFido2Client(b"secret-of-key-B")}
+        self.keys["A"]._credential_id = b"credential-of-key-A-0123456789"
+        self.keys["B"]._credential_id = b"credential-of-key-B-0123456789"
+        self.present: str | None = "A"
+        monkeypatch.setattr(soul_crypto, "_find_fido2_device",
+                            lambda: object() if self.present else None)
+        monkeypatch.setattr(soul_crypto, "_fido2_client",
+                            lambda device, rp_id: self.keys[self.present or "A"])
+
+    def plug_in(self, which: str | None) -> None:
+        self.present = which
+
+
+def test_a_second_hardware_key_is_added_and_opens_the_key_by_itself(
+    keyfile: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.ingest import soul_crypto
+
+    fakes = _TwoFakeKeys(monkeypatch)
+    # the first key, the way `soul-key enroll-recovery` writes it (a version 1 file)
+    first = soul_crypto._enroll_and_wrap(object(), RAW, rp_id="localhost")["blob"]
+    path = _write(keyfile, first)
+    assert [r["id"] for r in soul_envelope.envelope_recipients(path=keyfile)] == ["r0"]
+
+    fakes.plug_in("B")
+    out = soul_envelope.envelope_add_key(path=keyfile, label="spare key", raw_key=RAW)
+    rec = out["recipient"]
+    assert rec["kind"] == "fido2-prf" and rec["id"] == "k2" and rec["label"] == "spare key"
+    blob = json.loads(path.read_text())
+    assert blob["version"] == 2 and [r["id"] for r in blob["recipients"]] == ["r0", "k2"]
+    assert _mode(path) == 0o600
+    # the version 1 mirror still points at the FIRST key, so soul_key_recover is unchanged
+    assert blob["credential_id"] == first["credential_id"]
+    # the new key, and only it, unwraps the key: derive the wrap key the way an open does
+    new = blob["recipients"][1]
+    prf = fakes.keys["B"].get_assertion(
+        type("O", (), {"extensions": {"prf": {"eval": {
+            "first": base64.urlsafe_b64decode(new["salt"])}}}})()
+    ).get_response(0).client_extension_results.prf.results.first
+    token = base64.urlsafe_b64decode(new["wrapped_key"])
+    assert soul_crypto._hkdf_wrap_key(prf).decrypt(token) == RAW
+    # the other key's secret does not open it
+    from cryptography.fernet import InvalidToken
+
+    other = fakes.keys["A"].get_assertion(
+        type("O", (), {"extensions": {"prf": {"eval": {
+            "first": base64.urlsafe_b64decode(new["salt"])}}}})()
+    ).get_response(0).client_extension_results.prf.results.first
+    with pytest.raises(InvalidToken):
+        soul_crypto._hkdf_wrap_key(other).decrypt(token)
+    assert soul_envelope.envelope_check(path=keyfile)["unproven"] == ["r0", "k2"]
+
+
+def test_adding_a_key_refuses_cleanly_when_it_cannot(
+    keyfile: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fakes = _TwoFakeKeys(monkeypatch)
+    assert "enroll the first key" in soul_envelope.envelope_add_key(
+        path=keyfile, raw_key=RAW)["error"]
+    _write(keyfile, _v1(key_fingerprint(b"an older key")))
+    assert "older key than the live one" in soul_envelope.envelope_add_key(
+        path=keyfile, raw_key=RAW)["error"]
+    _write(keyfile, _v1(key_fingerprint(RAW)))
+    fakes.plug_in(None)
+    assert "plug in the NEW key" in soul_envelope.envelope_add_key(
+        path=keyfile, raw_key=RAW)["error"]

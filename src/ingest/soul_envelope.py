@@ -350,3 +350,50 @@ def mark_opened(recipient_id: str, *, path: str | None = None) -> bool:
             _write_blob_atomic(recovery_path, blob)
             return True
     return False
+
+
+def envelope_add_key(
+    *, path: str | None = None, label: str = "security key", rp_id: str | None = None,
+    raw_key: bytes | None = None,
+) -> dict[str, Any]:
+    """Seals the key to one more hardware recipient: a FIDO2 security key (hmac-secret / PRF).
+    Needs the NEW key plugged in, its PIN and a touch (the same enrollment the first key goes
+    through), and the live key (read from this box when not given) to wrap. The first key of
+    all is enrolled by `osiris soul-key enroll-recovery`, which creates the envelope; this adds
+    to it. Re-wraps the KEY only; the data is not touched. The new recipient starts
+    UNPROVEN on purpose: its enrollment derives the wrap key once, which is not the same as
+    opening the stored copy, so `envelope_verify` (a second touch) is what proves it."""
+    from src.ingest import soul_crypto
+
+    recovery_path = recovery_file_path(path=path)
+    if not recovery_path.exists():
+        return {"error": f"no envelope at {recovery_path} yet: enroll the first key with "
+                         "`osiris soul-key enroll-recovery`, then add more here"}
+    try:
+        blob = _read_blob(recovery_path)
+    except (OSError, ValueError) as exc:
+        return {"error": f"the recovery file cannot be read: {exc}"}
+    key = raw_key if raw_key is not None else _live_key(path)
+    if key_fingerprint(key) != blob.get("key_fingerprint"):
+        return {"error": "the envelope protects an older key than the live one (the key was "
+                         "rotated since); re-seal the envelope to the current key first"}
+    use_rp = rp_id or next((str(r["rp_id"]) for r in blob["recipients"]
+                            if r.get("kind") == KIND_HARDWARE and r.get("rp_id")),
+                           soul_crypto._DEFAULT_RP_ID)
+    device = soul_crypto._find_fido2_device()
+    if device is None:
+        return {"error": "no FIDO2 security key detected: plug in the NEW key and try again"}
+    try:
+        enrolled = soul_crypto._enroll_and_wrap(device, key, rp_id=use_rp)
+    except soul_crypto.SoulKeyRecoveryError as exc:
+        return {"error": str(exc)}
+    if "error" in enrolled:
+        return {"error": str(enrolled["error"])}
+    wrapped = enrolled["blob"]
+    record = {"id": _next_id(blob, "k"), "kind": KIND_HARDWARE,
+              "label": label or "security key", "added_at": _now(), "last_opened_at": None,
+              "credential_id": wrapped["credential_id"], "salt": wrapped["salt"],
+              "wrapped_key": wrapped["wrapped_key"], "rp_id": wrapped.get("rp_id", use_rp)}
+    blob["recipients"] = [*blob["recipients"], record]
+    _write_blob_atomic(recovery_path, blob)
+    return {"recipient": _public(record)}
