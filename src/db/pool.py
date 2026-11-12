@@ -275,4 +275,24 @@ async def create_pool(
     assert pool is not None
     if acquire_timeout is not None and hasattr(pool, "__dict__"):
         pool.__dict__["_osiris_acquire_timeout"] = acquire_timeout
+    if hasattr(pool, "__dict__"):
+        pool.__dict__["_osiris_side_connect"] = (dsn, dict(server_settings))
     return pool
+
+
+async def open_side_connection(pool: Any) -> asyncpg.Connection | None:
+    """One connection to the same database that is NOT one of the pool's slots, for a holder
+    that must keep a session-level lock for a long time. A lock holder that takes its slot from
+    the shared pool and then calls the pool again deadlocks it once the holders reach the pool
+    size (the 2026-09-29 wedge, and again in 2026-11 with the seat spawn lock: several DM
+    dispatches each held a slot of a 4-slot worker pool, every other job waited out the
+    acquire bound). None when the pool did not record how it connects; the caller then falls
+    back to a pool slot. The caller closes it."""
+    recorded = getattr(pool, "__dict__", {}).get("_osiris_side_connect")
+    if recorded is None:
+        return None
+    dsn, server_settings = recorded
+    try:
+        return await asyncpg.connect(dsn=dsn, server_settings=server_settings, timeout=10)
+    except (OSError, asyncpg.PostgresError, TimeoutError):
+        return None

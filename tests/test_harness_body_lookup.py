@@ -393,10 +393,9 @@ async def test_waiting_for_the_spawn_lock_pins_no_pool_connection(actions: Actio
             await asyncio.sleep(0.1)
             in_use.append(pool.get_size() - pool.get_idle_size())
         await asyncio.gather(*waiters)
-    # Before: each of the four waiters held a connection for its whole wait, so five were in
-    # use at every sample. Now a waiter borrows one only for an instant per try, so some
-    # sample sees just the holder's.
-    assert min(in_use) == 1
+    # The lock and every waiter live on side connections: the pool's own slots stay free the
+    # whole time, so a holder that goes on calling the pool can never starve it.
+    assert max(in_use) == 0
     # the lock is free again afterwards
     async with trigger.seat_spawn_lock(pool, "pinless", wait=1.0):
         pass
@@ -649,3 +648,24 @@ async def test_the_missing_worktree_refusal_names_the_cli_command(
     assert "is missing" in out["detail"] or "missing" in out["detail"]
     assert f'osiris bind-seat-tree {seat_id} <the real directory> "<why>"' in out["detail"]
     assert "bind_seat_tree(" not in out["detail"]
+
+
+async def test_holders_of_the_spawn_lock_cannot_starve_the_pool_they_keep_calling(
+    pg_dsn: str,
+) -> None:
+    """Several doors hold different seats' locks and each calls the pool while it holds, with
+    as many holders as the pool has slots: with the lock on a pool slot that deadlocked the
+    pool (every slot a holder waiting for a second one); on its own connection it finishes."""
+    from src.db.pool import create_pool
+
+    pool = await create_pool(pg_dsn, min_size=1, max_size=2, acquire_timeout=3)
+    try:
+        async def _door(i: int) -> int:
+            async with trigger.seat_spawn_lock(pool, f"starve-{i}"):
+                await asyncio.sleep(0.2)
+                return int(await pool.fetchval("SELECT $1::int", i))
+
+        got = await asyncio.wait_for(asyncio.gather(*[_door(i) for i in range(6)]), timeout=10)
+        assert sorted(got) == list(range(6))
+    finally:
+        await pool.close()
