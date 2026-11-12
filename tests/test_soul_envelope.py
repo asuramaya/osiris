@@ -122,7 +122,9 @@ def test_each_structural_fault_is_named_in_plain_words(
 
 def test_an_unreadable_file_is_reported_not_raised(keyfile: str) -> None:
     recovery_file_path(path=keyfile).write_text("{not json")
-    assert soul_envelope.envelope_recipients(path=keyfile) == []
+    with pytest.raises(soul_envelope.EnvelopeUnreadable) as err:
+        soul_envelope.envelope_recipients(path=keyfile)
+    assert "{not json" not in str(err.value)
     out = soul_envelope.envelope_check(path=keyfile)
     assert out["ok"] is False and "cannot be read" in out["problems"][0]
     recovery_file_path(path=keyfile).write_text("[1, 2]")
@@ -432,7 +434,7 @@ def test_verify_proves_one_recipient_and_writes_only_last_opened_at(
     seen: list[bytes] = []
 
     def on_key(key: bytes) -> bool:
-        seen.append(key)
+        seen.append(bytes(key))  # the buffer is zeroed after
         return True
 
     before = json.loads(recovery_file_path(path=keyfile).read_text())
@@ -512,3 +514,11 @@ def test_an_opened_key_gives_a_fernet_that_decrypts_a_real_token() -> None:
     with soul_envelope.OpenResult("ok", "k1", None, real) as opened:
         assert opened.fernet().decrypt(sealed) == b"a sealed soul line"
     assert opened.status == "ok" and opened.fingerprint is None
+
+
+def test_the_key_buffer_is_the_one_that_is_zeroed() -> None:
+    opened = soul_envelope.OpenResult("ok", "k1", key=RAW)
+    buf = opened.key_buffer
+    assert bytes(buf) == RAW
+    opened.close()
+    assert set(buf) == {0}  # the same buffer was wiped, not a copy left behind

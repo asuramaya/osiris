@@ -172,8 +172,9 @@ def test_only_names_one_recipient() -> None:
 def test_the_unattended_view_gives_days_since_and_a_stale_verdict_and_opens_nothing() -> None:
     view = {v["id"]: v for v in drill.status_view(RECIPIENTS, {}, now=NOW)}
 
-    assert view["yubi"]["verdict"] == "current: last proved 5 days ago"
-    assert view["code"]["verdict"].startswith("stale: last proved 40 days ago (limit 30)")
+    assert view["yubi"]["verdict"].startswith("current: opened (fingerprint only) 5 days ago")
+    assert "never proved on a real sealed line" in view["yubi"]["verdict"]
+    assert view["code"]["verdict"].startswith("stale: last activity 40 days ago (limit 30)")
     assert view["new"]["verdict"] == "never proved: needs the operator's key"
 
 
@@ -182,7 +183,9 @@ def test_a_full_proof_by_the_drill_counts_even_when_the_envelope_has_no_open_tim
 
     view = {v["id"]: v for v in drill.status_view(RECIPIENTS, record, now=NOW)}
 
-    assert view["new"]["verdict"] == "current: last proved 1 days ago"
+    assert view["new"]["verdict"] == (
+        "current: never opened; proved on a real sealed line 1 days ago")
+    assert view["new"]["days_since_proved"] == 1 and view["new"]["days_since_opened"] is None
 
 
 def test_the_envelope_section_reports_problems_and_never_blanks_on_an_error() -> None:
@@ -196,7 +199,8 @@ def test_the_envelope_section_reports_problems_and_never_blanks_on_an_error() ->
         raise OSError("disk gone")
 
     err = drill.envelope_section(boom, lambda: {}, now=NOW)
-    assert err == {"error": "the envelope could not be read: OSError"}
+    assert err["error"] == "the envelope could not be read: OSError"
+    assert err["problems"] == ["the envelope could not be read: OSError"]
 
 
 def test_the_section_warns_for_each_unproven_recipient_using_the_envelopes_own_list() -> None:
@@ -215,12 +219,36 @@ def test_with_no_unproven_field_the_section_reads_it_off_the_listing() -> None:
     assert sec["warnings"] == ["new: never proved to open the envelope"]
 
 
+def test_an_opened_by_fingerprint_recipient_is_not_reported_as_proved() -> None:
+    view = {v["id"]: v for v in drill.status_view(RECIPIENTS, {}, now=NOW)}
+
+    assert view["yubi"]["last_proved_at"] is None and view["yubi"]["last_opened_at"]
+
+
 def test_no_envelope_at_all_says_so_instead_of_reading_as_fine() -> None:
     sec = drill.envelope_section(
-        lambda: [], lambda: {"ok": False, "problems": ["no recovery file at /x"]}, now=NOW)
+        lambda: [], lambda: {"ok": False, "absent": True,
+                             "problems": ["no recovery file at /x"]}, now=NOW)
 
     assert sec["configured"] is False and "not sealed to any recipient" in sec["note"]
     assert sec["problems"] == ["no recovery file at /x"]
+
+
+def test_a_file_that_is_there_but_yields_nothing_is_a_problem_not_a_first_run() -> None:
+    from src.ingest.soul_envelope import EnvelopeUnreadable
+
+    def corrupt() -> Any:
+        raise EnvelopeUnreadable("the recovery file cannot be read (ValueError)")
+
+    sec = drill.envelope_section(
+        corrupt, lambda: {"ok": False, "problems": ["the recovery file cannot be read: x"]},
+        now=NOW)
+    assert sec["configured"] is True and sec["unreadable"] is True and sec["ok"] is False
+    assert "cannot be read (ValueError)" in sec["problems"][0]
+    # an empty file (no recipients) that is NOT absent is told as well
+    empty = drill.envelope_section(
+        lambda: [], lambda: {"ok": False, "problems": ["the envelope has no recipients"]}, now=NOW)
+    assert empty["configured"] is True and empty["problems"] == ["the envelope has no recipients"]
 
 
 def test_an_unreadable_record_reads_as_empty(_record: Path) -> None:
@@ -262,7 +290,7 @@ def test_the_section_reads_the_real_envelope_functions_over_a_real_recovery_file
 
     assert sec["configured"] is True and sec["hardware"] == 1
     by_id = {v["id"]: v for v in sec["recipients"]}
-    assert by_id["k1"]["verdict"] == "current: last proved 3 days ago"
+    assert by_id["k1"]["verdict"].startswith("current: opened (fingerprint only) 3 days ago")
     assert by_id["c1"]["verdict"] == "never proved: needs the operator's key"
     assert sec["warnings"] == ["c1: never proved to open the envelope"]
 
@@ -271,15 +299,18 @@ def test_the_section_reads_the_real_envelope_functions_over_a_real_recovery_file
 
 
 class _FakePool:
-    def __init__(self, tokens: list[bytes]) -> None:
+    def __init__(self, tokens: list[bytes], empty_until: int = 0) -> None:
         self.tokens = tokens
         self.sql: list[str] = []
+        self.empty_until = empty_until  # fetches that come back empty first
 
     async def fetchval(self, sql: str, *a: Any) -> int:
         return 1000
 
-    async def fetch(self, sql: str, *a: Any) -> list[dict[str, bytes]]:
+    async def fetch(self, sql: str, *a: Any, **kw: Any) -> list[dict[str, bytes]]:
         self.sql.append(sql)
+        if len(self.sql) <= self.empty_until:
+            return []
         return [{"raw_line": t} for t in self.tokens]
 
 
@@ -296,7 +327,19 @@ async def test_the_sample_passes_a_key_that_opens_one_real_line_and_fails_the_wr
 
 
 async def test_no_sealed_line_in_the_store_gives_no_sample() -> None:
-    assert await drill.sealed_sample(_FakePool([])) is None
+    pool = _FakePool([])
+    assert await drill.sealed_sample(pool) is None
+    assert len(pool.sql) == 3 and "ORDER BY" in pool.sql[-1]  # sampled, widened, then bounded
+
+
+async def test_an_empty_page_sample_is_retried_then_read_deterministically() -> None:
+    pool = _FakePool([Fernet(LIVE_KEY).encrypt(b"line")], empty_until=2)
+
+    sample = await drill.sealed_sample(pool)
+
+    assert sample is not None and sample.decrypts(LIVE_KEY, sample.token)
+    assert "TABLESAMPLE" in pool.sql[0] and "TABLESAMPLE" in pool.sql[1]
+    assert "TABLESAMPLE" not in pool.sql[2] and "LIMIT" in pool.sql[2]
 
 
 def test_a_recovery_code_recipient_is_asked_for_its_code_and_a_hardware_one_is_not() -> None:
@@ -412,7 +455,8 @@ async def test_an_envelope_problem_is_told_once_and_nothing_is_said_with_no_enve
         await drill.surface_stale(actions.pool, lambda: RECIPIENTS[:1], lambda: check, now=NOW)
     assert await _desk(actions) == ["envelope: no recipient is a hardware key"]
 
-    assert await drill.surface_stale(actions.pool, lambda: [], lambda: check, now=NOW) == []
+    absent = {**check, "absent": True}
+    assert await drill.surface_stale(actions.pool, lambda: [], lambda: absent, now=NOW) == []
 
 
 async def test_a_failure_to_tell_the_desk_never_fails_the_check(
@@ -438,3 +482,91 @@ def test_the_check_unit_runs_the_unattended_command_daily_and_the_installer_know
     assert "envelope-drill --check" in service and "Type=oneshot" in service
     assert "OnCalendar=*-*-*" in timer and "Persistent=true" in timer
     assert installer.count("osiris-envelope-check") >= 2  # installed and enabled
+
+
+async def test_a_corrupt_or_unreadable_envelope_is_told_open_and_logged_not_swallowed(
+    actions: Any, caplog: pytest.LogCaptureFixture,
+) -> None:
+    from src.ingest.soul_envelope import EnvelopeUnreadable
+
+    def corrupt() -> Any:
+        raise EnvelopeUnreadable("the recovery file cannot be read (ValueError)")
+
+    check = {"ok": False, "problems": ["the recovery file cannot be read: x"]}
+    with caplog.at_level("WARNING"):
+        told = await drill.surface_stale(actions.pool, corrupt, lambda: check, now=NOW)
+
+    assert told and any("cannot be read" in b for b in await _desk(actions))
+    assert drill.read_record()["_notified"]
+    assert any("cannot be read" in r.getMessage() for r in caplog.records)
+
+
+async def test_an_exception_while_looking_is_told_too(actions: Any) -> None:
+    def boom() -> Any:
+        raise OSError("disk gone")
+
+    told = await drill.surface_stale(actions.pool, boom, lambda: {}, now=NOW)
+
+    assert told == ["envelope: the envelope could not be read: OSError"]
+
+
+async def test_a_still_wanted_notice_is_told_again_every_seven_days(actions: Any) -> None:
+    def run(at: Any) -> Any:
+        return drill.surface_stale(
+            actions.pool, lambda: RECIPIENTS[1:2], lambda: {"ok": True, "problems": []}, now=at)
+
+    assert len(await run(NOW)) == 1
+    assert await run(NOW + timedelta(days=3)) == []
+    stored = drill.read_record()["_notified"]["recipient:code"]
+    assert stored["state"] and stored["at"]
+    again = await drill.surface_stale(
+        actions.pool, lambda: [{**RECIPIENTS[1], "last_opened_at": _days(40)}],
+        lambda: {"ok": True, "problems": []}, now=NOW + timedelta(days=8))
+    assert len(again) == 1  # same state, but over a week since it was told
+
+
+def test_the_record_is_private_and_a_drill_keeps_entries_written_meanwhile(_record: Path) -> None:
+    import stat
+
+    drill.run_drill(lambda: RECIPIENTS[:1], FakeVerify({"yubi": {"key": LIVE_KEY}}),
+                    sample=SAMPLE, now=NOW)
+
+    assert stat.S_IMODE(_record.stat().st_mode) == 0o600
+    with drill._locked_record():
+        record = drill.read_record()
+        record["other"] = {"last_proved_at": "x"}
+        drill._write_record(record)
+    drill.run_drill(lambda: RECIPIENTS[:1], FakeVerify({"yubi": {"key": LIVE_KEY}}),
+                    sample=SAMPLE, now=NOW)
+    assert "other" in drill.read_record() and "yubi" in drill.read_record()
+
+
+def test_a_missing_device_is_the_operators_to_fix_and_an_unconfirmed_fingerprint_fails() -> None:
+    def verify(rid: str, *, on_key: Any = None) -> dict[str, Any]:
+        return {"ok": False, "status": "unavailable", "needs_operator_key": False,
+                "error": "no device"}
+
+    assert drill.prove_one(verify, "yubi", sample=SAMPLE) == (
+        drill.NEEDS_OPERATOR_KEY, "no device")
+
+    def unsure(rid: str, *, on_key: Any = None) -> dict[str, Any]:
+        return {"ok": True, "status": "ok", "fingerprint_matches": None, "artifact_ok": True}
+
+    assert drill.prove_one(unsure, "yubi", sample=SAMPLE)[0] == drill.FAILED
+
+
+async def test_the_drill_command_reports_an_unreachable_database_without_its_text(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from src import cli
+    from src.db import pool as pool_mod
+
+    async def boom(*a: Any, **k: Any) -> Any:
+        raise OSError("connect failed postgresql://user:SECRETPW@host/db")
+
+    monkeypatch.setattr(pool_mod, "create_pool", boom)
+
+    rc = await cli.cmd_envelope_drill()
+
+    err = capsys.readouterr().err
+    assert rc == 1 and "OSError" in err and "SECRETPW" not in err
