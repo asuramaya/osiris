@@ -200,7 +200,7 @@ def _workspace_trust_step(untrusted: list[str] | None) -> dict[str, Any]:
     if not untrusted:
         return _step("workspace_trust", label, "done", None, None, optional=True)
     return _step("workspace_trust", label, "needs_attention",
-                 "; ".join(hint(d) for d in untrusted), None, mode="hands", optional=True)
+                 "\n".join(hint(d) for d in untrusted), None, mode="hands", optional=True)
 
 
 def _wal_backlog_step(backlog: dict[str, Any] | None, limit_gb: int) -> dict[str, Any]:
