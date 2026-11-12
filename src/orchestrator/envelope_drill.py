@@ -259,3 +259,57 @@ def verify_with_prompts(
         return verify(recipient_id, interactive=True, code=code, **kw)
 
     return wrapped
+
+
+_NOTIFIED = "_notified"
+
+
+async def surface_stale(
+    pool: Any, recipients: Recipients, check: Check, *, now: datetime | None = None,
+    stale_days: int = DEFAULT_STALE_DAYS,
+) -> list[str]:
+    """Tell the operator's desk, once per stretch, about a recipient that has gone stale or was
+    never proved, and about a problem the envelope's own check reports. It never opens anything.
+
+    "Once" means once per state: the record remembers the state each notice was for (the
+    recipient's last proof, or "never"), so a daily run says nothing new until a recipient is
+    proved (which clears its state) or goes stale again. Never fails the run."""
+    import logging
+
+    from src.orchestrator.mailbox import send_message
+
+    told: list[str] = []
+    try:
+        section = envelope_section(recipients, check, now=now or datetime.now(UTC),
+                                   stale_days=stale_days)
+        if not section.get("configured"):
+            return told  # no envelope yet: backup-status says so; the desk is not nagged
+        record = read_record()
+        notified: dict[str, str] = dict(record.get(_NOTIFIED) or {})
+        wanted: dict[str, tuple[str, str]] = {}
+        for v in section["recipients"]:
+            verdict = str(v["verdict"])
+            if verdict.startswith(("stale", "never")):
+                state = str(v["last_proved_at"] or "never")
+                wanted[f"recipient:{v['id']}"] = (
+                    state, f"envelope: {v.get('label') or v['id']}: {verdict}")
+        for problem in section["problems"]:
+            wanted[f"problem:{problem}"] = ("open", f"envelope: {problem}")
+        for key, (state, sentence) in wanted.items():
+            if notified.get(key) == state:
+                continue
+            await send_message(
+                pool, from_agent="cron:envelope_check", from_project="osiris",
+                to_project="operator", body=sentence, desk_kind="hands",
+                dedup_window_secs=3600)
+            notified[key] = state
+            told.append(sentence)
+        # a state that has cleared (proved again, problem fixed) is forgotten, so the next
+        # time it comes back it is told again
+        notified = {k: v for k, v in notified.items() if k in wanted}
+        record[_NOTIFIED] = notified
+        _write_record(record)
+    except Exception:  # noqa: BLE001 - telling the desk must never fail the run
+        logging.getLogger(__name__).warning("could not surface the envelope's state",
+                                            exc_info=True)
+    return told

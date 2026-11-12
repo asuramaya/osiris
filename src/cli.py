@@ -1322,7 +1322,8 @@ async def cmd_restic_key(
 # --- offload-runner ------------------------------------------------------------------------
 
 async def cmd_envelope_drill(
-    *, recipient: str | None = None, as_json: bool = False, pool: asyncpg.Pool | None = None,
+    *, recipient: str | None = None, as_json: bool = False, check: bool = False,
+    pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris envelope-drill: prove, with you present, that each recipient the vault key is sealed
     to opens the envelope BY ITSELF and that its key decrypts a real sealed line. A hardware key
@@ -1349,6 +1350,17 @@ async def cmd_envelope_drill(
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris envelope-drill: could not reach postgres: {exc}", file=sys.stderr)
             return 1
+    if check:
+        # the unattended daily check (osiris-envelope-check.timer): reads the envelope, opens
+        # nothing, tells the operator's desk once about a recipient gone stale or never proved
+        try:
+            told = await envelope_drill.surface_stale(
+                pool, soul_envelope.envelope_recipients, soul_envelope.envelope_check)
+        finally:
+            if owns_pool:
+                await pool.close()
+        render.emit({"told": told}, as_json=as_json, title="envelope check")
+        return 0
     try:
         sample = await envelope_drill.sealed_sample(pool)
     finally:
@@ -8733,6 +8745,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_envelope_drill.add_argument("--recipient", default=None,
                                   help="prove only this recipient (an id from "
                                        "`osiris backup-status`)")
+    p_envelope_drill.add_argument("--check", action="store_true",
+                                  help="the unattended daily check: open nothing, tell the "
+                                       "operator's desk once about a recipient gone stale or "
+                                       "never proved (what osiris-envelope-check.timer runs)")
     p_envelope_drill.add_argument("--json", action="store_true", dest="as_json",
                                   help="machine-readable: one compact JSON line")
 
@@ -10319,7 +10335,7 @@ def main(argv: list[str] | None = None) -> int:
             args.action, path=args.path, backend=args.backend, as_json=args.as_json))
     if args.command == "envelope-drill":
         return asyncio.run(cmd_envelope_drill(  # unbounded-wait-ok: asyncio.run of a CLI command
-            recipient=args.recipient, as_json=args.as_json))
+            recipient=args.recipient, as_json=args.as_json, check=args.check))
     if args.command == "offload-runner":
         return asyncio.run(cmd_offload_runner(
             args.action, vault=args.vault, as_json=args.as_json))

@@ -355,3 +355,86 @@ async def test_the_command_says_so_when_there_is_nothing_to_prove_against(
     rc = await cli.cmd_envelope_drill(pool=object())  # type: ignore[arg-type]
 
     assert rc == 1 and "no sealed line" in capsys.readouterr().err
+
+
+# ---- the daily unattended check tells the desk once ------------------------------------------
+
+
+async def _desk(actions: Any) -> list[str]:
+    rows = await actions.pool.fetch(
+        "SELECT body FROM fleet_messages WHERE from_agent = 'cron:envelope_check' "
+        "ORDER BY id")
+    return [r["body"] for r in rows]
+
+
+async def test_a_stale_and_a_never_proved_recipient_reach_the_desk_once_each(actions: Any) -> None:
+    told = await drill.surface_stale(
+        actions.pool, lambda: RECIPIENTS, lambda: {"ok": True, "problems": []}, now=NOW)
+
+    assert len(told) == 2  # "code" is 40 days old, "new" was never proved; "yubi" is current
+    bodies = await _desk(actions)
+    assert any("paper" in b and "stale" in b for b in bodies)
+    assert any("spare" in b and "never proved" in b for b in bodies)
+    assert not any("yubikey" in b for b in bodies)
+
+
+async def test_the_same_state_is_not_told_again_the_next_day(actions: Any) -> None:
+    for _ in range(3):
+        await drill.surface_stale(
+            actions.pool, lambda: RECIPIENTS, lambda: {"ok": True, "problems": []}, now=NOW)
+
+    assert len(await _desk(actions)) == 2
+    assert drill.read_record()["_notified"]  # remembered
+
+
+async def test_a_recipient_proved_again_is_forgotten_and_told_afresh_when_it_goes_stale(
+    actions: Any,
+) -> None:
+    await drill.surface_stale(
+        actions.pool, lambda: RECIPIENTS[1:2], lambda: {"ok": True, "problems": []}, now=NOW)
+    fresh = [{**RECIPIENTS[1], "last_opened_at": _days(1)}]
+    assert await drill.surface_stale(
+        actions.pool, lambda: fresh, lambda: {"ok": True, "problems": []}, now=NOW) == []
+    assert drill.read_record()["_notified"] == {}  # cleared by the proof
+    later = [{**RECIPIENTS[1], "last_opened_at": _days(35)}]
+
+    told = await drill.surface_stale(
+        actions.pool, lambda: later, lambda: {"ok": True, "problems": []}, now=NOW)
+
+    assert len(told) == 1  # a new stretch of silence is told again
+
+
+async def test_an_envelope_problem_is_told_once_and_nothing_is_said_with_no_envelope(
+    actions: Any,
+) -> None:
+    check = {"ok": False, "problems": ["no recipient is a hardware key"]}
+    for _ in range(2):
+        await drill.surface_stale(actions.pool, lambda: RECIPIENTS[:1], lambda: check, now=NOW)
+    assert await _desk(actions) == ["envelope: no recipient is a hardware key"]
+
+    assert await drill.surface_stale(actions.pool, lambda: [], lambda: check, now=NOW) == []
+
+
+async def test_a_failure_to_tell_the_desk_never_fails_the_check(
+    actions: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def boom(*a: Any, **k: Any) -> None:
+        raise RuntimeError("desk down")
+
+    monkeypatch.setattr("src.orchestrator.mailbox.send_message", boom)
+
+    told = await drill.surface_stale(
+        actions.pool, lambda: RECIPIENTS, lambda: {"ok": True, "problems": []}, now=NOW)
+
+    assert told == []  # nothing recorded as told, nothing raised
+
+
+def test_the_check_unit_runs_the_unattended_command_daily_and_the_installer_knows_it() -> None:
+    root = Path(__file__).resolve().parent.parent
+    service = (root / "deploy" / "osiris-envelope-check.service").read_text()
+    timer = (root / "deploy" / "osiris-envelope-check.timer").read_text()
+    installer = (root / "scripts" / "install_prune_timers.sh").read_text()
+
+    assert "envelope-drill --check" in service and "Type=oneshot" in service
+    assert "OnCalendar=*-*-*" in timer and "Persistent=true" in timer
+    assert installer.count("osiris-envelope-check") >= 2  # installed and enabled

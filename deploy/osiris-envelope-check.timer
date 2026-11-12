@@ -1,0 +1,9 @@
+[Unit]
+Description=Osiris envelope check (daily): a recipient gone stale or never proved reaches the operator's desk once
+
+[Timer]
+OnCalendar=*-*-* 09:20:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
