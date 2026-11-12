@@ -571,6 +571,7 @@ async def test_backup_status_degrades_a_missing_vault_without_blanking_other_sec
     # the real timer's state is read, never assumed: this box has systemd or it does not
     assert isinstance(data["pitr_drill"]["wired_to_a_timer"], bool)
     assert data["pitr_drill"]["unit"] == "osiris-pitr-drill.timer"
+    assert "last_result" in data["pitr_drill"]
 
 
 async def test_backup_status_timers_carry_their_shipped_schedule(

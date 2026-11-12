@@ -25,11 +25,14 @@ tested directly.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import shutil
 import subprocess
 import sys
 import tarfile
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -370,6 +373,42 @@ def pick_and_ensure_marker(container: str = CONTAINER) -> str | None:
     return canonical
 
 
+_RECEIPT_ENV = "OSIRIS_PITR_RECEIPT_FILE"
+_DEFAULT_RECEIPT = "~/.local/state/osiris/pitr_drill_receipt.json"
+
+
+def receipt_path() -> Path:
+    return Path(os.environ.get(_RECEIPT_ENV) or _DEFAULT_RECEIPT).expanduser()
+
+
+def read_result() -> dict[str, object] | None:
+    """The weekly drill's last saved result, or None (never ran, or the file is unreadable)."""
+    try:
+        body = json.loads(receipt_path().read_text())
+    except (OSError, ValueError):
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def save_result(ok: bool, *, backup: str | None, error: str | None = None,
+                now: datetime | None = None) -> None:
+    """Keep the outcome of this run: when, pass or fail, which base backup, why it failed. A
+    failed run keeps the time of the last pass. Atomic (temp file, rename); best effort, so a
+    state directory that cannot be written never changes the drill's own exit code."""
+    stamp = (now or datetime.now(UTC)).isoformat()
+    previous = read_result() or {}
+    body = {"last_attempt_at": stamp, "ok": ok, "backup": backup, "error": error,
+            "last_passed_at": stamp if ok else previous.get("last_passed_at")}
+    path = receipt_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(body, indent=2))
+        os.replace(tmp, path)
+    except OSError:
+        return
+
+
 def main(argv: list[str] | None = None) -> int:
     from scripts.osiris_prune_ladder import _scan
 
@@ -396,6 +435,7 @@ def main(argv: list[str] | None = None) -> int:
     backups = _scan(args.vault / "basebackups")
     if not backups:
         print("osiris_pitr_drill: no base backups found, nothing to drill", file=sys.stderr)
+        save_result(False, backup=None, error="no base backups found")
         return 1
     newest = max(backups, key=lambda f: f.when)
     target_time = args.target_time
@@ -403,16 +443,19 @@ def main(argv: list[str] | None = None) -> int:
     if marker is None:
         print("osiris_pitr_drill: no objects in the live DB, nothing to prove",
               file=sys.stderr)
+        save_result(False, backup=Path(newest.path).name, error="no objects in the live database")
         return 1
     print(f"osiris_pitr_drill: restoring {newest.path} to target_time={target_time!r}, "
           f"marker={marker!r}")
     fail = run_drill(Path(newest.path), target_time, marker, wal_dir_override=args.wal_dir)
     if fail:
         print(f"PITR DRILL FAILED: {fail}", file=sys.stderr)
+        save_result(False, backup=Path(newest.path).name, error=str(fail)[:500])
         return 1
     from scripts.osiris_prune_ladder import mark_base_backup_verified
 
     mark_base_backup_verified(Path(newest.path))
+    save_result(True, backup=Path(newest.path).name)
     print("PITR drill: PASS, the marker written after the base backup is present in "
           "the restored copy; the base backup is now recorded as verified")
     return 0

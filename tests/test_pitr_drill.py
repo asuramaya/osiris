@@ -6,6 +6,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
 from scripts.osiris_pitr_drill import CONTAINER, DRILL_NAME, postgresql_auto_conf_pitr, run_drill
 
 # --- never the live cluster ---------------------------------------------------------
@@ -275,6 +276,48 @@ def test_soul_encryption_state_reads_the_progress_record_and_never_raises(monkey
 
     monkeypatch.setattr("src.orchestrator.soul_encrypt_progress.read_progress", boom)
     assert drill._soul_encryption_state() == "unknown"
+
+
+@pytest.fixture(autouse=True)
+def _receipt_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The drill saves its result: never into the real state directory from a test."""
+    monkeypatch.setenv("OSIRIS_PITR_RECEIPT_FILE", str(tmp_path / "pitr_receipt.json"))
+
+
+def test_the_drill_saves_each_result_and_a_failure_keeps_the_last_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import osiris_pitr_drill as drill
+
+    assert drill.read_result() is None  # never ran
+    bases = tmp_path / "basebackups"
+    bases.mkdir()
+    (bases / "osiris-basebackup-20260908-000000.tar.gz").write_bytes(b"new")
+    monkeypatch.setattr(drill, "pick_and_ensure_marker", lambda: "message:1")
+
+    monkeypatch.setattr(drill, "run_drill", lambda *a, **k: None)
+    assert drill.main(["--vault", str(tmp_path)]) == 0
+    passed = drill.read_result()
+    assert passed is not None and passed["ok"] is True and passed["error"] is None
+    assert passed["backup"] == "osiris-basebackup-20260908-000000.tar.gz"
+    assert passed["last_passed_at"] == passed["last_attempt_at"]
+
+    monkeypatch.setattr(drill, "run_drill", lambda *a, **k: "replay failed")
+    assert drill.main(["--vault", str(tmp_path)]) == 1
+    failed = drill.read_result()
+    assert failed is not None and failed["ok"] is False and failed["error"] == "replay failed"
+    assert failed["last_passed_at"] == passed["last_passed_at"]  # the last pass is not lost
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_a_state_directory_that_cannot_be_written_never_changes_the_drill_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import osiris_pitr_drill as drill
+
+    (tmp_path / "pitr_receipt.json").mkdir()  # a directory where the file should be
+    drill.save_result(True, backup="x")  # no exception
+    assert drill.read_result() is None
 
 
 # --- a passing drill is the only thing that marks a base backup verified ----------------

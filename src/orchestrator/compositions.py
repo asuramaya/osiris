@@ -5381,14 +5381,23 @@ async def _fn_backup_status(
     # it (the same live read the backup timers use), not a constant. No receipt is persisted.
     pitr_unit = "osiris-pitr-drill.timer"
     pitr_live = await _backup_timer_live_state(pitr_unit)
+    try:
+        from scripts.osiris_pitr_drill import read_result as _pitr_result
+
+        pitr_result = _pitr_result()
+    except Exception:  # noqa: BLE001 - one section never blanks the panel
+        pitr_result = None
     pitr_section: dict[str, Any] = {
         "wired_to_a_timer": pitr_live.get("active_state") == "active",
         "unit": pitr_unit,
         "schedule": _backup_timer_calendar(pitr_unit),
         **pitr_live,
-        "note": ("scripts/osiris_pitr_drill.py runs from its weekly timer; no result saved"
-                 if pitr_live else
-                 "timer state unreadable here (no systemd); no result saved"),
+        "last_result": pitr_result,
+        "note": (
+            "scripts/osiris_pitr_drill.py runs from its weekly timer"
+            + ("" if pitr_live else "; timer state unreadable here (no systemd)")
+            + ("; its last result is saved" if pitr_result
+               else "; no result saved yet (it is saved after the next weekly run)")),
     }
 
     # THE DISK/WAL BRAKE: whether the bulk-rewrite jobs are paused right now, and why
