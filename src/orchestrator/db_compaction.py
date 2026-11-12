@@ -43,7 +43,13 @@ MIN_BLOAT_BYTES = 2 * GB
 # space and still never reach the 2 GB floor above, so it would never be rewritten: the
 # outbox sat at 709 MB reclaimable of 1.08 GB (65%) and was skipped night after night.
 # The audit log is the same shape: mostly retired duplicate rows, 1.28 GB reclaimable of 1.67 GB.
-MIN_BLOAT_BYTES_BY_TABLE = {"outbox": 256 * 1024 ** 2, "audit_log": 256 * 1024 ** 2}
+# The assertions tables are the same shape since the history fold and the duplicate-abstention
+# collapse: assertions_cold is 78% empty (1.3 GB of 1.7 GB) and assertions_hot 64% empty, both
+# under the 2 GB floor, so neither would ever be rewritten.
+MIN_BLOAT_BYTES_BY_TABLE = {
+    "outbox": 256 * 1024 ** 2, "audit_log": 256 * 1024 ** 2,
+    "assertions_hot": 256 * 1024 ** 2, "assertions_cold": 256 * 1024 ** 2,
+}
 # VACUUM FULL needs ACCESS EXCLUSIVE, and a queued exclusive request blocks every new reader and
 # writer of the table behind it while it waits. A short wait that is retried later costs the fleet
 # at most a few seconds; a long one stalls it that long and then fails anyway.
@@ -112,6 +118,26 @@ def worth_rewriting(total_bytes: int, reclaimable: int, table: str | None = None
     floor = min(MIN_BLOAT_BYTES, MIN_BLOAT_BYTES_BY_TABLE.get(table or "", MIN_BLOAT_BYTES))
     return total_bytes > 0 and reclaimable > floor \
         and reclaimable / total_bytes > MIN_BLOAT_FRACTION
+
+
+def _size(n: int) -> str:
+    return f"{n / GB:.1f} GB" if n >= GB else f"{n / 1024 ** 2:.0f} MB"
+
+
+def skip_reason(total_bytes: int, reclaimable: int, table: str | None = None) -> str:
+    """Why a table is under the rewrite thresholds, naming the rule that applied and the
+    numbers. "Not enough dead space" beside 1.2 GB reclaimable read as a contradiction: the
+    space was there, it was under this table's floor."""
+    floor = min(MIN_BLOAT_BYTES, MIN_BLOAT_BYTES_BY_TABLE.get(table or "", MIN_BLOAT_BYTES))
+    reasons = []
+    if reclaimable <= floor:
+        reasons.append(f"{_size(reclaimable)} reclaimable is at or below this table's "
+                       f"{_size(floor)} floor")
+    if total_bytes <= 0 or reclaimable / total_bytes <= MIN_BLOAT_FRACTION:
+        share = 100 * reclaimable / total_bytes if total_bytes > 0 else 0
+        reasons.append(f"{share:.0f}% reclaimable is at or below the "
+                       f"{MIN_BLOAT_FRACTION:.0%} minimum")
+    return "; ".join(reasons) or "below the rewrite thresholds"
 
 
 # --- the drain flags ------------------------------------------------------------------------
@@ -279,7 +305,8 @@ async def compact_tonight(
                 "at": datetime.now(UTC).isoformat()}
         left = window_secs - (clock() - started)
         if not worth_rewriting(sizes["total_bytes"], reclaim, table):
-            receipts[table] = {**base, "action": "skipped", "reason": "not enough dead space"}
+            receipts[table] = {**base, "action": "skipped",
+                               "reason": skip_reason(sizes["total_bytes"], reclaim, table)}
         elif left <= 60:
             receipts[table] = {**base, "action": "skipped", "reason": "the window is over"}
         elif await drain_running(pool, table):
@@ -333,6 +360,12 @@ async def compaction_status(pool: asyncpg.Pool) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             tables[table] = {"error": str(exc)}
             continue
-        tables[table] = {"total_gb": round(sizes["total_bytes"] / GB, 2),
-                         "last_run": last.get(table)}
-    return {"window": "03:00 to 05:00", "tables": tables}
+        run = last.get(table)
+        if isinstance(run, dict) and "before_bytes" in run:
+            # the same size definition as total_gb, but as it was when that run measured it
+            run = {**run, "before_gb": round(run["before_bytes"] / GB, 2)}
+        tables[table] = {"total_gb": round(sizes["total_bytes"] / GB, 2), "last_run": run}
+    return {"window": "03:00 to 05:00",
+            "sizes": "every size is the table's total on disk (heap, indexes and toast); "
+                     "total_gb is now, a last run's before_gb is as of its own 'at' time",
+            "tables": tables}

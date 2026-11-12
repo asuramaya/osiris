@@ -187,6 +187,7 @@ async def test_apply_migration_0064_moves_only_eligible_rows_in_bounded_batches(
     assert receipt["rows_moved"] == 10
     assert receipt["batches_run"] == 4
     assert receipt["count_preserved"] is True
+    assert receipt["more_remain"] is False  # everything eligible was moved
     assert receipt["before"]["total"] == receipt["after"]["total"]
     assert receipt["after"]["cold"] - receipt["before"]["cold"] == 10
     assert receipt["before"]["hot"] - receipt["after"]["hot"] == 10
@@ -344,3 +345,18 @@ async def test_apply_migration_0064_raises_loudly_on_a_reconciliation_mismatch(
     assert await actions.pool.fetchval(
         "SELECT 1 FROM assertions_cold WHERE id=$1", victim_id) is None
     assert issubclass(ReconciliationError, RuntimeError)
+
+
+async def test_apply_migration_0064_says_when_eligible_rows_remain(actions: Actions) -> None:
+    """A run that stops on its time budget leaves eligible rows; the receipt says so, which
+    rows_moved alone cannot (a small final batch looks the same as a finished drain)."""
+    obj = await actions.create_or_find_object("Agent", "agent:remain", "test")
+    for i in range(6):
+        aid = await actions.assert_property(obj, f"r{i}", "v1", f"agent:r{i}", OLD, 0.9)
+        await _age(actions, aid, OLD)
+        await actions.assert_property(obj, f"r{i}", "v2", f"agent:r{i}", RECENT, 0.9)
+    first = await apply_migration_0064(
+        actions.pool, batch_size=2, cutoff=CUTOFF, max_seconds=0.0)
+    assert first["rows_moved"] < 6 and first["more_remain"] is True
+    done = await apply_migration_0064(actions.pool, batch_size=2, cutoff=CUTOFF)
+    assert done["more_remain"] is False

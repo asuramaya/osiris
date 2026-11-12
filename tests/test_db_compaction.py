@@ -58,16 +58,21 @@ def test_the_outbox_is_rewritten_at_a_smaller_floor_than_the_big_tables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The live outbox: 709 MB reclaimable of 1.08 GB. Under the 2 GB floor it was skipped
-    every night; its own floor lets it through, as does the audit log's, and the
-    assertions tables' floor did not move."""
+    every night; its own floor lets it through, as does the audit log's, and now the
+    assertions tables'."""
     monkeypatch.setattr(db_compaction, "MIN_BLOAT_BYTES", 2 * GB)  # the real floor
     mb = 1024 ** 2
     assert worth_rewriting(1083 * mb, 709 * mb, "outbox") is True
     assert worth_rewriting(1083 * mb, 709 * mb, "audit_log") is True  # the same reduced floor
     assert worth_rewriting(1667 * mb, 1219 * mb, "audit_log") is True  # the live audit log
     assert worth_rewriting(1083 * mb, 200 * mb, "audit_log") is False
-    assert worth_rewriting(1913 * mb, 1091 * mb, "assertions_hot") is False  # unchanged
-    assert worth_rewriting(1764 * mb, 648 * mb, "assertions_cold") is False  # unchanged
+    # the assertions tables have the reduced floor too (they are mostly empty since the fold)
+    assert worth_rewriting(1913 * mb, 1091 * mb, "assertions_hot") is True
+    assert worth_rewriting(1764 * mb, 648 * mb, "assertions_cold") is True
+    assert worth_rewriting(1682 * mb, 1311 * mb, "assertions_cold") is True  # the live cold table
+    assert worth_rewriting(1825 * mb, 1172 * mb, "assertions_hot") is True  # the live hot table
+    assert worth_rewriting(1825 * mb, 200 * mb, "assertions_hot") is False  # still needs bloat
+    assert worth_rewriting(100 * GB, 20 * GB, "assertions_cold") is False  # still needs 30%
     assert worth_rewriting(1083 * mb, 709 * mb) is False
     assert worth_rewriting(1083 * mb, 200 * mb, "outbox") is False  # still needs real bloat
     assert worth_rewriting(100 * GB, 20 * GB, "outbox") is False  # still needs 30% bloat
@@ -124,7 +129,7 @@ async def test_a_table_with_little_dead_space_is_left_alone(actions: Actions) ->
         f"INSERT INTO {SCRATCH} SELECT g, repeat('x', 1000) FROM generate_series(1, 2000) g")
     out = await compact_tonight(actions.pool, window_secs=600, tables=(SCRATCH,), brake=_roomy)
     assert out[SCRATCH]["action"] == "skipped"
-    assert out[SCRATCH]["reason"] == "not enough dead space"
+    assert "floor" in out[SCRATCH]["reason"] and "minimum" in out[SCRATCH]["reason"]
 
 
 async def test_a_running_drain_defers_the_table(actions: Actions) -> None:
@@ -412,3 +417,127 @@ async def test_a_stale_housekeeping_flag_is_ignored_but_a_live_backfill_flag_sti
     assert await drain_running(actions.pool, "assertions_cold") is True
     await set_backfill_drain(actions.pool, "some_backfill", ("assertions_cold",), False)
     assert await drain_running(actions.pool, "assertions_cold") is False
+
+
+def test_ordinary_nightly_tiering_does_not_hold_the_drain_flag() -> None:
+    """Live: tonight's run would move 472 rows. That is not a bulk drain, and holding the flag
+    made the night compaction skip assertions_hot and assertions_cold every night."""
+    from src.workers.arq_worker import _TIERING_DRAIN_ROWS, hot_cold_drain_running
+
+    quiet = dict(layout_finished=True, fold_finished=True, tiering_paused=False)
+    assert hot_cold_drain_running(rows_moved=0, **quiet) is False
+    assert hot_cold_drain_running(rows_moved=472, **quiet) is False
+    assert hot_cold_drain_running(rows_moved=_TIERING_DRAIN_ROWS, **quiet) is False
+
+
+def test_a_real_bulk_drain_still_holds_the_flag() -> None:
+    from src.workers.arq_worker import _TIERING_DRAIN_ROWS, hot_cold_drain_running
+
+    base = dict(layout_finished=True, fold_finished=True, tiering_paused=False, rows_moved=0)
+    assert hot_cold_drain_running(**{**base, "rows_moved": _TIERING_DRAIN_ROWS + 1}) is True
+    assert hot_cold_drain_running(**{**base, "layout_finished": False}) is True
+    assert hot_cold_drain_running(**{**base, "fold_finished": False}) is True
+    assert hot_cold_drain_running(**{**base, "tiering_paused": True}) is True
+
+
+async def test_the_flag_is_written_once_per_pass_and_cleared_when_the_pass_finishes(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The old flag was left true by a previous pass and every move re-set it. A finished pass
+    with only ordinary tiering clears a stale 'running' flag."""
+    import src.orchestrator.mailbox as mailbox
+    from src.orchestrator.monitor import get_cursor
+    from src.workers.arq_worker import storage_housekeeping_heartbeat
+
+    async def _send(pool: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"sent": 1}
+
+    monkeypatch.setattr(mailbox, "send_message", _send)
+    await db_compaction.set_drain(actions.pool, ("assertions_hot", "assertions_cold"), True)
+    await storage_housekeeping_heartbeat({"cascade": SimpleNamespace(actions=actions)})
+    for table in ("assertions_hot", "assertions_cold"):
+        flag = json.loads(await get_cursor(actions.pool, db_compaction.DRAIN_KEY + table) or "{}")
+        assert flag.get("running") is False, table
+
+
+async def test_a_failed_step_leaves_the_flag_as_it_was(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure says nothing about whether the drain is done, so the flag is not rewritten."""
+    import src.orchestrator.assertion_fold as assertion_fold
+    import src.orchestrator.mailbox as mailbox
+    from src.orchestrator.monitor import get_cursor
+    from src.workers.arq_worker import storage_housekeeping_heartbeat
+
+    async def _send(pool: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"sent": 1}
+
+    async def _boom(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("fold failed")
+
+    monkeypatch.setattr(mailbox, "send_message", _send)
+    monkeypatch.setattr(assertion_fold, "apply_fold", _boom)
+    await db_compaction.set_drain(actions.pool, ("assertions_hot", "assertions_cold"), True)
+    await storage_housekeeping_heartbeat({"cascade": SimpleNamespace(actions=actions)})
+    flag = json.loads(
+        await get_cursor(actions.pool, db_compaction.DRAIN_KEY + "assertions_hot") or "{}")
+    assert flag.get("running") is True
+
+
+def test_a_skip_names_the_rule_and_the_numbers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The live cold table: 1.3 GB reclaimable of 1.7 GB used to be skipped with "not enough
+    dead space", which read as a contradiction."""
+    from src.orchestrator.db_compaction import skip_reason
+
+    monkeypatch.setattr(db_compaction, "MIN_BLOAT_BYTES", 2 * GB)  # the real floor
+    mb = 1024 ** 2
+    assert skip_reason(1682 * mb, 1311 * mb, "soul_lines") == (
+        "1.3 GB reclaimable is at or below this table's 2.0 GB floor")
+    assert skip_reason(100 * GB, 20 * GB, "outbox") == (
+        "20% reclaimable is at or below the 30% minimum")
+    assert "256 MB floor" in skip_reason(1000 * mb, 200 * mb, "audit_log")
+    assert skip_reason(0, 0, "outbox").endswith("minimum")
+
+
+async def test_the_status_says_what_a_size_means(actions: Actions) -> None:
+    status = await compaction_status(actions.pool)
+    assert "heap, indexes and toast" in status["sizes"]
+
+
+async def test_the_moved_rows_line_reaches_the_desk_even_when_another_step_failed(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The "moved N rows" line used to sit inside the all-three-steps-succeeded block, so a
+    failed fold dropped it from the summary although the rows were counted as changed."""
+    import src.orchestrator.assertion_fold as assertion_fold
+    import src.orchestrator.mailbox as mailbox
+    import src.orchestrator.migration_0064 as migration_0064
+    from src.workers.arq_worker import storage_housekeeping_heartbeat
+
+    bodies: list[str] = []
+
+    async def _send(pool: Any, **kwargs: Any) -> dict[str, Any]:
+        bodies.append(kwargs["body"])
+        return {"sent": 1}
+
+    async def _boom(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("fold failed")
+
+    async def _moved(*a: Any, **k: Any) -> dict[str, Any]:
+        return {"rows_moved": 7, "paused": False}
+
+    monkeypatch.setattr(mailbox, "send_message", _send)
+    monkeypatch.setattr(assertion_fold, "apply_fold", _boom)
+    monkeypatch.setattr(migration_0064, "apply_migration_0064", _moved)
+    await storage_housekeeping_heartbeat({"cascade": SimpleNamespace(actions=actions)})
+    assert any("moved 7 rows of old history to the cold table" in b for b in bodies), bodies
+
+
+def test_an_archive_step_that_left_rows_holds_the_flag_however_few_it_moved() -> None:
+    """A run that stopped on its budget moves few rows yet leaves a backlog; the row-count
+    threshold alone would clear the flag and let the night rewrite a half-drained table."""
+    from src.workers.arq_worker import hot_cold_drain_running
+
+    quiet = dict(layout_finished=True, fold_finished=True, tiering_paused=False)
+    assert hot_cold_drain_running(rows_moved=40, more_remain=True, **quiet) is True
+    assert hot_cold_drain_running(rows_moved=40, more_remain=False, **quiet) is False

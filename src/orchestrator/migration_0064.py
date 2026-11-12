@@ -319,4 +319,10 @@ async def apply_migration_0064(
             f"COUNT MISMATCH after migration 0064: before={before_total} "
             f"after={after_total} -- receipt={receipt.as_dict()!r}"
         )
-    return {**receipt.as_dict(), "paused": paused}
+    # Whether more eligible rows are still waiting (the run stopped on its time budget, a pause
+    # or contention): a caller deciding "is the drain finished" cannot tell that from
+    # rows_moved alone. One EXISTS, which stops at the first remaining row.
+    more_remain = bool(await pool.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM assertions_hot "
+        "WHERE is_current = false AND created_at < $1)", cutoff))
+    return {**receipt.as_dict(), "paused": paused, "more_remain": more_remain}

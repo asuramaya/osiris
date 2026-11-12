@@ -1351,6 +1351,21 @@ _ASSERTION_FOLD_SECS = 600.0
 _ASSERTION_ARCHIVE_SECS = 300.0
 _LAYOUT_HISTORY_SECS = 300.0
 _ASSERTION_HOT_WINDOW_DAYS = 7
+# Ordinary nightly tiering (rows that just aged past the hot window) moves a few hundred to a few
+# thousand rows and is not a bulk drain; only a move this large, an unfinished clean-up step or a
+# paused pass holds the "drain still running" flag that makes the night compaction skip a table.
+_TIERING_DRAIN_ROWS = 100_000
+
+
+def hot_cold_drain_running(
+    *, layout_finished: bool, fold_finished: bool, rows_moved: int, tiering_paused: bool,
+    more_remain: bool = False,
+) -> bool:
+    """Is a real bulk drain still emptying assertions_hot / assertions_cold? Three steps write
+    these tables each night and used to overwrite one flag in turn (the last one won, and any
+    move at all set it), so the flag stayed on and compaction skipped both tables for good."""
+    return (not layout_finished or not fold_finished or tiering_paused or more_remain
+            or rows_moved > _TIERING_DRAIN_ROWS)
 
 
 async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
@@ -1406,6 +1421,9 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
             more = "" if dup["finished"] else ", more remain for the next run"
             lines.append(f"audit_log: removed {dup['deleted']} rows that only repeated an "
                          f"assertion{more}")
+    layout_finished: bool | None = None
+    fold_finished: bool | None = None
+    tiering: tuple[int, bool, bool] | None = None
     try:
         layout = await retire_layout_history(
             pool, execute=True, max_seconds=_LAYOUT_HISTORY_SECS, pause_check=brake)
@@ -1413,7 +1431,7 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
         _log.warning("layout history retirement failed: %r", exc)
     else:
         changed += layout["deleted"]
-        await _flag_drain(pool, ("assertions_hot", "assertions_cold"), not layout["finished"])
+        layout_finished = bool(layout["finished"])
         if layout["deleted"]:
             more = "" if layout["finished"] else ", more remain for the next run"
             lines.append(f"assertions: removed {layout['deleted']} graph layout rows that "
@@ -1424,7 +1442,7 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
         _log.warning("assertion fold failed: %r", exc)
     else:
         changed += fold["folded"]
-        await _flag_drain(pool, ("assertions_hot", "assertions_cold"), not fold["finished"])
+        fold_finished = bool(fold["finished"])
         if fold["folded"]:
             more = "" if fold["finished"] else ", more remain for the next run"
             lines.append(f"assertions: folded {fold['folded']} rows that repeated the row "
@@ -1437,11 +1455,17 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
         _log.warning("assertion history archive failed: %r", exc)
     else:
         changed += moved["rows_moved"]
-        await _flag_drain(pool, ("assertions_hot", "assertions_cold"),
-                          bool(moved["paused"]) or moved["rows_moved"] > 0)
+        tiering = (int(moved["rows_moved"]), bool(moved["paused"]),
+                   bool(moved.get("more_remain")))
         if moved["rows_moved"]:
             lines.append(f"assertions: moved {moved['rows_moved']} rows of old history to the "
                          "cold table")
+    # One write for the pass, from all three steps. A step that failed leaves the flag as it
+    # was: a failure says nothing about whether the drain is done.
+    if layout_finished is not None and fold_finished is not None and tiering is not None:
+        await _flag_drain(pool, ("assertions_hot", "assertions_cold"), hot_cold_drain_running(
+            layout_finished=layout_finished, fold_finished=fold_finished,
+            rows_moved=tiering[0], tiering_paused=tiering[1], more_remain=tiering[2]))
     if lines:
         with contextlib.suppress(Exception):  # the desk being unreachable must not sink the cron
             await send_message(
