@@ -233,6 +233,65 @@ sealed key itself lives.
 A missing key does not stop either service from starting. See KEYS.md's "What happens with
 no key" section for the deliberate behavior and the exact warning text.
 
+### More than one way to open the key: the envelope
+
+One security key is a single point of failure: lose it and the recovery file opens for
+nobody. The envelope seals the same key to several recipients, and any one of them opens it.
+Adding or removing a recipient re-wraps only the key; the stored transcripts are not touched.
+Everything below runs in your own terminal, as the user the services run as, and none of it
+needs the services stopped.
+
+What you need to do yourself, because it cannot be done for you:
+
+1. **Enroll the first security key** (you already did this if you ran
+   `osiris soul-key enroll-recovery`). Plug it in, enter its PIN, touch it when it blinks.
+2. **Add a second security key**, ideally one kept somewhere else (a drawer at another
+   address, a safe). Plug in the NEW key, not the first one, and run:
+
+   ```bash
+   osiris soul-key envelope add-key --label "spare key"
+   ```
+
+   It asks for the new key's PIN and a touch.
+3. **Add a recovery code** as a third way in that needs no hardware:
+
+   ```bash
+   osiris soul-key envelope add-code --label "printed code"
+   ```
+
+   The code is shown once, on the screen only (it refuses to run into a file, a pipe or
+   `--json`, so it cannot end up in a log). **Write it down on paper at that moment and keep
+   it offline.** It is stored nowhere, osiris cannot show it again, and nobody can recover it
+   for you. A code alone is never allowed to be the only way in: at least one security key
+   must stay in the envelope.
+4. **Prove each one opens the key.** A recipient you have never tested is one you do not know
+   works. For each id shown by `osiris soul-key envelope list`:
+
+   ```bash
+   osiris soul-key envelope verify --recipient k2
+   ```
+
+   A security key asks for its PIN and a touch; a code recipient asks you to type the code
+   (hidden, and never an argument). Do this once now, and again whenever the backup status
+   shows a recipient as stale. Until you do, `osiris soul-key envelope check` lists it as
+   never proven.
+
+Day to day: `osiris soul-key envelope list` shows who the key is sealed to, and
+`osiris soul-key envelope check` looks the file over without opening anything (safe from a
+timer). The backup status page shows, per recipient, how long ago it last proved it opens
+the key.
+
+Removing a recipient (`osiris soul-key envelope remove --recipient k2`) refuses to take out
+the last recipient or the last security key. **Removing one does not take back a copy that
+person already holds:** to make an old copy useless, rotate the key
+(`osiris soul-key rotate`), then re-seal the envelope to the new key. If the key is rotated,
+`envelope check` reports the envelope as stale until you do.
+
+What this does not do: it does not enroll a key for you, it does not open anything without
+a person present (every real open needs a touch or the typed code, so an unattended timer
+can only check the file and report when each recipient was last proven), and it does not
+make the live service key any different: the services still read their own sealed copy.
+
 ## Full topology as one stack (containers)
 
 The whole set of components, Postgres, Redis, a one-shot migration, the API, the worker,

@@ -27,11 +27,13 @@ import json
 import os
 import secrets
 import tempfile
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 from src.ingest.soul_crypto import (
@@ -397,3 +399,193 @@ def envelope_add_key(
     blob["recipients"] = [*blob["recipients"], record]
     _write_blob_atomic(recovery_path, blob)
     return {"recipient": _public(record)}
+
+
+# --- opening a recipient and proving it ------------------------------------------------------
+
+STATUS_OK = "ok"
+STATUS_NEEDS_OPERATOR = "needs_operator_key"
+STATUS_UNAVAILABLE = "unavailable"
+STATUS_FAILED = "failed"
+
+# the short plain reasons a caller can match on
+ERR_NO_DEVICE = "no device"
+ERR_WRONG_PIN = "wrong PIN"
+ERR_TOUCH_TIMEOUT = "touch timed out"
+ERR_WRONG_KEY = "wrong key or damaged envelope"
+ERR_WRONG_CODE = "the code does not match"
+ERR_FINGERPRINT = "the fingerprint differs"
+
+
+class OpenResult:
+    """The outcome of opening ONE recipient, and the only holder of the key it yielded.
+
+    Use it as a context manager: `with envelope_open(...) as opened:` and the key is zeroed
+    when the block ends. The key lives only in memory here, is never written anywhere, and the
+    repr and str show the fingerprint, never the bytes. `status` is one of ok,
+    needs_operator_key (a touch, a PIN or a code is needed and nobody gave one, or the person
+    did not touch in time), unavailable (no device) and failed (wrong key, wrong code or a
+    damaged file); `reason` says which in a few plain words."""
+
+    def __init__(self, status: str, recipient: str, reason: str | None = None,
+                 key: bytes | None = None) -> None:
+        self.status = status
+        self.recipient = recipient
+        self.reason = reason
+        self._key: bytearray | None = bytearray(key) if key is not None else None
+
+    @property
+    def key(self) -> bytes:
+        if self._key is None:
+            raise ValueError("no key: this recipient did not open, or the block has ended")
+        return bytes(self._key)
+
+    @property
+    def fingerprint(self) -> str | None:
+        return key_fingerprint(bytes(self._key)) if self._key is not None else None
+
+    def fernet(self) -> Fernet:
+        """A Fernet over the opened key, for decrypting a real sealed soul line."""
+        return Fernet(self.key)
+
+    def close(self) -> None:
+        if self._key is not None:
+            for i in range(len(self._key)):
+                self._key[i] = 0
+            self._key = None
+
+    def __enter__(self) -> OpenResult:
+        return self
+
+    def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None,
+                 tb: TracebackType | None) -> None:
+        self.close()
+
+    def __repr__(self) -> str:
+        return (f"OpenResult(status={self.status!r}, recipient={self.recipient!r}, "
+                f"reason={self.reason!r}, fingerprint={self.fingerprint!r})")
+
+    __str__ = __repr__
+
+
+def _classify_device_error(exc: Exception) -> tuple[str, str]:
+    """(status, reason) for an error out of the security-key library. A touch that timed out or
+    was declined is the PERSON not acting (needs_operator_key); a wrong PIN is a failed proof.
+    Reads only the error's own text: nothing secret rides on it."""
+    text = f"{type(exc).__name__} {exc}".lower()
+    if "pin" in text and any(w in text for w in ("invalid", "wrong", "incorrect", "blocked")):
+        return STATUS_FAILED, ERR_WRONG_PIN
+    if any(w in text for w in ("timeout", "timed out", "cancel", "declin", "no touch", "denied")):
+        return STATUS_NEEDS_OPERATOR, ERR_TOUCH_TIMEOUT
+    return STATUS_FAILED, f"the security key reported: {type(exc).__name__}"
+
+
+def envelope_open(
+    recipient_id: str, *, path: str | None = None, interactive: bool = False,
+    code: str | None = None,
+) -> OpenResult:
+    """Opens the key using ONLY this recipient's own wrapped copy. It never reads the live key
+    file or any carrier of it, so a success here cannot be the host key answering instead: the
+    only way in is the recipient's own secret (its security key's touch, or its code).
+
+    `interactive=False` never touches the device and never asks anyone: a hardware recipient
+    then returns needs_operator_key at once, and a code recipient does too unless `code` is
+    given. `interactive=True` talks to the security key (PIN and touch at the terminal)."""
+    recovery_path = recovery_file_path(path=path)
+    if not recovery_path.exists():
+        return OpenResult(STATUS_FAILED, recipient_id, f"no envelope at {recovery_path}")
+    try:
+        blob = _read_blob(recovery_path)
+    except (OSError, ValueError) as exc:
+        return OpenResult(STATUS_FAILED, recipient_id, f"the recovery file cannot be read: {exc}")
+    rec = next((r for r in blob["recipients"]
+                if isinstance(r, dict) and r.get("id") == recipient_id), None)
+    if rec is None:
+        known = ", ".join(str(r.get("id")) for r in blob["recipients"]
+                          if isinstance(r, dict)) or "none"
+        return OpenResult(STATUS_FAILED, recipient_id,
+                          f"no recipient {recipient_id!r} (the envelope has: {known})")
+    try:
+        token = base64.urlsafe_b64decode(str(rec["wrapped_key"]))
+        salt = base64.urlsafe_b64decode(str(rec["salt"]))
+    except (KeyError, ValueError, TypeError):
+        return OpenResult(STATUS_FAILED, recipient_id, ERR_WRONG_KEY)
+    kind = rec.get("kind")
+    if kind == KIND_CODE:
+        if code is None:
+            return OpenResult(STATUS_NEEDS_OPERATOR, recipient_id, "the recovery code is needed")
+        try:
+            raw = code_wrap_key(code, salt, rec.get("kdf") or _SCRYPT).decrypt(token)
+        except (InvalidToken, KeyError, ValueError, TypeError):
+            return OpenResult(STATUS_FAILED, recipient_id, ERR_WRONG_CODE)
+        return OpenResult(STATUS_OK, recipient_id, None, raw)
+    if kind != KIND_HARDWARE:
+        return OpenResult(STATUS_FAILED, recipient_id, f"unknown recipient kind {kind!r}")
+    if not interactive:
+        return OpenResult(STATUS_NEEDS_OPERATOR, recipient_id,
+                          "the security key's touch and PIN are needed")
+    from src.ingest import soul_crypto
+
+    device = soul_crypto._find_fido2_device()
+    if device is None:
+        return OpenResult(STATUS_UNAVAILABLE, recipient_id, ERR_NO_DEVICE)
+    rp_id = str(rec.get("rp_id") or blob.get("rp_id") or soul_crypto._DEFAULT_RP_ID)
+    try:
+        client = soul_crypto._fido2_client(device, rp_id=rp_id)
+        prf = soul_crypto._prf_eval(
+            client, base64.urlsafe_b64decode(str(rec["credential_id"])), salt, rp_id=rp_id)
+    except soul_crypto.PrfOutputShapeError as exc:
+        return OpenResult(STATUS_FAILED, recipient_id, str(exc))
+    except Exception as exc:  # noqa: BLE001 - the security-key boundary: name it, never a traceback
+        status, reason = _classify_device_error(exc)
+        return OpenResult(status, recipient_id, reason)
+    if prf is None:
+        return OpenResult(STATUS_FAILED, recipient_id, ERR_WRONG_KEY)
+    try:
+        raw = soul_crypto._hkdf_wrap_key(prf).decrypt(token)
+    except InvalidToken:
+        return OpenResult(STATUS_FAILED, recipient_id, ERR_WRONG_KEY)
+    return OpenResult(STATUS_OK, recipient_id, None, raw)
+
+
+def envelope_verify(
+    recipient_id: str, *, path: str | None = None, interactive: bool = True,
+    code: str | None = None, on_key: Callable[[bytes], bool] | None = None,
+) -> dict[str, Any]:
+    """Proves that one recipient, by itself, opens the key: opens it, compares the key's
+    fingerprint with the one the envelope records, and (when `on_key` is given) hands the key to
+    that callback ONCE while it is in memory so the caller can decrypt a real sealed artifact
+    with it; the key is dropped right after. Returns {ok, status, needs_operator_key,
+    fingerprint_matches, artifact_ok, recipient, error}: `artifact_ok` is None without a
+    callback, and False when the callback returned false OR raised (its exception text is never
+    kept). The key and the callback's errors never appear in the result or in any log.
+    `needs_operator_key` is True when the person did not act (no touch in time, no code
+    given): a different thing from a failed proof, and the one an unattended drill reports.
+    A success writes exactly one thing: `last_opened_at` on that recipient."""
+    out: dict[str, Any] = {"ok": False, "status": STATUS_FAILED, "needs_operator_key": False,
+                           "fingerprint_matches": None, "artifact_ok": None,
+                           "recipient": recipient_id, "error": None}
+    with envelope_open(recipient_id, path=path, interactive=interactive, code=code) as opened:
+        out["status"] = opened.status
+        out["needs_operator_key"] = opened.status == STATUS_NEEDS_OPERATOR
+        if opened.status != STATUS_OK:
+            out["error"] = opened.reason
+            return out
+        try:
+            expected = _read_blob(recovery_file_path(path=path)).get("key_fingerprint")
+        except (OSError, ValueError):
+            expected = None
+        out["fingerprint_matches"] = expected is not None and opened.fingerprint == expected
+        if on_key is not None:
+            try:
+                out["artifact_ok"] = bool(on_key(opened.key))
+            except Exception:  # noqa: BLE001 - a callback's failure is a False, its text is never kept
+                out["artifact_ok"] = False
+    if not out["fingerprint_matches"]:
+        out["error"] = ERR_FINGERPRINT
+    elif out["artifact_ok"] is False:
+        out["error"] = "the key did not decrypt the sealed artifact"
+    else:
+        out["ok"] = True
+        mark_opened(recipient_id, path=path)
+    return out

@@ -351,3 +351,164 @@ def test_adding_a_key_refuses_cleanly_when_it_cannot(
     fakes.plug_in(None)
     assert "plug in the NEW key" in soul_envelope.envelope_add_key(
         path=keyfile, raw_key=RAW)["error"]
+
+
+# --- opening a recipient and proving it -----------------------------------------------------------
+
+def _enrolled(keyfile: str, fakes: Any) -> Path:
+    """A version 1 file written by the real enrollment against fake key A."""
+    from src.ingest import soul_crypto
+
+    fakes.plug_in("A")
+    return _write(keyfile, soul_crypto._enroll_and_wrap(object(), RAW, rp_id="localhost")["blob"])
+
+
+def test_a_code_recipient_opens_the_key_and_the_key_is_zeroed_on_exit(keyfile: str) -> None:
+    _v2_with_keys(keyfile, _hw("k1"))
+    code = soul_envelope.envelope_add_code(path=keyfile, raw_key=RAW)["code"]
+    with soul_envelope.envelope_open("c2", path=keyfile, code=code.lower()) as opened:
+        assert opened.status == "ok" and opened.reason is None
+        assert opened.key == RAW and opened.fingerprint == key_fingerprint(RAW)
+        assert RAW.decode() not in repr(opened) and RAW.decode() not in str(opened)
+    with pytest.raises(ValueError):
+        opened.key  # noqa: B018 - the key is gone after the block
+    assert opened.fingerprint is None
+    wrong = soul_envelope.envelope_open("c2", path=keyfile, code="AAAA-" * 7 + "AAAA")
+    assert (wrong.status, wrong.reason) == ("failed", "the code does not match")
+    nobody = soul_envelope.envelope_open("c2", path=keyfile)
+    assert (nobody.status, nobody.reason) == ("needs_operator_key", "the recovery code is needed")
+    missing = soul_envelope.envelope_open("zz", path=keyfile)
+    assert missing.status == "failed" and "no recipient" in (missing.reason or "")
+
+
+def test_a_hardware_recipient_opens_only_with_its_own_key_and_only_when_interactive(
+    keyfile: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.ingest import soul_crypto
+
+    fakes = _TwoFakeKeys(monkeypatch)
+    _enrolled(keyfile, fakes)
+    fakes.plug_in("A")
+    with soul_envelope.envelope_open("r0", path=keyfile, interactive=True) as ok:
+        assert ok.status == "ok" and ok.key == RAW
+    fakes.plug_in("B")
+    other = soul_envelope.envelope_open("r0", path=keyfile, interactive=True)
+    assert (other.status, other.reason) == ("failed", "wrong key or damaged envelope")
+    fakes.plug_in(None)
+    gone = soul_envelope.envelope_open("r0", path=keyfile, interactive=True)
+    assert (gone.status, gone.reason) == ("unavailable", "no device")
+    # unattended: never touches the device at all
+    monkeypatch.setattr(soul_crypto, "_find_fido2_device",
+                        lambda: pytest.fail("the device was touched while unattended"))
+    quiet = soul_envelope.envelope_open("r0", path=keyfile, interactive=False)
+    assert quiet.status == "needs_operator_key"
+
+
+def test_opening_a_recipient_never_reads_the_live_key(
+    keyfile: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.ingest import soul_crypto
+
+    fakes = _TwoFakeKeys(monkeypatch)
+    _enrolled(keyfile, fakes)
+    code = soul_envelope.envelope_add_code(path=keyfile, raw_key=RAW)["code"]
+
+    def forbidden(*a: Any, **k: Any) -> Any:
+        raise AssertionError("the live key was read")
+
+    for target in (soul_envelope, soul_crypto):
+        for name in ("read_key_bytes_at", "_live_key", "get_soul_key", "get_soul_fernet"):
+            if hasattr(target, name):
+                monkeypatch.setattr(target, name, forbidden)
+    assert soul_envelope.envelope_open("r0", path=keyfile, interactive=True).status == "ok"
+    assert soul_envelope.envelope_open("c2", path=keyfile, code=code).status == "ok"
+
+
+def test_verify_proves_one_recipient_and_writes_only_last_opened_at(
+    keyfile: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _v2_with_keys(keyfile, _hw("k1"))
+    code = soul_envelope.envelope_add_code(path=keyfile, raw_key=RAW)["code"]
+    seen: list[bytes] = []
+
+    def on_key(key: bytes) -> bool:
+        seen.append(key)
+        return True
+
+    before = json.loads(recovery_file_path(path=keyfile).read_text())
+    out = soul_envelope.envelope_verify("c2", path=keyfile, code=code, on_key=on_key)
+    assert out["ok"] is True and out["fingerprint_matches"] is True and out["artifact_ok"] is True
+    assert out["needs_operator_key"] is False and out["error"] is None and out["recipient"] == "c2"
+    assert seen == [RAW]                                   # called once, with the key
+    assert RAW.decode() not in json.dumps(out)             # the key is never in the result
+    after = json.loads(recovery_file_path(path=keyfile).read_text())
+    assert after["recipients"][1]["last_opened_at"].endswith("Z")
+    after["recipients"][1]["last_opened_at"] = before["recipients"][1]["last_opened_at"]
+    assert after == before                                  # nothing else moved
+
+
+def test_verify_tells_a_failed_proof_from_a_person_who_did_not_act(
+    keyfile: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.ingest import soul_crypto
+
+    _v2_with_keys(keyfile, _hw("k1"))
+    code = soul_envelope.envelope_add_code(path=keyfile, raw_key=RAW)["code"]
+    # no code given: the person did not act, not a failed proof
+    nobody = soul_envelope.envelope_verify("c2", path=keyfile)
+    assert nobody["ok"] is False and nobody["needs_operator_key"] is True
+    # a wrong code is a failed proof
+    bad = soul_envelope.envelope_verify("c2", path=keyfile, code="A" * 32)
+    assert bad["ok"] is False and bad["needs_operator_key"] is False
+    assert bad["error"] == "the code does not match"
+    # the key says no touch in time: the person did not act
+    monkeypatch.setattr(soul_crypto, "_find_fido2_device", lambda: object())
+    monkeypatch.setattr(soul_crypto, "_fido2_client", lambda device, rp_id: object())
+
+    def timed_out(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("operation timed out waiting for a touch")
+
+    monkeypatch.setattr(soul_crypto, "_prf_eval", timed_out)
+    late = soul_envelope.envelope_verify("k1", path=keyfile)
+    assert late["needs_operator_key"] is True and late["error"] == "touch timed out"
+    # a wrong PIN is a failed proof
+    monkeypatch.setattr(soul_crypto, "_prf_eval",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("PIN invalid")))
+    pin = soul_envelope.envelope_verify("k1", path=keyfile)
+    assert pin["needs_operator_key"] is False and pin["error"] == "wrong PIN"
+    assert not any(r["last_opened_at"] for r in json.loads(
+        recovery_file_path(path=keyfile).read_text())["recipients"] if r["id"] == "c2")
+    del code
+
+
+def test_verify_reports_a_differing_fingerprint_or_artifact_without_marking_it_proven(
+    keyfile: str,
+) -> None:
+    _v2_with_keys(keyfile, _hw("k1"))
+    code = soul_envelope.envelope_add_code(path=keyfile, raw_key=RAW)["code"]
+    # the callback says the key did not decrypt the artifact
+    no = soul_envelope.envelope_verify("c2", path=keyfile, code=code, on_key=lambda k: False)
+    assert no["ok"] is False and no["artifact_ok"] is False and "did not decrypt" in no["error"]
+    # a callback that raises: False, and its text is nowhere
+    def boom(key: bytes) -> bool:
+        raise RuntimeError("super secret callback text")
+
+    out = soul_envelope.envelope_verify("c2", path=keyfile, code=code, on_key=boom)
+    assert out["artifact_ok"] is False and "super secret" not in json.dumps(out)
+    # the envelope says a different key than the one the recipient yields
+    path = recovery_file_path(path=keyfile)
+    blob = json.loads(path.read_text())
+    blob["key_fingerprint"] = key_fingerprint(b"another key entirely")
+    path.write_text(json.dumps(blob))
+    fp = soul_envelope.envelope_verify("c2", path=keyfile, code=code)
+    assert fp["ok"] is False and fp["fingerprint_matches"] is False
+    assert fp["error"] == "the fingerprint differs"
+    assert not json.loads(path.read_text())["recipients"][1]["last_opened_at"]
+
+
+def test_an_opened_key_gives_a_fernet_that_decrypts_a_real_token() -> None:
+    real = Fernet.generate_key()
+    sealed = Fernet(real).encrypt(b"a sealed soul line")
+    with soul_envelope.OpenResult("ok", "k1", None, real) as opened:
+        assert opened.fernet().decrypt(sealed) == b"a sealed soul line"
+    assert opened.status == "ok" and opened.fingerprint is None
