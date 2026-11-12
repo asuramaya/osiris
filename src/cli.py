@@ -1285,6 +1285,13 @@ async def cmd_offload_runner(
             out = await run_drill_pass(pool)
         else:
             out = await run_offload_tick(pool, vault=_Path(vault) if vault else None)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        # Ctrl-C reaches this process, but restic runs in its own session on a worker thread and
+        # would carry on (up to its whole timeout) after we exit: ask it to stop and unlock first
+        from src.orchestrator import restic_locks
+
+        restic_locks.stop_all_running(grace=90)
+        raise
     finally:
         if owns_pool:
             await pool.close()

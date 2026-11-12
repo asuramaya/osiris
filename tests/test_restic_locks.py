@@ -609,6 +609,94 @@ def test_the_drill_readers_stop_restic_without_a_kill(sleeper: Path) -> None:
 
 
 
+def test_an_interrupted_run_stops_the_tracked_restic_and_lets_it_unlock(sleeper: Path) -> None:
+    """A hand-run tick that is interrupted must not leave its backup running: restic is in its
+    own session, so Ctrl-C never reaches it."""
+    import subprocess
+    import threading
+    import time
+
+    outcome: list[object] = []
+
+    def run() -> None:
+        try:
+            outcome.append(restic_locks.run_restic(["backup"], dict(os.environ), timeout=60))
+        except subprocess.TimeoutExpired as exc:
+            outcome.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    for _ in range(100):
+        if sleeper.exists():
+            break
+        time.sleep(0.05)
+
+    assert restic_locks.stop_all_running(grace=10) == 1
+    worker.join(timeout=10)
+
+    assert not worker.is_alive() and sleeper.read_text() == "released"
+    assert restic_locks.stop_all_running(grace=1) == 0  # nothing left tracked
+
+
+_CLEAN_EXIT_WITH_HELD_PIPES = '''#!{python}
+import subprocess, sys
+subprocess.Popen(["sleep", "30"])  # the ssh behind an sftp repository: inherits our pipes
+print("Fatal: some failure", file=sys.stderr)
+sys.exit(3)
+'''
+
+
+def test_a_restic_that_exited_but_whose_ssh_child_holds_the_pipes_is_not_a_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    bin_dir = tmp_path / "heldbin"
+    bin_dir.mkdir()
+    exe = bin_dir / "restic"
+    exe.write_text(_CLEAN_EXIT_WITH_HELD_PIPES.format(python=sys.executable))
+    exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    monkeypatch.setattr(restic_locks, "POST_STOP_DRAIN_SECONDS", 1)
+
+    started = time.monotonic()
+    done = restic_locks.run_restic(["backup"], dict(os.environ), timeout=2, text=False)
+
+    assert done.returncode == 3  # restic's own answer, not "timed out"
+    assert b"some failure" in done.stderr
+    assert time.monotonic() - started < 8.0
+
+
+def test_a_spent_budget_starts_no_restic(sleeper: Path) -> None:
+    with pytest.raises(TimeoutError, match="time budget"):
+        drill._Watched(["ls"], dict(os.environ), drill._Budget(0.0), "the listing", text=True)
+
+    import time
+
+    time.sleep(0.7)  # a restic that had been started would have written its marker by now
+    assert not sleeper.exists()  # the fake would have written its marker had it started
+
+
+async def test_an_interrupted_offload_run_stops_the_running_restic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src import cli
+
+    stopped: list[float | None] = []
+    monkeypatch.setattr(restic_locks, "stop_all_running",
+                        lambda grace=None: stopped.append(grace) or 1)
+
+    async def interrupted(pool: object, **kw: object) -> dict[str, Any]:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(offload_runner, "run_offload_tick", interrupted)
+
+    with pytest.raises(KeyboardInterrupt):
+        await cli.cmd_offload_runner("tick", pool=object())  # type: ignore[arg-type]
+
+    assert stopped == [90]
+
+
 def test_a_stalled_listing_read_ends_at_the_budget_and_releases_the_lock(sleeper: Path) -> None:
     """`restic ls` that stops answering must not hold the drill past its time budget: the read has
     no timeout of its own, so the budget stops the process."""
