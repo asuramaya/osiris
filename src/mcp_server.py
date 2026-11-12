@@ -7056,6 +7056,7 @@ async def backfill(
     "automated_desk_backlog" (settles old cron notices on the desk) |
     "desk_triage" (settles old agent desk mail by named rules) |
     "abstention_churn_collapse" (folds repeat abstentions) |
+    "repack_cleanup" (removes what a killed pg_repack left behind) |
     "provenance_possible_upstream" (back-stamps `possible_upstream` onto
     historical Decision/Thread writes via each write's transcript record. `limit`/
     `newest_first` are consulted by this target only. Runs in the background and

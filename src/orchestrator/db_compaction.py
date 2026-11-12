@@ -333,8 +333,9 @@ async def _repack(
     if code == 137:
         raise RuntimeError(
             f"pg_repack did not stop on SIGINT within {REPACK_STOP_GRACE_SECS} s and was "
-            "killed: it may have left its log table and a trigger on the table. Run "
-            "DROP EXTENSION pg_repack; CREATE EXTENSION pg_repack; in the database before "
+            "killed: it may have left its log table and a trigger on the table, which then "
+            "logs every write. Run `osiris backfill repack_cleanup` to see what is left, then "
+            "`osiris backfill repack_cleanup --apply --because \"<why>\"` to remove it, before "
             f"anything else writes to {table}: {tail}")
     raise RuntimeError(f"pg_repack failed (exit {code}): {tail}")
 

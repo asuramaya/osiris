@@ -884,6 +884,7 @@ var REPAIRS_TARGETS = [
   { key: 'closed_by_real_sources', hint: 'Re-point closed_by edges off placeholder Agents onto the real Person/SystemSource, then retire the placeholder.' },
   { key: 'operator_charter', hint: 'Mint governs from person:operator to every active SoftwareProject it doesn’t already cover. Fleet-wide authority scope. Apply is CLI-only: osiris backfill operator_charter --apply --because "..."', cliOnly: true },
   { key: 'desk_triage', hint: 'Settle old agent-written operator mail by four named rules (noise, informational, answered by the sender, old asks and unclassified briefs). Counts by rule first.' },
+  { key: 'repack_cleanup', hint: 'Remove what a killed pg_repack left behind: its trigger on the table and its log and copy tables. Dry run lists them; refuses while a repack is running.' },
   { key: 'abstention_churn_collapse', hint: 'Fold repeated in-repo abstentions: each distinct verdict keeps its first and latest row and the copies between go, with every pointer to a copy repointed (history delete; dry run shows rows, bytes and values lost).' },
   { key: 'automated_desk_backlog', hint: 'Settle the operator desk’s unread automated notices (cron and system senders) older than a day; asks and decisions are kept.' },
   { key: 'stale_in_repo_abstentions', hint: 'Retire in_repo abstentions on objects that already have a live in_repo link.' },
