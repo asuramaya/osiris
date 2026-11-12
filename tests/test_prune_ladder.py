@@ -236,8 +236,84 @@ def test_scan_parses_the_basebackup_filenames_own_timestamp(tmp_path) -> None:
 
     (tmp_path / "osiris-basebackup-20240115-093000.tar.gz").write_bytes(b"x" * 42)
     [found] = _scan(tmp_path)
-    assert found.when == datetime(2024, 1, 15, 9, 30, 0, tzinfo=UTC)
+    # the stamp is the box's LOCAL wall time: same wall clock, an aware datetime
+    assert found.when.replace(tzinfo=None) == datetime(2024, 1, 15, 9, 30, 0)
+    assert found.when.tzinfo is not None
     assert found.size_bytes == 42
+
+
+import time as _time  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture
+def chicago(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+    """The box's own zone: UTC-6 in winter."""
+    monkeypatch.setenv("TZ", "America/Chicago")
+    _time.tzset()
+    yield
+    monkeypatch.undo()
+    _time.tzset()
+
+
+def test_a_dump_stamp_is_local_time_not_utc(tmp_path, chicago) -> None:  # type: ignore[no-untyped-def]
+    from scripts.osiris_prune_ladder import _scan
+
+    (tmp_path / "osiris-20261111-043007.dump").write_bytes(b"x")  # written at 04:30 CST
+    [found] = _scan(tmp_path)
+
+    assert found.when.astimezone(UTC) == datetime(2026, 11, 11, 10, 30, 7, tzinfo=UTC)
+    assert found.when.isoformat() == "2026-11-11T04:30:07-06:00"  # the wall clock is kept
+
+
+def test_calendar_day_buckets_still_follow_the_file_names_date(tmp_path, chicago) -> None:  # type: ignore[no-untyped-def]
+    """A 20:00 local dump is the NEXT day in UTC; its daily bucket must stay its own day."""
+    from scripts.osiris_prune_ladder import _bucket_key, _scan
+
+    (tmp_path / "osiris-20261105-200000.dump").write_bytes(b"x")
+    [found] = _scan(tmp_path)
+
+    assert _bucket_key(found.when, "daily") == "2026-11-05"
+
+
+def test_the_age_math_uses_the_real_age_so_a_dump_near_the_edge_is_not_aged_early(  # type: ignore[no-untyped-def]
+    tmp_path, chicago,
+) -> None:
+    """Two dumps of one local day, 49.5 h and 43.5 h old: the newer is inside the 48 h hot window,
+    the older is a daily-tier dump on its own. Read as UTC both looked past 48 h, shared one daily
+    bucket, and the older was removed."""
+    from scripts.osiris_prune_ladder import _scan, plan_prune
+
+    now = datetime(2026, 11, 13, 12, 0, 0, tzinfo=UTC)
+    # 04:30 local is 10:30 UTC (49.5 h before `now`); 10:31 local is 16:31 UTC (43.5 h)
+    for stamp in ("20261111-043007", "20261111-103107"):
+        (tmp_path / f"osiris-{stamp}.dump").write_bytes(b"x")
+    files = _scan(tmp_path)
+
+    plan = plan_prune(files, now=now)
+
+    kept = {f.path.rsplit("osiris-", 1)[1] for f in plan["keep"]}
+    removed = {f.path.rsplit("osiris-", 1)[1] for f in plan["remove"]}
+    # the 10:31 dump is hot (kept); the 04:30 one is alone in the daily tier, so it is kept too
+    assert "20261111-103107.dump" in kept
+    assert "20261111-043007.dump" in kept and removed == set()
+
+
+def test_the_old_utc_reading_would_have_removed_one_of_them(tmp_path) -> None:
+    """The control for the test above: with the stamps read as UTC (the old behaviour) both dumps
+    land in the daily tier (55.5 h and 49.5 h), share one day bucket, and the older one is
+    removed."""
+    from scripts.osiris_prune_ladder import DumpFile, plan_prune
+
+    now = datetime(2026, 11, 13, 12, 0, 0, tzinfo=UTC)
+    old_way = [DumpFile(str(tmp_path / f"osiris-{s}.dump"),
+                        datetime.strptime(s, "%Y%m%d-%H%M%S").replace(tzinfo=UTC), 1)
+               for s in ("20261111-043007", "20261111-103107")]
+
+    plan = plan_prune(old_way, now=now)
+
+    assert len(plan["remove"]) == 1 and plan["remove"][0].path.endswith("043007.dump")
 
 
 def test_scan_never_counts_the_repo_bundle_as_a_dump(tmp_path) -> None:

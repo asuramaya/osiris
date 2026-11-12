@@ -81,6 +81,14 @@ class DumpFile:
     size_bytes: int = 0
 
 
+def _stamp_as_local_time(stamp: str) -> datetime:
+    """The `YYYYmmddHHMMSS` in a dump or base-backup file name is this box's LOCAL wall time (the
+    backup scripts name files with a plain `date`), so it is read as local time: an aware
+    datetime that keeps the wall clock, so calendar-day buckets still follow the file name's own
+    date. Reading it as UTC made every dump look as many hours older as the box is behind UTC."""
+    return datetime.strptime(stamp, "%Y%m%d%H%M%S").astimezone()
+
+
 def _bucket_key(when: datetime, tier: str) -> str:
     if tier == "daily":
         return when.date().isoformat()
@@ -257,7 +265,7 @@ def _scan(directory: Path, *, glob: str = "osiris-*") -> list[DumpFile]:
             continue
         m = _NAME_RE.match(p.name) or _BASEBACKUP_RE.match(p.name)
         if m:
-            when = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").replace(tzinfo=UTC)
+            when = _stamp_as_local_time(m.group(1) + m.group(2))
         elif p.name.endswith(_DUMP_LIKE_SUFFIXES):
             when = datetime.fromtimestamp(p.stat().st_mtime, tz=UTC)
         else:
