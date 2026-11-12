@@ -190,7 +190,7 @@ def test_the_envelope_section_reports_problems_and_never_blanks_on_an_error() ->
         lambda: RECIPIENTS, lambda: {"ok": False, "problems": ["no hardware recipient"],
                                      "hardware": 0}, now=NOW)
     assert ok["ok"] is False and ok["problems"] == ["no hardware recipient"]
-    assert sorted(ok["stale"]) == ["code", "new"]
+    assert ok["stale"] == ["code"]  # 40 days old; "new" is a warning, not stale
 
     def boom() -> Any:
         raise OSError("disk gone")
@@ -199,7 +199,69 @@ def test_the_envelope_section_reports_problems_and_never_blanks_on_an_error() ->
     assert err == {"error": "the envelope could not be read: OSError"}
 
 
+def test_the_section_warns_for_each_unproven_recipient_using_the_envelopes_own_list() -> None:
+    sec = drill.envelope_section(
+        lambda: RECIPIENTS, lambda: {"ok": True, "problems": [], "hardware": 2,
+                                     "unproven": ["new"], "by_recipient": {"new": ["x"]}},
+        now=NOW)
+
+    assert sec["warnings"] == ["new: never proved to open the envelope"]
+    assert sec["by_recipient"] == {"new": ["x"]} and sec["configured"] is True
+
+
+def test_with_no_unproven_field_the_section_reads_it_off_the_listing() -> None:
+    sec = drill.envelope_section(lambda: RECIPIENTS, lambda: {"ok": True}, now=NOW)
+
+    assert sec["warnings"] == ["new: never proved to open the envelope"]
+
+
+def test_no_envelope_at_all_says_so_instead_of_reading_as_fine() -> None:
+    sec = drill.envelope_section(
+        lambda: [], lambda: {"ok": False, "problems": ["no recovery file at /x"]}, now=NOW)
+
+    assert sec["configured"] is False and "not sealed to any recipient" in sec["note"]
+    assert sec["problems"] == ["no recovery file at /x"]
+
+
 def test_an_unreadable_record_reads_as_empty(_record: Path) -> None:
     _record.write_text("{broken")
 
     assert drill.read_record() == {}
+
+
+def test_the_section_reads_the_real_envelope_functions_over_a_real_recovery_file(
+    tmp_path: Path,
+) -> None:
+    import base64
+    import functools
+    import json
+
+    from src.ingest import soul_envelope
+    from src.ingest.soul_crypto import recovery_file_path
+
+    def wrapped() -> str:
+        token = Fernet(Fernet.generate_key()).encrypt(b"k" * 32)
+        return base64.urlsafe_b64encode(token).decode()
+
+    def b64(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).decode()
+
+    keyfile = str(tmp_path / "soul.key")
+    recovery_file_path(path=keyfile).write_text(json.dumps({
+        "version": 2, "key_fingerprint": "abcd1234abcd1234", "recipients": [
+            {"id": "k1", "kind": "fido2-prf", "label": "yubikey A", "added_at": _days(30),
+             "last_opened_at": _days(3), "credential_id": b64(b"c"), "salt": b64(b"s" * 32),
+             "wrapped_key": wrapped(), "rp_id": "localhost"},
+            {"id": "c1", "kind": "recovery-code", "label": "printed code",
+             "added_at": _days(30), "last_opened_at": None, "salt": b64(b"c" * 16),
+             "wrapped_key": wrapped()}]}))
+
+    sec = drill.envelope_section(
+        functools.partial(soul_envelope.envelope_recipients, path=keyfile),
+        functools.partial(soul_envelope.envelope_check, path=keyfile), now=NOW)
+
+    assert sec["configured"] is True and sec["hardware"] == 1
+    by_id = {v["id"]: v for v in sec["recipients"]}
+    assert by_id["k1"]["verdict"] == "current: last proved 3 days ago"
+    assert by_id["c1"]["verdict"] == "never proved: needs the operator's key"
+    assert sec["warnings"] == ["c1: never proved to open the envelope"]

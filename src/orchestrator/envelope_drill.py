@@ -132,11 +132,21 @@ def envelope_section(
         checked = check()
     except Exception as exc:  # noqa: BLE001 - one section never blanks the panel
         return {"error": f"the envelope could not be read: {type(exc).__name__}"}
+    if not listed:
+        return {"configured": False, "ok": False, "problems": list(checked.get("problems") or []),
+                "recipients": [], "warnings": [],
+                "note": "no envelope is set up yet: the key is not sealed to any recipient"}
     view = status_view(listed, read_record(), now=now, stale_days=stale_days)
-    return {"ok": bool(checked.get("ok")), "problems": list(checked.get("problems") or []),
-            "hardware": checked.get("hardware"), "recipients": view,
-            "stale": [v["id"] for v in view if str(v["verdict"]).startswith(
-                ("stale", "never"))]}
+    # recipients never proved are a warning in their own right: the envelope's own list when it
+    # gives one, else read off the view
+    unproven = list(checked.get("unproven") or [
+        v["id"] for v in view if v["last_proved_at"] is None])
+    warnings = [f"{rid}: never proved to open the envelope" for rid in unproven]
+    return {"configured": True, "ok": bool(checked.get("ok")),
+            "problems": list(checked.get("problems") or []),
+            "by_recipient": dict(checked.get("by_recipient") or {}),
+            "hardware": checked.get("hardware"), "recipients": view, "warnings": warnings,
+            "stale": [v["id"] for v in view if str(v["verdict"]).startswith("stale")]}
 
 
 def _on_key(sample: Sample | None) -> Callable[[bytes], bool]:
