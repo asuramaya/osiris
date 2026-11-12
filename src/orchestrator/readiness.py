@@ -134,6 +134,7 @@ def _restore_test_step(
     backups this machine is actually making, and used to read as done."""
     label = "Restore test passed"
     failed: str | None = None
+    waiting: str | None = None
     for target in enabled_targets:
         receipt = restore_drill_receipts.get(str(target.get("path_or_url") or ""), {})
         first_offload = _when(target.get("first_successful_offload")
@@ -142,7 +143,20 @@ def _restore_test_step(
         if first_offload is not None and passed is not None and passed >= first_offload:
             return _step("restore_test_passed", label, "done", None, None)
         if first_offload is not None and receipt.get("last_error"):
-            failed = str(receipt["last_error"])
+            attempted = _when(receipt.get("last_attempt_at"))
+            skipped_since = _when(target.get("skipped_since") or target.get("last_skip_at"))
+            if (target.get("last_skip_reason") and skipped_since is not None
+                    and (attempted is None or skipped_since >= attempted)):
+                # the target has been skipped since that attempt: the old failure is history, and
+                # the test cannot run until the target is reachable again
+                when = f" on {attempted.date().isoformat()}" if attempted else ""
+                waiting = (f"Waiting for the target ({target['last_skip_reason']} since "
+                           f"{skipped_since.date().isoformat()}). The last restore test{when} "
+                           "did not pass; it runs again once the target is back.")
+            else:
+                failed = str(receipt["last_error"])
+    if waiting and not failed:
+        return _step("restore_test_passed", label, "missing", waiting, None)
     if failed:
         return _step("restore_test_passed", label, "needs_attention",
                      f"The last restore test failed and will be retried: {failed}", None)

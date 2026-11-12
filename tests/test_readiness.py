@@ -329,6 +329,32 @@ def test_restore_drill_failure_on_a_configured_target_needs_attention_with_the_e
     assert steps["restore_test_passed"]["mode"] == "auto"
 
 
+def test_a_target_being_skipped_since_the_failed_drill_reads_as_waiting_not_failed() -> None:
+    receipts = {NAS_URL: {"last_attempt_at": "2026-09-13T00:00:00+00:00",
+                          "last_error": "repository was locked during the check"}}
+    targets = _nas(last_skip_reason="reachable only over tailscale0",
+                   skipped_since="2026-09-14T00:00:00+00:00")
+    step = _steps(soul_key=KEY_READY, restic_key=RESTIC_READY, services_restarted=True,
+                  offload_targets=targets, restore_drill_receipts=receipts)["restore_test_passed"]
+
+    assert step["status"] == "missing"
+    assert "Waiting for the target (reachable only over tailscale0 since 2026-09-14)" in (
+        step["reason"])
+    assert "2026-09-13" in step["reason"]  # the drill's own time
+    assert "locked" not in step["reason"]  # the stale failure text is not repeated
+
+
+def test_a_failure_after_the_skips_began_is_still_a_failure() -> None:
+    receipts = {NAS_URL: {"last_attempt_at": "2026-09-15T00:00:00+00:00",
+                          "last_error": "restic check failed"}}
+    targets = _nas(last_skip_reason="reachable only over tailscale0",
+                   skipped_since="2026-09-14T00:00:00+00:00")
+    step = _steps(soul_key=KEY_READY, restic_key=RESTIC_READY, services_restarted=True,
+                  offload_targets=targets, restore_drill_receipts=receipts)["restore_test_passed"]
+
+    assert step["status"] == "needs_attention" and "restic check failed" in step["reason"]
+
+
 def test_a_failure_for_a_repository_no_longer_configured_is_not_shown() -> None:
     receipts = {"sftp:gone:/z": {"last_error": "repository not found"}}
     step = _steps(soul_key=KEY_READY, restic_key=RESTIC_READY, services_restarted=True,
