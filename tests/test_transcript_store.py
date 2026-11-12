@@ -278,16 +278,29 @@ async def test_identity_reading_laps_its_steps_and_gives_the_same_reading(
     read1 = await store.discover_and_ingest(
         cwd="/home/x/code/widget", job_dir=f"/home/x/.claude/jobs/{sid}", root=projects,
         clock=first)
-    assert list(first.phases_ms()) == ["id_discover", "id_freshness", "id_read_new_turns",
+    search = "id_discover_search_claude-code"
+    assert list(first.phases_ms()) == [search, "id_freshness", "id_read_new_turns",
                                        "id_upsert", "id_model_read"]
     second = PhaseClock()
     read2 = await store.discover_and_ingest(
         cwd="/home/x/code/widget", job_dir=f"/home/x/.claude/jobs/{sid}", root=projects,
         clock=second)
-    assert list(second.phases_ms()) == ["id_discover", "id_freshness", "id_model_read"]
+    assert list(second.phases_ms()) == [search, "id_freshness", "id_model_read"]
+    # a caller that hands over the transcript path skips the search, and the lap says so
+    by_path = PhaseClock()
+    read3 = await store.discover_and_ingest(
+        cwd=None, job_dir=None, root=tmp_path / "empty", transcript_path=str(real),
+        clock=by_path)
+    assert list(by_path.phases_ms()) == ["id_discover_path", "id_freshness", "id_model_read"]
+    # a search that finds nothing is labelled a miss
+    miss = PhaseClock()
+    assert await store.discover_and_ingest(
+        cwd=None, job_dir="/home/x/.claude/jobs/00000000", root=projects, clock=miss) is None
+    assert "id_discover_search_claude-code_miss" in miss.phases_ms()
     bare = await store.discover_and_ingest(
         cwd="/home/x/code/widget", job_dir=f"/home/x/.claude/jobs/{sid}", root=projects)
     assert read1 == read2 == bare and read1 is not None and read1.current == "claude-fable-5"
+    assert read3 is not None and read3.current == "claude-fable-5"
 
 
 async def test_store_ingests_and_reads_back(store: TranscriptStore, tmp_path: Path) -> None:

@@ -284,7 +284,7 @@ class TranscriptStore:
                 except Exception:  # noqa: BLE001, an adapter failure must never block mount
                     continue
                 if clock is not None:
-                    clock.mark("id_discover")
+                    clock.mark("id_discover_path")
                 if locator is not None:
                     reading = await self._ingest_locator(adapter, locator, clock)
                     if reading is not None:
@@ -296,7 +296,9 @@ class TranscriptStore:
             except Exception:  # noqa: BLE001, an adapter failure must never block mount
                 continue
             if clock is not None:
-                clock.mark("id_discover")
+                # the search lane: which adapter looked, and whether it found anything
+                clock.mark(f"id_discover_search_{getattr(adapter, 'name', 'adapter')}"
+                           + ("" if locator is not None else "_miss"))
             if locator is None:
                 continue
             reading = await self._ingest_locator(adapter, locator, clock)
