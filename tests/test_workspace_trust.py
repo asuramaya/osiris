@@ -50,6 +50,17 @@ def test_an_unreadable_config_accuses_nobody(tmp_path: Path) -> None:
     assert untrusted_dirs([str(loose)], tmp_path) == []
 
 
+def test_readiness_puts_each_untrusted_workspace_on_its_own_line() -> None:
+    steps = compute_readiness_steps(
+        soul_key={}, restic_key={}, offload_targets=[], restore_drill_receipts={},
+        services_restarted=None, untrusted_workspaces=["/home/a/code/loop", "/home/a/code/pond"])
+    step = next(s for s in steps if s["key"] == "workspace_trust")
+
+    assert step["reason"].splitlines() == [
+        "workspace not trusted: run claude once in /home/a/code/loop",
+        "workspace not trusted: run claude once in /home/a/code/pond"]
+
+
 def test_readiness_names_the_exact_command_for_each_untrusted_workspace() -> None:
     steps = compute_readiness_steps(
         soul_key={}, restic_key={}, offload_targets=[], restore_drill_receipts={},

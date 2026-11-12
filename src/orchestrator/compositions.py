@@ -5353,9 +5353,19 @@ async def _fn_backup_status(
         receipts = {}
         attempts = []
     offload_targets = list((settings or {}).get("offload_targets", []) or [])
+    try:
+        from src.orchestrator.settings_service import settings_with_overlay
+
+        offload_stale_days = int(
+            (await settings_with_overlay(pool)).osiris_offload_stale_days) if pool else 7
+    except Exception:  # noqa: BLE001 - the limit is display only: fall back to the default
+        offload_stale_days = 7
+    from src.orchestrator.offload_staleness import annotate_target
+
     for t in offload_targets:
         if isinstance(t, dict) and isinstance(t.get("name"), str):
             t.update(receipts.get(t["name"], {}))
+            t.update(annotate_target(t, now=now, stale_days=offload_stale_days))
     offbox_section = {
         "wired": True,
         "offload_targets": offload_targets,
@@ -5371,14 +5381,23 @@ async def _fn_backup_status(
     # it (the same live read the backup timers use), not a constant. No receipt is persisted.
     pitr_unit = "osiris-pitr-drill.timer"
     pitr_live = await _backup_timer_live_state(pitr_unit)
+    try:
+        from scripts.osiris_pitr_drill import read_result as _pitr_result
+
+        pitr_result = _pitr_result()
+    except Exception:  # noqa: BLE001 - one section never blanks the panel
+        pitr_result = None
     pitr_section: dict[str, Any] = {
         "wired_to_a_timer": pitr_live.get("active_state") == "active",
         "unit": pitr_unit,
         "schedule": _backup_timer_calendar(pitr_unit),
         **pitr_live,
-        "note": ("scripts/osiris_pitr_drill.py runs from its weekly timer; no result saved"
-                 if pitr_live else
-                 "timer state unreadable here (no systemd); no result saved"),
+        "last_result": pitr_result,
+        "note": (
+            "scripts/osiris_pitr_drill.py runs from its weekly timer"
+            + ("" if pitr_live else "; timer state unreadable here (no systemd)")
+            + ("; its last result is saved" if pitr_result
+               else "; no result saved yet (it is saved after the next weekly run)")),
     }
 
     # THE DISK/WAL BRAKE: whether the bulk-rewrite jobs are paused right now, and why
