@@ -5281,6 +5281,24 @@ async def _fn_backup_status(
         row.update(await _backup_timer_live_state(unit))
         timers.append(row)
 
+    # THE NIGHTLY RUNS THAT DID NOT HAPPEN ON TIME: the box sleeps, a timer catches up when it
+    # wakes and a worker job is simply lost; this says which, from each job's own last run.
+    try:
+        from src.orchestrator.missed_runs import section as missed_section
+
+        extra_timers: list[dict[str, Any]] = []
+        for unit, label in (("osiris-cleanup.timer", "daily clean-up"),
+                            ("osiris-pg-autotune.timer", "database autotune"),
+                            ("osiris-pitr-drill.timer", "weekly point-in-time restore drill"),
+                            ("osiris-envelope-check.timer", "daily envelope check")):
+            extra_timers.append({"unit": unit, "label": label,
+                                 "schedule": _backup_timer_calendar(unit),
+                                 **(await _backup_timer_live_state(unit))})
+        missed_out: dict[str, Any] = await missed_section(
+            pool, timers + extra_timers, now=_datetime.now().astimezone())
+    except Exception as exc:  # noqa: BLE001 - one section never blanks the panel
+        missed_out = {"error": f"missed-run check unavailable: {type(exc).__name__}"}
+
     try:
         plans, chain_plan, wal_plan, legacy_plan = _compute_plans(backups_dir, vault)
         dumps = plans["vault"]["keep"] + plans["vault"]["remove"]
@@ -5441,6 +5459,7 @@ async def _fn_backup_status(
         "ladder": ladder_section,
         "prune_manifest": manifest_section,
         "pitr_drill": pitr_section,
+        "missed_runs": missed_out,
         "envelope": envelope_out,
         "offbox": offbox_section,
     }
