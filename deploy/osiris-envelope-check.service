@@ -1,0 +1,10 @@
+[Unit]
+Description=Osiris envelope check (reads who the vault key is sealed to, opens nothing, tells the desk once about a stale or never-proved recipient)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/osiris
+Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris?application_name=osiris-envelope-check
+Environment=REDIS_URL=redis://127.0.0.1:6396/0
+TimeoutStartSec=300
+ExecStart=%h/code/osiris/.venv/bin/python -m src.cli envelope-drill --check
