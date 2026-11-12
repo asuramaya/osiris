@@ -517,10 +517,10 @@ async def _run_offload_tick_locked(
         why_not = None
         if untrusted and not (receipts.get(name) or {}).get("last_successful_offload"):
             why_not = (
-                f"the repository looks missing, but the offload receipts could not be read "
+                f"the repository looks missing, but the offload records could not be read "
                 f"({_quarantine_path()} holds the damaged copy), so this box cannot tell whether "
                 f"{name} has offloaded before; not initializing. If {name} is a new target, run "
-                f"`restic init` on it by hand; once the receipts are sound again, remove that "
+                f"`restic init` on it by hand; once the records are sound again, remove that "
                 "file to let first-time setup run on its own")
         notes: list[str] = []
         info: dict[str, Any] = {}
