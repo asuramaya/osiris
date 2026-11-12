@@ -126,7 +126,7 @@ async def test_a_run_that_had_to_be_killed_names_the_cleanup(
 ) -> None:
     _installed(monkeypatch, True)
     fake = FakeExec((0, "pg_repack 1.5.3"), (137, ""))
-    with pytest.raises(RuntimeError, match="DROP EXTENSION pg_repack; CREATE EXTENSION"):
+    with pytest.raises(RuntimeError, match="osiris backfill repack_cleanup"):
         await rewrite_table(actions.pool, "outbox", seconds_left=600, dsn=DSN, exec_fn=fake)
 
 
