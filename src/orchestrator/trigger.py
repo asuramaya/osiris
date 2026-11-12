@@ -150,26 +150,34 @@ async def seat_spawn_lock(
     if key in _HELD_SPAWN_LOCKS.get():
         yield  # this task already holds it (a door called inside a door): never wait on self
         return
+    from src.db.pool import open_side_connection
+
     conn: Any = None
     deadline = time.monotonic() + wait
     token: contextvars.Token[frozenset[str]] | None = None
+    # The lock lives on a connection of its own, NOT a slot of the shared pool. The door that
+    # holds it goes on calling the pool (twin check, roster, mounts) for as long as it holds,
+    # so a pool slot pinned by the lock plus the holder's own nested acquires deadlocks the
+    # pool as soon as the holders reach its size: with four DM dispatches in flight on the
+    # worker's 4-slot pool, every other job (heartbeat, trigger_mail, sense_liveness) waited
+    # out the acquire bound, about 290 s at a time. A pool slot is the fallback only when the
+    # pool did not record how it connects.
+    side = await open_side_connection(pool)
     try:
         while True:
-            # A connection is held only while the lock is HELD (a session-level advisory
-            # lock lives on its connection). Waiting holds none: each try borrows one and
-            # gives it straight back, so several launches queued on one seat never pin the
-            # shared pool while they wait.
-            candidate = await pool.acquire()
+            candidate = side if side is not None else await pool.acquire()
             try:
                 got = bool(await candidate.fetchval(
                     "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", key))
             except BaseException:
-                await pool.release(candidate)
+                if side is None:
+                    await pool.release(candidate)
                 raise
             if got:
                 conn = candidate
                 break
-            await pool.release(candidate)
+            if side is None:
+                await pool.release(candidate)
             if time.monotonic() >= deadline:
                 raise SpawnInProgress(handle)
             await asyncio.sleep(0.25)
@@ -178,14 +186,22 @@ async def seat_spawn_lock(
     finally:
         if token is not None:
             _HELD_SPAWN_LOCKS.reset(token)
-        # If this unlock is itself cancelled, the lock is still released: `pool.release` resets
-        # the connection (asyncpg runs `pg_advisory_unlock_all()` in its reset), and a connection
-        # that is dropped instead takes its session-level locks with it.
-        if conn is not None:
-            try:
-                await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", key)
-            finally:
-                await pool.release(conn)
+        # A side connection dies with its lock: closing it drops the session-level lock even
+        # if the explicit unlock is cancelled. A pool slot is released the old way
+        # (`pool.release` resets the connection, which runs `pg_advisory_unlock_all()`).
+        try:
+            if conn is not None and side is None:
+                try:
+                    await conn.execute(
+                        "SELECT pg_advisory_unlock(hashtextextended($1, 0))", key)
+                finally:
+                    await pool.release(conn)
+        finally:
+            if side is not None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(side.close()), timeout=5)
+                except BaseException:  # noqa: BLE001 - cancelled or stuck: drop it
+                    side.terminate()
 
 # the trigger speaks in its own name when it gives up, never in an agent's
 _TRIGGER_AGENT = "agent:osiris-trigger"
