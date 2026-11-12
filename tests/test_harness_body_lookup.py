@@ -448,6 +448,13 @@ async def test_every_door_takes_the_seat_lock_and_the_cli_does_not_deadlock_on_i
             out = await trigger.wake_worker(Actions(pool), caller="operator", target="doors",
                                             message="hi", spawn=_boom)
             assert out["status"] == "refused-spawn-in-progress"
+            # dispatch_dm takes the lock only where it can spawn (its body asks through
+            # spawn_gate): a body that reaches that point finds it busy and refuses
+            async def _reaches_the_spawn_point(*a: Any, spawn_gate: Any, **k: Any) -> Any:
+                await spawn_gate()
+                raise AssertionError("must not get past the spawn gate while the lock is held")
+
+            mp.setattr(trigger, "_dispatch_dm_body", _reaches_the_spawn_point)
             mail = await trigger.dispatch_dm(pool, addressee="doors", msg_id=1, sender="x",
                                              spawn=_boom, fresh_spawn=_boom)
             assert mail["mode"] == "window-busy"
@@ -669,3 +676,155 @@ async def test_holders_of_the_spawn_lock_cannot_starve_the_pool_they_keep_callin
         assert sorted(got) == list(range(6))
     finally:
         await pool.close()
+
+
+async def test_a_dispatch_that_ends_at_a_cheap_verdict_never_takes_the_spawn_lock(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The backstop sweep re-dispatches every unsettled message every tick and nearly all end
+    at a cheap verdict (fyi, paused, settled, braked): about ten lock grants a second, each a
+    database connection. The lock is asked for only where a body can start."""
+    taken: list[str] = []
+    orig = trigger.seat_spawn_lock
+
+    def _count(p: Any, k: str, **kw: Any) -> Any:
+        taken.append(k)
+        return orig(p, k, **kw)
+
+    monkeypatch.setattr(trigger, "seat_spawn_lock", _count)
+
+    async def _cheap(*a: Any, **k: Any) -> dict[str, str]:
+        return {"mode": "queued-fyi", "detail": "an fyi never wakes"}
+
+    monkeypatch.setattr(trigger, "_dispatch_dm_body", _cheap)
+    for _ in range(5):
+        mail = await trigger.dispatch_dm(actions.pool, addressee="doors", msg_id=1, sender="x")
+        assert mail["mode"] == "queued-fyi"
+    assert taken == []
+
+
+async def test_waiters_in_one_process_queue_in_memory_and_side_connections_are_capped(
+    pg_dsn: str,
+) -> None:
+    """Many doors queued on one seat hold no Postgres backend while they wait (one lock in
+    memory per key), and doors on different seats never hold more than the cap."""
+    from src.db.pool import create_pool
+
+    pool = await create_pool(pg_dsn, min_size=1, max_size=2, acquire_timeout=5)
+    try:
+        async def _backends() -> int:
+            return int(await pool.fetchval(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+                "AND pid <> pg_backend_pid()"))
+
+        base = await _backends()
+        order: list[int] = []
+
+        async def _same_seat(i: int) -> None:
+            async with trigger.seat_spawn_lock(pool, "queued-seat", wait=20):
+                order.append(i)
+                await asyncio.sleep(0.05)
+
+        import contextvars
+
+        tasks = [asyncio.create_task(_same_seat(i), context=contextvars.Context())
+                 for i in range(30)]
+        await asyncio.sleep(0.3)
+        # 30 doors, one holder at a time: at most one side connection on top of the pool's own
+        assert await _backends() - base <= 1 + 2
+        await asyncio.gather(*tasks)
+        assert sorted(order) == list(range(30))
+
+        peak = 0
+        live = 0
+
+        async def _other_seat(i: int) -> None:
+            nonlocal peak, live
+            async with trigger.seat_spawn_lock(pool, f"cap-{i}", wait=30):
+                live += 1
+                peak = max(peak, live)
+                await asyncio.sleep(0.2)
+                live -= 1
+
+        await asyncio.gather(*[
+            asyncio.create_task(_other_seat(i), context=contextvars.Context())
+            for i in range(trigger.SIDE_CONNECTION_CAP * 2)])
+        assert peak <= trigger.SIDE_CONNECTION_CAP
+    finally:
+        await pool.close()
+
+
+async def test_a_child_task_that_outlives_the_door_does_not_inherit_its_lock(
+    actions: Actions,
+) -> None:
+    pool = actions.pool
+    child: asyncio.Task[bool] | None = None
+
+    async def _later() -> bool:
+        await asyncio.sleep(0.3)  # runs after the door has closed
+        try:
+            async with trigger.seat_spawn_lock(pool, "outlive", wait=0.2):
+                return True
+        except trigger.SpawnInProgress:
+            return False
+
+    async def _holder() -> None:
+        async with trigger.seat_spawn_lock(pool, "outlive"):
+            nonlocal child
+            child = asyncio.create_task(_later())  # copies the door's context
+
+    await _holder()
+    # the door is closed: the child takes the lock for itself and succeeds (it was not a
+    # silent pass-through, and it did not deadlock on a lock nobody holds)
+    assert child is not None and await child is True
+
+
+async def test_a_cancelled_door_still_releases_its_side_connection_and_lock(
+    actions: Actions,
+) -> None:
+    pool = actions.pool
+    inside = asyncio.Event()
+
+    async def _door() -> None:
+        async with trigger.seat_spawn_lock(pool, "cancelled"):
+            inside.set()
+            await asyncio.sleep(60)
+
+    task = asyncio.create_task(_door())
+    await inside.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task  # the cancellation is not swallowed on the way out
+    async with trigger.seat_spawn_lock(pool, "cancelled", wait=2):
+        pass  # and the lock is free again
+
+
+async def test_a_full_server_is_waited_out_never_answered_with_a_pool_slot(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncpg
+    import src.db.pool as dbpool
+
+    real = dbpool.open_side_connection
+    calls = {"n": 0}
+
+    async def _full_twice(pool: Any) -> Any:
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise asyncpg.TooManyConnectionsError("sorry, too many clients already")
+        return await real(pool)
+
+    monkeypatch.setattr(dbpool, "open_side_connection", _full_twice)
+    pool = actions.pool
+    async with trigger.seat_spawn_lock(pool, "fullserver", wait=10):
+        # held on a side connection once the server had room: no pool slot is pinned
+        assert pool.get_size() - pool.get_idle_size() == 0
+    assert calls["n"] == 3
+
+    async def _always_full(pool: Any) -> Any:
+        raise asyncpg.TooManyConnectionsError("sorry, too many clients already")
+
+    monkeypatch.setattr(dbpool, "open_side_connection", _always_full)
+    with pytest.raises(trigger.SpawnInProgress):
+        async with trigger.seat_spawn_lock(pool, "fullserver", wait=1.2):
+            raise AssertionError("must not hold the lock without a side connection")
