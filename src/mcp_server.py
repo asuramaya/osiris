@@ -1316,6 +1316,7 @@ async def _reattach(
     after a real swap. None when there is nothing to re-attach by."""
     if job is None:
         return None
+    clock = PhaseClock()    # laps for the "reattach phases" log line at the end
     rec = await mounts.find_mount(pool, job_dir=job)
     # THE FIRST-RUN SEAT RESCUE: checked before every other fallback below. A stale-mount
     # sweep can release this exact job_dir's row for reasons that have nothing to do with
@@ -1369,9 +1370,11 @@ async def _reattach(
         # the row itself is the evidence).
         self_restored = True
     settings = get_settings()
+    clock.mark("find_mount_and_rescue")
     # The model reading rides the store (sole lane since the JSONL-fallback removal);
     # fail-open: a store outage re-attaches with an unobserved model, never a bounce
-    reading = await identity_reading(pool, cwd=rec.cwd, job_dir=rec.job_dir)
+    reading = await identity_reading(pool, cwd=rec.cwd, job_dir=rec.job_dir, clock=clock)
+    clock.mark("identity_reading")
     ident = resolve_identity(cwd=rec.cwd, job_dir=rec.job_dir, store_reading=reading)
     # rec.agent_id == "" is the self-restore's own sentinel (mounts.MountRecord minted
     # above with no prior row to have bound a seat on): nothing to honor, the freshly
@@ -1406,16 +1409,22 @@ async def _reattach(
     # is an unconditional no-op (`held_seat` returns None: the row it would need to match
     # cannot exist for an id nothing has ever bound), so ordering never changes that
     # population's behavior either.
+    clock.mark("office_claim")
     await _resolve_project_seat_first(pool, ident)
+    clock.mark("project_seat_first")
+    expected = await _expected_model(pool, rec.cwd, ident.project)
+    clock.mark("expected_model")
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
-                         expected_model=await _expected_model(pool, rec.cwd, ident.project),
-                         mint_reason=mint_reason, revisit_check=self_restored)
+                         expected_model=expected, mint_reason=mint_reason,
+                         revisit_check=self_restored, clock=clock)
+    clock.mark("register_agent_tail")
     if key is not None:
         _agents[key] = ident
         _agents_touched[key] = time.monotonic()
     prev = await mounts.save_mount(pool, job_dir=rec.job_dir, agent_id=ident.agent_id,
                                    project=ident.project, cwd=rec.cwd, model=ident.model,
                                    session_key=key)
+    clock.mark("save_mount")
     if adopted_from is not None and job != rec.job_dir:
         # The presented anchor earns its own row (same identity, marked as the bridge's),
         # and the binding rides along, so downstream guards treat the bridged session id
@@ -1429,6 +1438,11 @@ async def _reattach(
         await mailbox.settle_history_at_join(pool, ident.project, ident.agent_id)
         prev = await mounts.project_prev_seen(pool, ident.project, exclude_job_dir=rec.job_dir)
     _prev_seen.setdefault(ident.agent_id, prev)  # a re-attach is a re-entry: keep the anchor
+    clock.mark("join_history")
+    # the re-adopt after a server restart: once per seat per restart, and it never goes through
+    # mount(), so it has no "mount phases" line of its own. Short agent id, no paths.
+    logging.getLogger("osiris.mcp").info(
+        "reattach phases: %s [agent=%s]", clock.line(), ident.agent_id)
     return ident
 
 

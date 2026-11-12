@@ -357,7 +357,9 @@ async def test_reattach_recovers_identity_after_a_bounce(
     srv._agents.pop("sid:fresh", None)  # leave no global residue for other tests
 
 
-async def test_reattach_honors_a_bound_seat(actions: Actions, tmp_path: Path) -> None:
+async def test_reattach_honors_a_bound_seat(
+    actions: Actions, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
     """The flap mechanism: a silent reconnect re-derived identity from the
     bound row's transcript and stomped a claimed seat back to its session hash, and writes
     landed on an anonymous duplicate. A row whose agent is a FOREIGN lineage is a binding:
@@ -369,8 +371,17 @@ async def test_reattach_honors_a_bound_seat(actions: Actions, tmp_path: Path) ->
                             project="sibling-two", cwd=str(tmp_path / "d"),
                             model=None, session_key="sid:old")  # ...bound to the SEAT
     srv._agents.pop("sid:re", None)
-    ident = await srv._reattach(actions.pool, "sid:re", job_dir)
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="osiris.mcp"):
+        ident = await srv._reattach(actions.pool, "sid:re", job_dir)
     assert ident is not None and ident.agent_id == "agent:0806072e"  # the seat, not the raw dir
+    # the re-adopt is lapped: one line, the steps, the agent, and no path
+    lines = [r.getMessage() for r in caplog.records if "reattach phases:" in r.getMessage()]
+    assert len(lines) == 1 and lines[0].endswith("[agent=agent:0806072e]")
+    for lap in ("find_mount_and_rescue", "identity_reading", "register_agent_tail", "save_mount"):
+        assert f"{lap}=" in lines[0]
+    assert str(tmp_path) not in lines[0]
     rec = await mounts.find_mount(actions.pool, job_dir=job_dir)
     assert rec is not None and rec.agent_id == "agent:0806072e"      # binding survives
     srv._agents.pop("sid:re", None)
