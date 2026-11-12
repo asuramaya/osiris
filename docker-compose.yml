@@ -15,7 +15,8 @@
 # silently down-tune a recreated box back to whatever number was checked in years ago.
 services:
   postgres:
-    image: postgres:16
+    image: osiris-pg:16-repack
+    build: ./deploy/pg
     environment:
       POSTGRES_USER: osiris
       POSTGRES_PASSWORD: osiris

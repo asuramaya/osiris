@@ -45,12 +45,14 @@ echo "[up] infra (Postgres + Redis) as containers"
 # live at 7.7GB, not 4GB) and a recreate using this script would have silently DOWN-
 # TUNED a production box back to those old numbers every time. The image's own stock
 # defaults are a safe day-0 floor; autotune's first daily run corrects them within 24h.
+# osiris-pg is postgres:16 plus pg_repack (deploy/pg/Dockerfile); build it first.
+docker build -q -t osiris-pg:16-repack deploy/pg >/dev/null
 docker run -d --name osiris-pg --restart unless-stopped \
   -e POSTGRES_USER=osiris -e POSTGRES_PASSWORD=osiris -e POSTGRES_DB=osiris \
   -p "127.0.0.1:${PG_PORT}:5432" \
   -v osiris-pg-data:/var/lib/postgresql/data \
   -v "$(pwd)/scripts/osiris_archive_wal.sh:/var/lib/postgresql/data/osiris_archive_wal.sh:ro" \
-  postgres:16 \
+  osiris-pg:16-repack \
   -c wal_level=replica -c archive_mode=on \
   -c archive_command='bash /var/lib/postgresql/data/osiris_archive_wal.sh %p %f' \
   -c wal_compression=lz4 -c archive_timeout=300 >/dev/null
