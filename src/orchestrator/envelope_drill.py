@@ -207,3 +207,55 @@ def run_drill(
         results.append({"id": rid, "label": r.get("label"), "kind": r.get("kind"),
                         "status": status, "reason": reason})
     return results
+
+
+_SAMPLE_TRIES = 8
+
+
+async def sealed_sample(pool: Any, *, tries: int = _SAMPLE_TRIES) -> Sample | None:
+    """A few REAL sealed soul lines from the store, and a check that passes when a key opens at
+    least one of them. Several, because a line sealed before the last key rotation opens only
+    with an older key: what is being proved is that the recipient's key opens real data, not that
+    every line is current. None when the store holds no sealed line to try."""
+    from cryptography.fernet import Fernet, InvalidToken
+
+    from src.ingest.soul_crypto import FERNET_TOKEN_PREFIX
+
+    reltuples = await pool.fetchval(
+        "SELECT reltuples::bigint FROM pg_class WHERE oid = 'soul_lines'::regclass")
+    pct = min(100.0, max(0.01, tries * 4 / max(int(reltuples or 0), tries) * 100))
+    rows = await pool.fetch(
+        "SELECT raw_line FROM soul_lines TABLESAMPLE SYSTEM ($1) "
+        "WHERE substring(raw_line from 1 for 5) = $2 LIMIT $3",
+        pct, FERNET_TOKEN_PREFIX, tries)
+    tokens = [bytes(r["raw_line"]) for r in rows]
+    if not tokens:
+        return None
+
+    def opens_one(key: bytes, _unused: bytes) -> bool:
+        fernet = Fernet(key)
+        for token in tokens:
+            try:
+                fernet.decrypt(token)
+            except InvalidToken:
+                continue
+            return True
+        return False
+
+    return Sample(token=tokens[0], decrypts=opens_one)
+
+
+def verify_with_prompts(
+    recipients: Recipients, verify: Verify, prompt_code: Callable[[str], str],
+) -> Verify:
+    """Wrap the envelope's verify so a recovery-code recipient is asked for its typed code (hidden
+    input, by `prompt_code`) and a hardware recipient is left to its own touch prompt. The code
+    goes straight to the envelope and is not kept."""
+    kinds = {str(r.get("id")): r.get("kind") for r in recipients()}
+
+    def wrapped(recipient_id: str, **kw: Any) -> dict[str, Any]:
+        code = (prompt_code(f"recovery code for {recipient_id}: ")
+                if kinds.get(recipient_id) == "recovery-code" else None)
+        return verify(recipient_id, interactive=True, code=code, **kw)
+
+    return wrapped

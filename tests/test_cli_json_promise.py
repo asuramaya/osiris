@@ -95,6 +95,8 @@ JSON_COMMANDS = frozenset({
     # mirrors soul-key's own status/init shape; offload-runner
     # is the timer's own ExecStart, safe to run by hand.
     "restic-key", "offload-runner",
+    # the envelope drill: results as one JSON line, for a script that reads them
+    "envelope-drill",
     # the miner's proposals list for a script
     "proposals",
 })
@@ -356,3 +358,25 @@ async def test_cmd_desk_emits_json(monkeypatch: Any) -> None:
     assert out == 0
     printed = json.loads(buf.getvalue())
     assert printed["owed"] == 0
+
+
+async def test_cmd_envelope_drill_emits_json(monkeypatch: Any, capsys: Any) -> None:
+    import json
+
+    from src.ingest import soul_envelope
+    from src.orchestrator import envelope_drill
+
+    async def sample(pool: Any, **kw: Any) -> Any:
+        return envelope_drill.Sample(token=b"x", decrypts=lambda k, t: True)
+
+    monkeypatch.setattr(envelope_drill, "sealed_sample", sample)
+    monkeypatch.setattr(soul_envelope, "envelope_recipients",
+                        lambda **kw: [{"id": "k1", "kind": "fido2-prf", "label": "yubikey"}])
+    monkeypatch.setattr(soul_envelope, "envelope_verify", lambda rid, **kw: {
+        "ok": True, "fingerprint_matches": True, "artifact_ok": True})
+
+    from src.cli import cmd_envelope_drill
+
+    assert await cmd_envelope_drill(pool=object(), as_json=True) == 0  # type: ignore[arg-type]
+    body = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert body["results"][0]["status"] == "proved"

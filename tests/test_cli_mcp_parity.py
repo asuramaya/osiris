@@ -120,6 +120,9 @@ NO_MCP_EQUIVALENT = {
         ", one tick runs real restic subprocess backups against real infrastructure "
         "(the docked drive, the NAS over sftp), meant as osiris-offload.timer's own "
         "ExecStart or a human's own by-hand run, not an ordinary agent-callable verb.",
+    "envelope-drill": "needs the person: a hardware key's touch and PIN, a recovery code typed "
+        "at a hidden prompt. No agent can supply either, so it is never an agent-callable verb; "
+        "the unattended view of the same envelope is in backup-status.",
     "fold-project": "deprecated alias for merge, kept working for muscle "
                     "memory, never advertised; not a live act to reconcile",
     "correct-agent-house": "NOT actually MCP-less, correct_agent_house is hidden from "
