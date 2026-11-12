@@ -5345,11 +5345,13 @@ async def _fn_backup_status(
     # (backup_settings.py's own deprecation note) but is no longer this section's
     # primary field.
     try:
-        from src.orchestrator.offload_runner import offload_receipts
+        from src.orchestrator.offload_runner import offload_receipts, recent_attempts
 
         receipts = offload_receipts()
+        attempts = recent_attempts(limit=5)
     except Exception:  # noqa: BLE001 - see vault_section above: unavailable, never a crash
         receipts = {}
+        attempts = []
     offload_targets = list((settings or {}).get("offload_targets", []) or [])
     for t in offload_targets:
         if isinstance(t, dict) and isinstance(t.get("name"), str):
@@ -5359,6 +5361,8 @@ async def _fn_backup_status(
         "offload_targets": offload_targets,
         # backups that finished but could not read some files (restic exit 3): kept visible here
         # until a later backup comes through clean
+        # the newest few restic attempts, newest first (the receipts hold only the latest state)
+        "recent_attempts": attempts,
         "warnings": [f"{t['name']}: {t['last_note']}" for t in offload_targets
                      if isinstance(t, dict) and t.get("last_note") and t.get("name")],
         "repositories": (settings or {}).get("offbox_repositories", []) or [],

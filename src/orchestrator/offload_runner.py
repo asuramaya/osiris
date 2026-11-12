@@ -38,6 +38,7 @@ import fcntl
 import json
 import os
 import subprocess
+import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -129,6 +130,63 @@ def _write_receipt(name: str, receipt: dict[str, Any]) -> None:
             tmp.unlink()
 
 
+_ATTEMPTS_MAX_BYTES = 256 * 1024     # the attempt log is trimmed past this size ...
+_ATTEMPTS_KEEP_LINES = 400           # ... down to this many of the newest lines
+_ATTEMPT_DETAIL_CHARS = 300
+_QUIET_OUTCOMES = ("busy", "unreachable")  # a skip that repeats is one line, not one per tick
+
+
+def _attempts_path() -> Path:
+    return _receipts_path().with_name("offload_attempts.jsonl")
+
+
+def recent_attempts(name: str | None = None, limit: int = 5) -> list[dict[str, Any]]:
+    """The newest attempts first (optionally one target's). Never raises: a missing or damaged
+    log reads as empty, and an unparseable line is skipped."""
+    try:
+        lines = _attempts_path().read_text().splitlines()
+    except OSError:
+        return []
+    out: list[dict[str, Any]] = []
+    for line in reversed(lines):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and (name is None or row.get("name") == name):
+            out.append(row)
+            if len(out) >= limit:
+                break
+    return out
+
+
+def _log_attempt(name: str, outcome: str, at: str, *, duration_s: float,
+                 exit_code: int | None = None, detail: str | None = None) -> None:
+    """One line per attempt per target, appended: the receipts hold only the latest state, so
+    this is what shows a failure that a later success overwrote. Best effort: a log that cannot
+    be written never fails the tick. The log is trimmed by size so it cannot grow without bound,
+    and a quiet skip that repeats the one before it is not logged again."""
+    path = _attempts_path()
+    try:
+        if outcome in _QUIET_OUTCOMES:
+            last = recent_attempts(name, 1)
+            if last and last[0].get("outcome") == outcome:
+                return
+        row = {"at": at, "name": name, "outcome": outcome, "exit_code": exit_code,
+               "duration_s": round(duration_s, 1),
+               "detail": (detail or "")[:_ATTEMPT_DETAIL_CHARS] or None}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as handle:
+            handle.write(json.dumps(row) + "\n")
+        if path.stat().st_size > _ATTEMPTS_MAX_BYTES:
+            kept = path.read_text().splitlines()[-_ATTEMPTS_KEEP_LINES:]
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+            tmp.write_text("\n".join(kept) + "\n")
+            os.replace(tmp, path)
+    except OSError:
+        return
+
+
 def _note_skip(name: str, reason: str, now: str) -> None:
     """A quiet skip: why, when, and when this run of skips began (kept while the same
     skipping continues, cleared by the next attempt)."""
@@ -205,6 +263,7 @@ _PROBE_TIMEOUT_SECONDS = 30  # restic snapshots and init: a slow link must not h
 def _run_restic_backup(
     *, repository: str, password: bytes, source: Path, init_if_needed: bool = True,
     notes: list[str] | None = None, no_init_reason: str | None = None,
+    info: dict[str, Any] | None = None,
 ) -> str | None:
     """Returns a failure string, or None on success, same return convention as
     `osiris_offbox_restore_drill.run_drill`.
@@ -217,7 +276,8 @@ def _run_restic_backup(
     NAS repository (restic refused, but only because the config file was there).
 
     restic exits 3 when it could not read some source files but still wrote the snapshot: that is
-    a success, and the caller gets the reason through `notes` (a list the call appends to)."""
+    a success, and the caller gets the reason through `notes` (a list the call appends to).
+    `info` (a dict the call fills) gets `exit_code`: the exit code of the last restic run made."""
     from src.orchestrator import restic_locks
 
     env = {**os.environ, "RESTIC_REPOSITORY": repository, "RESTIC_PASSWORD": password.decode()}
@@ -234,6 +294,8 @@ def _run_restic_backup(
                 ["snapshots"], env, timeout=_PROBE_TIMEOUT_SECONDS, text=False)
 
         probe = snapshots()
+        if info is not None:
+            info["exit_code"] = probe.returncode
         if probe.returncode != 0:
             detail = (probe.stdout + b"\n" + probe.stderr).decode(errors="replace")
             if restic_locks.is_lock_failure(detail, probe.returncode):
@@ -245,6 +307,8 @@ def _run_restic_backup(
                     return again.busy
                 if again.cleared or again.note:
                     probe = snapshots()
+                    if info is not None:
+                        info["exit_code"] = probe.returncode
                     detail = (probe.stdout + b"\n" + probe.stderr).decode(errors="replace")
             if probe.returncode != 0 and restic_locks.is_lock_failure(detail, probe.returncode):
                 held = restic_locks.holder_line(detail) or _one_line(probe.stderr)
@@ -260,11 +324,15 @@ def _run_restic_backup(
                     "not initializing over it (is the target reachable?)")
             init = restic_locks.run_restic(
                 ["init"], env, timeout=_PROBE_TIMEOUT_SECONDS, text=False)
+            if info is not None:
+                info["exit_code"] = init.returncode
             if init.returncode != 0:
                 return f"restic init failed: {init.stderr.decode(errors='replace').strip()}"
         backup = restic_locks.run_restic(
             ["backup", str(source), "--exclude=*.tmp"], env,
             timeout=_RESTIC_TIMEOUT_SECONDS, text=False, grace=_BACKUP_STOP_GRACE_SECONDS)
+        if info is not None:
+            info["exit_code"] = backup.returncode
         if backup.returncode == _RESTIC_INCOMPLETE_SNAPSHOT:
             if notes is not None:
                 notes.append("snapshot saved, but restic could not read some source files: "
@@ -455,10 +523,16 @@ async def _run_offload_tick_locked(
                 f"`restic init` on it by hand; once the receipts are sound again, remove that "
                 "file to let first-time setup run on its own")
         notes: list[str] = []
+        info: dict[str, Any] = {}
+        began = time.monotonic()
         fail = await asyncio.to_thread(
             _run_restic_backup, repository=repository, password=password, source=source,
-            init_if_needed=not ever_offloaded, notes=notes, no_init_reason=why_not)
+            init_if_needed=not ever_offloaded, notes=notes, no_init_reason=why_not, info=info)
+        took = time.monotonic() - began
+        code = info.get("exit_code")
         if fail is None:
+            _log_attempt(name, "ok_with_note" if notes else "ok", now, duration_s=took,
+                         exit_code=code, detail=notes[0] if notes else None)
             _write_receipt(name, {"last_successful_offload": now, "last_attempt_at": now,
                                   "last_error": None, "last_skip_reason": None,
                                   "skipped_since": None, "stale_notified_clock": None,
@@ -468,6 +542,7 @@ async def _run_offload_tick_locked(
             # Somebody else holds the repository right now (the restore test, a backup started by
             # hand, another host). Nothing failed: a quiet skip, no last_error, no clobbered last
             # success. A lock that never lets go still surfaces, through the stale-offload notice.
+            _log_attempt(name, "busy", now, duration_s=took, exit_code=code, detail=str(fail))
             _note_skip(name, str(fail), now)
             results.append({"name": name, "skipped": str(fail)})
         elif is_unreachable_error(fail):
@@ -476,6 +551,8 @@ async def _run_offload_tick_locked(
             # the same as the presence check's own: it never clobbers a real last success
             # and adds no last_error for the readiness view to report.
             reason = "target not reachable from this network"
+            _log_attempt(name, "unreachable", now, duration_s=took, exit_code=code,
+                         detail=str(fail))
             _note_skip(name, reason, now)
             results.append({"name": name, "skipped": reason})
         else:
@@ -484,6 +561,7 @@ async def _run_offload_tick_locked(
             # probe for restic targets (the standing rule in this domain is never a
             # network call outside the real operation itself),
             # so "tried and failed" is the only signal a sftp/NAS target ever gets.
+            _log_attempt(name, "failed", now, duration_s=took, exit_code=code, detail=str(fail))
             _write_receipt(name, {"last_attempt_at": now, "last_error": fail,
                                   "last_skip_reason": None, "skipped_since": None})
             results.append({"name": name, "ok": False, "error": fail})

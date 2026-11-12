@@ -526,6 +526,8 @@ async def test_backup_status_lists_a_backup_that_finished_with_unread_files(
         actions.pool, actor="operator", because="x",
         offload_targets=[{"name": "nas", "kind": "restic", "path_or_url": "sftp:nas:/r",
                           "schedule": "*-*-* 03:00:00", "enabled": True}])
+    offload_runner._log_attempt("nas", "failed", "2026-11-10T00:00:00+00:00", duration_s=2.0,
+                                exit_code=1, detail="restic backup failed: x")
     offload_runner._write_receipt("nas", {
         "last_successful_offload": "2026-11-11T00:00:00+00:00",
         "last_note": "snapshot saved, but restic could not read some source files: x"})
@@ -534,6 +536,8 @@ async def test_backup_status_lists_a_backup_that_finished_with_unread_files(
                                         "args": {"vault": str(tmp_path / "v"),
                                                  "backups": str(tmp_path / "b")}}, None)
 
+    attempts = res["items"]["offbox"]["recent_attempts"]
+    assert [(a["name"], a["outcome"]) for a in attempts] == [("nas", "failed")]
     warnings = res["items"]["offbox"]["warnings"]
     assert len(warnings) == 1 and warnings[0].startswith("nas: snapshot saved")
 
