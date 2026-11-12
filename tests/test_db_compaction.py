@@ -531,3 +531,13 @@ async def test_the_moved_rows_line_reaches_the_desk_even_when_another_step_faile
     monkeypatch.setattr(migration_0064, "apply_migration_0064", _moved)
     await storage_housekeeping_heartbeat({"cascade": SimpleNamespace(actions=actions)})
     assert any("moved 7 rows of old history to the cold table" in b for b in bodies), bodies
+
+
+def test_an_archive_step_that_left_rows_holds_the_flag_however_few_it_moved() -> None:
+    """A run that stopped on its budget moves few rows yet leaves a backlog; the row-count
+    threshold alone would clear the flag and let the night rewrite a half-drained table."""
+    from src.workers.arq_worker import hot_cold_drain_running
+
+    quiet = dict(layout_finished=True, fold_finished=True, tiering_paused=False)
+    assert hot_cold_drain_running(rows_moved=40, more_remain=True, **quiet) is True
+    assert hot_cold_drain_running(rows_moved=40, more_remain=False, **quiet) is False

@@ -1359,11 +1359,12 @@ _TIERING_DRAIN_ROWS = 100_000
 
 def hot_cold_drain_running(
     *, layout_finished: bool, fold_finished: bool, rows_moved: int, tiering_paused: bool,
+    more_remain: bool = False,
 ) -> bool:
     """Is a real bulk drain still emptying assertions_hot / assertions_cold? Three steps write
     these tables each night and used to overwrite one flag in turn (the last one won, and any
     move at all set it), so the flag stayed on and compaction skipped both tables for good."""
-    return (not layout_finished or not fold_finished or tiering_paused
+    return (not layout_finished or not fold_finished or tiering_paused or more_remain
             or rows_moved > _TIERING_DRAIN_ROWS)
 
 
@@ -1422,7 +1423,7 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
                          f"assertion{more}")
     layout_finished: bool | None = None
     fold_finished: bool | None = None
-    tiering: tuple[int, bool] | None = None
+    tiering: tuple[int, bool, bool] | None = None
     try:
         layout = await retire_layout_history(
             pool, execute=True, max_seconds=_LAYOUT_HISTORY_SECS, pause_check=brake)
@@ -1454,7 +1455,8 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
         _log.warning("assertion history archive failed: %r", exc)
     else:
         changed += moved["rows_moved"]
-        tiering = (int(moved["rows_moved"]), bool(moved["paused"]))
+        tiering = (int(moved["rows_moved"]), bool(moved["paused"]),
+                   bool(moved.get("more_remain")))
         if moved["rows_moved"]:
             lines.append(f"assertions: moved {moved['rows_moved']} rows of old history to the "
                          "cold table")
@@ -1463,7 +1465,7 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
     if layout_finished is not None and fold_finished is not None and tiering is not None:
         await _flag_drain(pool, ("assertions_hot", "assertions_cold"), hot_cold_drain_running(
             layout_finished=layout_finished, fold_finished=fold_finished,
-            rows_moved=tiering[0], tiering_paused=tiering[1]))
+            rows_moved=tiering[0], tiering_paused=tiering[1], more_remain=tiering[2]))
     if lines:
         with contextlib.suppress(Exception):  # the desk being unreachable must not sink the cron
             await send_message(
