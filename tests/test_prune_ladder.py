@@ -300,6 +300,39 @@ def test_the_age_math_uses_the_real_age_so_a_dump_near_the_edge_is_not_aged_earl
     assert "20261111-043007.dump" in kept and removed == set()
 
 
+def test_the_repeated_hour_when_the_clock_goes_back_is_told_apart_by_the_mtime(  # type: ignore[no-untyped-def]
+    tmp_path, chicago,
+) -> None:
+    """2026-11-01 01:30 happens twice in Chicago (05:30 UTC, then 07:30 UTC). Two dumps with the
+    SAME stamp-hour but written an hour apart must order the way they were written."""
+    import os
+
+    from scripts.osiris_prune_ladder import _scan
+
+    first = tmp_path / "osiris-20261101-013005.dump"   # written 01:30 CDT = 06:30 UTC
+    second = tmp_path / "osiris-20261101-013500.dump"  # written 01:35 CST = 07:35 UTC
+    for f in (first, second):
+        f.write_bytes(b"x")
+    t_first = datetime(2026, 11, 1, 6, 31, 0, tzinfo=UTC).timestamp()
+    t_second = datetime(2026, 11, 1, 7, 36, 0, tzinfo=UTC).timestamp()
+    os.utime(first, (t_first, t_first))
+    os.utime(second, (t_second, t_second))
+
+    found = {Path(f.path).name: f for f in _scan(tmp_path)}
+
+    assert found[first.name].when.astimezone(UTC) == datetime(2026, 11, 1, 6, 30, 5, tzinfo=UTC)
+    assert found[second.name].when.astimezone(UTC) == datetime(2026, 11, 1, 7, 35, 0, tzinfo=UTC)
+    assert found[first.name].when < found[second.name].when  # the order they were written in
+
+
+def test_an_ambiguous_stamp_without_an_mtime_takes_the_first_reading(chicago) -> None:  # type: ignore[no-untyped-def]
+    from scripts.osiris_prune_ladder import _stamp_as_local_time
+
+    got = _stamp_as_local_time("20261101013000")
+
+    assert got.astimezone(UTC) == datetime(2026, 11, 1, 6, 30, 0, tzinfo=UTC)
+
+
 def test_the_old_utc_reading_would_have_removed_one_of_them(tmp_path) -> None:
     """The control for the test above: with the stamps read as UTC (the old behaviour) both dumps
     land in the daily tier (55.5 h and 49.5 h), share one day bucket, and the older one is

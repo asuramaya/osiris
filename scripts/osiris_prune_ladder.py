@@ -81,12 +81,21 @@ class DumpFile:
     size_bytes: int = 0
 
 
-def _stamp_as_local_time(stamp: str) -> datetime:
+def _stamp_as_local_time(stamp: str, mtime: float | None = None) -> datetime:
     """The `YYYYmmddHHMMSS` in a dump or base-backup file name is this box's LOCAL wall time (the
     backup scripts name files with a plain `date`), so it is read as local time: an aware
     datetime that keeps the wall clock, so calendar-day buckets still follow the file name's own
-    date. Reading it as UTC made every dump look as many hours older as the box is behind UTC."""
-    return datetime.strptime(stamp, "%Y%m%d%H%M%S").astimezone()
+    date. Reading it as UTC made every dump look as many hours older as the box is behind UTC.
+
+    In the hour a clock goes back (daylight saving ends) one wall time happens twice. The file's
+    own modification time says which of the two it was: the reading closest to it wins (without a
+    modification time, the first)."""
+    naive = datetime.strptime(stamp, "%Y%m%d%H%M%S")
+    first = naive.replace(fold=0).astimezone()
+    second = naive.replace(fold=1).astimezone()
+    if first.utcoffset() == second.utcoffset() or mtime is None:
+        return first
+    return min((first, second), key=lambda c: abs(c.timestamp() - mtime))
 
 
 def _bucket_key(when: datetime, tier: str) -> str:
@@ -265,7 +274,7 @@ def _scan(directory: Path, *, glob: str = "osiris-*") -> list[DumpFile]:
             continue
         m = _NAME_RE.match(p.name) or _BASEBACKUP_RE.match(p.name)
         if m:
-            when = _stamp_as_local_time(m.group(1) + m.group(2))
+            when = _stamp_as_local_time(m.group(1) + m.group(2), p.stat().st_mtime)
         elif p.name.endswith(_DUMP_LIKE_SUFFIXES):
             when = datetime.fromtimestamp(p.stat().st_mtime, tz=UTC)
         else:
