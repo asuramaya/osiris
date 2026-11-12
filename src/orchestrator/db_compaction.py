@@ -28,7 +28,7 @@ import logging
 import shutil
 import time
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -47,6 +47,12 @@ MIN_BLOAT_BYTES_BY_TABLE = {"outbox": 256 * 1024 ** 2, "audit_log": 256 * 1024 *
 LOCK_TIMEOUT_SECS = 30
 RECEIPT_KEY = "compaction:last"
 DRAIN_KEY = "drain:"
+# A bulk-delete backfill that is not finished holds its own flag per target (the nightly
+# housekeeping overwrites `drain:<table>` every pass, which would clear it mid-drain). It lapses
+# when the backfill has not been called again for this long, so an abandoned run cannot keep a
+# table from ever being compacted.
+BACKFILL_DRAIN_KEY = "drain:backfill:"
+BACKFILL_DRAIN_LAPSE = timedelta(days=7)
 
 
 # --- measuring ------------------------------------------------------------------------------
@@ -111,15 +117,44 @@ async def set_drain(pool: asyncpg.Pool, tables: tuple[str, ...], running: bool) 
         await set_cursor(pool, DRAIN_KEY + table, stamp)
 
 
+async def set_backfill_drain(
+    pool: asyncpg.Pool, target: str, tables: tuple[str, ...], running: bool,
+) -> None:
+    """Record that a bulk-delete backfill is (or is no longer) emptying `tables`."""
+    from src.orchestrator.monitor import set_cursor
+
+    await set_cursor(pool, BACKFILL_DRAIN_KEY + target, json.dumps({
+        "running": running, "tables": list(tables), "at": datetime.now(UTC).isoformat()}))
+
+
+async def _backfill_drain_running(pool: asyncpg.Pool, table: str) -> bool:
+    rows = await pool.fetch(
+        "SELECT cursor FROM watermarks WHERE key LIKE $1", BACKFILL_DRAIN_KEY + "%")
+    now = datetime.now(UTC)
+    for row in rows:
+        try:
+            flag = json.loads(row["cursor"])
+            at = datetime.fromisoformat(flag["at"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        if flag.get("running") and table in flag.get("tables", []) \
+                and now - at < BACKFILL_DRAIN_LAPSE:
+            return True
+    return False
+
+
 async def drain_running(pool: asyncpg.Pool, table: str) -> bool:
-    """A bulk drain is still emptying `table`: a housekeeping step flagged it unfinished, or
-    (for soul_lines) the transcript re-encode or encryption is mid-pass."""
+    """A bulk drain is still emptying `table`: a housekeeping step flagged it unfinished, a
+    bulk-delete backfill is mid-run (its own flag, see `BACKFILL_DRAIN_KEY`), or (for
+    soul_lines) the transcript re-encode or encryption is mid-pass."""
     from src.orchestrator import soul_encrypt_progress, soul_recompress
     from src.orchestrator.monitor import get_cursor
 
     if table == "soul_lines" and any(
             read().get("state") == "running"
             for read in (soul_recompress.read_progress, soul_encrypt_progress.read_progress)):
+        return True
+    if await _backfill_drain_running(pool, table):
         return True
     raw = await get_cursor(pool, DRAIN_KEY + table)
     if not raw:
