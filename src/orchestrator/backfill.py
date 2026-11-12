@@ -70,7 +70,42 @@ async def check_apply_authority(
             "directly")
 
 
+# Targets that delete rows from the assertions tables in bulk and may need several calls to
+# finish. While one is unfinished the night compaction must not rewrite those tables (it would
+# rewrite a table that is still being emptied, and make the next call wait on its lock), so
+# an apply holds a drain flag of its own until the target reports `finished`. It is separate
+# from the nightly housekeeping's flag, which that pass overwrites every night.
+BULK_DELETE_TARGETS: dict[str, tuple[str, ...]] = {
+    "abstention_churn_collapse": ("assertions_hot", "assertions_cold"),
+}
+
+
 async def run_backfill(
+    pool: asyncpg.Pool, target: str, *, actor: str, dry_run: bool = True,
+    because: str | None = None, only_bases: list[str] | None = None,
+    limit: int | None = None, newest_first: bool = False,
+) -> dict[str, Any]:
+    """Repair verb, dispatched over `target` (see `_run_backfill_target`). A bulk-delete target
+    applied for real holds its tables' backfill drain flag from before the first delete until
+    it reports `finished`: a call that stops early (its time budget, an error) leaves the flag
+    set, and the flag lapses on its own after a week without another call."""
+    tables = BULK_DELETE_TARGETS.get(target)
+    if tables is None or dry_run or not (because or "").strip():
+        return await _run_backfill_target(
+            pool, target, actor=actor, dry_run=dry_run, because=because,
+            only_bases=only_bases, limit=limit, newest_first=newest_first)
+    from src.orchestrator.db_compaction import set_backfill_drain
+
+    await set_backfill_drain(pool, target, tables, True)
+    result = await _run_backfill_target(
+        pool, target, actor=actor, dry_run=dry_run, because=because,
+        only_bases=only_bases, limit=limit, newest_first=newest_first)
+    if result.get("finished") is True:
+        await set_backfill_drain(pool, target, tables, False)
+    return result
+
+
+async def _run_backfill_target(
     pool: asyncpg.Pool, target: str, *, actor: str, dry_run: bool = True,
     because: str | None = None, only_bases: list[str] | None = None,
     limit: int | None = None, newest_first: bool = False,
