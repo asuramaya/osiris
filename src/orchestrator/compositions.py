@@ -5403,6 +5403,17 @@ async def _fn_backup_status(
                else "; no result saved yet (it is saved after the next weekly run)")),
     }
 
+    # THE KEY ENVELOPE: who the vault key is sealed to, when each recipient last proved it opens
+    # it, and the envelope's own structural check. Read-only: nothing is opened or touched.
+    try:
+        from src.ingest.soul_envelope import envelope_check, envelope_recipients
+        from src.orchestrator.envelope_drill import envelope_section
+
+        envelope_out: dict[str, Any] = envelope_section(
+            envelope_recipients, envelope_check, now=now)
+    except Exception as exc:  # noqa: BLE001 - one section never blanks the panel
+        envelope_out = {"error": f"envelope status unavailable: {type(exc).__name__}"}
+
     # THE DISK/WAL BRAKE: whether the bulk-rewrite jobs are paused right now, and why
     try:
         from src.orchestrator.disk_brake import brake_state
@@ -5430,6 +5441,7 @@ async def _fn_backup_status(
         "ladder": ladder_section,
         "prune_manifest": manifest_section,
         "pitr_drill": pitr_section,
+        "envelope": envelope_out,
         "offbox": offbox_section,
     }
 

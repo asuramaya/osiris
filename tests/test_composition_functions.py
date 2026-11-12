@@ -572,6 +572,7 @@ async def test_backup_status_degrades_a_missing_vault_without_blanking_other_sec
     assert isinstance(data["pitr_drill"]["wired_to_a_timer"], bool)
     assert data["pitr_drill"]["unit"] == "osiris-pitr-drill.timer"
     assert "last_result" in data["pitr_drill"]
+    assert "envelope" in data and ("configured" in data["envelope"] or "error" in data["envelope"])
     assert data["vault"]["held_files"] == []
 
 
