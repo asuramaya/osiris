@@ -107,6 +107,7 @@ _JOB_PREFIX = "job:"
 
 async def record_job(
     pool: asyncpg.Pool, name: str, *, every: int, secs: float = 0.0, error: str | None = None,
+    catchup_for: str | None = None,
 ) -> None:
     """A job reports its own outcome: the one write in this file's health story.
 
@@ -127,6 +128,11 @@ async def record_job(
     blob["every"] = every
     blob["last_run"] = now
     blob["secs"] = round(secs, 1)
+    # a run made up after the box slept says so; an ordinary run clears the mark
+    if catchup_for:
+        blob["catchup"] = catchup_for
+    else:
+        blob.pop("catchup", None)
     if error is None:
         blob["last_ok"] = now
         blob["fails"] = 0

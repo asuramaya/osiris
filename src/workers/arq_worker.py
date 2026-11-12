@@ -1267,6 +1267,24 @@ def _retention_receipt_line(
     return f"{table}: removed {deleted} {noun} older than {days} days (cutoff {cutoff}){more}"
 
 
+def _exclusive_daily(fn: Any) -> Any:
+    """Run a nightly job only if no other run of it (the real slot or a catch-up) holds its
+    advisory lock; the one that finds it held skips and returns 0. Keeps the job's own name, so
+    `watched` and the job record see the same job."""
+    from src.orchestrator.daily_catchup import exclusive
+
+    @functools.wraps(fn)
+    async def run(ctx: dict[str, Any]) -> int:
+        async with exclusive(ctx["cascade"].actions.pool, fn.__name__) as got:
+            if not got:
+                _log.info("%s skipped: another run of it is in progress", fn.__name__)
+                return 0
+            result: int = await fn(ctx)
+            return result
+    return run
+
+
+@_exclusive_daily
 async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     """THE RETENTION HEARTBEAT (wave 12 item 1, operator's word via Thoth DM 8378: "put
     outbox_retention and audit_log_retention ... on the heartbeat"): outbox/audit_log are
@@ -1368,6 +1386,7 @@ def hot_cold_drain_running(
             or rows_moved > _TIERING_DRAIN_ROWS)
 
 
+@_exclusive_daily
 async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
     """ONE WRITE PER FACT, TIERED FACT HISTORY (storage redesign): four bounded, resumable
     steps that stop the graph's own tables storing the same fact several times.
@@ -1524,6 +1543,7 @@ async def db_compaction_heartbeat(ctx: dict[str, Any]) -> int:
     return freed
 
 
+@_exclusive_daily
 async def soul_cold_tier_heartbeat(ctx: dict[str, Any]) -> int:
     """THE SOUL STORE'S COLD TIER (wave 12 item 2, thread 78efd46d, operator ruling via
     decision 64ec1905: "memory gets tiers not deletion"): fold a bounded batch of
@@ -1771,7 +1791,8 @@ def watched(fn: Any, *, every: int, heavy: bool = False) -> Any:
     return run
 
 
-async def _run_watched(fn: Any, ctx: dict[str, Any], every: int) -> int:
+async def _run_watched(fn: Any, ctx: dict[str, Any], every: int,
+                       catchup_for: str | None = None) -> int:
     pool = ctx["cascade"].actions.pool
     t0 = time.monotonic()
     try:
@@ -1779,17 +1800,62 @@ async def _run_watched(fn: Any, ctx: dict[str, Any], every: int) -> int:
     except asyncio.CancelledError:  # arq's timeout: confess before dying, shielded
         with contextlib.suppress(Exception):
             await asyncio.shield(record_job(
-                pool, fn.__name__, every=every, secs=time.monotonic() - t0, error="timeout"))
+                pool, fn.__name__, every=every, secs=time.monotonic() - t0, error="timeout",
+                catchup_for=catchup_for))
         raise
     except Exception as exc:  # a hiccup must not kill the cron — but it MUST be recorded
         _log.warning("%s failed: %r", fn.__name__, exc)
         with contextlib.suppress(Exception):
             await record_job(pool, fn.__name__, every=every,
-                             secs=time.monotonic() - t0, error=repr(exc))
+                             secs=time.monotonic() - t0, error=repr(exc),
+                             catchup_for=catchup_for)
         return 0
     with contextlib.suppress(Exception):  # telemetry must never fail the work it watched
-        await record_job(pool, fn.__name__, every=every, secs=time.monotonic() - t0)
+        await record_job(pool, fn.__name__, every=every, secs=time.monotonic() - t0,
+                         catchup_for=catchup_for)
     return n
+
+
+async def daily_catchup_heartbeat(ctx: dict[str, Any]) -> int:
+    """MAKE UP A NIGHTLY JOB THE BOX SLEPT THROUGH (src/orchestrator/daily_catchup.py holds the
+    rules): arq has no catch-up, so a slot missed while the laptop was asleep was simply lost.
+    Every 15 minutes this looks at the housekeeping, the retention pass and the cold-tier fold
+    and runs ONE that is overdue, through `watched`, marked in its job record as a catch-up.
+    Never compaction (hours of heavy disk work, ruled overnight). Skipped while the disk/WAL
+    brake is engaged, within an hour of the job's next real slot, and in the night window; a slot
+    is tried once, so a failed or timed-out catch-up waits for the next real slot. Returns 1 when
+    one was run."""
+    import json as _json
+
+    from src.orchestrator.daily_catchup import CATCHUP_JOBS, TIMEOUTS, decide
+    from src.orchestrator.disk_brake import pause_reason
+    from src.orchestrator.monitor import get_cursor, set_cursor
+
+    pool = ctx["cascade"].actions.pool
+    jobs = {"storage_housekeeping_heartbeat": storage_housekeeping_heartbeat,
+            "retention_heartbeat": retention_heartbeat,
+            "soul_cold_tier_heartbeat": soul_cold_tier_heartbeat}
+    now = datetime.now().astimezone()
+    brake = await pause_reason(pool, "daily_catchup")
+    for name, slot in CATCHUP_JOBS:
+        key = f"job:{name}"
+        raw = await get_cursor(pool, key)
+        try:
+            blob = _json.loads(raw) if raw else {}
+        except ValueError:
+            blob = {}
+        due, why = decide(slot, blob, now=now, brake_reason=brake)
+        if due is None:
+            continue
+        # mark the slot as tried BEFORE running, so a failure or timeout is not retried
+        blob["catchup_tried"] = due
+        await set_cursor(pool, key, _json.dumps(blob))
+        _log.info("catching up %s (due %s): the box missed its slot", name, due)
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(_run_watched(jobs[name], ctx, 86400, catchup_for=due),
+                                   timeout=TIMEOUTS[name])
+        return 1  # one at a time: the next overdue job waits for the next tick
+    return 0
 
 
 # THE LAYOUT HEARTBEAT'S OWN CADENCE (Thoth mail 10609/10638, effect=restart:osiris-worker
@@ -2005,6 +2071,11 @@ class WorkerSettings:
         # hard-stops itself before 05:00. Not run_at_startup (hours-long rewrites).
         cron(watched(db_compaction_heartbeat, every=86400), hour={3}, minute={0},
              second={0}, timeout=7200),
+        # CATCH-UP for the housekeeping, retention and cold-tier jobs above when the box slept
+        # through their slot (never compaction): see daily_catchup_heartbeat. Offset from every
+        # other 15-minute job's seconds.
+        cron(watched(daily_catchup_heartbeat, every=900), minute={12, 27, 42, 57}, second={35},
+             timeout=1700),
         # wave 13 item 3: the harness signal's own catch-up sweep — same 15-min cadence
         # class as classification_laws_heartbeat/obligation_hygiene_heartbeat, offset
         # from all nine so none contend for CPU at the same wall-clock second.

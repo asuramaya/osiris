@@ -42,7 +42,8 @@ class Slot:
         return candidate
 
 
-def assess(label: str, slot: Slot, last_run: datetime | None, now: datetime) -> dict[str, Any]:
+def assess(label: str, slot: Slot, last_run: datetime | None, now: datetime,
+           catchup: bool = False) -> dict[str, Any]:
     """{label, status, sentence, due, ran}. status is one of:
     `on_time` (the latest slot got its run), `late` (a run came, but more than the grace after
     its slot), `waiting` (the slot has come and gone and no run yet), `never` (no run on
@@ -57,8 +58,9 @@ def assess(label: str, slot: Slot, last_run: datetime | None, now: datetime) -> 
         if last_run - due <= GRACE:
             return {**base, "status": "on_time",
                     "sentence": f"{label} ran at {last_run:%H:%M} on {last_run:%m-%d}"}
-        return {**base, "status": "late", "sentence": (
-            f"{label} was due at {when_due} and ran at {last_run:%H:%M}, "
+        how = "ran as a catch-up at" if catchup else "ran at"
+        return {**base, "status": "late", "catchup": catchup, "sentence": (
+            f"{label} was due at {when_due} and {how} {last_run:%H:%M}, "
             f"{_hours(last_run - due)} late (the box was probably asleep or off)")}
     # the latest slot has no run after it
     if now - due <= GRACE:
@@ -75,13 +77,15 @@ def _hours(delta: timedelta) -> str:
 
 
 def recent_problems(
-    jobs: list[tuple[str, Slot, datetime | None]], now: datetime,
+    jobs: list[tuple[str, Slot, datetime | None]] | list[tuple[str, Slot, datetime | None, bool]],
+    now: datetime,
 ) -> list[dict[str, Any]]:
     """The jobs whose most recent slot was late or is still waiting, within the lookback,
     worst first (waiting before late). On-time jobs are not listed: silence when well."""
     out = []
-    for label, slot, last_run in jobs:
-        item = assess(label, slot, last_run, now)
+    for job in jobs:
+        label, slot, last_run = job[0], job[1], job[2]
+        item = assess(label, slot, last_run, now, catchup=bool(job[3]) if len(job) > 3 else False)
         if item["status"] in ("waiting", "late", "never"):
             due = datetime.fromisoformat(item["due"])
             if now - due <= LOOKBACK:
@@ -135,7 +139,7 @@ async def section(pool: Any, timers: list[dict[str, Any]], *, now: datetime) -> 
     `unread`; it never raises."""
     import json
 
-    jobs: list[tuple[str, Slot, datetime | None]] = []
+    jobs: list[tuple[str, Slot, datetime | None, bool]] = []
     unread: list[str] = []
     for t in timers:
         slot = slot_from_calendar(str(t.get("schedule") or ""))
@@ -145,16 +149,17 @@ async def section(pool: Any, timers: list[dict[str, Any]], *, now: datetime) -> 
         if last is None and not t.get("active_state"):
             unread.append(str(t.get("unit")))  # systemd said nothing about it
             continue
-        jobs.append((str(t.get("label") or t["unit"]), slot, last))
+        jobs.append((str(t.get("label") or t["unit"]), slot, last, False))
     try:
         rows = await pool.fetch(
             "SELECT key, cursor FROM watermarks WHERE key = ANY($1::text[])",
             [f"job:{name}" for name, _, _ in WORKER_DAILY_JOBS])
         seen = {r["key"][4:]: json.loads(r["cursor"] or "{}") for r in rows}
         for name, label, slot in WORKER_DAILY_JOBS:
-            raw = (seen.get(name) or {}).get("last_run")
+            blob = seen.get(name) or {}
+            raw = blob.get("last_run")
             jobs.append((label, slot, datetime.fromisoformat(raw).astimezone(now.tzinfo)
-                         if raw else None))
+                         if raw else None, bool(blob.get("catchup"))))
     except Exception:  # noqa: BLE001
         unread.append("the worker's job record")
     problems = recent_problems(jobs, now)
