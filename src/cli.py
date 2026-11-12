@@ -19,6 +19,9 @@ rather than re-deriving it:
   osiris offload-runner tick        THE OPPORTUNISTIC OFFLOAD RUNNER: one pass syncing the
                                      vault via restic to every present, enabled offload
                                      target, meant as osiris-offload.timer's own ExecStart
+  osiris envelope-drill [--recipient id]  with you present, prove each recipient the vault key
+                                     is sealed to opens the envelope by itself and its key
+                                     decrypts a real sealed line (touch, PIN or typed code)
   osiris launch <handle> [--model]  body a seat via `claude --bg` by default, following
              [--debug]              trigger.launch_seat's own flip - every body lands in the
                                      operator's own `claude agents` list by construction.
@@ -1241,6 +1244,56 @@ async def cmd_restic_key(
 
 
 # --- offload-runner ------------------------------------------------------------------------
+
+async def cmd_envelope_drill(
+    *, recipient: str | None = None, as_json: bool = False, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris envelope-drill: prove, with you present, that each recipient the vault key is sealed
+    to opens the envelope BY ITSELF and that its key decrypts a real sealed line. A hardware key
+    asks for its touch and PIN; a recovery code asks for the typed code (hidden). Each result is
+    kept, with the date, and shows in backup-status. Nothing is changed in the envelope except
+    the 'last opened' time of a recipient that proved itself. The key is never shown or kept."""
+    import getpass
+
+    from src import cli_render as render
+    from src.ingest import soul_envelope
+    from src.orchestrator import envelope_drill
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=2,
+                                     application_name="osiris-cli:envelope-drill")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris envelope-drill: could not reach postgres: {exc}", file=sys.stderr)
+            return 1
+    try:
+        sample = await envelope_drill.sealed_sample(pool)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if sample is None:
+        print("osiris envelope-drill: the store holds no sealed line to test a key against, "
+              "so nothing can be proved yet.", file=sys.stderr)
+        return 1
+    verify = envelope_drill.verify_with_prompts(
+        soul_envelope.envelope_recipients, soul_envelope.envelope_verify, getpass.getpass)
+    results = envelope_drill.run_drill(
+        soul_envelope.envelope_recipients, verify, sample=sample, only=recipient)
+    if not results:
+        print("osiris envelope-drill: no such recipient." if recipient
+              else "osiris envelope-drill: the key is not sealed to any recipient yet.",
+              file=sys.stderr)
+        return 1
+    render.emit({"results": results}, as_json=as_json, title="envelope drill")
+    return 0 if all(r["status"] == "proved" for r in results) else 1
+
 
 async def cmd_offload_runner(
     action: str, *, vault: str | None = None, as_json: bool = False,
@@ -8259,7 +8312,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         retire-assertion, retire-link, retire-object, cite,
                         declare-machine-identity, correct-agent-house (deprecated alias
                         for correct-agent-project, one release only)
-  operate               deploy, migrate, seed, soul-key, restic-key, offload-runner,
+  operate               deploy, migrate, seed, soul-key, restic-key, offload-runner, envelope-drill,
                         bootstrap, retention, rematerialize, rebuild-transcript,
                         fleet-reconcile, fleet-prune, backfill, graph-migrate, layout
 
@@ -8572,6 +8625,19 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help="override the vault directory being synced "
                                        "(defaults to $OSIRIS_VAULT or ~/osiris-vault)")
     p_offload_runner.add_argument("--json", action="store_true", dest="as_json",
+                                  help="machine-readable: one compact JSON line")
+
+    p_envelope_drill = sub.add_parser("envelope-drill", description=_d(
+        "Prove, with you present, that each recipient the vault key is sealed to opens the "
+        "envelope by itself and that its key decrypts a real sealed line. A hardware key "
+        "asks for its touch and PIN, a recovery code for the typed code. Each result is "
+        "kept and shown in backup-status."),
+        epilog="example: osiris envelope-drill\n"
+               "example: osiris envelope-drill --recipient k1")
+    p_envelope_drill.add_argument("--recipient", default=None,
+                                  help="prove only this recipient (an id from "
+                                       "`osiris backup-status`)")
+    p_envelope_drill.add_argument("--json", action="store_true", dest="as_json",
                                   help="machine-readable: one compact JSON line")
 
     p_launch = sub.add_parser("launch", description=_d(
@@ -10153,6 +10219,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "restic-key":
         return asyncio.run(cmd_restic_key(
             args.action, path=args.path, backend=args.backend, as_json=args.as_json))
+    if args.command == "envelope-drill":
+        return asyncio.run(cmd_envelope_drill(  # unbounded-wait-ok: asyncio.run of a CLI command
+            recipient=args.recipient, as_json=args.as_json))
     if args.command == "offload-runner":
         return asyncio.run(cmd_offload_runner(
             args.action, vault=args.vault, as_json=args.as_json))

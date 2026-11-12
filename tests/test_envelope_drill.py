@@ -265,3 +265,93 @@ def test_the_section_reads_the_real_envelope_functions_over_a_real_recovery_file
     assert by_id["k1"]["verdict"] == "current: last proved 3 days ago"
     assert by_id["c1"]["verdict"] == "never proved: needs the operator's key"
     assert sec["warnings"] == ["c1: never proved to open the envelope"]
+
+
+# ---- the sealed sample, the typed-code prompt, and the command -------------------------------
+
+
+class _FakePool:
+    def __init__(self, tokens: list[bytes]) -> None:
+        self.tokens = tokens
+        self.sql: list[str] = []
+
+    async def fetchval(self, sql: str, *a: Any) -> int:
+        return 1000
+
+    async def fetch(self, sql: str, *a: Any) -> list[dict[str, bytes]]:
+        self.sql.append(sql)
+        return [{"raw_line": t} for t in self.tokens]
+
+
+async def test_the_sample_passes_a_key_that_opens_one_real_line_and_fails_the_wrong_key() -> None:
+    old_key = Fernet.generate_key()
+    pool = _FakePool([Fernet(old_key).encrypt(b"old line"), Fernet(LIVE_KEY).encrypt(b"line")])
+
+    sample = await drill.sealed_sample(pool)
+
+    assert sample is not None
+    assert sample.decrypts(LIVE_KEY, sample.token) is True  # opens one of them
+    assert sample.decrypts(OTHER_KEY, sample.token) is False
+    assert "TABLESAMPLE" in pool.sql[0]  # a spread sample, never a full scan
+
+
+async def test_no_sealed_line_in_the_store_gives_no_sample() -> None:
+    assert await drill.sealed_sample(_FakePool([])) is None
+
+
+def test_a_recovery_code_recipient_is_asked_for_its_code_and_a_hardware_one_is_not() -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def verify(rid: str, **kw: Any) -> dict[str, Any]:
+        calls.append((rid, kw))
+        return {"ok": True}
+
+    prompts: list[str] = []
+    wrapped = drill.verify_with_prompts(
+        lambda: RECIPIENTS, verify, lambda p: prompts.append(p) or "ABCD-1234")
+
+    wrapped("code", on_key=None)
+    wrapped("yubi", on_key=None)
+
+    assert prompts == ["recovery code for code: "]  # asked once, for the code recipient only
+    assert calls[0][1]["code"] == "ABCD-1234" and calls[0][1]["interactive"] is True
+    assert calls[1][1]["code"] is None and calls[1][1]["interactive"] is True
+
+
+async def test_the_command_proves_each_recipient_and_exits_nonzero_when_one_does_not(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from src import cli
+    from src.ingest import soul_envelope
+
+    async def sample(pool: Any, **kw: Any) -> drill.Sample:
+        return SAMPLE
+
+    answers = {"yubi": {"ok": True, "fingerprint_matches": True, "artifact_ok": True},
+               "code": {"ok": False, "error": "the code does not match"}}
+    monkeypatch.setattr(drill, "sealed_sample", sample)
+    monkeypatch.setattr(soul_envelope, "envelope_recipients", lambda **kw: RECIPIENTS[:2])
+    monkeypatch.setattr(soul_envelope, "envelope_verify",
+                        lambda rid, **kw: answers[rid])
+    monkeypatch.setattr("getpass.getpass", lambda prompt="": "WRONG")
+
+    rc = await cli.cmd_envelope_drill(pool=object(), as_json=True)  # type: ignore[arg-type]
+
+    out = capsys.readouterr().out
+    assert rc == 1 and "proved" in out and "the code does not match" in out
+    assert "WRONG" not in out  # the typed code is never echoed
+
+
+async def test_the_command_says_so_when_there_is_nothing_to_prove_against(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from src import cli
+
+    async def none(pool: Any, **kw: Any) -> None:
+        return None
+
+    monkeypatch.setattr(drill, "sealed_sample", none)
+
+    rc = await cli.cmd_envelope_drill(pool=object())  # type: ignore[arg-type]
+
+    assert rc == 1 and "no sealed line" in capsys.readouterr().err
