@@ -287,3 +287,128 @@ def test_the_compaction_runs_at_three_in_the_morning_after_housekeeping_and_not_
     assert compaction.run_at_startup is False
     assert compaction.hour == {3} and compaction.minute == {0}
     assert housekeeping.hour == {2}   # its drains finish before the compaction window opens
+
+
+async def _hold_the_table(actions: Actions) -> Any:
+    """A transaction that keeps the table busy (ACCESS SHARE blocks VACUUM FULL's exclusive
+    lock), returned with a way to let it go."""
+    conn = await actions.pool.acquire()
+    tx = conn.transaction()
+    await tx.start()
+    await conn.execute(f"LOCK TABLE {SCRATCH} IN ACCESS SHARE MODE")
+
+    async def release() -> None:
+        await tx.rollback()
+        await actions.pool.release(conn)
+
+    return release
+
+
+async def test_a_busy_table_is_skipped_with_a_plain_reason_after_short_tries(
+    actions: Actions,
+) -> None:
+    """The lock is asked for with a short timeout and retried; a table that stays busy is
+    skipped, not failed, and nothing is changed."""
+    from src.orchestrator.db_compaction import LockNotAcquired
+
+    await _bloated(actions)
+    release = await _hold_the_table(actions)
+    sleeps: list[float] = []
+
+    async def _sleep(secs: float) -> None:
+        sleeps.append(secs)
+
+    try:
+        with pytest.raises(LockNotAcquired) as caught:
+            await rewrite_table(actions.pool, SCRATCH, seconds_left=600, lock_attempts=3,
+                                lock_timeout_secs=0.2, sleep=_sleep)
+    finally:
+        await release()
+    assert len(sleeps) == 2  # waited between the three tries, not after the last
+    assert "within 0.2 s on 3 tries" in caught.value.reason
+    assert await actions.pool.fetchval(f"SELECT count(*) FROM {SCRATCH}") == 1000
+
+
+async def test_the_night_run_records_a_never_free_table_as_skipped(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator.db_compaction import LockNotAcquired
+
+    await _bloated(actions)
+
+    async def _busy(pool: Any, table: str, **kwargs: Any) -> str:
+        raise LockNotAcquired(table, 4, 3.0, 120.0)
+
+    monkeypatch.setattr(db_compaction, "rewrite_table", _busy)
+    out = await compact_tonight(actions.pool, window_secs=600, tables=(SCRATCH,), brake=_roomy)
+    assert out[SCRATCH]["action"] == "skipped"
+    assert out[SCRATCH]["reason"].startswith("could not get the table lock within 3 s on 4 tries")
+
+
+async def test_a_lock_freed_between_tries_lets_the_rewrite_through(actions: Actions) -> None:
+    await _bloated(actions)
+    release = await _hold_the_table(actions)
+
+    async def _let_go_then_wait(secs: float) -> None:
+        await release()  # the busy holder finishes while we wait for the next try
+
+    engine = await rewrite_table(actions.pool, SCRATCH, seconds_left=600, lock_attempts=3,
+                                 lock_timeout_secs=0.2, sleep=_let_go_then_wait)
+    assert engine == "VACUUM FULL"
+    assert await actions.pool.fetchval(f"SELECT count(*) FROM {SCRATCH}") == 1000
+
+
+async def _flag(actions: Actions, table: str, *, running: bool, hours_ago: float) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from src.orchestrator.monitor import set_cursor
+
+    at = (datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat()
+    await set_cursor(actions.pool, db_compaction.DRAIN_KEY + table,
+                     json.dumps({"running": running, "at": at}))
+
+
+async def test_a_fresh_drain_flag_defers_the_table_and_a_stale_one_does_not(
+    actions: Actions,
+) -> None:
+    """The flag is rewritten nightly. One that is older than 36 hours was left by a step that
+    stopped, and it must not skip the table forever."""
+    from src.orchestrator.db_compaction import drain_running
+
+    await _flag(actions, "assertions_cold", running=True, hours_ago=2)
+    assert await drain_running(actions.pool, "assertions_cold") is True
+    await _flag(actions, "assertions_cold", running=True, hours_ago=35)
+    assert await drain_running(actions.pool, "assertions_cold") is True
+    await _flag(actions, "assertions_cold", running=True, hours_ago=37)
+    assert await drain_running(actions.pool, "assertions_cold") is False
+    await _flag(actions, "assertions_cold", running=False, hours_ago=1)
+    assert await drain_running(actions.pool, "assertions_cold") is False
+
+
+async def test_a_flag_with_no_time_is_still_honoured_and_a_broken_one_is_not_a_drain(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.db_compaction import drain_running
+    from src.orchestrator.monitor import set_cursor
+
+    await set_cursor(actions.pool, db_compaction.DRAIN_KEY + "assertions_hot",
+                     json.dumps({"running": True}))
+    assert await drain_running(actions.pool, "assertions_hot") is True
+    await set_cursor(actions.pool, db_compaction.DRAIN_KEY + "assertions_hot",
+                     json.dumps({"running": True, "at": "not a time"}))
+    assert await drain_running(actions.pool, "assertions_hot") is False
+
+
+async def test_a_stale_housekeeping_flag_is_ignored_but_a_live_backfill_flag_still_holds(
+    actions: Actions,
+) -> None:
+    """The two flags are independent: the housekeeping one expires after 36 hours, a
+    bulk-delete backfill's own flag still defers the table while it is unfinished."""
+    from src.orchestrator.db_compaction import drain_running, set_backfill_drain
+
+    await _flag(actions, "assertions_cold", running=True, hours_ago=40)
+    assert await drain_running(actions.pool, "assertions_cold") is False
+    await set_backfill_drain(actions.pool, "some_backfill", ("assertions_cold",), True)
+    assert await drain_running(actions.pool, "assertions_cold") is True
+    await set_backfill_drain(actions.pool, "some_backfill", ("assertions_cold",), False)
+    assert await drain_running(actions.pool, "assertions_cold") is False
