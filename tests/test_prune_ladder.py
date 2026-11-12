@@ -110,6 +110,19 @@ def test_keep_and_remove_partition_the_input_with_no_overlap() -> None:
     assert kept & removed == set()
 
 
+def _back_date(path):  # type: ignore[no-untyped-def]
+    """Give a test file the modification time its name stamp says (local wall time): a real dump
+    is written when its name says, and a file whose stamp the clock does not back is held."""
+    import os
+    import re
+    from datetime import datetime
+
+    m = re.search(r"(\d{8})-(\d{6})", path.name)
+    when = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").timestamp()
+    os.utime(path, (when, when))
+    return path
+
+
 # ── the CLI's own safety property: dry-run is the default, --apply is required ──────────
 
 def test_cli_without_apply_never_deletes_anything(tmp_path, capsys) -> None:
@@ -125,6 +138,7 @@ def test_cli_without_apply_never_deletes_anything(tmp_path, capsys) -> None:
     cached = backups / "osiris-20200101-000000.dump"
     cached.write_bytes(b"x" * 100)
     (vault / cached.name).write_bytes(b"x" * 100)
+    _back_date(cached), _back_date(vault / cached.name)
 
     rc = main(["--backups", str(backups), "--vault", str(vault)])
 
@@ -145,8 +159,10 @@ def test_cli_with_apply_deletes_exactly_the_planned_removals(tmp_path, capsys) -
     cached = backups / "osiris-20200101-000000.dump"
     cached.write_bytes(b"x" * 100)
     (vault / cached.name).write_bytes(b"x" * 100)
+    _back_date(cached), _back_date(vault / cached.name)
     only_here = backups / "osiris-20200115-000000.dump"  # the vault has no copy of this one
     only_here.write_bytes(b"x" * 100)
+    _back_date(only_here)
     # the CLI's own `main()` uses the REAL wall clock (never the test module's fixed
     # NOW), so name this one after it directly to land it inside the one day window
     real_now = datetime.now(UTC)
@@ -333,6 +349,76 @@ def test_an_ambiguous_stamp_without_an_mtime_takes_the_first_reading(chicago) ->
     assert got.astimezone(UTC) == datetime(2026, 11, 1, 6, 30, 0, tzinfo=UTC)
 
 
+def _dump_at(directory, stamp: str, written_utc: datetime):  # type: ignore[no-untyped-def]
+    import os
+
+    path = directory / f"osiris-{stamp}.dump"
+    path.write_bytes(b"x")
+    os.utime(path, (written_utc.timestamp(), written_utc.timestamp()))
+    return path
+
+
+def test_a_file_whose_stamp_the_clock_does_not_back_is_held_and_never_removed(  # type: ignore[no-untyped-def]
+    tmp_path, chicago,
+) -> None:
+    """The stamp says 2020 but the file was written just now: a copy or a restore, or a stamp
+    from another zone. It is far past every window, so the plan would delete it: it is kept."""
+    from scripts.osiris_prune_ladder import _scan, plan_prune, plan_prune_cache, plan_prune_dumps
+
+    now = datetime(2026, 11, 13, 12, 0, 0, tzinfo=UTC)
+    odd = _dump_at(tmp_path, "20200101-000000", now)          # name 2020, written now
+    honest = _dump_at(tmp_path, "20200102-000000", datetime(2020, 1, 2, 6, 5, 0, tzinfo=UTC))
+    files = _scan(tmp_path)
+
+    held = [f for f in files if f.held]
+    assert [Path(f.path).name for f in held] == [odd.name]
+    assert "apart" in (held[0].held or "")
+    for plan in (plan_prune(files, now=now), plan_prune_dumps(files, now=now, verified=None),
+                 plan_prune_cache(files, now=now, vault_names={odd.name, honest.name})):
+        assert odd.as_posix() in {f.path for f in plan["keep"]}
+        assert odd.as_posix() not in {f.path for f in plan["remove"]}
+
+
+def test_a_held_file_takes_no_part_in_the_buckets_of_the_files_that_are_not(  # type: ignore[no-untyped-def]
+    tmp_path, chicago,
+) -> None:
+    from scripts.osiris_prune_ladder import _scan, plan_prune
+
+    now = datetime(2026, 11, 13, 12, 0, 0, tzinfo=UTC)
+    # two honest dumps of one old week: the older is removed, the newer wins the week bucket
+    a = _dump_at(tmp_path, "20260101-040000", datetime(2026, 1, 1, 10, 5, 0, tzinfo=UTC))
+    b = _dump_at(tmp_path, "20260101-100000", datetime(2026, 1, 1, 16, 5, 0, tzinfo=UTC))
+    # a held file with a stamp in the same week must not displace either of them
+    _dump_at(tmp_path, "20260101-120000", now)
+    plan = plan_prune(_scan(tmp_path), now=now)
+
+    assert {Path(f.path).name for f in plan["remove"]} == {a.name}
+    assert b.as_posix() in {f.path for f in plan["keep"]}
+
+
+def test_a_stamp_close_to_the_mtime_is_not_held(tmp_path, chicago) -> None:  # type: ignore[no-untyped-def]
+    from scripts.osiris_prune_ladder import STAMP_MTIME_TOLERANCE, _scan
+
+    assert STAMP_MTIME_TOLERANCE == timedelta(hours=3)
+    # a dump takes a while to write: the file is last touched ten minutes after its stamp
+    _dump_at(tmp_path, "20261111-043007", datetime(2026, 11, 11, 10, 40, 19, tzinfo=UTC))
+
+    [found] = _scan(tmp_path)
+
+    assert found.held is None
+
+
+def test_the_dry_run_report_names_a_held_file(tmp_path, chicago) -> None:  # type: ignore[no-untyped-def]
+    from scripts.osiris_prune_ladder import _report_text, _scan, plan_prune
+
+    now = datetime(2026, 11, 13, 12, 0, 0, tzinfo=UTC)
+    odd = _dump_at(tmp_path, "20200101-000000", now)
+
+    text = _report_text("vault", plan_prune(_scan(tmp_path), now=now))
+
+    assert "HELD (kept, not trusted to delete)" in text and odd.name in text
+
+
 def test_the_old_utc_reading_would_have_removed_one_of_them(tmp_path) -> None:
     """The control for the test above: with the stamps read as UTC (the old behaviour) both dumps
     land in the daily tier (55.5 h and 49.5 h), share one day bucket, and the older one is
@@ -398,6 +484,8 @@ def test_cli_reports_and_prunes_basebackups_as_their_own_population(
     # two ancient same-month basebackups, the elder should be removable
     (basebackups / "osiris-basebackup-20240108-000000.tar.gz").write_bytes(b"x" * 10)
     (basebackups / "osiris-basebackup-20240115-000000.tar.gz").write_bytes(b"x" * 10)
+    for f in basebackups.iterdir():
+        _back_date(f)
 
     rc = main(["--backups", str(backups), "--vault", str(vault)])
 
@@ -787,6 +875,7 @@ def test_apply_removes_a_pruned_base_backups_marker_with_it(tmp_path, capsys) ->
     new = bases / "osiris-basebackup-20260908-000000.tar.gz"
     for f in (old, new):
         _write_base_backup(f, "000000010000000000000002")
+        _back_date(f)
         mark_base_backup_verified(f)
 
     assert main(["--backups", str(tmp_path / "backups"), "--vault", str(vault), "--apply"]) == 0

@@ -66,7 +66,21 @@ def _old_cache_dump(backups: Path, vault: Path, name: str) -> Path:
     cached = backups / name
     cached.write_bytes(b"x" * 10)
     (vault / name).write_bytes(b"x" * 10)
+    _back_date(cached), _back_date(vault / name)
     return cached
+
+
+def _back_date(path):  # type: ignore[no-untyped-def]
+    """Give a test file the modification time its name stamp says (local wall time): a real dump
+    is written when its name says, and a file whose stamp the clock does not back is held."""
+    import os
+    import re
+    from datetime import datetime
+
+    m = re.search(r"(\d{8})-(\d{6})", path.name)
+    when = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").timestamp()
+    os.utime(path, (when, when))
+    return path
 
 
 # --- the incident, through the real entry point --------------------------------------------
