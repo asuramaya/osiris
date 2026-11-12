@@ -502,3 +502,32 @@ def test_a_skip_names_the_rule_and_the_numbers(monkeypatch: pytest.MonkeyPatch) 
 async def test_the_status_says_what_a_size_means(actions: Actions) -> None:
     status = await compaction_status(actions.pool)
     assert "heap, indexes and toast" in status["sizes"]
+
+
+async def test_the_moved_rows_line_reaches_the_desk_even_when_another_step_failed(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The "moved N rows" line used to sit inside the all-three-steps-succeeded block, so a
+    failed fold dropped it from the summary although the rows were counted as changed."""
+    import src.orchestrator.assertion_fold as assertion_fold
+    import src.orchestrator.mailbox as mailbox
+    import src.orchestrator.migration_0064 as migration_0064
+    from src.workers.arq_worker import storage_housekeeping_heartbeat
+
+    bodies: list[str] = []
+
+    async def _send(pool: Any, **kwargs: Any) -> dict[str, Any]:
+        bodies.append(kwargs["body"])
+        return {"sent": 1}
+
+    async def _boom(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("fold failed")
+
+    async def _moved(*a: Any, **k: Any) -> dict[str, Any]:
+        return {"rows_moved": 7, "paused": False}
+
+    monkeypatch.setattr(mailbox, "send_message", _send)
+    monkeypatch.setattr(assertion_fold, "apply_fold", _boom)
+    monkeypatch.setattr(migration_0064, "apply_migration_0064", _moved)
+    await storage_housekeeping_heartbeat({"cascade": SimpleNamespace(actions=actions)})
+    assert any("moved 7 rows of old history to the cold table" in b for b in bodies), bodies

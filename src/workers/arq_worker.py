@@ -1455,15 +1455,15 @@ async def storage_housekeeping_heartbeat(ctx: dict[str, Any]) -> int:
     else:
         changed += moved["rows_moved"]
         tiering = (int(moved["rows_moved"]), bool(moved["paused"]))
+        if moved["rows_moved"]:
+            lines.append(f"assertions: moved {moved['rows_moved']} rows of old history to the "
+                         "cold table")
     # One write for the pass, from all three steps. A step that failed leaves the flag as it
     # was: a failure says nothing about whether the drain is done.
     if layout_finished is not None and fold_finished is not None and tiering is not None:
         await _flag_drain(pool, ("assertions_hot", "assertions_cold"), hot_cold_drain_running(
             layout_finished=layout_finished, fold_finished=fold_finished,
             rows_moved=tiering[0], tiering_paused=tiering[1]))
-        if moved["rows_moved"]:
-            lines.append(f"assertions: moved {moved['rows_moved']} rows of old history to the "
-                         "cold table")
     if lines:
         with contextlib.suppress(Exception):  # the desk being unreachable must not sink the cron
             await send_message(
