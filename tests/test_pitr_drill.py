@@ -419,3 +419,71 @@ def test_gather_skips_a_segment_copy_that_is_still_being_written(tmp_path, monke
     monkeypatch.setattr(drill.subprocess, "run", fake_run)
     drill._gather_wal_segments("pg", vault, tmp_path / "scratch")
     assert [p.name for p in (tmp_path / "scratch").iterdir()] == ["000000010000000100000002.zst"]
+
+
+# --- the drill runs the image the live database runs --------------------------------------
+
+def _fake_docker(monkeypatch, *, inspected: str | None, have_local: bool = True):
+    """Records every docker call the image lookup makes; `inspected` is what
+    `docker inspect osiris-pg` prints (None = the container cannot be asked)."""
+    import subprocess as sp
+
+    from scripts import osiris_pitr_drill as drill
+
+    calls: list[list[str]] = []
+
+    def run(cmd, **kw):
+        calls.append(list(cmd))
+        if cmd[1] == "inspect":
+            return sp.CompletedProcess(cmd, 0 if inspected else 1, (inspected or "") + "\n", "")
+        if cmd[1:3] == ["image", "inspect"]:
+            return sp.CompletedProcess(cmd, 0 if have_local else 1, "", "")
+        return sp.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(drill.subprocess, "run", run)
+    return drill, calls
+
+
+def test_drill_image_is_the_image_the_live_container_runs(monkeypatch) -> None:
+    drill, calls = _fake_docker(monkeypatch, inspected="osiris-pg:16-repack")
+    assert drill.drill_image() == "osiris-pg:16-repack"
+    assert calls[0][:3] == ["docker", "inspect", "osiris-pg"]
+    assert not any(c[1] == "build" for c in calls)
+
+
+def test_drill_image_follows_the_live_container_when_its_image_changes(monkeypatch) -> None:
+    drill, calls = _fake_docker(monkeypatch, inspected="osiris-pg:17-next")
+    assert drill.drill_image() == "osiris-pg:17-next"
+    assert not any(c[1] == "build" for c in calls)
+
+
+def test_drill_image_falls_back_and_builds_from_deploy_pg_when_missing(monkeypatch) -> None:
+    drill, calls = _fake_docker(monkeypatch, inspected=None, have_local=False)
+    assert drill.drill_image() == "osiris-pg:16-repack"
+    build = [c for c in calls if c[1] == "build"]
+    assert len(build) == 1
+    assert build[0][-1].endswith("deploy/pg") and "osiris-pg:16-repack" in build[0]
+
+
+def test_the_fallback_image_is_the_one_compose_and_the_dockerfile_name() -> None:
+    from pathlib import Path
+
+    from scripts import osiris_pitr_drill as drill
+
+    root = Path(__file__).resolve().parent.parent
+    assert drill.IMAGE_BUILD_DIR == root / "deploy" / "pg"
+    assert (drill.IMAGE_BUILD_DIR / "Dockerfile").is_file()
+    assert f"image: {drill.FALLBACK_IMAGE}" in (root / "docker-compose.yml").read_text()
+
+
+def test_no_script_runs_a_stock_postgres_image_for_a_restore() -> None:
+    """A future image change must not leave the drill or the preflight restoring into a
+    different binary than the box runs: both take the image from drill_image()."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    for name in ("osiris_pitr_drill.py", "osiris_preflight.py"):
+        code = (root / "scripts" / name).read_text()
+        assert '"postgres:16"' not in code, name
+    assert "drill_image()" in (root / "scripts" / "osiris_preflight.py").read_text()
+    assert "drill_image(container)" in (root / "scripts" / "osiris_pitr_drill.py").read_text()

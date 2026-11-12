@@ -39,7 +39,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 CONTAINER = "osiris-pg"
 DRILL_NAME = "osiris-pitr-drill"
+# The image the live database runs when the container cannot be asked (compose, up.sh and
+# deploy/pg/Dockerfile name the same tag; tests/test_compose_drift.py keeps them together).
+FALLBACK_IMAGE = "osiris-pg:16-repack"
+IMAGE_BUILD_DIR = Path(__file__).resolve().parent.parent / "deploy" / "pg"
 VAULT_WAL_DIR = Path.home() / "osiris-vault" / "wal_archive"
+
+
+
+def drill_image(container: str = CONTAINER) -> str:
+    """The image a scratch restore must run: the one the live database container runs, so
+    the drill proves recovery into the binary the box actually uses, not an older stock
+    one. Read from `docker inspect`; when the container cannot be asked (not running, no
+    docker) it is FALLBACK_IMAGE. If that local image is missing it is built from
+    deploy/pg, the same Dockerfile the box is built from. Any other image name is left to
+    docker run, which pulls it as it always would."""
+    try:
+        out = subprocess.run(
+            ["docker", "inspect", container, "--format", "{{.Config.Image}}"],
+            capture_output=True, text=True, timeout=30)
+        image = (out.stdout or "").strip() if out.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        image = ""
+    image = image or FALLBACK_IMAGE
+    if image == FALLBACK_IMAGE:
+        have = subprocess.run(["docker", "image", "inspect", image],
+                              capture_output=True, timeout=30)
+        if have.returncode != 0:
+            subprocess.run(["docker", "build", "-q", "-t", image, str(IMAGE_BUILD_DIR)],
+                           capture_output=True, timeout=900, check=True)
+    return image
+
 
 # The longest the drill waits for archive recovery to finish replaying. Replay time grows
 # with the age of the base backup (every archived segment since it is replayed), so this is
@@ -287,6 +317,7 @@ def run_drill(
     scratch = scratch or Path(f"/var/tmp/osiris-scratch/pitr-drill-{int(time.time())}")
     pgdata = scratch / "pgdata"
     wal_dir = scratch / "wal"
+    image = FALLBACK_IMAGE  # replaced by the live container's own image once the drill runs
     try:
         pgdata.mkdir(parents=True, exist_ok=True)
         with tarfile.open(base_backup, "r:gz") as tf:
@@ -305,13 +336,14 @@ def run_drill(
 
         subprocess.run(["docker", "rm", "-f", "-v", drill_name],
                        capture_output=True, timeout=30)
+        image = drill_image(container)
         subprocess.run(
             ["docker", "run", "-d", "--name", drill_name,
              "--memory", SCRATCH_MEMORY, "--memory-swap", SCRATCH_MEMORY,
              "-v", f"{pgdata}:/var/lib/postgresql/data",
              "-v", f"{vault_wal}:{vault_wal}:ro",
              "-v", f"{wal_dir}:{wal_dir}:ro",
-             "-e", "POSTGRES_PASSWORD=osiris", "postgres:16", *SCRATCH_POSTGRES_ARGS],
+             "-e", "POSTGRES_PASSWORD=osiris", image, *SCRATCH_POSTGRES_ARGS],
             capture_output=True, timeout=60, check=True)
 
         waited = _wait_for_recovery_end(drill_name)
@@ -339,7 +371,7 @@ def run_drill(
         # running this drill for real: three runs, three leaked multi-GB directories
         # before this fix). A throwaway root container CAN delete it (root bypasses host
         # DAC on a bind mount); reclaim it first, then rmtree the rest normally.
-        subprocess.run(["docker", "run", "--rm", "-v", f"{scratch}:/scratch", "postgres:16",
+        subprocess.run(["docker", "run", "--rm", "-v", f"{scratch}:/scratch", image,
                         "rm", "-rf", "/scratch/pgdata"], capture_output=True, timeout=60)
         shutil.rmtree(scratch, ignore_errors=True)
 

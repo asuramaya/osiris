@@ -461,15 +461,18 @@ def drill(newest_dump: str) -> str | None:
         f"the preflight drill's own scratch container name {name!r} must never "
         f"collide with a live-fleet container name {CONTAINERS!r}")
     try:
-        # -v (not just -f): postgres:16 declares an anonymous VOLUME for its data dir.
+        # -v (not just -f): the postgres image declares an anonymous VOLUME for its data dir.
         # `docker rm -f` alone drops the container but leaves that volume orphaned, links=0,
         # forever. A field report measured 11GB across 4 weekly Mondays,
         # tracking the growing dump size, ~180GB/year on an unfixed laptop.
         subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True, timeout=30)
+        from scripts.osiris_pitr_drill import drill_image
+
+        image = drill_image()
         subprocess.run(["docker", "run", "-d", "--name", name, "--memory", "6g",
                         "--memory-swap", "6g", "-e", "POSTGRES_USER=osiris",
                         "-e", "POSTGRES_PASSWORD=osiris", "-e", "POSTGRES_DB=osiris",
-                        "postgres:16"], capture_output=True, timeout=60, check=True)
+                        image], capture_output=True, timeout=60, check=True)
         for _ in range(30):
             r = subprocess.run(["docker", "exec", name, "pg_isready", "-U", "osiris"],
                                capture_output=True, timeout=10)
