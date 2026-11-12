@@ -39,7 +39,7 @@ def test_a_job_that_is_due_and_has_not_run_is_waiting() -> None:
     assert got["status"] == "waiting"
     assert got["sentence"] == ("the nightly housekeeping was due at 02:15 on 11-12 and has not "
                                "run yet; it last ran at 02:15 on 11-11 (the box was probably "
-                               "asleep or off)")
+                               "off, or the worker restarted after the slot)")
 
 
 def test_a_slot_that_has_only_just_come_due_is_not_yet_a_problem() -> None:
@@ -125,9 +125,10 @@ async def test_the_section_lists_a_late_timer_and_a_worker_job_that_has_not_run(
     assert out["checked"] == 5  # the every-15-minute timer has no slot to miss
     assert out["problems"] == [
         "the nightly housekeeping was due at 02:15 on 11-12 and has not run yet; it last ran "
-        "at 02:15 on 11-11 (the box was probably asleep or off)",
+        "at 02:15 on 11-11 (the box was probably off, or the worker restarted after the slot)",
         "the nightly database compaction was due at 03:00 on 11-12 and has not run yet; it "
-        "last ran at 03:00 on 11-11 (the box was probably asleep or off)",
+        "last ran at 03:00 on 11-11 (the box was probably off, or the worker restarted after "
+        "the slot)",
         "dumps (pg_dump, daily) was due at 04:30 on 11-12 and ran at 10:54, 6.4 h late "
         "(the box was probably asleep or off)"]
 
@@ -161,3 +162,13 @@ def test_a_slot_never_lands_in_the_future() -> None:
     assert DUMP.latest_at_or_before(now) == at(11, 4, 30)
     assert DUMP.latest_at_or_before(now) <= now
     assert now - DUMP.latest_at_or_before(now) < timedelta(days=1)
+
+
+async def test_a_newly_installed_timer_that_has_not_fired_yet_is_not_a_problem() -> None:
+    timers = [{"unit": "osiris-envelope-check.timer", "label": "daily envelope check",
+               "schedule": "*-*-* 09:20:00", "active_state": "active",
+               "next_elapse": "Fri 2026-11-13 09:20:00 CST"}]
+
+    out = await mr.section(_Pool({}), timers, now=at(12, 17))
+
+    assert not any("envelope" in p for p in out["problems"]) and "unread" not in out

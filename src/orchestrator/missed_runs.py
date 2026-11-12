@@ -68,7 +68,8 @@ def assess(label: str, slot: Slot, last_run: datetime | None, now: datetime,
             f"{label} is due at {due:%H:%M} (last ran {last_run:%m-%d %H:%M})")}
     return {**base, "status": "waiting", "sentence": (
         f"{label} was due at {when_due} and has not run yet; it last ran at "
-        f"{last_run:%H:%M} on {last_run:%m-%d} (the box was probably asleep or off)")}
+        f"{last_run:%H:%M} on {last_run:%m-%d} (the box was probably off, or the worker "
+        "restarted after the slot)")}
 
 
 def _hours(delta: timedelta) -> str:
@@ -149,6 +150,8 @@ async def section(pool: Any, timers: list[dict[str, Any]], *, now: datetime) -> 
         if last is None and not t.get("active_state"):
             unread.append(str(t.get("unit")))  # systemd said nothing about it
             continue
+        if last is None and t.get("next_elapse"):
+            continue  # an active timer that has not fired yet (just installed): nothing missed
         jobs.append((str(t.get("label") or t["unit"]), slot, last, False))
     try:
         rows = await pool.fetch(
