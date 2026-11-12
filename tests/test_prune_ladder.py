@@ -110,6 +110,19 @@ def test_keep_and_remove_partition_the_input_with_no_overlap() -> None:
     assert kept & removed == set()
 
 
+def _back_date(path):  # type: ignore[no-untyped-def]
+    """Give a test file the modification time its name stamp says (local wall time): a real dump
+    is written when its name says, and a file whose stamp the clock does not back is held."""
+    import os
+    import re
+    from datetime import datetime
+
+    m = re.search(r"(\d{8})-(\d{6})", path.name)
+    when = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").timestamp()
+    os.utime(path, (when, when))
+    return path
+
+
 # ── the CLI's own safety property: dry-run is the default, --apply is required ──────────
 
 def test_cli_without_apply_never_deletes_anything(tmp_path, capsys) -> None:
@@ -125,6 +138,7 @@ def test_cli_without_apply_never_deletes_anything(tmp_path, capsys) -> None:
     cached = backups / "osiris-20200101-000000.dump"
     cached.write_bytes(b"x" * 100)
     (vault / cached.name).write_bytes(b"x" * 100)
+    _back_date(cached), _back_date(vault / cached.name)
 
     rc = main(["--backups", str(backups), "--vault", str(vault)])
 
@@ -145,8 +159,10 @@ def test_cli_with_apply_deletes_exactly_the_planned_removals(tmp_path, capsys) -
     cached = backups / "osiris-20200101-000000.dump"
     cached.write_bytes(b"x" * 100)
     (vault / cached.name).write_bytes(b"x" * 100)
+    _back_date(cached), _back_date(vault / cached.name)
     only_here = backups / "osiris-20200115-000000.dump"  # the vault has no copy of this one
     only_here.write_bytes(b"x" * 100)
+    _back_date(only_here)
     # the CLI's own `main()` uses the REAL wall clock (never the test module's fixed
     # NOW), so name this one after it directly to land it inside the one day window
     real_now = datetime.now(UTC)
@@ -300,6 +316,172 @@ def test_the_age_math_uses_the_real_age_so_a_dump_near_the_edge_is_not_aged_earl
     assert "20261111-043007.dump" in kept and removed == set()
 
 
+def test_the_repeated_hour_when_the_clock_goes_back_is_told_apart_by_the_mtime(  # type: ignore[no-untyped-def]
+    tmp_path, chicago,
+) -> None:
+    """2026-11-01 01:30 happens twice in Chicago (05:30 UTC, then 07:30 UTC). Two dumps with the
+    SAME stamp-hour but written an hour apart must order the way they were written."""
+    import os
+
+    from scripts.osiris_prune_ladder import _scan
+
+    first = tmp_path / "osiris-20261101-013005.dump"   # written 01:30 CDT = 06:30 UTC
+    second = tmp_path / "osiris-20261101-013500.dump"  # written 01:35 CST = 07:35 UTC
+    for f in (first, second):
+        f.write_bytes(b"x")
+    t_first = datetime(2026, 11, 1, 6, 31, 0, tzinfo=UTC).timestamp()
+    t_second = datetime(2026, 11, 1, 7, 36, 0, tzinfo=UTC).timestamp()
+    os.utime(first, (t_first, t_first))
+    os.utime(second, (t_second, t_second))
+
+    found = {Path(f.path).name: f for f in _scan(tmp_path)}
+
+    assert found[first.name].when.astimezone(UTC) == datetime(2026, 11, 1, 6, 30, 5, tzinfo=UTC)
+    assert found[second.name].when.astimezone(UTC) == datetime(2026, 11, 1, 7, 35, 0, tzinfo=UTC)
+    assert found[first.name].when < found[second.name].when  # the order they were written in
+
+
+def test_an_ambiguous_stamp_without_an_mtime_takes_the_first_reading(chicago) -> None:  # type: ignore[no-untyped-def]
+    from scripts.osiris_prune_ladder import _stamp_as_local_time
+
+    got = _stamp_as_local_time("20261101013000")
+
+    assert got.astimezone(UTC) == datetime(2026, 11, 1, 6, 30, 0, tzinfo=UTC)
+
+
+def _dump_at(directory, stamp: str, written_utc: datetime):  # type: ignore[no-untyped-def]
+    import os
+
+    path = directory / f"osiris-{stamp}.dump"
+    path.write_bytes(b"x")
+    os.utime(path, (written_utc.timestamp(), written_utc.timestamp()))
+    return path
+
+
+def test_a_file_whose_stamp_the_clock_does_not_back_is_held_and_never_removed(  # type: ignore[no-untyped-def]
+    tmp_path, chicago,
+) -> None:
+    """The stamp says 2020 but the file was written just now: a copy or a restore, or a stamp
+    from another zone. It is far past every window, so the plan would delete it: it is kept."""
+    from scripts.osiris_prune_ladder import _scan, plan_prune, plan_prune_cache, plan_prune_dumps
+
+    now = datetime(2026, 11, 13, 12, 0, 0, tzinfo=UTC)
+    odd = _dump_at(tmp_path, "20200101-000000", now)          # name 2020, written now
+    honest = _dump_at(tmp_path, "20200102-000000", datetime(2020, 1, 2, 6, 5, 0, tzinfo=UTC))
+    files = _scan(tmp_path)
+
+    held = [f for f in files if f.held]
+    assert [Path(f.path).name for f in held] == [odd.name]
+    assert "apart" in (held[0].held or "")
+    for plan in (plan_prune(files, now=now), plan_prune_dumps(files, now=now, verified=None),
+                 plan_prune_cache(files, now=now, vault_names={odd.name, honest.name})):
+        assert odd.as_posix() in {f.path for f in plan["keep"]}
+        assert odd.as_posix() not in {f.path for f in plan["remove"]}
+
+
+def test_a_held_file_takes_no_part_in_the_buckets_of_the_files_that_are_not(  # type: ignore[no-untyped-def]
+    tmp_path, chicago,
+) -> None:
+    from scripts.osiris_prune_ladder import _scan, plan_prune
+
+    now = datetime(2026, 11, 13, 12, 0, 0, tzinfo=UTC)
+    # two honest dumps of one old week: the older is removed, the newer wins the week bucket
+    a = _dump_at(tmp_path, "20260101-040000", datetime(2026, 1, 1, 10, 5, 0, tzinfo=UTC))
+    b = _dump_at(tmp_path, "20260101-100000", datetime(2026, 1, 1, 16, 5, 0, tzinfo=UTC))
+    # a held file with a stamp in the same week must not displace either of them
+    _dump_at(tmp_path, "20260101-120000", now)
+    plan = plan_prune(_scan(tmp_path), now=now)
+
+    assert {Path(f.path).name for f in plan["remove"]} == {a.name}
+    assert b.as_posix() in {f.path for f in plan["keep"]}
+
+
+def test_a_stamp_close_to_the_mtime_is_not_held(tmp_path, chicago) -> None:  # type: ignore[no-untyped-def]
+    from scripts.osiris_prune_ladder import STAMP_MTIME_TOLERANCE, _scan
+
+    assert STAMP_MTIME_TOLERANCE == timedelta(hours=3)
+    # a dump takes a while to write: the file is last touched ten minutes after its stamp
+    _dump_at(tmp_path, "20261111-043007", datetime(2026, 11, 11, 10, 40, 19, tzinfo=UTC))
+
+    [found] = _scan(tmp_path)
+
+    assert found.held is None
+
+
+def test_the_dry_run_report_names_a_held_file(tmp_path, chicago) -> None:  # type: ignore[no-untyped-def]
+    from scripts.osiris_prune_ladder import _report_text, _scan, plan_prune
+
+    now = datetime(2026, 11, 13, 12, 0, 0, tzinfo=UTC)
+    odd = _dump_at(tmp_path, "20200101-000000", now)
+
+    text = _report_text("vault", plan_prune(_scan(tmp_path), now=now))
+
+    assert "HELD (kept, not trusted to delete)" in text and odd.name in text
+
+
+@pytest.fixture
+def utc_box(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+    """A prune run in a container whose zone is UTC, over files named by a box in Chicago."""
+    monkeypatch.setenv("TZ", "UTC")
+    _time.tzset()
+    yield
+    monkeypatch.undo()
+    _time.tzset()
+
+
+def test_a_prune_run_in_utc_over_chicago_named_files_removes_nothing_it_cannot_date(  # type: ignore[no-untyped-def]
+    tmp_path, utc_box,
+) -> None:
+    """The names say 04:30 (Chicago wall time); read in UTC they are 6 h early, which would push
+    every dump 6 h older than it is. The mtime shows the disagreement, so each is held, and the
+    ladder, which would otherwise have thinned them, removes none."""
+    from scripts.osiris_prune_ladder import _scan, plan_prune, plan_prune_dumps
+
+    written = [(f"2026110{d}-043007", datetime(2026, 11, d, 10, 40, 19, tzinfo=UTC))
+               for d in (1, 2, 3, 4, 5, 6)]
+    paths = [_dump_at(tmp_path, stamp, at) for stamp, at in written]
+    now = datetime(2026, 12, 20, 12, 0, 0, tzinfo=UTC)  # far past every window
+    files = _scan(tmp_path)
+
+    assert all(f.held for f in files) and len(files) == 6
+    assert plan_prune(files, now=now)["remove"] == []
+    assert plan_prune_dumps(files, now=now, verified=None)["remove"] == []
+    assert {f.path for f in plan_prune(files, now=now)["keep"]} == {str(p) for p in paths}
+
+
+def test_a_dump_written_in_the_repeated_hour_stays_newer_than_the_verified_base(  # type: ignore[no-untyped-def]
+    tmp_path, chicago,
+) -> None:
+    """The base backup is written 01:50 CDT (06:50 UTC), the dump 01:10 CST (07:10 UTC): the dump's
+    stamp is numerically EARLIER, but it is the newer file. 'Never remove a dump newer than the
+    newest verified base backup' needs the real order."""
+    import os
+
+    from scripts.osiris_prune_ladder import DumpFile, _scan, plan_prune_dumps
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    base = vault / "osiris-basebackup-20261101-015000.tar.gz"
+    dump = vault / "osiris-20261101-011000.dump"
+    for f, at in ((base, datetime(2026, 11, 1, 6, 55, 0, tzinfo=UTC)),
+                  (dump, datetime(2026, 11, 1, 7, 15, 0, tzinfo=UTC))):
+        f.write_bytes(b"x")
+        os.utime(f, (at.timestamp(), at.timestamp()))
+    [verified] = [f for f in _scan(vault) if "basebackup" in f.path]
+    [scanned] = [f for f in _scan(vault) if f.path == str(dump)]
+    now = datetime(2026, 11, 20, 12, 0, 0, tzinfo=UTC)  # the dump is long past its windows
+
+    assert scanned.when > verified.when  # written later, so newer, whatever the stamps read
+    kept = plan_prune_dumps([scanned], now=now, verified=verified)
+    assert str(dump) in {f.path for f in kept["keep"]} and kept["remove"] == []
+
+    # the control: read with no mtime to break the tie (the first reading of 01:10), the dump
+    # looks OLDER than the base, is past the windows, and is removed
+    naive = DumpFile(str(dump), datetime(2026, 11, 1, 1, 10, 0).astimezone(), 1)
+    assert [f.path for f in plan_prune_dumps([naive], now=now, verified=verified)["remove"]] == [
+        str(dump)]
+
+
 def test_the_old_utc_reading_would_have_removed_one_of_them(tmp_path) -> None:
     """The control for the test above: with the stamps read as UTC (the old behaviour) both dumps
     land in the daily tier (55.5 h and 49.5 h), share one day bucket, and the older one is
@@ -365,6 +547,8 @@ def test_cli_reports_and_prunes_basebackups_as_their_own_population(
     # two ancient same-month basebackups, the elder should be removable
     (basebackups / "osiris-basebackup-20240108-000000.tar.gz").write_bytes(b"x" * 10)
     (basebackups / "osiris-basebackup-20240115-000000.tar.gz").write_bytes(b"x" * 10)
+    for f in basebackups.iterdir():
+        _back_date(f)
 
     rc = main(["--backups", str(backups), "--vault", str(vault)])
 
@@ -754,6 +938,7 @@ def test_apply_removes_a_pruned_base_backups_marker_with_it(tmp_path, capsys) ->
     new = bases / "osiris-basebackup-20260908-000000.tar.gz"
     for f in (old, new):
         _write_base_backup(f, "000000010000000000000002")
+        _back_date(f)
         mark_base_backup_verified(f)
 
     assert main(["--backups", str(tmp_path / "backups"), "--vault", str(vault), "--apply"]) == 0

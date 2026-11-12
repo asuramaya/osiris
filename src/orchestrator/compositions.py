@@ -5294,6 +5294,9 @@ async def _fn_backup_status(
                       "newest_size_bytes": newest_dump.size_bytes if newest_dump else None},
             "base_backups": {"count": len(basebackups),
                              "newest_at": newest_base.when.isoformat() if newest_base else None},
+            # files whose name stamp the clock does not back: the prune ladder never removes them
+            "held_files": [f"{Path(f.path).name}: {f.held}" for f in dumps + basebackups
+                           if f.held],
             "wal_segments_kept": len(wal_plan["keep"]),
             "wal_segments_prunable": len(wal_plan["remove"]),
         }

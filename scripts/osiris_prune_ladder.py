@@ -55,15 +55,17 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import functools
 import json
 import os
 import re
 import sys
 import tarfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -74,19 +76,54 @@ _NAME_RE = re.compile(r"^osiris-(\d{8})-(\d{6})\.(?:dump|sql)$")
 _BASEBACKUP_RE = re.compile(r"^osiris-basebackup-(\d{8})-(\d{6})\.tar\.gz$")
 
 
+# A file name's stamp and the file's own modification time describe the same moment, a few
+# minutes apart (a dump takes a while to write). When they are further apart than this, one of
+# them is lying: the stamp was written in another zone than the one reading it (a container in
+# UTC), or the file was copied or restored. Such a file is HELD: never removed, and reported.
+STAMP_MTIME_TOLERANCE = timedelta(hours=3)
+
+
 @dataclass(frozen=True)
 class DumpFile:
     path: str
     when: datetime
     size_bytes: int = 0
+    held: str | None = None  # why this file must not be removed (a stamp the clock does not back)
 
 
-def _stamp_as_local_time(stamp: str) -> datetime:
+_PlanFn = Callable[..., dict[str, list[DumpFile]]]
+
+
+def _never_remove_held(fn: _PlanFn) -> _PlanFn:
+    """Wrap a plan over DumpFiles so a HELD file is neither considered by it nor ever removed:
+    the plan is made over the rest, and the held files are added to `keep`. Never trust the name
+    stamp alone for a delete."""
+    @functools.wraps(fn)
+    def wrapper(files: list[DumpFile], *args: Any, **kwargs: Any) -> dict[str, list[DumpFile]]:
+        held = [f for f in files if f.held]
+        plan = fn([f for f in files if not f.held], *args, **kwargs)
+        if not held:
+            return plan
+        return {"keep": sorted(plan["keep"] + held, key=lambda f: f.when),
+                "remove": plan["remove"]}
+    return wrapper
+
+
+def _stamp_as_local_time(stamp: str, mtime: float | None = None) -> datetime:
     """The `YYYYmmddHHMMSS` in a dump or base-backup file name is this box's LOCAL wall time (the
     backup scripts name files with a plain `date`), so it is read as local time: an aware
     datetime that keeps the wall clock, so calendar-day buckets still follow the file name's own
-    date. Reading it as UTC made every dump look as many hours older as the box is behind UTC."""
-    return datetime.strptime(stamp, "%Y%m%d%H%M%S").astimezone()
+    date. Reading it as UTC made every dump look as many hours older as the box is behind UTC.
+
+    In the hour a clock goes back (daylight saving ends) one wall time happens twice. The file's
+    own modification time says which of the two it was: the reading closest to it wins (without a
+    modification time, the first)."""
+    naive = datetime.strptime(stamp, "%Y%m%d%H%M%S")
+    first = naive.replace(fold=0).astimezone()
+    second = naive.replace(fold=1).astimezone()
+    if first.utcoffset() == second.utcoffset() or mtime is None:
+        return first
+    return min((first, second), key=lambda c: abs(c.timestamp() - mtime))
 
 
 def _bucket_key(when: datetime, tier: str) -> str:
@@ -100,6 +137,7 @@ def _bucket_key(when: datetime, tier: str) -> str:
     raise ValueError(f"unknown tier: {tier!r}")
 
 
+@_never_remove_held
 def plan_prune(
     files: list[DumpFile], *, now: datetime,
     hot_window: timedelta = timedelta(hours=48),
@@ -185,6 +223,7 @@ def newest_verified_base(bases: list[DumpFile]) -> DumpFile | None:
     return max(verified, key=lambda f: f.when) if verified else None
 
 
+@_never_remove_held
 def plan_prune_basebackups(
     files: list[DumpFile], *, now: datetime, verified: DumpFile | None,
 ) -> dict[str, list[DumpFile]]:
@@ -197,6 +236,7 @@ def plan_prune_basebackups(
             "remove": [f for f in ordered if f.when < verified.when]}
 
 
+@_never_remove_held
 def plan_prune_dumps(
     files: list[DumpFile], *, now: datetime, verified: DumpFile | None,
 ) -> dict[str, list[DumpFile]]:
@@ -219,6 +259,7 @@ def plan_prune_dumps(
             "remove": [f for f in ordered if f.path not in keep]}
 
 
+@_never_remove_held
 def plan_prune_cache(
     files: list[DumpFile], *, now: datetime, vault_names: set[str],
 ) -> dict[str, list[DumpFile]]:
@@ -265,7 +306,15 @@ def _scan(directory: Path, *, glob: str = "osiris-*") -> list[DumpFile]:
             continue
         m = _NAME_RE.match(p.name) or _BASEBACKUP_RE.match(p.name)
         if m:
-            when = _stamp_as_local_time(m.group(1) + m.group(2))
+            mtime = p.stat().st_mtime
+            when = _stamp_as_local_time(m.group(1) + m.group(2), mtime)
+            apart = abs(when - datetime.fromtimestamp(mtime, tz=UTC))
+            if apart > STAMP_MTIME_TOLERANCE:
+                out.append(DumpFile(str(p), when, p.stat().st_size, held=(
+                    f"the name says {when.isoformat()} but the file was last written "
+                    f"{datetime.fromtimestamp(mtime, tz=UTC).isoformat()} "
+                    f"({apart.total_seconds() / 3600:.1f} h apart)")))
+                continue
         elif p.name.endswith(_DUMP_LIKE_SUFFIXES):
             when = datetime.fromtimestamp(p.stat().st_mtime, tz=UTC)
         else:
@@ -478,6 +527,9 @@ def _report_text(label: str, plan: dict[str, list[DumpFile]]) -> str:
     for f in plan["remove"]:
         lines.append(f"  REMOVE  {f.path}  ({f.when.isoformat()}, "
                      f"{f.size_bytes / (1024**2):.1f} MB)")
+    for f in plan["keep"]:
+        if f.held:
+            lines.append(f"  HELD (kept, not trusted to delete)  {f.path}: {f.held}")
     return "\n".join(lines)
 
 
