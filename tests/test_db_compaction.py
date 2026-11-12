@@ -417,3 +417,68 @@ async def test_a_stale_housekeeping_flag_is_ignored_but_a_live_backfill_flag_sti
     assert await drain_running(actions.pool, "assertions_cold") is True
     await set_backfill_drain(actions.pool, "some_backfill", ("assertions_cold",), False)
     assert await drain_running(actions.pool, "assertions_cold") is False
+
+
+def test_ordinary_nightly_tiering_does_not_hold_the_drain_flag() -> None:
+    """Live: tonight's run would move 472 rows. That is not a bulk drain, and holding the flag
+    made the night compaction skip assertions_hot and assertions_cold every night."""
+    from src.workers.arq_worker import _TIERING_DRAIN_ROWS, hot_cold_drain_running
+
+    quiet = dict(layout_finished=True, fold_finished=True, tiering_paused=False)
+    assert hot_cold_drain_running(rows_moved=0, **quiet) is False
+    assert hot_cold_drain_running(rows_moved=472, **quiet) is False
+    assert hot_cold_drain_running(rows_moved=_TIERING_DRAIN_ROWS, **quiet) is False
+
+
+def test_a_real_bulk_drain_still_holds_the_flag() -> None:
+    from src.workers.arq_worker import _TIERING_DRAIN_ROWS, hot_cold_drain_running
+
+    base = dict(layout_finished=True, fold_finished=True, tiering_paused=False, rows_moved=0)
+    assert hot_cold_drain_running(**{**base, "rows_moved": _TIERING_DRAIN_ROWS + 1}) is True
+    assert hot_cold_drain_running(**{**base, "layout_finished": False}) is True
+    assert hot_cold_drain_running(**{**base, "fold_finished": False}) is True
+    assert hot_cold_drain_running(**{**base, "tiering_paused": True}) is True
+
+
+async def test_the_flag_is_written_once_per_pass_and_cleared_when_the_pass_finishes(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The old flag was left true by a previous pass and every move re-set it. A finished pass
+    with only ordinary tiering clears a stale 'running' flag."""
+    import src.orchestrator.mailbox as mailbox
+    from src.orchestrator.monitor import get_cursor
+    from src.workers.arq_worker import storage_housekeeping_heartbeat
+
+    async def _send(pool: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"sent": 1}
+
+    monkeypatch.setattr(mailbox, "send_message", _send)
+    await db_compaction.set_drain(actions.pool, ("assertions_hot", "assertions_cold"), True)
+    await storage_housekeeping_heartbeat({"cascade": SimpleNamespace(actions=actions)})
+    for table in ("assertions_hot", "assertions_cold"):
+        flag = json.loads(await get_cursor(actions.pool, db_compaction.DRAIN_KEY + table) or "{}")
+        assert flag.get("running") is False, table
+
+
+async def test_a_failed_step_leaves_the_flag_as_it_was(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure says nothing about whether the drain is done, so the flag is not rewritten."""
+    import src.orchestrator.assertion_fold as assertion_fold
+    import src.orchestrator.mailbox as mailbox
+    from src.orchestrator.monitor import get_cursor
+    from src.workers.arq_worker import storage_housekeeping_heartbeat
+
+    async def _send(pool: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"sent": 1}
+
+    async def _boom(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("fold failed")
+
+    monkeypatch.setattr(mailbox, "send_message", _send)
+    monkeypatch.setattr(assertion_fold, "apply_fold", _boom)
+    await db_compaction.set_drain(actions.pool, ("assertions_hot", "assertions_cold"), True)
+    await storage_housekeeping_heartbeat({"cascade": SimpleNamespace(actions=actions)})
+    flag = json.loads(
+        await get_cursor(actions.pool, db_compaction.DRAIN_KEY + "assertions_hot") or "{}")
+    assert flag.get("running") is True
