@@ -514,6 +514,34 @@ async def test_backup_status_ladder_tiers_read_off_plan_prunes_own_defaults(
     assert ladder["configurable"] is False
 
 
+async def test_backup_status_lists_a_backup_that_finished_with_unread_files(
+    actions: Actions, tmp_path, monkeypatch: pytest.MonkeyPatch, _use_test_dsn: None,
+) -> None:
+    from src.orchestrator import offload_runner
+    from src.orchestrator.backup_settings import write_backup_settings
+
+    monkeypatch.setenv(offload_runner._RECEIPTS_ENV, str(tmp_path / "receipts.json"))
+    await seed_default_compositions(actions.pool)
+    await write_backup_settings(
+        actions.pool, actor="operator", because="x",
+        offload_targets=[{"name": "nas", "kind": "restic", "path_or_url": "sftp:nas:/r",
+                          "schedule": "*-*-* 03:00:00", "enabled": True}])
+    offload_runner._log_attempt("nas", "failed", "2026-11-10T00:00:00+00:00", duration_s=2.0,
+                                exit_code=1, detail="restic backup failed: x")
+    offload_runner._write_receipt("nas", {
+        "last_successful_offload": "2026-11-11T00:00:00+00:00",
+        "last_note": "snapshot saved, but restic could not read some source files: x"})
+
+    res = await run_spec(actions.pool, {"op": "function", "name": "backup_status",
+                                        "args": {"vault": str(tmp_path / "v"),
+                                                 "backups": str(tmp_path / "b")}}, None)
+
+    attempts = res["items"]["offbox"]["recent_attempts"]
+    assert [(a["name"], a["outcome"]) for a in attempts] == [("nas", "failed")]
+    warnings = res["items"]["offbox"]["warnings"]
+    assert len(warnings) == 1 and warnings[0].startswith("nas: snapshot saved")
+
+
 async def test_backup_status_degrades_a_missing_vault_without_blanking_other_sections(
     actions: Actions, tmp_path, _use_test_dsn: None,
 ) -> None:

@@ -88,6 +88,44 @@ async def test_the_tick_never_allows_init_when_the_receipts_did_not_parse(
     assert seen == [False]
 
 
+async def test_the_refusal_names_the_marker_and_the_remedy_not_a_false_history(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _one_target(actions)
+    (tmp_path / "offload_receipts.json").write_text("{broken")
+    seen: list[str | None] = []
+    monkeypatch.setattr(offload_runner, "_run_restic_backup",
+                        lambda **kw: seen.append(kw["no_init_reason"]))
+
+    await offload_runner.run_offload_tick(actions.pool)
+
+    reason = seen[0] or ""
+    assert "offload_receipts.json.unreadable" in reason and "restic init" in reason
+    assert "cannot tell whether nas has offloaded before" in reason
+
+
+def test_the_backup_returns_the_given_reason_instead_of_claiming_an_offload_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+    import stat
+    import sys
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    exe = bin_dir / "restic"
+    exe.write_text(f"#!{sys.executable}\nimport sys\n"
+                   "print('Fatal: repository does not exist', file=sys.stderr)\nsys.exit(10)\n")
+    exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+
+    out = offload_runner._run_restic_backup(
+        repository="fake", password=b"x", source=tmp_path, init_if_needed=False,
+        no_init_reason="because the receipts are damaged")
+
+    assert out == "because the receipts are damaged"
+
+
 async def test_the_tick_allows_init_for_a_target_with_no_receipts_at_all(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

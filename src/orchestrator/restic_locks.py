@@ -19,6 +19,7 @@ import signal
 import socket
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -33,6 +34,43 @@ STOP_GRACE_SECONDS = 15
 # After a stopped restic has exited, how long to keep reading its output before giving up on pipes a
 # surviving child (ssh) still holds.
 POST_STOP_DRAIN_SECONDS = 5
+
+# Every restic this process has started and not yet seen finish. A hand-run tick that is
+# interrupted (Ctrl-C reaches the main thread, never a restic running in its own session on a
+# worker thread) uses this to stop them instead of orphaning a backup for up to its whole timeout.
+_live: set[subprocess.Popen[Any]] = set()
+_live_lock = threading.Lock()
+
+
+def track(proc: subprocess.Popen[Any]) -> None:
+    with _live_lock:
+        _live.add(proc)
+
+
+def untrack(proc: subprocess.Popen[Any]) -> None:
+    with _live_lock:
+        _live.discard(proc)
+
+
+def stop_all_running(grace: float | None = None) -> int:
+    """Ask every tracked restic to stop (SIGINT: it unlocks and exits), give them the grace
+    together, kill what ignored it. Returns how many were still running."""
+    with _live_lock:
+        running = [p for p in _live if p.poll() is None]
+    for proc in running:
+        with contextlib.suppress(OSError):
+            proc.send_signal(signal.SIGINT)
+    deadline = time.monotonic() + (STOP_GRACE_SECONDS if grace is None else grace)
+    for proc in running:
+        try:
+            proc.wait(timeout=max(deadline - time.monotonic(), 0.0))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    return len(running)
+
 
 Runner = Callable[[list[str], dict[str, str]], "subprocess.CompletedProcess[str]"]
 
@@ -81,28 +119,40 @@ def run_restic(args: list[str], env: dict[str, str], *, timeout: float, text: bo
     # our pipes, so when the run is stopped the whole group can be cleaned up together.
     proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=text, start_new_session=True)
+    track(proc)
     try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        stop_restic(proc, grace)
         try:
-            out, err = proc.communicate(timeout=POST_STOP_DRAIN_SECONDS)
-        except subprocess.TimeoutExpired as drain:
-            # restic is gone but a child (the ssh behind the sftp backend) still holds the pipes
-            # open, so reading to the end would wait on a dead link forever. Keep what arrived,
-            # close the pipes and end whatever is left of the group.
-            out, err = drain.output, drain.stderr
-            for stream in (proc.stdout, proc.stderr):
-                if stream is not None:
-                    with contextlib.suppress(OSError, ValueError):
-                        stream.close()
-            with contextlib.suppress(OSError):
-                os.killpg(proc.pid, signal.SIGKILL)
-        raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err) from None
-    except BaseException:
-        stop_restic(proc, grace)
-        raise
-    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # restic may have EXITED (cleanly or not) with the pipes still held open by the ssh
+            # behind an sftp repository: then the run did not time out, restic finished and only
+            # the drain stalled. Its exit code stands; only a restic still running is a timeout.
+            finished = proc.poll() is not None
+            if not finished:
+                stop_restic(proc, grace)
+            try:
+                out, err = proc.communicate(timeout=POST_STOP_DRAIN_SECONDS)
+            except subprocess.TimeoutExpired as drain:
+                # restic is gone but a child still holds the pipes open, so reading to the end
+                # would wait on a dead link forever. Keep what arrived, close the pipes and end
+                # whatever is left of the group.
+                out, err = drain.output, drain.stderr
+                for stream in (proc.stdout, proc.stderr):
+                    if stream is not None:
+                        with contextlib.suppress(OSError, ValueError):
+                            stream.close()
+                with contextlib.suppress(OSError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+            if not finished:
+                raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err) from None
+            empty: Any = b"" if not text else ""
+            return subprocess.CompletedProcess(cmd, proc.returncode, out or empty, err or empty)
+        except BaseException:
+            stop_restic(proc, grace)
+            raise
+        return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+    finally:
+        untrack(proc)
 
 
 def _run(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:

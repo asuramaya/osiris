@@ -206,13 +206,18 @@ class _Watched:
 
     def __init__(self, args: list[str], env: dict[str, str], budget: _Budget, step: str, *,
                  text: bool) -> None:
+        from src.orchestrator import restic_locks
+
         self.step = step
         self.budget = budget
         self._fired = threading.Event()
+        # the budget is checked BEFORE restic starts: a spent budget must not start a process
+        left = budget.timeout(step)
         self.proc: subprocess.Popen[Any] = subprocess.Popen(
             ["restic", *args], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=text, start_new_session=True)
-        self._timer = threading.Timer(max(budget.timeout(step), 0.0), self._fire)
+        restic_locks.track(self.proc)
+        self._timer = threading.Timer(max(left, 0.0), self._fire)
         self._timer.daemon = True
         self._timer.start()
 
@@ -221,8 +226,11 @@ class _Watched:
         _stop(self.proc)
 
     def close(self) -> None:
+        from src.orchestrator import restic_locks
+
         self._timer.cancel()
         _stop(self.proc)
+        restic_locks.untrack(self.proc)
 
     def fired(self) -> bool:
         return self._fired.is_set()

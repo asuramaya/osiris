@@ -165,9 +165,14 @@ def _offload_current_step(
     label = "Backups up to date"
     if not enabled_targets:
         return _step("offload_current", label, "missing", "Waiting for a backup target.", None)
-    if stale:
-        return _step("offload_current", label, "needs_attention",
-                     " ".join(stale_sentence(e, stale_days) + "." for e in stale), None)
+    # a backup that finished but could not read some files is not a clean one: say so, so a vault
+    # file that stays unreadable cannot hide behind a green step
+    notes = [f"{t.get('name', '<unnamed>')}: {t['last_note']}" for t in enabled_targets
+             if isinstance(t, dict) and t.get("last_note")]
+    parts = [stale_sentence(e, stale_days) + "." for e in stale]
+    parts += [f"The last backup was saved with a warning ({note})." for note in notes]
+    if parts:
+        return _step("offload_current", label, "needs_attention", " ".join(parts), None)
     return _step("offload_current", label, "done", None, None)
 
 
