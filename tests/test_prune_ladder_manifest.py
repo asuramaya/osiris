@@ -141,6 +141,9 @@ async def test_find_clear_manifest_refuses_a_dimmed_manifest(
     mid, reason = await ladder.find_clear_manifest()
     assert mid is None
     assert "dimmed" in reason
+    # it says where to look the manifest up and what a dim means
+    assert f"mail {sent_id} on the operator desk (`osiris desk`)" in reason
+    assert "no longer current" in reason
 
 
 async def test_collect_session_prune_plan_delegates_to_the_cache_prune_script(

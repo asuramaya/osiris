@@ -750,7 +750,9 @@ async def find_clear_manifest(
         return None, "no manifest has ever been sent: run --manifest first"
     if row["moot_at"] is not None:
         return None, (f"manifest {row['id']} was dimmed at "
-                      f"{row['moot_at'].isoformat()}, not applying")
+                      f"{row['moot_at'].isoformat()}, not applying. The manifest is mail "
+                      f"{row['id']} on the operator desk (`osiris desk`); a dim means something "
+                      "judged the plan no longer current. A newer manifest replaces it.")
     age = datetime.now(UTC) - row["created_at"]
     if age < min_age:
         return None, (f"manifest {row['id']} is only {age} old (need "
