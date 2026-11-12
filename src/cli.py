@@ -1072,7 +1072,77 @@ async def cmd_seed(*, compositions_only: bool, pool: asyncpg.Pool | None = None)
 _SOUL_KEY_POOL_FREE_ACTIONS = ("init",)
 _SOUL_KEY_ACTIONS = (
     "status", "init", "rotate", "restore-drill", "enroll-recovery", "verify-recovery",
-    "recover", "reseal")
+    "recover", "reseal", "envelope")
+_ENVELOPE_ACTIONS = ("list", "check", "add-key", "add-code", "remove", "verify")
+
+
+def _cmd_soul_key_envelope(
+    envelope_action: str | None, *, path: str | None, recipient: str | None,
+    label: str | None, allow_no_hardware: bool, as_json: bool,
+) -> int:
+    """osiris soul-key envelope <list|check|add-key|add-code|remove|verify>: who the soul key is
+    sealed to, and adding, removing and proving each recipient. Pool-free, like init: it only
+    reads and writes the recovery file next to the key. A recovery code is shown ONLY on a
+    terminal and is read back with getpass: it is never an argument, never in the output of a
+    pipe or --json, never logged. A hardware key needs to be plugged in, and its PIN and touch
+    are asked for at the terminal."""
+    from src import cli_render as render
+    from src.ingest import soul_envelope
+
+    if envelope_action not in _ENVELOPE_ACTIONS:
+        print(f"osiris soul-key envelope: choose one of {', '.join(_ENVELOPE_ACTIONS)}",
+              file=sys.stderr)
+        return 1
+    title = f"soul-key envelope {envelope_action}"
+    if envelope_action == "list":
+        render.emit({"recipients": soul_envelope.envelope_recipients(path=path)},
+                    as_json=as_json, title=title)
+        return 0
+    if envelope_action == "check":
+        out = soul_envelope.envelope_check(path=path)
+        render.emit(out, as_json=as_json, title=title)
+        return 0 if out["ok"] else 1
+    if envelope_action == "add-key":
+        out = soul_envelope.envelope_add_key(path=path, label=label or "security key")
+    elif envelope_action == "add-code":
+        if as_json or not sys.stdout.isatty():
+            print("osiris soul-key envelope add-code: the new code is shown only on a "
+                  "terminal, never in --json or a pipe, so it cannot end up in a log. "
+                  "Run it in a terminal.", file=sys.stderr)
+            return 1
+        out = soul_envelope.envelope_add_code(path=path, label=label or "recovery code")
+        if "error" not in out:
+            code = out.pop("code")
+            print("\nWRITE THIS RECOVERY CODE DOWN NOW and keep it somewhere safe and "
+                  "offline. It is not stored anywhere and will not be shown again:\n")
+            print(f"    {code}\n")
+    elif not recipient:
+        print(f"osiris soul-key envelope {envelope_action}: --recipient <id> is required "
+              "(see `osiris soul-key envelope list`)", file=sys.stderr)
+        return 1
+    elif envelope_action == "remove":
+        out = soul_envelope.envelope_remove(
+            recipient, path=path, allow_no_hardware=allow_no_hardware)
+    else:  # verify
+        kinds = {r["id"]: r["kind"] for r in soul_envelope.envelope_recipients(path=path)}
+        typed = None
+        if kinds.get(recipient) == soul_envelope.KIND_CODE:
+            import getpass
+
+            typed = getpass.getpass("Recovery code: ")
+        out = soul_envelope.envelope_verify(recipient, path=path, interactive=True, code=typed)
+        if out.get("needs_operator_key"):
+            print("osiris soul-key envelope verify: nobody acted in time (no touch, or no "
+                  "code). Nothing was proven; try again.", file=sys.stderr)
+        render.emit(out, as_json=as_json, title=title)
+        return 0 if out["ok"] else 1
+    if "error" in out:
+        print(f"osiris soul-key envelope {envelope_action}: refused: {out['error']}",
+              file=sys.stderr)
+        render.emit(out, as_json=as_json, title=title)
+        return 1
+    render.emit(out, as_json=as_json, title=title)
+    return 0
 
 
 _SOUL_KEY_RESTART_UNITS = ["osiris-mcp.service", "osiris-worker.service"]
@@ -1083,10 +1153,12 @@ async def cmd_soul_key(
     backend: str | None = None, finish: bool = False, print_recovery: bool = False,
     repo_url: str | None = None, restart: bool = False, as_json: bool = False,
     exact: bool = False, recovery_file: str | None = None, full: bool = False,
+    envelope_action: str | None = None, recipient: str | None = None,
+    label: str | None = None, allow_no_hardware: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris soul-key <status|init|rotate|restore-drill|enroll-recovery|verify-recovery|
-    recover|reseal>:
+    recover|reseal|envelope>:
     THE KEY ENTRY POINT, so that key and backup setup are configurable from the UI or the
     CLI without needing an agent. A thin console-script entry point, matching `osiris
     composition <action>`'s own shape.
@@ -1118,6 +1190,10 @@ async def cmd_soul_key(
     from src import cli_render as render
     from src.ingest import soul_crypto
 
+    if action == "envelope":
+        return _cmd_soul_key_envelope(
+            envelope_action, path=path, recipient=recipient, label=label,
+            allow_no_hardware=allow_no_hardware, as_json=as_json)
     if action == "reseal":
         # pool-free, like init: it only re-seals the same key on this machine's TPM
         out = soul_crypto.soul_key_reseal_tpm(path=path)
@@ -8519,11 +8595,13 @@ def _build_parser() -> argparse.ArgumentParser:
                "example: osiris soul-key rotate\n"
                "example: osiris soul-key rotate --finish\n"
                "example: osiris soul-key recover\n"
-               "example: osiris soul-key restore-drill")
+               "example: osiris soul-key restore-drill\n"
+               "example: osiris soul-key envelope list\n"
+               "example: osiris soul-key envelope verify --recipient k2")
     p_soul_key.add_argument(
         "action",
         choices=["status", "init", "rotate", "restore-drill", "enroll-recovery",
-                 "verify-recovery", "recover", "reseal"],
+                 "verify-recovery", "recover", "reseal", "envelope"],
         help="status: show backend, recovery, and encryption-progress facts, never the "
              "key bytes themselves. init: mint the first key by hand, refusing if one "
              "already exists (a deploy does this automatically); a systemd-creds user "
@@ -8536,7 +8614,25 @@ def _build_parser() -> argparse.ArgumentParser:
              "security-key recovery enrollment onto a box with no live key yet. "
              "restore-drill: prove that an off-box backup repository actually "
              "restores. reseal: move the existing key onto this machine's TPM once "
-             "your user has joined the tss group (the key itself does not change)")
+             "your user has joined the tss group (the key itself does not change). "
+             "envelope: who the key is sealed to, so losing one security key never locks "
+             "the store (list, check, add-key, add-code, remove, verify; give the "
+             "sub-command after it)")
+    p_soul_key.add_argument(
+        "envelope_action", nargs="?", default=None,
+        choices=["list", "check", "add-key", "add-code", "remove", "verify"],
+        help="envelope only. list: show who the key is sealed to. check: look the file over "
+             "without opening anything. add-key: seal the key to one more security key (PIN "
+             "plus touch). add-code: seal it to a recovery code, shown once on a terminal. "
+             "remove: drop a recipient (never the last one, nor the last security key). "
+             "verify: prove one recipient opens the key (touch, or type its code)")
+    p_soul_key.add_argument("--recipient", default=None,
+                            help="envelope remove/verify: the recipient id from `envelope list`")
+    p_soul_key.add_argument("--label", default=None,
+                            help="envelope add-key/add-code: a name for the new recipient")
+    p_soul_key.add_argument("--allow-no-hardware", dest="allow_no_hardware",
+                            action="store_true",
+                            help="envelope remove: allow removing the last security key")
     p_soul_key.add_argument("--owner", default=None,
                             help="init only: change ownership of the key file and "
                                  "directory to this user after writing (useful when "
@@ -10215,7 +10311,9 @@ def main(argv: list[str] | None = None) -> int:
             args.action, owner=args.owner, path=args.path, backend=args.backend,
             finish=args.finish, print_recovery=args.print_recovery,
             repo_url=args.repo_url, restart=args.restart, as_json=args.as_json,
-            exact=args.exact, recovery_file=args.recovery_file, full=args.full))
+            exact=args.exact, recovery_file=args.recovery_file, full=args.full,
+            envelope_action=args.envelope_action, recipient=args.recipient,
+            label=args.label, allow_no_hardware=args.allow_no_hardware))
     if args.command == "restic-key":
         return asyncio.run(cmd_restic_key(
             args.action, path=args.path, backend=args.backend, as_json=args.as_json))
