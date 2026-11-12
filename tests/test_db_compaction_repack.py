@@ -11,7 +11,11 @@ import pytest
 from src.actions.core import Actions
 from src.orchestrator import db_compaction
 from src.orchestrator.db_compaction import (
+    CLIENT_UNANSWERED,
+    REPACK_MIN_SECS,
     REPACK_STOP_GRACE_SECS,
+    LockNotAcquired,
+    WindowTooShort,
     _docker_exec,
     repack_command,
     repack_ready,
@@ -104,6 +108,8 @@ def test_a_short_allowance_still_gets_a_floor_and_the_user_comes_from_the_dsn() 
     assert db_compaction._user_and_database(DSN) == ("osiris", "osiris")
     assert db_compaction._user_and_database(None) == ("osiris", "osiris")
     assert db_compaction._user_and_database("postgresql://other@h/db2") == ("other", "db2")
+    assert db_compaction._user_and_database("postgresql://os%40iris:p%2Fw@h/db%202") == (
+        "os@iris", "db 2")
 
 
 async def test_a_run_stopped_by_the_timeout_says_it_cleaned_up_and_changed_nothing(
@@ -152,8 +158,14 @@ async def test_the_docker_client_never_raises_and_is_never_killed(
             await asyncio.sleep(30)
             return b"", b""
 
+        waited = False
+
         def terminate(self) -> None:
             self.terminated = True
+
+        async def wait(self) -> int:
+            self.waited = True
+            return -15
 
         def kill(self) -> None:
             self.killed = True
@@ -165,9 +177,111 @@ async def test_the_docker_client_never_raises_and_is_never_killed(
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", start)
     code, _ = await _docker_exec(["exec", "x"], 0.05)
-    assert code == 124 and slow.terminated and not slow.killed
+    assert code == CLIENT_UNANSWERED and code != 124
+    assert slow.terminated and slow.waited and not slow.killed
 
 
 async def test_the_container_name_can_be_overridden(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OSIRIS_PG_CONTAINER", "other-pg")
     assert repack_command("t", stop_after_secs=60, user="u", database="d")[1] == "other-pg"
+
+
+# what the live extension prints and exits with when a conflicting lock is not released within
+# --wait-timeout (checked against pg_repack 1.5.3 with a table lock held by another session)
+SKIPPED = ('INFO: repacking table "public.outbox"\n'
+           "WARNING: timed out, do not cancel conflicting backends\n"
+           "INFO: Skipping repack public.outbox due to timeout")
+
+
+async def _no_sleep(_secs: float) -> None:
+    return None
+
+
+async def test_a_lock_that_pg_repack_gave_up_on_is_retried_not_counted_as_a_rewrite(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _installed(monkeypatch, True)
+    fake = FakeExec((0, "pg_repack 1.5.3"), (0, SKIPPED), (0, SKIPPED), (0, "repacked"))
+    engine = await rewrite_table(
+        actions.pool, "outbox", seconds_left=3000, dsn=DSN, exec_fn=fake, sleep=_no_sleep)
+    assert engine == "pg_repack"
+    assert [c[0][c[0].index("pg_repack"):][:1] for c in fake.calls[1:]] == [["pg_repack"]] * 3
+
+
+async def test_a_lock_that_never_frees_is_a_skip_after_the_same_four_tries(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _installed(monkeypatch, True)
+    fake = FakeExec((0, "pg_repack 1.5.3"), (0, SKIPPED))
+    with pytest.raises(LockNotAcquired) as caught:
+        await rewrite_table(
+            actions.pool, "outbox", seconds_left=3000, dsn=DSN, exec_fn=fake, sleep=_no_sleep)
+    assert len(fake.calls) == 1 + 4                          # the probe and four tries
+    assert "nothing was changed" in caught.value.reason and "5 s" in caught.value.reason
+
+
+async def test_retries_stop_when_too_little_of_the_window_is_left(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _installed(monkeypatch, True)
+    now = [0.0]
+
+    async def spend(_secs: float) -> None:
+        now[0] += 200                                        # each wait and try uses up time
+
+    fake = FakeExec((0, "pg_repack 1.5.3"), (0, SKIPPED))
+    with pytest.raises(LockNotAcquired):
+        await rewrite_table(actions.pool, "outbox", seconds_left=300, dsn=DSN, exec_fn=fake,
+                            sleep=spend, clock=lambda: now[0])
+    assert len(fake.calls) == 1 + 1                          # one try; no room for another
+
+
+async def test_a_window_with_too_little_left_does_not_start_a_repack(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _installed(monkeypatch, True)
+    fake = FakeExec((0, "pg_repack 1.5.3"))
+    with pytest.raises(WindowTooShort) as caught:
+        await rewrite_table(actions.pool, "outbox", seconds_left=REPACK_MIN_SECS - 1, dsn=DSN,
+                            exec_fn=fake)
+    assert len(fake.calls) == 1                              # only the probe
+    assert "nothing was changed" in caught.value.reason
+    fake2 = FakeExec((0, "pg_repack 1.5.3"), (0, "repacked"))
+    assert await rewrite_table(actions.pool, "outbox", seconds_left=REPACK_MIN_SECS, dsn=DSN,
+                               exec_fn=fake2) == "pg_repack"
+
+
+async def test_a_client_that_stopped_answering_is_not_read_as_a_clean_stop(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _installed(monkeypatch, True)
+    fake = FakeExec((0, "pg_repack 1.5.3"), (CLIENT_UNANSWERED, "the docker client did not answer"))
+    with pytest.raises(RuntimeError, match="state of the repack is unknown.*repack schema"):
+        await rewrite_table(actions.pool, "outbox", seconds_left=600, dsn=DSN, exec_fn=fake)
+
+
+async def test_the_night_run_records_a_short_window_as_a_skip(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def short(*_a: Any, **_k: Any) -> str:
+        raise WindowTooShort("assertions_hot", 100)
+
+    monkeypatch.setattr(db_compaction, "rewrite_table", short)
+    await actions.pool.execute(
+        "CREATE TABLE IF NOT EXISTS compaction_scratch_short (id int primary key, v text)")
+    await actions.pool.execute("INSERT INTO compaction_scratch_short SELECT g, repeat('x', 800) "
+                               "FROM generate_series(1, 20000) g ON CONFLICT DO NOTHING")
+    await actions.pool.execute("DELETE FROM compaction_scratch_short WHERE id % 10 < 9")
+
+    async def fake_reclaim(_pool: Any, _table: str) -> tuple[int, str]:
+        return 3 * 1024 ** 3, "test"
+
+    monkeypatch.setattr(db_compaction, "reclaimable_bytes", fake_reclaim)
+
+    async def calm(_pool: Any) -> dict[str, Any]:
+        return {"paused": False, "free_gb": 500.0, "floor_gb": 10.0, "reason": ""}
+
+    out = await db_compaction.compact_tonight(
+        actions.pool, window_secs=3000, tables=("compaction_scratch_short",), brake=calm)
+    receipt = out["compaction_scratch_short"]
+    assert receipt["action"] == "skipped" and "only 100 s" in receipt["reason"]
