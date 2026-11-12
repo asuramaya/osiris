@@ -8,7 +8,8 @@ retirements) the big tables are mostly empty space, so a night step rewrites the
 Per big table (soul_lines with its TOAST, assertions_hot and assertions_cold, audit_log,
 outbox) it measures the dead and free space and rewrites the table when more than 30% of it
 and more than 2 GB is reclaimable. Rewrites run one table at a time, biggest first, inside a
-window (03:00 to 05:00): pg_repack when the extension and binary exist (no long lock),
+window (03:00 to 05:00): pg_repack when the extension is installed and the database container's
+client answers (no long lock),
 otherwise VACUUM FULL under a lock_timeout, with a statement timeout that is the time left in
 the window, so a rewrite that will not finish by then is cancelled and rolled back, never left
 holding the table. A table is skipped, with the reason recorded, when
@@ -25,7 +26,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import shutil
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
@@ -211,12 +211,104 @@ async def drain_running(pool: asyncpg.Pool, table: str) -> bool:
 
 # --- rewriting ------------------------------------------------------------------------------
 
-def _repack_available() -> bool:
-    return shutil.which("pg_repack") is not None
+# --- pg_repack, run inside the database container ------------------------------------------
+#
+# pg_repack rewrites a table with only a moment of exclusive lock at the start and the end. It
+# is not installed on this box today, and everything here stays inert until it is: the choice
+# needs BOTH the extension in the database AND a working `pg_repack` client in the container.
+# The client runs inside the container (`docker exec`), where its version always matches the
+# extension's, because the host has no client of its own. The container's `timeout` stops it
+# with SIGINT at the end of the allowance (pg_repack cleans up after itself on SIGINT) and only
+# then, as a last resort after a grace period, kills it. A SIGKILL on the client used to be the
+# way a run was ended; it leaves pg_repack's log table and a trigger on the table behind.
+PG_CONTAINER = "osiris-pg"
+REPACK_STOP_GRACE_SECS = 60
+REPACK_WAIT_TIMEOUT_SECS = 5
+REPACK_PROBE_SECS = 15
+
+ExecFn = Callable[[list[str], float], Awaitable[tuple[int, str]]]
+
+
+async def _docker_exec(args: list[str], timeout_secs: float) -> tuple[int, str]:
+    """Run `docker <args>` and return (exit code, output). Never raises: no docker binary, a
+    container that is not there or a command that does not finish read as a failed run."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    except OSError as exc:
+        return 127, f"{type(exc).__name__}: {exc}"
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_secs)
+    except TimeoutError:
+        proc.terminate()  # the client only; whatever it started in the container is not killed
+        return 124, "the docker client did not answer in time"
+    return int(proc.returncode or 0), out.decode(errors="replace")
+
+
+def _container() -> str:
+    import os
+
+    return os.environ.get("OSIRIS_PG_CONTAINER") or PG_CONTAINER
 
 
 async def _installed(pool: asyncpg.Pool, name: str) -> bool:
     return bool(await pool.fetchval("SELECT 1 FROM pg_extension WHERE extname = $1", name))
+
+
+async def repack_ready(pool: asyncpg.Pool, exec_fn: ExecFn | None = None) -> bool:
+    """Can a table be rewritten with pg_repack right now: the extension is in the database and
+    the container answers `pg_repack --version`. Any other answer, including a box with no
+    docker, no container or no extension, is False and the caller rewrites with VACUUM FULL."""
+    if not await _installed(pool, "pg_repack"):
+        return False
+    code, _out = await (exec_fn or _docker_exec)(
+        ["exec", _container(), "pg_repack", "--version"], REPACK_PROBE_SECS)
+    return code == 0
+
+
+def repack_command(
+    table: str, *, stop_after_secs: int, user: str, database: str,
+) -> list[str]:
+    """The `docker` arguments for one repack. `timeout` inside the container sends SIGINT after
+    `stop_after_secs` and SIGKILL only `REPACK_STOP_GRACE_SECS` later if it is still running.
+    `--no-kill-backend` leaves other sessions alone (pg_repack would cancel one that held a
+    conflicting lock past the wait), and the wait for its brief exclusive locks is short."""
+    return ["exec", _container(), "timeout", "--signal=INT",
+            f"--kill-after={REPACK_STOP_GRACE_SECS}", f"{stop_after_secs}s",
+            "pg_repack", "-U", user, "-d", database, "--table", table,
+            "--no-superuser-check", "--no-kill-backend",
+            f"--wait-timeout={REPACK_WAIT_TIMEOUT_SECS}"]
+
+
+def _user_and_database(dsn: str | None) -> tuple[str, str]:
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(dsn or "")
+    return parts.username or "osiris", parts.path.lstrip("/") or "osiris"
+
+
+async def _repack(
+    table: str, *, seconds_left: float, dsn: str | None, exec_fn: ExecFn | None,
+) -> str:
+    user, database = _user_and_database(dsn)
+    stop_after = max(30, int(seconds_left) - REPACK_STOP_GRACE_SECS - 30)
+    code, out = await (exec_fn or _docker_exec)(
+        repack_command(table, stop_after_secs=stop_after, user=user, database=database),
+        stop_after + REPACK_STOP_GRACE_SECS + 30)
+    if code == 0:
+        return "pg_repack"
+    tail = out[-300:]
+    if code == 124:
+        raise RuntimeError(
+            f"pg_repack was stopped when the time allowed ran out (after {stop_after} s) and "
+            f"cleaned up after itself; the table was not rewritten: {tail}")
+    if code == 137:
+        raise RuntimeError(
+            f"pg_repack did not stop on SIGINT within {REPACK_STOP_GRACE_SECS} s and was "
+            "killed: it may have left its log table and a trigger on the table. Run "
+            "DROP EXTENSION pg_repack; CREATE EXTENSION pg_repack; in the database before "
+            f"anything else writes to {table}: {tail}")
+    raise RuntimeError(f"pg_repack failed (exit {code}): {tail}")
 
 
 class LockNotAcquired(RuntimeError):
@@ -234,24 +326,16 @@ async def rewrite_table(
     lock_attempts: int = LOCK_ATTEMPTS, lock_timeout_secs: float = LOCK_TIMEOUT_SECS,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
+    exec_fn: ExecFn | None = None,
 ) -> str:
-    """Rewrite `table` and return the engine used. pg_repack when it is installed (no long
-    lock); otherwise VACUUM FULL, which holds the table exclusively for the whole rewrite. Its
-    lock is asked for with a SHORT timeout and tried `lock_attempts` times spaced across the
-    time left, so a busy table is retried later instead of stalling every reader behind a long
-    wait; if it is never free, `LockNotAcquired`. Cancelled when `seconds_left` runs out."""
-    if dsn and _repack_available() and await _installed(pool, "pg_repack"):
-        proc = await asyncio.create_subprocess_exec(
-            "pg_repack", "--dbname", dsn, "--table", table, "--no-superuser-check",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-        try:
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=max(1.0, seconds_left))
-        except TimeoutError:
-            proc.kill()
-            raise
-        if proc.returncode != 0:
-            raise RuntimeError(f"pg_repack failed: {out.decode(errors='replace')[-300:]}")
-        return "pg_repack"
+    """Rewrite `table` and return the engine used. pg_repack when the extension is installed
+    and the container's client answers (no long lock; see `repack_ready`); otherwise VACUUM
+    FULL, which holds the table exclusively for the whole rewrite. Its lock is asked for with a
+    SHORT timeout and tried `lock_attempts` times spaced across the time left, so a busy table
+    is retried later instead of stalling every reader behind a long wait; if it is never free,
+    `LockNotAcquired`. Cancelled when `seconds_left` runs out."""
+    if await repack_ready(pool, exec_fn):
+        return await _repack(table, seconds_left=seconds_left, dsn=dsn, exec_fn=exec_fn)
     started = clock()
     gap = min(MAX_RETRY_GAP_SECS, max(1.0, seconds_left / (lock_attempts + 1)))
     for attempt in range(lock_attempts):
