@@ -24,6 +24,7 @@ backup-status."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -225,13 +226,21 @@ PG_CONTAINER = "osiris-pg"
 REPACK_STOP_GRACE_SECS = 60
 REPACK_WAIT_TIMEOUT_SECS = 5
 REPACK_PROBE_SECS = 15
+# less than this left in the window and a repack is not started: its stop signal goes out at
+# (time left - 90 s), and a rewrite that cannot finish would only be stopped and thrown away
+REPACK_MIN_SECS = 120
+# the exit code `_docker_exec` reports when the docker client itself stopped answering: not a
+# process exit status, so it can never be confused with `timeout`'s own 124
+CLIENT_UNANSWERED = 1000
 
 ExecFn = Callable[[list[str], float], Awaitable[tuple[int, str]]]
 
 
 async def _docker_exec(args: list[str], timeout_secs: float) -> tuple[int, str]:
     """Run `docker <args>` and return (exit code, output). Never raises: no docker binary, a
-    container that is not there or a command that does not finish read as a failed run."""
+    container that is not there or a command that does not finish read as a failed run. A client
+    that stops answering is terminated (the client only; what it started in the container is
+    not killed), awaited so it leaves no zombie, and reported as `CLIENT_UNANSWERED`."""
     try:
         proc = await asyncio.create_subprocess_exec(
             "docker", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
@@ -240,8 +249,10 @@ async def _docker_exec(args: list[str], timeout_secs: float) -> tuple[int, str]:
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_secs)
     except TimeoutError:
-        proc.terminate()  # the client only; whatever it started in the container is not killed
-        return 124, "the docker client did not answer in time"
+        proc.terminate()
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        return CLIENT_UNANSWERED, "the docker client did not answer in time"
     return int(proc.returncode or 0), out.decode(errors="replace")
 
 
@@ -281,10 +292,20 @@ def repack_command(
 
 
 def _user_and_database(dsn: str | None) -> tuple[str, str]:
-    from urllib.parse import urlsplit
+    from urllib.parse import unquote, urlsplit
 
     parts = urlsplit(dsn or "")
-    return parts.username or "osiris", parts.path.lstrip("/") or "osiris"
+    return (unquote(parts.username) if parts.username else "osiris",
+            unquote(parts.path.lstrip("/")) or "osiris")
+
+
+class _LockBusy(RuntimeError):
+    """pg_repack gave up on its short wait for the table's brief locks and skipped the table."""
+
+
+# pg_repack exits 0 when it skips a table because a conflicting lock was not released within
+# --wait-timeout (checked against the live extension: exit 0 and these two lines)
+_SKIPPED_ON_LOCK = ("Skipping repack", "timed out, do not cancel conflicting backends")
 
 
 async def _repack(
@@ -296,8 +317,15 @@ async def _repack(
         repack_command(table, stop_after_secs=stop_after, user=user, database=database),
         stop_after + REPACK_STOP_GRACE_SECS + 30)
     if code == 0:
+        if any(mark in out for mark in _SKIPPED_ON_LOCK):
+            raise _LockBusy(table)
         return "pg_repack"
     tail = out[-300:]
+    if code == CLIENT_UNANSWERED:
+        raise RuntimeError(
+            "the docker client did not answer in time, so the state of the repack is unknown: "
+            "it may still be running in the container, and a run that was cut off can leave a "
+            f"trigger or log table in the repack schema behind: {tail}")
     if code == 124:
         raise RuntimeError(
             f"pg_repack was stopped when the time allowed ran out (after {stop_after} s) and "
@@ -311,13 +339,30 @@ async def _repack(
     raise RuntimeError(f"pg_repack failed (exit {code}): {tail}")
 
 
-class LockNotAcquired(RuntimeError):
+class RewriteSkipped(RuntimeError):
+    """A rewrite that was not attempted, or gave way to something busy; nothing was changed.
+    `reason` goes into the night's receipt as a skip, not a failure."""
+
+    reason: str
+
+
+class LockNotAcquired(RewriteSkipped):
     """The table lock could not be had within the short lock timeout on any attempt."""
 
     def __init__(self, table: str, attempts: int, timeout_secs: float, gap_secs: float) -> None:
         super().__init__(table)
         self.reason = (f"could not get the table lock within {timeout_secs:g} s on {attempts} "
                        f"tries spaced about {gap_secs:.0f} s apart: something kept it busy; "
+                       "nothing was changed")
+
+
+class WindowTooShort(RewriteSkipped):
+    """Not enough of the window is left to start a repack that could finish."""
+
+    def __init__(self, table: str, seconds_left: float) -> None:
+        super().__init__(table)
+        self.reason = (f"only {seconds_left:.0f} s of the window are left and a repack needs "
+                       f"at least {REPACK_MIN_SECS} s to run and be stopped cleanly; "
                        "nothing was changed")
 
 
@@ -334,9 +379,22 @@ async def rewrite_table(
     SHORT timeout and tried `lock_attempts` times spaced across the time left, so a busy table
     is retried later instead of stalling every reader behind a long wait; if it is never free,
     `LockNotAcquired`. Cancelled when `seconds_left` runs out."""
-    if await repack_ready(pool, exec_fn):
-        return await _repack(table, seconds_left=seconds_left, dsn=dsn, exec_fn=exec_fn)
     started = clock()
+    if await repack_ready(pool, exec_fn):
+        if seconds_left < REPACK_MIN_SECS:
+            raise WindowTooShort(table, seconds_left)
+        gap = min(MAX_RETRY_GAP_SECS, max(1.0, seconds_left / (lock_attempts + 1)))
+        for attempt in range(lock_attempts):
+            left = seconds_left if attempt == 0 else seconds_left - (clock() - started)
+            if attempt > 0 and left < REPACK_MIN_SECS:
+                break
+            try:
+                return await _repack(table, seconds_left=left, dsn=dsn, exec_fn=exec_fn)
+            except _LockBusy:
+                pass  # busy: pg_repack skipped the table; wait and try again
+            if attempt < lock_attempts - 1:
+                await sleep(gap)
+        raise LockNotAcquired(table, lock_attempts, REPACK_WAIT_TIMEOUT_SECS, gap)
     gap = min(MAX_RETRY_GAP_SECS, max(1.0, seconds_left / (lock_attempts + 1)))
     for attempt in range(lock_attempts):
         left = seconds_left - (clock() - started)
@@ -414,7 +472,7 @@ async def compact_tonight(
                     after = (await table_sizes(pool, table))["total_bytes"]
                     receipts[table] = {**base, "action": "rewritten", "engine": engine,
                                        "after_bytes": after}
-                except LockNotAcquired as exc:
+                except RewriteSkipped as exc:
                     receipts[table] = {**base, "action": "skipped", "reason": exc.reason}
                 except Exception as exc:  # noqa: BLE001 - window cancel, repack error
                     receipts[table] = {**base, "action": "failed", "reason": repr(exc)}
