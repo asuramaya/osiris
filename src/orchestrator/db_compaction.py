@@ -44,7 +44,12 @@ MIN_BLOAT_BYTES = 2 * GB
 # outbox sat at 709 MB reclaimable of 1.08 GB (65%) and was skipped night after night.
 # The audit log is the same shape: mostly retired duplicate rows, 1.28 GB reclaimable of 1.67 GB.
 MIN_BLOAT_BYTES_BY_TABLE = {"outbox": 256 * 1024 ** 2, "audit_log": 256 * 1024 ** 2}
-LOCK_TIMEOUT_SECS = 30
+# VACUUM FULL needs ACCESS EXCLUSIVE, and a queued exclusive request blocks every new reader and
+# writer of the table behind it while it waits. A short wait that is retried later costs the fleet
+# at most a few seconds; a long one stalls it that long and then fails anyway.
+LOCK_TIMEOUT_SECS = 3.0
+LOCK_ATTEMPTS = 4
+MAX_RETRY_GAP_SECS = 300.0
 RECEIPT_KEY = "compaction:last"
 DRAIN_KEY = "drain:"
 # A bulk-delete backfill that is not finished holds its own flag per target (the nightly
@@ -175,12 +180,27 @@ async def _installed(pool: asyncpg.Pool, name: str) -> bool:
     return bool(await pool.fetchval("SELECT 1 FROM pg_extension WHERE extname = $1", name))
 
 
+class LockNotAcquired(RuntimeError):
+    """The table lock could not be had within the short lock timeout on any attempt."""
+
+    def __init__(self, table: str, attempts: int, timeout_secs: float, gap_secs: float) -> None:
+        super().__init__(table)
+        self.reason = (f"could not get the table lock within {timeout_secs:g} s on {attempts} "
+                       f"tries spaced about {gap_secs:.0f} s apart: something kept it busy; "
+                       "nothing was changed")
+
+
 async def rewrite_table(
     pool: asyncpg.Pool, table: str, *, seconds_left: float, dsn: str | None = None,
+    lock_attempts: int = LOCK_ATTEMPTS, lock_timeout_secs: float = LOCK_TIMEOUT_SECS,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
 ) -> str:
     """Rewrite `table` and return the engine used. pg_repack when it is installed (no long
-    lock); otherwise VACUUM FULL, taking the table lock only if it is free within
-    LOCK_TIMEOUT_SECS and cancelled when `seconds_left` runs out."""
+    lock); otherwise VACUUM FULL, which holds the table exclusively for the whole rewrite. Its
+    lock is asked for with a SHORT timeout and tried `lock_attempts` times spaced across the
+    time left, so a busy table is retried later instead of stalling every reader behind a long
+    wait; if it is never free, `LockNotAcquired`. Cancelled when `seconds_left` runs out."""
     if dsn and _repack_available() and await _installed(pool, "pg_repack"):
         proc = await asyncio.create_subprocess_exec(
             "pg_repack", "--dbname", dsn, "--table", table, "--no-superuser-check",
@@ -193,15 +213,26 @@ async def rewrite_table(
         if proc.returncode != 0:
             raise RuntimeError(f"pg_repack failed: {out.decode(errors='replace')[-300:]}")
         return "pg_repack"
-    async with pool.acquire() as conn:
-        await conn.execute(f"SET lock_timeout = '{LOCK_TIMEOUT_SECS}s'")
-        await conn.execute(f"SET statement_timeout = '{max(1, int(seconds_left * 1000))}ms'")
-        try:
-            await conn.execute(f"VACUUM (FULL, ANALYZE) {table}")
-        finally:
-            await conn.execute("RESET statement_timeout")
-            await conn.execute("RESET lock_timeout")
-    return "VACUUM FULL"
+    started = clock()
+    gap = min(MAX_RETRY_GAP_SECS, max(1.0, seconds_left / (lock_attempts + 1)))
+    for attempt in range(lock_attempts):
+        left = seconds_left - (clock() - started)
+        if attempt > 0 and left <= 1:
+            break  # no time left to retry; the first try always runs (and is cancelled by time)
+        async with pool.acquire() as conn:
+            await conn.execute(f"SET lock_timeout = '{int(lock_timeout_secs * 1000)}ms'")
+            await conn.execute(f"SET statement_timeout = '{max(1, int(left * 1000))}ms'")
+            try:
+                await conn.execute(f"VACUUM (FULL, ANALYZE) {table}")
+                return "VACUUM FULL"
+            except asyncpg.exceptions.LockNotAvailableError:
+                pass  # busy: wait and try again
+            finally:
+                await conn.execute("RESET statement_timeout")
+                await conn.execute("RESET lock_timeout")
+        if attempt < lock_attempts - 1:
+            await sleep(gap)
+    raise LockNotAcquired(table, lock_attempts, lock_timeout_secs, gap)
 
 
 # --- the night run --------------------------------------------------------------------------
@@ -259,7 +290,9 @@ async def compact_tonight(
                     after = (await table_sizes(pool, table))["total_bytes"]
                     receipts[table] = {**base, "action": "rewritten", "engine": engine,
                                        "after_bytes": after}
-                except Exception as exc:  # noqa: BLE001 - lock timeout, window cancel, repack error
+                except LockNotAcquired as exc:
+                    receipts[table] = {**base, "action": "skipped", "reason": exc.reason}
+                except Exception as exc:  # noqa: BLE001 - window cancel, repack error
                     receipts[table] = {**base, "action": "failed", "reason": repr(exc)}
         _log.info("db compaction %s: %s", table, receipts[table].get("action"))
     await set_cursor(pool, RECEIPT_KEY, json.dumps(receipts))
