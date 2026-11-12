@@ -58,6 +58,21 @@ LOCK_TIMEOUT_SECS = 3.0
 LOCK_ATTEMPTS = 4
 MAX_RETRY_GAP_SECS = 300.0
 RECEIPT_KEY = "compaction:last"
+# The night window in the box's local time. The cron slot is 03:00, but a laptop that slept
+# through it wakes with the missed slot still due and the worker runs it at once, in the
+# middle of the day (a lid-open at 10:54 started a 12-minute run that rewrote audit_log).
+NIGHT_START_HOUR = 3
+NIGHT_END_HOUR = 5
+
+
+def night_seconds_left(now: datetime | None = None) -> float:
+    """Seconds until the night window closes (05:00 local) while it is open (03:00 to 05:00
+    local); 0 outside it. A rewrite is only ever started when this is positive."""
+    local = (now or datetime.now().astimezone()).astimezone()
+    if not NIGHT_START_HOUR <= local.hour < NIGHT_END_HOUR:
+        return 0.0
+    end = local.replace(hour=NIGHT_END_HOUR, minute=0, second=0, microsecond=0)
+    return max(0.0, (end - local).total_seconds())
 DRAIN_KEY = "drain:"
 # A bulk-delete backfill that is not finished holds its own flag per target (the nightly
 # housekeeping overwrites `drain:<table>` every pass, which would clear it mid-drain). It lapses
