@@ -42,15 +42,18 @@ def _v1(fingerprint: str = "abcd1234abcd1234") -> dict[str, Any]:
             "key_fingerprint": fingerprint, "rp_id": "localhost"}
 
 
+PROVEN = "2026-11-12T01:00:00Z"
+
+
 def _hw(rid: str = "k1", label: str = "yubikey A") -> dict[str, Any]:
     return {"id": rid, "kind": "fido2-prf", "label": label, "added_at": "2026-11-12T00:00:00Z",
-            "last_opened_at": None, "credential_id": _b64(b"cred-" + rid.encode()),
+            "last_opened_at": PROVEN, "credential_id": _b64(b"cred-" + rid.encode()),
             "salt": _b64(b"s" * 32), "wrapped_key": _wrapped(), "rp_id": "localhost"}
 
 
 def _code(rid: str = "c1") -> dict[str, Any]:
     return {"id": rid, "kind": "recovery-code", "label": "printed code",
-            "added_at": "2026-11-12T00:00:00Z", "last_opened_at": None,
+            "added_at": "2026-11-12T00:00:00Z", "last_opened_at": PROVEN,
             "salt": _b64(b"c" * 16), "wrapped_key": _wrapped()}
 
 
@@ -66,7 +69,9 @@ def test_a_version_1_file_reads_as_one_hardware_recipient_called_r0(keyfile: str
     recs = soul_envelope.envelope_recipients(path=keyfile)
     assert [(r["id"], r["kind"], r["unattended"]) for r in recs] == [("r0", "fido2-prf", False)]
     out = soul_envelope.envelope_check(path=keyfile)
-    assert out["ok"] is True and out["recipients"] == 1 and out["hardware"] == 1
+    # structurally fine, but a version 1 file has never been proven through this tool
+    assert out["ok"] is False and out["recipients"] == 1 and out["hardware"] == 1
+    assert out["unproven"] == ["r0"] and "never been proven" in out["problems"][0]
 
 
 def test_the_listing_never_carries_a_secret(keyfile: str) -> None:
@@ -75,7 +80,10 @@ def test_the_listing_never_carries_a_secret(keyfile: str) -> None:
     recs = soul_envelope.envelope_recipients(path=keyfile)
     assert [r["id"] for r in recs] == ["k1", "c1"]
     for r in recs:
-        assert set(r) == {"id", "kind", "label", "added_at", "last_opened_at", "unattended"}
+        assert set(r) == {"id", "kind", "label", "added_at", "enrolled_at", "last_opened_at",
+                          "unattended", "needs_touch", "needs_human"}
+        assert r["unattended"] is False and r["needs_human"] is True
+    assert [r["needs_touch"] for r in recs] == [True, False]
     dumped = json.dumps(recs)
     for secret in (blob["recipients"][0]["wrapped_key"], blob["recipients"][0]["salt"],
                    blob["recipients"][0]["credential_id"], blob["recipients"][1]["wrapped_key"]):
@@ -85,7 +93,8 @@ def test_the_listing_never_carries_a_secret(keyfile: str) -> None:
 def test_a_good_two_recipient_envelope_checks_ok(keyfile: str) -> None:
     _write(keyfile, {"version": 2, "key_fingerprint": "f" * 16, "recipients": [_hw(), _code()]})
     out = soul_envelope.envelope_check(path=keyfile)
-    assert out == {"ok": True, "problems": [], "recipients": 2, "hardware": 1, "stale": None}
+    assert out == {"ok": True, "problems": [], "by_recipient": {}, "unproven": [],
+                   "recipients": 2, "hardware": 1, "stale": None}
 
 
 @pytest.mark.parametrize("mutate,words", [
@@ -132,3 +141,134 @@ def test_a_file_for_an_older_key_than_the_live_one_is_stale(
     out = soul_envelope.envelope_check(path=keyfile)
     assert out["stale"] is True and out["ok"] is False
     assert any("older key than the live one" in p for p in out["problems"])
+
+
+# --- the write half ---------------------------------------------------------------------------
+
+def test_a_problem_with_one_recipient_is_keyed_by_its_id(keyfile: str) -> None:
+    bad = _hw("k2")
+    bad.pop("salt")
+    _write(keyfile, {"version": 2, "key_fingerprint": "f" * 16, "recipients": [_hw("k1"), bad]})
+    out = soul_envelope.envelope_check(path=keyfile)
+    assert list(out["by_recipient"]) == ["k2"] and "missing salt" in out["by_recipient"]["k2"][0]
+    assert out["by_recipient"]["k2"][0] in out["problems"]
+
+
+RAW = b"0123456789abcdef0123456789abcdef"      # stands in for the live key bytes
+
+
+def _v2_with_keys(keyfile: str, *recipients: dict[str, Any]) -> Path:
+    return _write(keyfile, {"version": 2, "key_fingerprint": key_fingerprint(RAW),
+                            "recipients": list(recipients), "serial": len(recipients)})
+
+
+def _mode(path: Path) -> int:
+    import stat
+
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+def test_adding_a_recovery_code_returns_it_once_and_it_opens_the_key(keyfile: str) -> None:
+    path = _write(keyfile, {**_v1(key_fingerprint(RAW))})
+    out = soul_envelope.envelope_add_code(path=keyfile, label="paper copy", raw_key=RAW)
+    code = out["code"]
+    assert len(code.split("-")) == 8 and all(len(g) == 4 for g in code.split("-"))
+    assert out["recipient"]["kind"] == "recovery-code" and out["recipient"]["id"] == "c2"
+    text = path.read_text()
+    assert code not in text and code.replace("-", "") not in text     # stored nowhere
+    blob = json.loads(text)
+    assert blob["version"] == 2 and [r["id"] for r in blob["recipients"]] == ["r0", "c2"]
+    assert _mode(path) == 0o600
+    # the version 1 reader still finds the hardware recipient at the top level
+    assert blob["credential_id"] == _v1()["credential_id"] and "wrapped_key" in blob
+    # the code, typed the way a person types it (lower case, spaces), opens the key
+    rec = blob["recipients"][1]
+    fernet = soul_envelope.code_wrap_key(
+        code.lower().replace("-", " "), base64.urlsafe_b64decode(rec["salt"]), rec["kdf"])
+    assert fernet.decrypt(base64.urlsafe_b64decode(rec["wrapped_key"])) == RAW
+    # a wrong code does not
+    from cryptography.fernet import InvalidToken
+
+    wrong = soul_envelope.code_wrap_key(
+        "AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA", base64.urlsafe_b64decode(rec["salt"]),
+        rec["kdf"])
+    with pytest.raises(InvalidToken):
+        wrong.decrypt(base64.urlsafe_b64decode(rec["wrapped_key"]))
+    # and the listing and the check see it
+    assert [r["id"] for r in soul_envelope.envelope_recipients(path=keyfile)] == ["r0", "c2"]
+    assert soul_envelope.envelope_check(path=keyfile)["unproven"] == ["r0", "c2"]
+
+
+def test_adding_refuses_without_an_envelope_or_for_an_older_key(keyfile: str) -> None:
+    assert "enroll a hardware key first" in soul_envelope.envelope_add_code(
+        path=keyfile, raw_key=RAW)["error"]
+    _write(keyfile, _v1(key_fingerprint(b"an older key")))
+    out = soul_envelope.envelope_add_code(path=keyfile, raw_key=RAW)
+    assert "older key than the live one" in out["error"]
+
+
+def test_ids_are_never_reused_after_a_removal(keyfile: str) -> None:
+    _v2_with_keys(keyfile, _hw("k1"))
+    first = soul_envelope.envelope_add_code(path=keyfile, raw_key=RAW)["recipient"]["id"]
+    assert soul_envelope.envelope_remove(first, path=keyfile)["removed"]["id"] == first
+    second = soul_envelope.envelope_add_code(path=keyfile, raw_key=RAW)["recipient"]["id"]
+    assert first == "c2" and second == "c3"
+
+
+def test_removal_keeps_one_way_in_and_one_hardware_key(keyfile: str) -> None:
+    _v2_with_keys(keyfile, _hw("k1"))
+    only = soul_envelope.envelope_remove("k1", path=keyfile)
+    assert "only recipient" in only["error"]
+    soul_envelope.envelope_add_code(path=keyfile, raw_key=RAW)
+    last_hw = soul_envelope.envelope_remove("k1", path=keyfile)
+    assert "last hardware key" in last_hw["error"]
+    forced = soul_envelope.envelope_remove("k1", path=keyfile, allow_no_hardware=True)
+    assert forced["removed"]["id"] == "k1" and forced["remaining"] == ["c2"]
+    assert "does not revoke a copy" in forced["note"] and "rotate" in forced["note"]
+    assert "no recipient" in soul_envelope.envelope_remove("zz", path=keyfile)["error"]
+    assert "no envelope" in soul_envelope.envelope_remove(
+        "k1", path=keyfile + "-nope")["error"]
+
+
+def test_removing_a_second_hardware_key_is_fine_and_the_legacy_mirror_follows(
+    keyfile: str,
+) -> None:
+    path = _v2_with_keys(keyfile, _hw("k1"), _hw("k2"))
+    out = soul_envelope.envelope_remove("k1", path=keyfile)
+    assert out["remaining"] == ["k2"]
+    blob = json.loads(path.read_text())
+    assert blob["credential_id"] == _b64(b"cred-k2")      # the version 1 reader follows k2
+
+
+def test_a_failed_write_leaves_the_old_file_and_no_temp_file(
+    keyfile: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+
+    path = _v2_with_keys(keyfile, _hw("k1"), _hw("k2"))
+    before = path.read_bytes()
+
+    def boom(src: Any, dst: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(OSError):
+        soul_envelope.envelope_remove("k2", path=keyfile)
+    assert path.read_bytes() == before
+    assert not [p for p in path.parent.iterdir() if p.name.startswith(".envelope-")]
+
+
+def test_marking_a_recipient_opened_is_the_only_change_and_is_private(keyfile: str) -> None:
+    rec = {**_hw("k1"), "last_opened_at": None}
+    other = _hw("k2")
+    path = _v2_with_keys(keyfile, rec, other)
+    assert soul_envelope.envelope_check(path=keyfile)["unproven"] == ["k1"]
+    assert soul_envelope.mark_opened("k1", path=keyfile) is True
+    after = json.loads(path.read_text())
+    assert after["recipients"][0]["last_opened_at"].endswith("Z")
+    assert after["recipients"][0]["wrapped_key"] == rec["wrapped_key"]      # nothing else moved
+    assert after["recipients"][1] == other
+    assert _mode(path) == 0o600
+    assert soul_envelope.envelope_check(path=keyfile)["unproven"] == []
+    assert soul_envelope.mark_opened("nope", path=keyfile) is False
+    assert soul_envelope.mark_opened("k1", path=keyfile + "-nope") is False
