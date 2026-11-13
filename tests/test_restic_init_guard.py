@@ -15,7 +15,11 @@ import pytest
 from src.orchestrator import offload_runner
 
 _FAKE = '''#!{python}
-import json, os, sys, time
+import json, os, signal, sys, time
+
+# a test run started in the background by a shell inherits SIGINT as ignored, and then this fake
+# would never stop when asked to; restic itself exits on SIGINT
+signal.signal(signal.SIGINT, signal.default_int_handler)
 
 state_path = os.environ["FAKE_RESTIC_STATE"]
 state = json.load(open(state_path))
@@ -42,6 +46,12 @@ if cmd == "init":
     sys.exit(1)
 sys.exit(0)
 '''
+
+# How long the fake holds a command that the test means to time out after 1 s. It runs in its own
+# session and keeps going while the test is descheduled or frozen, so a hold of a few seconds let
+# a late test see the command finish (no timeout) instead; the timeout stops it (SIGINT) long
+# before this runs out, so a larger hold costs the test nothing.
+HOLD_SECONDS = 120
 
 # restic's own wording for each situation
 MISSING_LOCAL = ("Fatal: unable to open config file: Stat: stat /srv/repo/config: no such file "
@@ -109,7 +119,7 @@ def test_a_probe_failure_that_is_not_a_missing_repository_never_inits(
 
 def test_a_probe_timeout_never_inits(fake: Fake, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(offload_runner, "_PROBE_TIMEOUT_SECONDS", 1)
-    fake.state["snapshots_sleep"] = 4
+    fake.state["snapshots_sleep"] = HOLD_SECONDS
     fake.save()
 
     failure = fake.backup()
@@ -150,7 +160,7 @@ def test_a_backup_timeout_says_it_will_resume_not_that_nothing_was_initialized(
     fake: Fake, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(offload_runner, "_RESTIC_TIMEOUT_SECONDS", 1)
-    fake.state["backup_sleep"] = 4
+    fake.state["backup_sleep"] = HOLD_SECONDS
     fake.save()
 
     failure = fake.backup()

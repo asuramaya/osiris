@@ -550,7 +550,8 @@ else:
         open(marker, "w").write("released")  # restic removes its lock on SIGINT/SIGTERM
         sys.exit(130)
     signal.signal(signal.SIGINT, release)
-time.sleep(60)
+time.sleep(float(os.environ.get("FAKE_RESTIC_HOLD_SECONDS", "60")))
+open(marker, "w").write("finished")  # only reached when nobody stopped it
 '''
 
 
@@ -581,15 +582,19 @@ def test_a_timed_out_restic_is_asked_to_release_its_lock_not_killed(sleeper: Pat
 def test_a_restic_that_ignores_the_request_is_killed_after_the_grace(
     sleeper: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Proved by what happened to the process, not by how long it took. The fake ignores SIGINT
+    and would hold for five minutes; it never reaches its "finished" line, so it was ended by
+    the kill after the grace. A wall-clock bound here failed whenever the box was busy or frozen
+    (the fake runs in its own session and keeps going while the test is frozen): five minutes is
+    far past any freeze, and a code path that waited the fake out would not return at all."""
     import subprocess
-    import time
 
     monkeypatch.setenv("FAKE_RESTIC_IGNORE_SIGINT", "1")
-    started = time.monotonic()
+    monkeypatch.setenv("FAKE_RESTIC_HOLD_SECONDS", "300")
     with pytest.raises(subprocess.TimeoutExpired):
         restic_locks.run_restic(["backup"], dict(os.environ), timeout=1.0, grace=0.5)
 
-    assert time.monotonic() - started < 6.0 and sleeper.read_text() == "holding"
+    assert sleeper.read_text() == "holding"  # not "released" (it ignored SIGINT), not "finished"
 
 
 def test_the_drill_readers_stop_restic_without_a_kill(sleeper: Path) -> None:
