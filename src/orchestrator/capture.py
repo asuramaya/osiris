@@ -331,6 +331,16 @@ _DERIVE_TIER = EvidenceClass.DIRECT_OBSERVATION
 _DERIVE_CONF = confidence_for(_DERIVE_TIER)
 
 
+def _hold_back(entry: dict[str, Any]) -> None:
+    """A lane planned a mint and `derive_or_abstain` made none, because a link of that type to
+    that project already exists (`derive_or_abstain` does not look at `valid_until`, so a link
+    someone deliberately retired counts, and is never resurrected). The plan entry says so,
+    and the lane counts it as held, not minted."""
+    entry["verdict"] = "already_linked"
+    entry["why"] = ("a link of this type to this project already exists (retired); "
+                    "the sweep does not recreate it")
+
+
 async def derive_or_abstain(
     actions: Actions, from_id: uuid.UUID, link_type: str, candidates: list[uuid.UUID],
     source: str, *, why_if_ambiguous: str | None = None, retried: bool = False,
@@ -1051,6 +1061,7 @@ async def resolve_agent_orphans(
     plan: list[dict[str, Any]] = []
     minted = 0
     abstained = 0
+    held = 0
     for row in rows:
         session = (row["session"] or "").strip()
         reason: str | None = None
@@ -1082,8 +1093,12 @@ async def resolve_agent_orphans(
                      "candidate_count": len(candidate_ids)}
             abstained += 1
         if not dry_run:
-            await derive_or_abstain(actions, row["id"], "works_in", candidate_ids, actor,
-                                    why_if_ambiguous=reason)
+            got = await derive_or_abstain(actions, row["id"], "works_in", candidate_ids, actor,
+                                          why_if_ambiguous=reason)
+            if entry["verdict"] == "mint" and not got["minted"]:
+                _hold_back(entry)  # planned, not done: a link of this type is already there
+                minted -= 1
+                held += 1
             if len(candidate_ids) != 1:
                 hatch_observed = datetime.now(UTC)
                 await actions.assert_property(
@@ -1094,7 +1109,8 @@ async def resolve_agent_orphans(
                     hatch_observed, _CONF, evidence_class=_EC)
         plan.append(entry)
     return {"dry_run": dry_run, "scanned": len(rows), "to_mint": minted,
-           "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
+           "to_abstain": abstained, "held": held, "plan": plan,
+           "because": because if not dry_run else None}
 
 
 async def resolve_reference_orphans(
@@ -1145,6 +1161,7 @@ async def resolve_reference_orphans(
     plan: list[dict[str, Any]] = []
     minted = 0
     abstained = 0
+    held = 0
     for row in rows:
         topic = (row["topic"] or "").strip()
         matching = [n for n in names if topic.startswith(n + "-")]
@@ -1173,11 +1190,16 @@ async def resolve_reference_orphans(
                      "candidate_count": len(candidate_ids)}
             abstained += 1
         if not dry_run:
-            await derive_or_abstain(actions, row["id"], "in_repo", candidate_ids, actor,
-                                    why_if_ambiguous=reason)
+            got = await derive_or_abstain(actions, row["id"], "in_repo", candidate_ids, actor,
+                                          why_if_ambiguous=reason)
+            if entry["verdict"] == "mint" and not got["minted"]:
+                _hold_back(entry)  # planned, not done: a link of this type is already there
+                minted -= 1
+                held += 1
         plan.append(entry)
     return {"dry_run": dry_run, "scanned": len(rows), "to_mint": minted,
-           "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
+           "to_abstain": abstained, "held": held, "plan": plan,
+           "because": because if not dry_run else None}
 
 
 async def resolve_practice_orphans(
@@ -1218,6 +1240,7 @@ async def resolve_practice_orphans(
     plan: list[dict[str, Any]] = []
     minted = 0
     abstained = 0
+    held = 0
     for row in rows:
         proj_rows = await pool.fetch(
             "SELECT DISTINCT p.id, p.canonical FROM links w "
@@ -1246,11 +1269,16 @@ async def resolve_practice_orphans(
                      "candidate_count": len(candidate_ids)}
             abstained += 1
         if not dry_run:
-            await derive_or_abstain(actions, row["id"], "in_repo", candidate_ids, actor,
-                                    why_if_ambiguous=reason)
+            got = await derive_or_abstain(actions, row["id"], "in_repo", candidate_ids, actor,
+                                          why_if_ambiguous=reason)
+            if entry["verdict"] == "mint" and not got["minted"]:
+                _hold_back(entry)  # planned, not done: a link of this type is already there
+                minted -= 1
+                held += 1
         plan.append(entry)
     return {"dry_run": dry_run, "scanned": len(rows), "to_mint": minted,
-           "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
+           "to_abstain": abstained, "held": held, "plan": plan,
+           "because": because if not dry_run else None}
 
 
 async def resolve_superstition_orphans(
@@ -1290,6 +1318,7 @@ async def resolve_superstition_orphans(
     plan: list[dict[str, Any]] = []
     minted = 0
     abstained = 0
+    held = 0
     for row in rows:
         killed_by = (row["killed_by"] or "").strip()
         killer: uuid.UUID | None = None
@@ -1329,11 +1358,16 @@ async def resolve_superstition_orphans(
                      "candidate_count": len(candidate_ids)}
             abstained += 1
         if not dry_run:
-            await derive_or_abstain(actions, row["id"], "in_repo", candidate_ids, actor,
-                                    why_if_ambiguous=reason)
+            got = await derive_or_abstain(actions, row["id"], "in_repo", candidate_ids, actor,
+                                          why_if_ambiguous=reason)
+            if entry["verdict"] == "mint" and not got["minted"]:
+                _hold_back(entry)  # planned, not done: a link of this type is already there
+                minted -= 1
+                held += 1
         plan.append(entry)
     return {"dry_run": dry_run, "scanned": len(rows), "to_mint": minted,
-           "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
+           "to_abstain": abstained, "held": held, "plan": plan,
+           "because": because if not dry_run else None}
 
 
 async def resolve_seat_orphans(
@@ -1555,8 +1589,8 @@ def sweep_summary(result: dict[str, Any]) -> dict[str, Any]:
     lanes: dict[str, Any] = {}
     for key, value in result.get("lanes", {}).items():
         if isinstance(value, dict):
-            lanes[key] = {k: value[k] for k in ("scanned", "to_mint", "to_abstain", "more_remain")
-                          if k in value}
+            lanes[key] = {k: value[k] for k in (
+                "scanned", "to_mint", "to_abstain", "held", "more_remain") if k in value}
         else:
             lanes[key] = value
     return {"lanes": lanes, "total_minted": result.get("total_minted", 0),

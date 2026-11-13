@@ -204,3 +204,33 @@ async def test_with_nothing_to_judge_the_session_tree_is_not_walked(
     monkeypatch.setattr(lineage, "_session_dirs", _walk)
     out = await resolve_agent_orphans(_NoRows(), root=tmp_path, skip_judged=True)  # type: ignore[arg-type]
     assert out["scanned"] == 0 and walks == []
+
+
+async def test_a_planned_mint_that_a_retired_link_blocks_is_counted_as_held_not_minted(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """derive_or_abstain does not recreate a link someone invalidated, but the lane's plan used
+    to count the mint every tick (the practice lane read to_mint 4 forever). The result now says
+    held, and to_mint only counts what landed."""
+    session_uuid = "eeeeeeee-0000-4000-8000-000000000009"
+    _write_session_dir(tmp_path, "-home-x-code-retiredpro", session_uuid, "retired1")
+    await _orphan_agent(actions, "agent:retired1", session_uuid)
+    first = await resolve_agent_orphans(actions, root=tmp_path, dry_run=False, because="test")
+    assert first["to_mint"] >= 1
+    [row] = await actions.pool.fetch("SELECT id FROM objects WHERE canonical='agent:retired1'")
+    link = await actions.pool.fetchrow(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='works_in'", row["id"])
+    await actions.invalidate_link(row["id"], link["to_id"], "works_in", "test", _NOW,
+                                  reason="test: retired")
+
+    again = await resolve_agent_orphans(actions, root=tmp_path, dry_run=False, because="test")
+    [entry] = [e for e in again["plan"] if e["canonical"] == "agent:retired1"]
+    assert entry["verdict"] == "already_linked"
+    assert again["held"] >= 1
+    assert again["to_mint"] + again["to_abstain"] + again["held"] == len(again["plan"])
+    assert not await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='works_in' "
+        "AND valid_until IS NULL", row["id"])  # and nothing was recreated
+    planned = await resolve_agent_orphans(actions, root=tmp_path)  # a dry run reports the plan
+    [dry] = [e for e in planned["plan"] if e["canonical"] == "agent:retired1"]
+    assert dry["verdict"] == "mint"
