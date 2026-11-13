@@ -807,19 +807,35 @@ async def backfill_lineage_repo_links_at_write_time(
         saved = await get_cursor(pool, _AT_WRITE_TIME_CURSOR_KEY)
         with contextlib.suppress(ValueError):
             after = uuid.UUID(saved) if saved else None
-    sql = (
-        "SELECT DISTINCT o.id, o.type, a.source_id, a.observed_at FROM objects o "
-        "JOIN assertions a ON a.object_id=o.id AND a.name='summary' "
-        "WHERE o.type IN ('Decision','Thread') AND o.status='active' "
-        "AND a.source_id LIKE 'agent:%' "
+    leftover = (
+        "o.type IN ('Decision','Thread') AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
         "AND (l.valid_until IS NULL OR l.valid_until > now()))")
+    pick = (
+        "SELECT DISTINCT o.id, o.type, a.source_id, a.observed_at FROM objects o "
+        "JOIN assertions a ON a.object_id=o.id AND a.name='summary' "
+        "WHERE " + leftover + " AND a.source_id LIKE 'agent:%'")
+    slice_ids = 0
     if resume:
-        rows = await pool.fetch(
-            sql + " AND ($1::uuid IS NULL OR o.id > $1::uuid) ORDER BY o.id LIMIT $2",
-            after, _AT_WRITE_TIME_SLICE_ROWS)
+        # A slice is a set of OBJECTS, not of rows: one object can carry several summary
+        # assertions (one row each), and a row limit that cut between two of them would let the
+        # cursor step past the rest. The heartbeat also leaves out an object that already
+        # carries a live unresolved in_repo abstention, as the seat and project lanes do: it was
+        # judged, and `retryable_abstentions` owns trying a zero-candidate one again; walking
+        # the same abstained objects every tick only spent the budget.
+        ids = [r["id"] for r in await pool.fetch(
+            "SELECT o.id FROM objects o WHERE " + leftover + " "
+            "AND EXISTS (SELECT 1 FROM assertions a WHERE a.object_id=o.id "
+            "  AND a.name='summary' AND a.source_id LIKE 'agent:%') "
+            "AND NOT EXISTS (SELECT 1 FROM current_assertions ca WHERE ca.object_id=o.id "
+            "  AND ca.name='derivation_abstained_in_repo' AND NOT (ca.value ? 'resolved')) "
+            "AND ($1::uuid IS NULL OR o.id > $1::uuid) ORDER BY o.id LIMIT $2",
+            after, _AT_WRITE_TIME_SLICE_ROWS)]
+        slice_ids = len(ids)
+        rows = await pool.fetch(pick + " AND o.id = ANY($1::uuid[]) ORDER BY o.id", ids) \
+            if ids else []
     else:
-        rows = await pool.fetch(sql)
+        rows = await pool.fetch(pick)
     observed = datetime.now(UTC)
     plan: list[dict[str, Any]] = []
     minted = 0
@@ -827,7 +843,10 @@ async def backfill_lineage_repo_links_at_write_time(
     last_id: uuid.UUID | None = None
     stopped_early = False
     for row in rows:
-        if budget_secs is not None and time.monotonic() - began >= budget_secs:
+        # the budget is checked between OBJECTS, never between two rows of one: the position
+        # saved is an object id, and the rest of a half-done object would be stepped past
+        if (budget_secs is not None and row["id"] != last_id
+                and time.monotonic() - began >= budget_secs):
             stopped_early = True
             break
         last_id = row["id"]
@@ -868,7 +887,7 @@ async def backfill_lineage_repo_links_at_write_time(
     if resume:
         # a full slice or a budget stop means there may be more after `last_id`; a short slice
         # that ran to its end means this pass is finished, so the position is cleared
-        more_remain = stopped_early or len(rows) >= _AT_WRITE_TIME_SLICE_ROWS
+        more_remain = stopped_early or slice_ids >= _AT_WRITE_TIME_SLICE_ROWS
         # a budget that ran out before the first row keeps the old position, never resets it
         keep = str(last_id or after or "") if more_remain else ""
         await set_cursor(pool, _AT_WRITE_TIME_CURSOR_KEY, keep)
@@ -1517,6 +1536,21 @@ async def apply_provenance_sweep_heartbeat(
                                if isinstance(v, dict)),
            "total_abstained": sum(v.get("to_abstain", 0) for v in lanes.values()
                                   if isinstance(v, dict))}
+
+
+def sweep_summary(result: dict[str, Any]) -> dict[str, Any]:
+    """The provenance sweep's result without its per-object plans: for each lane its counts
+    (scanned, minted, abstained, more_remain when it has a position) or its error, and the
+    totals. The full result carries every plan entry, about 49 KB for one journal line."""
+    lanes: dict[str, Any] = {}
+    for key, value in result.get("lanes", {}).items():
+        if isinstance(value, dict):
+            lanes[key] = {k: value[k] for k in ("scanned", "to_mint", "to_abstain", "more_remain")
+                          if k in value}
+        else:
+            lanes[key] = value
+    return {"lanes": lanes, "total_minted": result.get("total_minted", 0),
+            "total_abstained": result.get("total_abstained", 0)}
 
 
 async def _describe(pool: asyncpg.Pool, obj_id: uuid.UUID) -> tuple[str | None, str | None]:
