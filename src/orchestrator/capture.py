@@ -41,7 +41,9 @@ import hashlib
 import json
 import logging
 import re
+import time
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -54,6 +56,7 @@ from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
 logger = logging.getLogger("osiris.capture")
+_SLOW_LANE_SECS = 5.0  # a provenance-sweep lane at least this slow gets its own log line
 
 # The session channel: distinct from the miner's `git-memory` so provenance reads true
 # (a captured decision and a mined one coexist as a multi-source set on the same object).
@@ -1423,47 +1426,43 @@ async def apply_provenance_sweep_heartbeat(
     as running it by hand twice."""
     lanes: dict[str, Any] = {}
     because = _PROVENANCE_SWEEP_BECAUSE
-    try:
-        lanes["agent"] = await resolve_agent_orphans(
-            actions, actor=actor, dry_run=False, because=because)
-    except Exception as exc:  # a DB hiccup on one lane must not sink the others
-        lanes["agent_error"] = repr(exc)
-    try:
-        lanes["decision_thread"] = await backfill_lineage_repo_links(
-            actions, actor=actor, dry_run=False, because=because,
-            defer_abstention=True)
-    except Exception as exc:
-        lanes["decision_thread_error"] = repr(exc)
-    try:
-        lanes["decision_thread_at_write_time"] = await backfill_lineage_repo_links_at_write_time(
-            actions, actor=actor, dry_run=False, because=because)
-    except Exception as exc:
-        lanes["decision_thread_at_write_time_error"] = repr(exc)
-    try:
-        lanes["reference"] = await resolve_reference_orphans(
-            actions, actor=actor, dry_run=False, because=because)
-    except Exception as exc:
-        lanes["reference_error"] = repr(exc)
-    try:
-        lanes["practice"] = await resolve_practice_orphans(
-            actions, actor=actor, dry_run=False, because=because)
-    except Exception as exc:
-        lanes["practice_error"] = repr(exc)
-    try:
-        lanes["superstition"] = await resolve_superstition_orphans(
-            actions, actor=actor, dry_run=False, because=because)
-    except Exception as exc:
-        lanes["superstition_error"] = repr(exc)
-    try:
-        lanes["seat"] = await resolve_seat_orphans(
-            actions, actor=actor, dry_run=False, because=because)
-    except Exception as exc:
-        lanes["seat_error"] = repr(exc)
-    try:
-        lanes["project"] = await resolve_project_orphans(
-            actions, actor=actor, dry_run=False, because=because)
-    except Exception as exc:
-        lanes["project_error"] = repr(exc)
+    spent: dict[str, float] = {}
+
+    async def lane(key: str, call: Callable[[], Awaitable[Any]]) -> None:
+        """Run one lane, keep its result or its error, and log how long it took the moment it
+        ends. Logged per lane, not once at the end: the whole sweep runs under a 60 s budget, and
+        a sweep that is cancelled never reaches an end-of-sweep line, which hid WHICH lane was
+        slow. A cancelled lane logs where it stopped, then lets the cancel through."""
+        began = time.monotonic()
+        try:
+            lanes[key] = await call()
+        except asyncio.CancelledError:
+            logger.warning("provenance sweep: lane %s was cancelled after %.1f s (lanes done: %s)",
+                         key, time.monotonic() - began, ", ".join(spent) or "none")
+            raise
+        except Exception as exc:  # a DB hiccup on one lane must not sink the others
+            lanes[f"{key}_error"] = repr(exc)
+        spent[key] = round(time.monotonic() - began, 2)
+        if spent[key] >= _SLOW_LANE_SECS:
+            logger.info("provenance sweep: lane %s took %.1f s", key, spent[key])
+
+    await lane("agent", lambda: resolve_agent_orphans(
+        actions, actor=actor, dry_run=False, because=because))
+    await lane("decision_thread", lambda: backfill_lineage_repo_links(
+        actions, actor=actor, dry_run=False, because=because, defer_abstention=True))
+    await lane("decision_thread_at_write_time", lambda: backfill_lineage_repo_links_at_write_time(
+        actions, actor=actor, dry_run=False, because=because))
+    await lane("reference", lambda: resolve_reference_orphans(
+        actions, actor=actor, dry_run=False, because=because))
+    await lane("practice", lambda: resolve_practice_orphans(
+        actions, actor=actor, dry_run=False, because=because))
+    await lane("superstition", lambda: resolve_superstition_orphans(
+        actions, actor=actor, dry_run=False, because=because))
+    await lane("seat", lambda: resolve_seat_orphans(
+        actions, actor=actor, dry_run=False, because=because))
+    await lane("project", lambda: resolve_project_orphans(
+        actions, actor=actor, dry_run=False, because=because))
+    logger.info("provenance sweep lane timings (s): %s", spent)
     return {"lanes": lanes,
            "total_minted": sum(v.get("to_mint", 0) for v in lanes.values()
                                if isinstance(v, dict)),
