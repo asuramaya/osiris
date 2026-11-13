@@ -394,6 +394,9 @@ async def sense_liveness(ctx: dict[str, Any]) -> int:
     return await observe_liveness(ctx["pool"], Path(root))
 
 
+_BACKFILL_LAP_FLOOR_SECS = 1.5
+
+
 async def backfill_transcripts(ctx: dict[str, Any]) -> int:
     """THE STORE STAYS CURRENT ON THE OBSERVER'S SWITCH (task #19, the operator's word
     2026-07-19). The transcript store is Osiris eating sessions from ANY harness; its
@@ -412,10 +415,21 @@ async def backfill_transcripts(ctx: dict[str, Any]) -> int:
     from src.ingest.telemetry import TelemetryStore
     from src.ingest.transcript_store import TranscriptStore
     from src.orchestrator.neighborhoods import census_trees
+    laps: dict[str, float] = {}
+    t_last = t_start = time.monotonic()
+
+    def lap(name: str) -> None:
+        nonlocal t_last
+        now = time.monotonic()
+        laps[name] = now - t_last
+        t_last = now
+
     out = await TranscriptStore(ctx["pool"]).backfill()
+    lap("transcripts")
     # the retained-telemetry sweep rides the same observer switch (task #35): the same
     # free-deterministic class, the same spend gate, the same one-switch-one-cost law
     tel = await TelemetryStore(ctx["pool"]).backfill()
+    lap("telemetry")
     # the soul store rides the SAME switch too (task #51 piece 1, Lane 1 msg 6527/ruling
     # ba329ccb): measured 89,591 real lines fleet-wide (not the ~20M a linear guess
     # implied), migration 0050's own last_line_idx/last_hash design was built for exactly
@@ -423,12 +437,14 @@ async def backfill_transcripts(ctx: dict[str, Any]) -> int:
     # for the identical pattern — never SessionEnd/PreCompact, per the ruling's own
     # constraint that nothing may wedge a session's exit
     soul = await SoulStore(ctx["pool"]).backfill(root=Path(root))
+    lap("soul")
     # crush sessions become canonical too (wave 13 item 2, thread 78efd46d): unlike the
     # claude-code half above, crush's own discovery (projects.json + seat offices) never
     # depends on osiris_transcripts, so this runs unconditionally, same free-observer,
     # one-switch-one-cost law — ingest_crush_session resumes from last_line_idx, so a
     # steady-state tick with nothing new costs one SQLite query per known session.
     soul_crush = await SoulStore(ctx["pool"]).backfill_crush()
+    lap("crush")
     # DSH sessions become canonical too (wave 18 item 1, mail 9541 7b8bb398): the same
     # gap crush closed above — DshSessionAdapter feeds harness_turns cleanly via
     # transcript_store's own backfill, but soul_store's own backfill() deliberately
@@ -438,10 +454,17 @@ async def backfill_transcripts(ctx: dict[str, Any]) -> int:
     # per known session (no cheaper stat-gate exists for a compressed file, see
     # backfill_dsh's own docstring)
     soul_dsh = await SoulStore(ctx["pool"]).backfill_dsh()
+    lap("dsh")
     # the disk census too (thread 5e37630b): a free walk that makes 'exists on disk'
     # a graph fact — observation only, never the watch list
     roots = [r for r in get_settings().osiris_census_roots.split(":") if r.strip()]
     cs = await census_trees(Actions(ctx["pool"]), roots=roots)
+    lap("census")
+    if time.monotonic() - t_start >= _BACKFILL_LAP_FLOOR_SECS:
+        # where the time went, said only when the tick was slow: the cron's total was ~3.9 s a
+        # tick and nothing said which of the six sweeps it was (the mount laps did this job there)
+        _log.info("backfill phases: total %.1fs, %s", time.monotonic() - t_start,
+                  ", ".join(f"{k} {v:.1f}s" for k, v in laps.items()))
     if cs["minted"]:
         _log.info("disk census minted %d unmodeled repos: %s",
                   len(cs["minted"]), ", ".join(cs["minted"]))
