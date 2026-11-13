@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from src.actions.core import Actions
@@ -263,7 +264,9 @@ async def test_census_trees_no_ops_when_resolve_repo_keeps_missing_an_existing_o
     # force _resolve_repo to keep missing it, same as a stray fold/merge would live
     await actions.pool.execute("UPDATE objects SET status='merged' WHERE id=$1", obj)
     second = await census_trees(actions, roots=[str(tmp_path / "code")])
-    assert second["minted"] == ["missedcensus"]  # still routes through the mint branch
+    # it still routes through the mint branch (the resolver misses it), but it is a find, not a
+    # first sighting, so it is not reported as a mint
+    assert second["minted"] == []
     for prop in ("discovered", "on_disk_path", "remote_url"):
         assert await actions.pool.fetchval(
             "SELECT count(*) FROM assertions WHERE object_id=$1 AND name=$2", obj, prop
@@ -502,7 +505,6 @@ async def test_census_asks_git_once_per_checkout_and_again_only_when_its_files_c
     four git subprocesses per checkout, 224 a tick. What git said is remembered against the
     stat of the file it read (`.git/config` for the remote, a worktree's pointer file and its
     HEAD), so an unchanged checkout costs a stat; a changed one is asked again."""
-    from typing import Any
 
     from src.orchestrator import neighborhoods, project_identity
     from src.orchestrator.neighborhoods import census_trees
@@ -542,6 +544,30 @@ async def test_census_asks_git_once_per_checkout_and_again_only_when_its_files_c
         "WHERE o.canonical='worktree:gitfactparent-wt' AND a.name='branch' LIMIT 1")
     assert branch == "moved-on"
     neighborhoods._GIT_FACTS.clear()
+
+
+async def test_the_census_counts_a_mint_only_the_first_time_it_sees_a_repo(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the name resolver misses an object that already exists under its canonical, the mint
+    branch runs on every walk for it; the worker logged "disk census minted 12 unmodeled repos"
+    every five minutes, the same twelve. It wrote nothing, but it was not a mint."""
+    from src.orchestrator import capture
+    from src.orchestrator.neighborhoods import census_trees
+
+    (tmp_path / "code" / "twice-seen" / ".git").mkdir(parents=True)
+    roots = [str(tmp_path / "code")]
+    first = await census_trees(actions, roots=roots)
+    assert first["minted"] == ["twice-seen"]  # the real first sighting
+
+    async def blind(pool: Any, name: str) -> None:
+        return None
+
+    monkeypatch.setattr(capture, "_resolve_repo", blind)
+    for _ in range(2):
+        again = await census_trees(actions, roots=roots)
+        assert again["minted"] == []  # it exists already: found, not minted
+        assert again["refused"] == []
 
 
 # --- the read-back ("I could not have discovered my own zero") -----------------------
