@@ -1095,13 +1095,19 @@ def _cmd_soul_key_envelope(
         return 1
     title = f"soul-key envelope {envelope_action}"
     if envelope_action == "list":
-        render.emit({"recipients": soul_envelope.envelope_recipients(path=path)},
-                    as_json=as_json, title=title)
+        try:
+            listed = soul_envelope.envelope_recipients(path=path)
+        except soul_envelope.EnvelopeUnreadable as exc:
+            print(f"osiris soul-key envelope list: {exc}", file=sys.stderr)
+            return 1
+        render.emit({"recipients": listed}, as_json=as_json, title=title)
         return 0
     if envelope_action == "check":
         out = soul_envelope.envelope_check(path=path)
         render.emit(out, as_json=as_json, title=title)
         return 0 if out["ok"] else 1
+    if envelope_action in ("add-key", "add-code", "verify"):
+        soul_envelope.harden_process()  # no core dump while a key is in memory
     if envelope_action == "add-key":
         out = soul_envelope.envelope_add_key(path=path, label=label or "security key")
     elif envelope_action == "add-code":
@@ -1124,7 +1130,11 @@ def _cmd_soul_key_envelope(
         out = soul_envelope.envelope_remove(
             recipient, path=path, allow_no_hardware=allow_no_hardware)
     else:  # verify
-        kinds = {r["id"]: r["kind"] for r in soul_envelope.envelope_recipients(path=path)}
+        try:
+            kinds = {r["id"]: r["kind"] for r in soul_envelope.envelope_recipients(path=path)}
+        except soul_envelope.EnvelopeUnreadable as exc:
+            print(f"osiris soul-key envelope verify: {exc}", file=sys.stderr)
+            return 1
         typed = None
         if kinds.get(recipient) == soul_envelope.KIND_CODE:
             import getpass
@@ -1348,7 +1358,9 @@ async def cmd_envelope_drill(
             pool = await create_pool(settings.database_url, min_size=1, max_size=2,
                                      application_name="osiris-cli:envelope-drill")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris envelope-drill: could not reach postgres: {exc}", file=sys.stderr)
+            # the exception text of a connection failure can carry the DSN: name the type only
+            print("osiris envelope-drill: could not reach postgres "
+                  f"({type(exc).__name__}); is the database up?", file=sys.stderr)
             return 1
     if check:
         # the unattended daily check (osiris-envelope-check.timer): reads the envelope, opens
@@ -1361,6 +1373,7 @@ async def cmd_envelope_drill(
                 await pool.close()
         render.emit({"told": told}, as_json=as_json, title="envelope check")
         return 0
+    soul_envelope.harden_process()  # no core dump while a key is in memory
     try:
         sample = await envelope_drill.sealed_sample(pool)
     finally:
@@ -1370,10 +1383,14 @@ async def cmd_envelope_drill(
         print("osiris envelope-drill: the store holds no sealed line to test a key against, "
               "so nothing can be proved yet.", file=sys.stderr)
         return 1
-    verify = envelope_drill.verify_with_prompts(
-        soul_envelope.envelope_recipients, soul_envelope.envelope_verify, getpass.getpass)
-    results = envelope_drill.run_drill(
-        soul_envelope.envelope_recipients, verify, sample=sample, only=recipient)
+    try:
+        verify = envelope_drill.verify_with_prompts(
+            soul_envelope.envelope_recipients, soul_envelope.envelope_verify, getpass.getpass)
+        results = envelope_drill.run_drill(
+            soul_envelope.envelope_recipients, verify, sample=sample, only=recipient)
+    except soul_envelope.EnvelopeUnreadable as exc:
+        print(f"osiris envelope-drill: {exc}", file=sys.stderr)
+        return 1
     if not results:
         print("osiris envelope-drill: no such recipient." if recipient
               else "osiris envelope-drill: the key is not sealed to any recipient yet.",

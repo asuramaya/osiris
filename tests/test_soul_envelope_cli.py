@@ -122,3 +122,24 @@ async def test_remove_and_the_plain_refusals(keyfile: str, capsys: Any) -> None:
 async def test_add_key_without_an_envelope_refuses_plainly(keyfile: str, capsys: Any) -> None:
     assert await _run("add-key", keyfile) == 1
     assert "enroll the first key" in capsys.readouterr().err
+
+
+async def test_list_and_verify_say_plainly_when_the_file_is_there_but_unreadable(
+    keyfile: str, capsys: Any,
+) -> None:
+    recovery_file_path(path=keyfile).write_text("{not json")
+    assert await _run("list", keyfile) == 1
+    assert "cannot be read" in capsys.readouterr().err
+    assert await _run("verify", keyfile, recipient="k1") == 1
+    assert "cannot be read" in capsys.readouterr().err
+
+
+def test_harden_process_turns_off_core_dumps() -> None:
+    import subprocess
+    import sys
+
+    code = ("import resource\nfrom src.ingest import soul_envelope as e\ne.harden_process()\n"
+            "print(resource.getrlimit(resource.RLIMIT_CORE))")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
+                         timeout=60)
+    assert out.stdout.strip() == "(0, 0)"

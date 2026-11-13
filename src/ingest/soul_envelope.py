@@ -31,7 +31,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import Any, cast
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
@@ -94,19 +94,27 @@ def _token_well_formed(wrapped: Any) -> bool:
     return len(raw) >= _MIN_TOKEN_BYTES and raw[0] == 0x80
 
 
+class EnvelopeUnreadable(ValueError):
+    """The recovery file exists but cannot be read or is not an envelope. Different from "no
+    file yet": a first run is quiet, a file that cannot be read is a problem to tell. The
+    message is plain words and never carries the file's content."""
+
+
 def envelope_recipients(*, path: str | None = None) -> list[dict[str, Any]]:
     """Who the key is sealed to: id, kind, label, added_at (also `enrolled_at`),
     last_opened_at, and `unattended` (always False: every real open of a recipient needs a
     person; `needs_touch` is True for a hardware key, `needs_human` for every kind). No
-    secret, no touch, no decryption. An empty list when there is no recovery file or it
-    cannot be read."""
+    secret, no touch, no decryption. An empty list ONLY when there is no recovery file (the
+    quiet first-run case); a file that exists but cannot be read raises `EnvelopeUnreadable`,
+    so a corrupt or unreadable envelope is never mistaken for "not set up yet"."""
     recovery_path = recovery_file_path(path=path)
-    if not recovery_path.exists():
-        return []
     try:
+        if not recovery_path.exists():
+            return []
         blob = _read_blob(recovery_path)
-    except (OSError, ValueError):
-        return []
+    except (OSError, ValueError) as exc:
+        raise EnvelopeUnreadable(
+            f"the recovery file cannot be read ({type(exc).__name__})") from None
     return [{"id": str(r.get("id", "")), "kind": r.get("kind"), "label": r.get("label", ""),
              "added_at": r.get("added_at"), "enrolled_at": r.get("added_at"),
              "last_opened_at": r.get("last_opened_at"), "unattended": False,
@@ -125,7 +133,8 @@ def envelope_check(*, path: str | None = None) -> dict[str, Any]:
     `envelope_verify` proves a recipient actually does."""
     recovery_path = recovery_file_path(path=path)
     if not recovery_path.exists():
-        return {"ok": False, "problems": [f"no recovery file at {recovery_path}"],
+        return {"ok": False, "absent": True,
+                "problems": [f"no recovery file at {recovery_path}"],
                 "by_recipient": {}, "unproven": [], "recipients": 0, "hardware": 0,
                 "stale": None}
     try:
@@ -193,6 +202,32 @@ def _now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def atomic_write_private(path: Path, text: str) -> None:
+    """Write `text` to `path` atomically and private: a temp file in the same directory (mode
+    0600, flushed to disk), then a rename over the old one, so a crash leaves either the old file
+    or the new one, never half of either. The directory is created 0700 if it is missing."""
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".envelope-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            os.fchmod(fh.fileno(), 0o600)
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    dir_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+
+
 def _write_blob_atomic(recovery_path: Path, blob: dict[str, Any]) -> None:
     """Write the file as version 2, atomically and private: a temp file in the same directory
     (mode 0600, flushed to disk), then a rename over the old one, so a crash leaves either the
@@ -206,25 +241,7 @@ def _write_blob_atomic(recovery_path: Path, blob: dict[str, Any]) -> None:
         for field in _LEGACY_FIELDS:
             if first.get(field):
                 blob[field] = first[field]
-    fd, tmp = tempfile.mkstemp(prefix=".envelope-", dir=recovery_path.parent)
-    try:
-        with os.fdopen(fd, "w") as fh:
-            os.fchmod(fh.fileno(), 0o600)
-            fh.write(json.dumps(blob))
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, recovery_path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    dir_fd = os.open(recovery_path.parent, os.O_RDONLY)
-    try:
-        os.fsync(dir_fd)
-    finally:
-        os.close(dir_fd)
+    atomic_write_private(recovery_path, json.dumps(blob))
 
 
 def _next_id(blob: dict[str, Any], prefix: str) -> str:
@@ -441,6 +458,14 @@ class OpenResult:
         return bytes(self._key)
 
     @property
+    def key_buffer(self) -> bytearray:
+        """The key itself, NOT a copy: the same buffer `close` zeroes. For a caller that only
+        needs to pass it on (Fernet accepts it) and keeps nothing."""
+        if self._key is None:
+            raise ValueError("no key: this recipient did not open, or the block has ended")
+        return self._key
+
+    @property
     def fingerprint(self) -> str | None:
         return key_fingerprint(bytes(self._key)) if self._key is not None else None
 
@@ -578,7 +603,7 @@ def envelope_verify(
         out["fingerprint_matches"] = expected is not None and opened.fingerprint == expected
         if on_key is not None:
             try:
-                out["artifact_ok"] = bool(on_key(opened.key))
+                out["artifact_ok"] = bool(on_key(cast(bytes, opened.key_buffer)))
             except Exception:  # noqa: BLE001 - a callback's failure is a False, its text is never kept
                 out["artifact_ok"] = False
     if not out["fingerprint_matches"]:
@@ -589,3 +614,22 @@ def envelope_verify(
         out["ok"] = True
         mark_opened(recipient_id, path=path)
     return out
+
+
+def harden_process() -> None:
+    """Before a real open: no core dump and not dumpable, so a crash or a same-user ptrace
+    cannot write this process's memory (where the key briefly lives) to disk. Best effort and
+    silent: a platform without these simply does without. Call it at the start of a command
+    that opens a recipient, never from library or test code."""
+    try:
+        import resource
+
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    except (ImportError, ValueError, OSError):
+        pass
+    try:
+        import ctypes
+
+        ctypes.CDLL(None).prctl(4, 0, 0, 0, 0)  # PR_SET_DUMPABLE = 4
+    except (ImportError, OSError, AttributeError):
+        pass
