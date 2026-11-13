@@ -10,6 +10,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 from src.ingest.harness.dsh import DshSessionAdapter, _cwd_to_slug
 
 _ZSTD = "zstd"
@@ -113,3 +114,74 @@ def test_discover_picks_the_most_recently_modified_session_when_a_slug_has_sever
     loc = DshSessionAdapter().discover(cwd="/home/user/code/proj", job_dir=None, root=root)
     assert loc is not None
     assert loc.anchor_sid == "ffffffff"
+
+
+def test_discovery_decompresses_an_unchanged_session_once_not_every_tick(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """enumerate() runs on every worker tick; it used to run a whole `zstd` decompress per
+    session each time, just to read the header line (~0.2 s a session on the event loop)."""
+    from src.ingest.harness import dsh
+
+    dsh._HEAD_MEMO.clear()
+    root = tmp_path / "sessions"
+    zst = (root / "--home-user-code-proj--" / "session-aaaaaaaa-0000-0000-0000-000000000000"
+           / "session.jsonl.zstd")
+    _write_session(zst, session_id="session-aaaaaaaa-0000-0000-0000-000000000000",
+                   cwd="/home/user/code/proj")
+    calls: list[Path] = []
+    real = dsh._decompress
+
+    def counting(path: Path) -> list[str] | None:
+        calls.append(path)
+        return real(path)
+
+    monkeypatch.setattr(dsh, "_decompress", counting)
+
+    for _ in range(3):
+        locs = list(DshSessionAdapter().enumerate(root=root))
+        assert [loc.anchor_sid for loc in locs] == ["aaaaaaaa"]
+    assert len(calls) == 1  # read once, then a stat per tick
+
+    # the harness rewrote the file (new size and mtime): it is read again
+    _write_session(zst, session_id="session-aaaaaaaa-0000-0000-0000-000000000000",
+                   cwd="/home/user/code/proj/renamed-and-longer")
+    locs = list(DshSessionAdapter().enumerate(root=root))
+    assert len(calls) == 2 and locs[0].cwd == "/home/user/code/proj/renamed-and-longer"
+
+
+def test_a_file_replaced_by_rename_with_the_same_size_and_mtime_is_read_again(
+    tmp_path: Path,
+) -> None:
+    """mtime and size can both survive a rewrite (a same-length edit with the time restored);
+    the inode cannot survive a replace-by-rename."""
+    import os
+
+    from src.ingest.harness import dsh
+
+    dsh._HEAD_MEMO.clear()
+    zst = tmp_path / "s.jsonl.zstd"
+    _write_session(zst, session_id="session-aaaaaaaa", cwd="/home/u/aaa")
+    before = dsh._head_lines(zst)
+    st = zst.stat()
+    other = tmp_path / "other.jsonl.zstd"
+    _write_session(other, session_id="session-bbbbbbbb", cwd="/home/u/bbb")
+    assert other.stat().st_size == st.st_size  # same length, so size alone cannot tell
+    os.utime(other, ns=(st.st_atime_ns, st.st_mtime_ns))
+    os.replace(other, zst)
+
+    after = dsh._head_lines(zst)
+
+    assert before != after and "bbbbbbbb" in after[0]
+
+
+def test_a_session_that_cannot_be_read_is_not_remembered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.ingest.harness import dsh
+
+    dsh._HEAD_MEMO.clear()
+    bad = tmp_path / "broken.jsonl.zstd"
+    bad.write_bytes(b"not zstd")
+
+    assert dsh._head_lines(bad) is None and not dsh._HEAD_MEMO

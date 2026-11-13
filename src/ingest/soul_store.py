@@ -29,6 +29,7 @@ import gzip
 import hashlib
 import json
 import logging
+import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
@@ -97,6 +98,9 @@ class _LazyFernet:
 _HARNESS = "claude-code"
 _CRUSH_HARNESS = "crush"
 _DSH_HARNESS = "dsh"
+# (mtime_ns, size, inode) of each DSH session file this process has ingested to its end;
+# see backfill_dsh
+_DSH_INGESTED: dict[str, tuple[int, int, int]] = {}
 _CRUSH_ROW_COLUMNS = (
     "id", "session_id", "role", "parts", "model", "provider",
     "created_at", "updated_at", "finished_at", "is_summary_message",
@@ -959,20 +963,28 @@ class SoulStore:
         lines and when `source_path` resolves to nothing decompressible (missing,
         corrupt, zstd unavailable), a skip, never a raised exception, matching
         `backfill`'s own per-session tolerance."""
+        return (await self._ingest_dsh_checked(source_path, anchor_sid))[0]
+
+    async def _ingest_dsh_checked(
+        self, source_path: str, anchor_sid: str,
+    ) -> tuple[int, bool]:
+        """`ingest_dsh_session`'s body, also saying whether the session was READ: (new lines,
+        readable). Unreadable (missing, corrupt, no zstd, a timeout, empty) is False, so the
+        sweep never treats a failed read as "nothing new"."""
         import asyncio
 
         from src.ingest.harness.dsh import _decompress_bytes
 
         content = await asyncio.to_thread(_decompress_bytes, Path(source_path))
         if content is None:
-            return 0
+            return 0, False
         all_lines = _split_lines(content)
         if not all_lines:
-            return 0
+            return 0, False
         idx, prev_hash = await self._progress(anchor_sid, harness=_DSH_HARNESS)
         new_lines = all_lines[idx:]
         if not new_lines:
-            return 0
+            return 0, True
         hashed, next_idx, next_prev = _hash_rows(
             _DSH_HARNESS, anchor_sid, new_lines, idx, prev_hash)
         async with self.pool.acquire() as conn:
@@ -987,7 +999,7 @@ class SoulStore:
                 )
                 await self._checkpoint(
                     _DSH_HARNESS, anchor_sid, source_path, next_idx, next_prev, conn=conn)
-        return len(new_lines)
+        return len(new_lines), True
 
     async def backfill_dsh(self, *, limit_per_adapter: int = 0) -> dict[str, int]:
         """The periodic sweep for DSH, mirroring `backfill_crush`'s own shape over
@@ -1011,10 +1023,28 @@ class SoulStore:
             source_path = locator.source_path
             if limit_per_adapter and per_source.get(source_path, 0) >= limit_per_adapter:
                 continue
+            # A stat gate after all: a session file this process already ingested to its end
+            # and that has the same mtime, size and inode has nothing new, and finding that out
+            # cost a
+            # whole `zstd` decompress per session per tick (~1.5 s a sweep). The stat is taken
+            # BEFORE the ingest, so a write during it leaves the file looking changed next time.
+            # Process-local: after a restart each file is checked once.
             try:
-                new = await self.ingest_dsh_session(source_path, locator.anchor_sid)
+                st = os.stat(source_path)
+                fingerprint: tuple[int, int, int] | None = (
+                    st.st_mtime_ns, st.st_size, st.st_ino)
+            except OSError:
+                fingerprint = None
+            if fingerprint is not None and _DSH_INGESTED.get(source_path) == fingerprint:
+                continue
+            try:
+                new, readable = await self._ingest_dsh_checked(source_path, locator.anchor_sid)
             except Exception:  # noqa: BLE001 (one bad session must not abort the sweep)
                 continue
+            if fingerprint is not None and readable:
+                if len(_DSH_INGESTED) >= 4096:
+                    _DSH_INGESTED.clear()
+                _DSH_INGESTED[source_path] = fingerprint
             if new:
                 counts[source_path] = counts.get(source_path, 0) + 1
                 per_source[source_path] = per_source.get(source_path, 0) + 1

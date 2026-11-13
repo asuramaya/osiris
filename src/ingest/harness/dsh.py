@@ -175,6 +175,40 @@ def _decompress(path: Path) -> list[str] | None:
         return None
 
 
+_HEAD_MEMO: dict[str, tuple[int, int, int, list[str]]] = {}
+_HEAD_MEMO_MAX = 1024
+_HEAD_LINES = 5
+
+
+def _head_lines(path: Path) -> list[str] | None:
+    """The first lines of a session file (all that discovery reads: the `type: session`
+    header), remembered per (path, mtime, size).
+
+    Discovery runs on every worker tick (`enumerate`, from both the transcript and the soul
+    backfills) and used to decompress EVERY session file, whole, with a `zstd` subprocess, just
+    to read a header: ~0.2 s a session, ~2 s a tick, on the event loop's thread. A file that has
+    not changed has the same header, so an unchanged file costs one stat. A file the harness
+    rewrote (new mtime, size or inode, the last because a rewrite by rename keeps neither)
+    is read again. None when it cannot be read (not memoised)."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    key = str(path)
+    hit = _HEAD_MEMO.get(key)
+    if (hit is not None and hit[0] == st.st_mtime_ns and hit[1] == st.st_size
+            and hit[2] == st.st_ino):
+        return list(hit[3])
+    lines = _decompress(path)
+    if lines is None:
+        return None
+    head = lines[:_HEAD_LINES]
+    if len(_HEAD_MEMO) >= _HEAD_MEMO_MAX:
+        _HEAD_MEMO.clear()  # bounded: a flood of files costs a re-read, never memory
+    _HEAD_MEMO[key] = (st.st_mtime_ns, st.st_size, st.st_ino, head)
+    return list(head)
+
+
 def _decompress_bytes(path: Path) -> bytes | None:
     """RAW-BYTE decompress. This exists for the transcript store's own verbatim-ingest
     requirement: a real transcript line can carry a literal NUL byte, which
@@ -274,7 +308,7 @@ class DshSessionAdapter:
         session_file = source or _session_file_in(session_dir)
         if session_file is None:
             return None
-        lines = _decompress(session_file)
+        lines = _head_lines(session_file)
         if not lines:
             return None
         session_id: str | None = None
@@ -305,7 +339,7 @@ class DshSessionAdapter:
         """Explicit-path discovery lane for transcript_store."""
         if not path.is_file() or path.suffix != _ZSTD_EXT:
             return None
-        lines = _decompress(path)
+        lines = _head_lines(path)
         if not lines:
             return None
         session_id: str | None = None
