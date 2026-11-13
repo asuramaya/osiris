@@ -37,7 +37,7 @@ TOPLEVEL="$(git rev-parse --show-toplevel)"
 REAL_TARGET_DIR="$HOME/.config/systemd/user"
 TARGET_DIR="${OSIRIS_SYSTEMD_USER_DIR:-$REAL_TARGET_DIR}"
 
-UNITS="osiris-prune-manifest osiris-prune-apply osiris-base-backup osiris-backup osiris-preflight osiris-pg-autotune osiris-offload osiris-restore-drill osiris-cleanup osiris-pitr-drill osiris-wal-pull osiris-envelope-check"
+UNITS="osiris-prune-manifest osiris-prune-apply osiris-base-backup osiris-backup osiris-preflight osiris-pg-autotune osiris-offload osiris-restore-drill osiris-cleanup osiris-pitr-drill osiris-wal-pull osiris-envelope-check osiris-at-home"
 
 mkdir -p "$TARGET_DIR"
 
@@ -72,7 +72,7 @@ if [ "$TARGET_DIR" = "$REAL_TARGET_DIR" ]; then
         osiris-prune-manifest.timer osiris-prune-apply.timer osiris-base-backup.timer \
         osiris-backup.timer osiris-preflight.timer osiris-pg-autotune.timer \
         osiris-offload.timer osiris-restore-drill.timer osiris-cleanup.timer \
-        osiris-pitr-drill.timer osiris-wal-pull.timer osiris-envelope-check.timer
+        osiris-pitr-drill.timer osiris-wal-pull.timer osiris-envelope-check.timer osiris-at-home.timer
 fi
 
 echo "install_prune_timers: $installed installed/updated, $current already current — $TARGET_DIR"

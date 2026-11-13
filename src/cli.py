@@ -19,6 +19,8 @@ rather than re-deriving it:
   osiris offload-runner tick        THE OPPORTUNISTIC OFFLOAD RUNNER: one pass syncing the
                                      vault via restic to every present, enabled offload
                                      target, meant as osiris-offload.timer's own ExecStart
+  osiris at-home [--json]            what is waiting only on you being there, cheapest and
+                                     safest first, with the exact command for each
   osiris nas-first-offload [--check]  the NAS's first offload for the day you are home on the
                                      LAN: route, repository, offload, snapshot, restore test,
                                      recovery file; one plain line per step
@@ -1333,6 +1335,46 @@ async def cmd_restic_key(
 
 
 # --- offload-runner ------------------------------------------------------------------------
+
+async def cmd_at_home(
+    *, as_json: bool = False, notify: bool = False, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris at-home: what is waiting only on you being there (on the home network, a security key
+    in hand, or your word), cheapest and safest first, each with its live status and the exact
+    command to run. Read-only: it opens nothing, uploads nothing and changes nothing. `--notify`
+    also puts one line on the operator desk when something waits (told once per state; what the
+    daily timer runs)."""
+    from src import cli_render as render
+    from src.orchestrator import at_home
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=2,
+                                     application_name="osiris-cli:at-home")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris at-home: could not reach postgres: {exc}", file=sys.stderr)
+            return 1
+    try:
+        result = at_home.checklist(await at_home.real_sources(pool))
+        if notify:
+            result["told"] = await at_home.surface(pool, result)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if as_json:
+        render.emit(result, as_json=True, title="at home")
+    else:
+        for line in at_home.render(result):
+            print(line)
+    return 0
+
 
 async def cmd_nas_first_offload(
     *, name: str | None = None, check_only: bool = False, pool: asyncpg.Pool | None = None,
@@ -8457,7 +8499,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         declare-machine-identity, correct-agent-house (deprecated alias
                         for correct-agent-project, one release only)
   operate               deploy, migrate, seed, soul-key, restic-key, offload-runner,
-                        nas-first-offload, envelope-drill, bootstrap, retention,
+                        nas-first-offload, envelope-drill, at-home, bootstrap, retention,
                         rematerialize, rebuild-transcript, fleet-reconcile, fleet-prune,
                         backfill, graph-migrate, layout
 
@@ -8791,6 +8833,19 @@ def _build_parser() -> argparse.ArgumentParser:
                                        "(defaults to $OSIRIS_VAULT or ~/osiris-vault)")
     p_offload_runner.add_argument("--json", action="store_true", dest="as_json",
                                   help="machine-readable: one compact JSON line")
+
+    p_at_home = sub.add_parser("at-home", description=_d(
+        "What is waiting only on you being there (on the home network, a security key in "
+        "hand, or your word), cheapest and safest first, each with its live status and the "
+        "exact command to run. Read-only: it opens nothing, uploads nothing and changes "
+        "nothing."),
+        epilog="example: osiris at-home\n"
+               "example: osiris at-home --json")
+    p_at_home.add_argument("--notify", action="store_true",
+                           help="also put one line on the operator desk when something waits "
+                                "(told once per state; what the daily timer runs)")
+    p_at_home.add_argument("--json", action="store_true", dest="as_json",
+                           help="machine-readable: one compact JSON line")
 
     p_nas_first = sub.add_parser("nas-first-offload", description=_d(
         "The NAS's first offload, as one command for the day you are home on the LAN: the "
@@ -10405,6 +10460,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "restic-key":
         return asyncio.run(cmd_restic_key(
             args.action, path=args.path, backend=args.backend, as_json=args.as_json))
+    if args.command == "at-home":
+        return asyncio.run(cmd_at_home(  # unbounded-wait-ok: asyncio.run of a CLI command
+            as_json=args.as_json, notify=args.notify))
     if args.command == "nas-first-offload":
         return asyncio.run(cmd_nas_first_offload(  # unbounded-wait-ok: asyncio.run of a CLI command
             name=args.name, check_only=args.check_only))
