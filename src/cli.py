@@ -19,6 +19,9 @@ rather than re-deriving it:
   osiris offload-runner tick        THE OPPORTUNISTIC OFFLOAD RUNNER: one pass syncing the
                                      vault via restic to every present, enabled offload
                                      target, meant as osiris-offload.timer's own ExecStart
+  osiris nas-first-offload [--check]  the NAS's first offload for the day you are home on the
+                                     LAN: route, repository, offload, snapshot, restore test,
+                                     recovery file; one plain line per step
   osiris envelope-drill [--recipient id]  with you present, prove each recipient the vault key
                                      is sealed to opens the envelope by itself and its key
                                      decrypts a real sealed line (touch, PIN or typed code)
@@ -1330,6 +1333,37 @@ async def cmd_restic_key(
 
 
 # --- offload-runner ------------------------------------------------------------------------
+
+async def cmd_nas_first_offload(
+    *, name: str | None = None, check_only: bool = False, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris nas-first-offload: the NAS's first offload, as one command for the day you are home
+    on the LAN. Six steps, one plain line each: the route is the home network (never Tailscale),
+    the repository is there, the vault is offloaded, a fresh snapshot exists, the restore test
+    passes, the recovery file is copied. It stops at the first step that fails and says what to
+    do. `--check` runs only the two read-only steps. It never touches the plaintext key copy."""
+    from src.orchestrator import nas_first_offload
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=2,
+                                     application_name="osiris-cli:nas-first-offload")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris nas-first-offload: could not reach postgres: {exc}", file=sys.stderr)
+            return 1
+    try:
+        return await nas_first_offload.command(name=name, check_only=check_only, pool=pool)
+    finally:
+        if owns_pool:
+            await pool.close()
+
 
 async def cmd_envelope_drill(
     *, recipient: str | None = None, as_json: bool = False, check: bool = False,
@@ -8422,9 +8456,10 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         retire-assertion, retire-link, retire-object, cite,
                         declare-machine-identity, correct-agent-house (deprecated alias
                         for correct-agent-project, one release only)
-  operate               deploy, migrate, seed, soul-key, restic-key, offload-runner, envelope-drill,
-                        bootstrap, retention, rematerialize, rebuild-transcript,
-                        fleet-reconcile, fleet-prune, backfill, graph-migrate, layout
+  operate               deploy, migrate, seed, soul-key, restic-key, offload-runner,
+                        nas-first-offload, envelope-drill, bootstrap, retention,
+                        rematerialize, rebuild-transcript, fleet-reconcile, fleet-prune,
+                        backfill, graph-migrate, layout
 
 When osiris resume says a session's history is from another Claude account, the session is
 continued from osiris's own copy. To carry it into another harness instead, run
@@ -8756,6 +8791,21 @@ def _build_parser() -> argparse.ArgumentParser:
                                        "(defaults to $OSIRIS_VAULT or ~/osiris-vault)")
     p_offload_runner.add_argument("--json", action="store_true", dest="as_json",
                                   help="machine-readable: one compact JSON line")
+
+    p_nas_first = sub.add_parser("nas-first-offload", description=_d(
+        "The NAS's first offload, as one command for the day you are home on the LAN: the "
+        "route is the home network (never Tailscale), the repository is there, the vault "
+        "(WAL, base backups, dumps) is offloaded, a fresh snapshot exists, the restore test "
+        "passes and the recovery file is copied. One plain line per step; it stops at the "
+        "first step that fails and says what to do."),
+        epilog="example: osiris nas-first-offload\n"
+               "example: osiris nas-first-offload --check")
+    p_nas_first.add_argument("--name", default=None,
+                             help="the offload target to use (only needed when more than one "
+                                  "NAS target is enabled)")
+    p_nas_first.add_argument("--check", action="store_true", dest="check_only",
+                             help="run only the two read-only steps (the route and the "
+                                  "repository); upload nothing")
 
     p_envelope_drill = sub.add_parser("envelope-drill", description=_d(
         "Prove, with you present, that each recipient the vault key is sealed to opens the "
@@ -10355,6 +10405,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "restic-key":
         return asyncio.run(cmd_restic_key(
             args.action, path=args.path, backend=args.backend, as_json=args.as_json))
+    if args.command == "nas-first-offload":
+        return asyncio.run(cmd_nas_first_offload(  # unbounded-wait-ok: asyncio.run of a CLI command
+            name=args.name, check_only=args.check_only))
     if args.command == "envelope-drill":
         return asyncio.run(cmd_envelope_drill(  # unbounded-wait-ok: asyncio.run of a CLI command
             recipient=args.recipient, as_json=args.as_json, check=args.check))

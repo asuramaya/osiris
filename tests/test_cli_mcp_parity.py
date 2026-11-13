@@ -120,6 +120,9 @@ NO_MCP_EQUIVALENT = {
         ", one tick runs real restic subprocess backups against real infrastructure "
         "(the docked drive, the NAS over sftp), meant as osiris-offload.timer's own "
         "ExecStart or a human's own by-hand run, not an ordinary agent-callable verb.",
+    "nas-first-offload": "an operator act that uploads the vault to real infrastructure over "
+        "the home LAN and runs a real restore test: same devops class as offload-runner, meant "
+        "for the operator at home, never an agent-callable verb.",
     "envelope-drill": "needs the person: a hardware key's touch and PIN, a recovery code typed "
         "at a hidden prompt. No agent can supply either, so it is never an agent-callable verb; "
         "the unattended view of the same envelope is in backup-status.",
