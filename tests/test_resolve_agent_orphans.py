@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from src.actions.core import Actions
 from src.orchestrator.capture import resolve_agent_orphans
@@ -164,3 +165,42 @@ async def test_dry_run_never_writes_the_hatch_either(actions: Actions, tmp_path:
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
         "AND name='unlinked_because'", row["id"])
     assert because is None
+
+
+async def test_the_heartbeat_does_not_walk_agents_it_already_judged(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The heartbeat re-abstained the same ~98 agents (and walked the on-disk session tree
+    for them) every tick. With skip_judged it judges each once; a manual call still sees all."""
+    await _orphan_agent(actions, "agent:judged001", "deadbeef")
+    first = await resolve_agent_orphans(
+        actions, root=tmp_path, dry_run=False, because="test", skip_judged=True)
+    assert "agent:judged001" in {e["canonical"] for e in first["plan"]}
+
+    second = await resolve_agent_orphans(
+        actions, root=tmp_path, dry_run=False, because="test", skip_judged=True)
+    assert "agent:judged001" not in {e["canonical"] for e in second["plan"]}
+    manual = await resolve_agent_orphans(actions, root=tmp_path)
+    assert "agent:judged001" in {e["canonical"] for e in manual["plan"]}
+
+
+async def test_with_nothing_to_judge_the_session_tree_is_not_walked(
+    actions: Actions, tmp_path: Path, monkeypatch: Any,
+) -> None:
+    from src.orchestrator import lineage
+
+    walks: list[int] = []
+
+    def _walk(root: Path) -> list[Path]:
+        walks.append(1)
+        return []
+
+    class _NoRows:
+        pool = type("P", (), {"fetch": staticmethod(lambda *a, **k: _empty())})()
+
+    async def _empty() -> list[Any]:
+        return []
+
+    monkeypatch.setattr(lineage, "_session_dirs", _walk)
+    out = await resolve_agent_orphans(_NoRows(), root=tmp_path, skip_judged=True)  # type: ignore[arg-type]
+    assert out["scanned"] == 0 and walks == []

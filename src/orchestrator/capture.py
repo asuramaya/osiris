@@ -1002,7 +1002,7 @@ async def backfill_boot_alarm_commit_links(
 # derive_or_abstain's own cardinality rule rather than picking the first/newest match.
 async def resolve_agent_orphans(
     actions: Actions, *, root: Path | None = None, actor: str = "provenance-sweep:agent",
-    dry_run: bool = True, because: str | None = None,
+    dry_run: bool = True, because: str | None = None, skip_judged: bool = False,
 ) -> dict[str, Any]:
     """Links every zero-live-link Agent to its project via `works_in`, resolved from
     the `session` property register_swarm already stamped on it (never re-derived,
@@ -1018,6 +1018,12 @@ async def resolve_agent_orphans(
     fires only on the abstain branch, and is `kind="standalone"`: a sweep confession
     names no pending extension link.
 
+    `skip_judged=True` (the heartbeat's own call) leaves out an Agent that already carries
+    a live unresolved `derivation_abstained_works_in` or an `unlinked_because`, as the seat
+    and project lanes do: it was judged, `retryable_abstentions` owns trying a zero-candidate
+    one again, and walking the same ~98 abstained agents every tick (and the on-disk session
+    tree for them) cost 6 to 14 s of the sweep. A manual call still sees everything.
+
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
     a repeat call finds nothing to scan once an object is linked or already carries a
     live abstention that `derive_or_abstain` itself dedupes against; `assert_property`'s
@@ -1029,6 +1035,10 @@ async def resolve_agent_orphans(
 
     root = root or (Path.home() / ".claude" / "projects")
     pool = actions.pool
+    judged = (
+        " AND NOT EXISTS (SELECT 1 FROM current_assertions ca WHERE ca.object_id=o.id "
+        "AND (ca.name='unlinked_because' OR (ca.name='derivation_abstained_works_in' "
+        "AND NOT (ca.value ? 'resolved'))))" if skip_judged else "")
     rows = await pool.fetch(
         "SELECT o.id, o.canonical, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -1036,8 +1046,8 @@ async def resolve_agent_orphans(
         "  AS session "
         "FROM objects o WHERE o.type='Agent' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM links l WHERE (l.from_id=o.id OR l.to_id=o.id) "
-        "AND (l.valid_until IS NULL OR l.valid_until > now()))")
-    session_dirs = _session_dirs(root)
+        "AND (l.valid_until IS NULL OR l.valid_until > now()))" + judged)
+    session_dirs = _session_dirs(root) if rows else []  # the on-disk walk only when needed
     plan: list[dict[str, Any]] = []
     minted = 0
     abstained = 0
@@ -1514,7 +1524,7 @@ async def apply_provenance_sweep_heartbeat(
             logger.info("provenance sweep: lane %s took %.1f s%s", key, spent[key], detail)
 
     await lane("agent", lambda: resolve_agent_orphans(
-        actions, actor=actor, dry_run=False, because=because))
+        actions, actor=actor, dry_run=False, because=because, skip_judged=True))
     await lane("decision_thread", lambda: backfill_lineage_repo_links(
         actions, actor=actor, dry_run=False, because=because, defer_abstention=True))
     await lane("decision_thread_at_write_time", lambda: backfill_lineage_repo_links_at_write_time(
