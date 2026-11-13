@@ -19,6 +19,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 from typing import Any
 
+from src.db.session_lock import session_lock_connection
 from src.orchestrator.missed_runs import GRACE, WORKER_DAILY_JOBS, Slot
 
 # the jobs that may be made up, with the reason for each exclusion written beside it
@@ -74,9 +75,10 @@ def decide(
 async def exclusive(pool: Any, name: str) -> AsyncIterator[bool]:
     """Hold a session advisory lock named for this daily job for the block, yielding whether it
     was taken. The real nightly run and a catch-up both take it, so they can never overlap: the
-    one that finds it held skips. The lock rides one dedicated connection and is released with
-    it, so a crashed run never leaves it held."""
-    async with pool.acquire() as conn:
+    one that finds it held skips. The lock rides a side connection of its own, not a slot of the
+    worker's pool (the job holds it for minutes to hours and uses the pool meanwhile), and is
+    released with it, so a crashed run never leaves it held."""
+    async with session_lock_connection(pool) as conn:
         got = bool(await conn.fetchval(
             "SELECT pg_try_advisory_lock(hashtext($1))", f"osiris-daily:{name}"))
         try:

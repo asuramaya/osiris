@@ -180,6 +180,7 @@ import asyncpg
 import numpy as np
 
 from src.actions.core import Actions
+from src.db.session_lock import session_lock_connection
 from src.ontology.link_classes import CONTAINER_LINK_TYPES, STRUCTURAL_LINK_TYPES
 
 GRAPH_LAYOUT_SOURCE = "cron:graph_layout"
@@ -1125,7 +1126,7 @@ async def run_layout_migrate(
     `_try_acquire_layout_lock`'s own docstring for why this is session-scoped and
     safe. The SAME `layout_batch` the cron heartbeat calls -- never a second
     implementation of the placement logic, just a tighter loop around it."""
-    async with actions.pool.acquire() as lock_conn:
+    async with session_lock_connection(actions.pool) as lock_conn:
         if not await _try_acquire_layout_lock(lock_conn):
             yield {"error": "the layout heartbeat (or another migrate run) currently "
                             "holds the layout lock -- try again shortly"}

@@ -1737,7 +1737,9 @@ async def graph_layout_heartbeat(ctx: dict[str, Any]) -> int:
     actions: Actions = ctx["cascade"].actions
     if await pause_reason(actions.pool, "graph_layout"):
         return 0
-    async with actions.pool.acquire() as lock_conn:
+    from src.db.session_lock import session_lock_connection
+
+    async with session_lock_connection(actions.pool) as lock_conn:
         if not await _try_acquire_layout_lock(lock_conn):
             return 0
         try:

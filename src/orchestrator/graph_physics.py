@@ -170,6 +170,7 @@ import igraph as ig
 import numpy as np
 
 from src.actions.core import Actions
+from src.db.session_lock import session_lock_connection
 from src.ontology.link_classes import CONTAINER_LINK_TYPES, STRUCTURAL_LINK_TYPES
 from src.orchestrator.graph_layout import (
     _MEMBERSHIP_CONTAINER_LINK_TYPES,
@@ -1887,7 +1888,7 @@ async def run_physics_migrate(
     from an undeployed branch against the live population; only a run that
     actually writes still needs deployed code (the migration-entry-point
     rule)."""
-    async with actions.pool.acquire() as lock_conn:
+    async with session_lock_connection(actions.pool) as lock_conn:
         if not await _try_acquire_layout_lock(lock_conn):
             yield {"error": "the layout heartbeat (or a migrate run) currently holds "
                             "the layout lock -- try again shortly"}
