@@ -3477,13 +3477,12 @@ async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
     assert "tool list changed: +retire_assertion, ~smoke changed" in buf.getvalue()
 
 
-async def test_cmd_deploy_broadcasts_a_disconnect_warning_before_and_after_the_restart(
+async def test_cmd_deploy_posts_one_notice_after_the_restart(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A deploy restart drops every live streamable-HTTP session
-    silently, and health/smoke can never see it (they probe a FRESH connection). 
-    plan: broadcast an fyi before the restart and another once health confirms it's back
-, reconnect itself is the harness client's own job."""
+    """A deploy restart drops every live streamable-HTTP session silently, and health/smoke
+    can never see it (they probe a FRESH connection). One fyi after the restart tells a cut
+    session what happened; it used to be two (before and after)."""
     from src.orchestrator import mounts
 
     await mounts.save_mount(actions.pool, job_dir="/x/jobs/deploywarn1", agent_id="agent:dw1",
@@ -3500,15 +3499,36 @@ async def test_cmd_deploy_broadcasts_a_disconnect_warning_before_and_after_the_r
                            check_whisper_probe=_fake_check_whisper_ok)
     assert out in (0, 1)
     rows = await actions.pool.fetch(
-        "SELECT body FROM fleet_messages WHERE from_agent='deploy:disconnect-warning' "
+        "SELECT body, grade FROM fleet_messages WHERE from_agent='deploy:disconnect-warning' "
         "ORDER BY id")
-    bodies = [r["body"] for r in rows]
-    assert len(bodies) == 2
-    assert "restarting osiris-mcp" in bodies[0] and "Your next call reconnects" in bodies[0]
-    assert "osiris-mcp is back up" in bodies[1] and "Reconnect now" in bodies[1]
+    assert len(rows) == 1
+    assert rows[0]["grade"] == "fyi"
+    assert "restarted and is back up" in rows[0]["body"]
+    assert "your next call reconnects" in rows[0]["body"]
 
 
-async def test_cmd_deploy_disconnect_warning_failure_never_blocks_the_deploy(
+async def test_a_deploy_notice_settles_every_older_unread_one(actions: Actions) -> None:
+    from src.cli import _post_deploy_notice
+    from src.orchestrator import mounts
+
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/deploywarn2", agent_id="agent:dw2",
+                            project="osiris", cwd="/w/x", model="claude-sonnet-5",
+                            session_key=None)
+    await _post_deploy_notice(actions.pool, "aaaaaaaa1111", True)
+    await _post_deploy_notice(actions.pool, "bbbbbbbb2222", False)
+    await _post_deploy_notice(actions.pool, "cccccccc3333", True)
+    rows = await actions.pool.fetch(
+        "SELECT body, read_at, moot_at, moot_note FROM fleet_messages "
+        "WHERE from_agent='deploy:disconnect-warning' ORDER BY id")
+    assert len(rows) == 3
+    assert [r["read_at"] is not None for r in rows] == [True, True, False]
+    assert all(r["moot_at"] is not None and "replaced by a newer deploy notice"
+               in r["moot_note"] for r in rows[:2])
+    assert rows[2]["moot_at"] is None and "cccccccc" in rows[2]["body"]
+    assert "console health check did not come up" in rows[1]["body"]
+
+
+async def test_cmd_deploy_notice_failure_never_blocks_the_deploy(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """No mount under 'osiris' at all, send_message's own to_project validation refuses
@@ -3527,8 +3547,7 @@ async def test_cmd_deploy_disconnect_warning_failure_never_blocks_the_deploy(
                                wait_for_mcp_socket=_fake_wait_for_mcp_socket,
                                check_whisper_probe=_fake_check_whisper_ok)
     assert out in (0, 1)
-    assert "disconnect warning failed to send" in buf.getvalue()
-    assert "reconnect notice failed to send" in buf.getvalue()
+    assert "deploy notice failed to send" in buf.getvalue()
 
 
 async def test_cmd_deploy_restart_failure_is_honest(actions: Actions, tmp_path: Path) -> None:
