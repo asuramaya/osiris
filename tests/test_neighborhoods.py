@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from src.actions.core import Actions
 from src.ingest.providers import Usage
 from src.orchestrator.capture import open_thread, record_decision
@@ -486,6 +487,61 @@ async def test_census_trees_files_a_sibling_worktree_as_a_worktree_never_a_proje
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='worktree_of'",
         tree_row["id"]) == 1
+
+
+def _git(cwd: Path, *args: str) -> None:
+    import subprocess
+
+    subprocess.run(["git", *args], cwd=cwd, check=True, timeout=60)
+
+
+async def test_census_asks_git_once_per_checkout_and_again_only_when_its_files_change(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The census runs every backfill tick on the worker's event loop and used to run three or
+    four git subprocesses per checkout, 224 a tick. What git said is remembered against the
+    stat of the file it read (`.git/config` for the remote, a worktree's pointer file and its
+    HEAD), so an unchanged checkout costs a stat; a changed one is asked again."""
+    from typing import Any
+
+    from src.orchestrator import neighborhoods, project_identity
+    from src.orchestrator.neighborhoods import census_trees
+
+    neighborhoods._GIT_FACTS.clear()
+    _real_repo_with_sibling_worktree(tmp_path, "gitfactparent", "gitfactparent-wt")
+    parent = tmp_path / "code" / "gitfactparent"
+    _git(parent, "remote", "add", "origin", "https://example.test/a.git")
+    calls: list[str] = []
+    for name in ("_git_remote", "worktree_parent_path", "git_current_branch"):
+        real = getattr(project_identity, name)
+
+        def counting(path: str, _real: Any = real, _name: str = name) -> Any:
+            calls.append(_name)
+            return _real(path)
+
+        monkeypatch.setattr(project_identity, name, counting)
+    roots = [str(tmp_path / "code")]
+
+    await census_trees(actions, roots=roots)
+    first = sorted(calls)
+    calls.clear()
+    await census_trees(actions, roots=roots)
+
+    assert first == ["_git_remote", "git_current_branch", "worktree_parent_path"]
+    assert calls == []  # nothing on disk changed, so git was not asked again
+
+    _git(parent, "remote", "set-url", "origin", "https://example.test/b.git")
+    wt = tmp_path / "code" / "gitfactparent-wt"
+    _git(wt, "switch", "-q", "-c", "moved-on")
+    out = await census_trees(actions, roots=roots)
+
+    assert sorted(calls) == ["_git_remote", "git_current_branch"]  # the two that changed
+    assert out["remoted"] == ["gitfactparent"]
+    branch = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='worktree:gitfactparent-wt' AND a.name='branch' LIMIT 1")
+    assert branch == "moved-on"
+    neighborhoods._GIT_FACTS.clear()
 
 
 # --- the read-back ("I could not have discovered my own zero") -----------------------

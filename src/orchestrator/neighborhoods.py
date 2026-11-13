@@ -24,6 +24,7 @@ member objects themselves.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -181,6 +182,59 @@ def _git_dirs(roots: list[str], *, max_depth: int = 2) -> list[Path]:
     return found
 
 
+# What git said about a checkout, remembered against the stat of the files git reads for it.
+# The census runs every backfill tick on the worker's event loop and asked git three or four
+# questions about each of ~95 checkouts (224 subprocesses, 0.4 to 0.9 s, 1.0 to 1.5 s in the live
+# lap): the remote from `.git/config`, a worktree's parent from its `.git` pointer file, its
+# branch from the `HEAD` that pointer names. None of those change unless that file does.
+# Process-local; a restart asks once.
+_GIT_FACTS: dict[tuple[str, str], tuple[tuple[tuple[int, int], ...], Any]] = {}
+_GIT_FACTS_MAX = 4096
+
+
+def _stat_fingerprint(files: list[Path]) -> tuple[tuple[int, int], ...] | None:
+    out: list[tuple[int, int]] = []
+    for f in files:
+        try:
+            st = f.stat()
+        except OSError:
+            return None
+        out.append((st.st_mtime_ns, st.st_size))
+    return tuple(out)
+
+
+def _git_fact(kind: str, repo: Path, files: list[Path], compute: Callable[[str], Any]) -> Any:
+    """`compute(repo)` (the subprocess), unless the files it depends on are unchanged since it last
+    ran for this checkout. A file that cannot be stat'ed is never trusted: ask git."""
+    fingerprint = _stat_fingerprint(files)
+    if fingerprint is None:
+        return compute(str(repo))
+    key = (kind, str(repo))
+    hit = _GIT_FACTS.get(key)
+    if hit is not None and hit[0] == fingerprint:
+        return hit[1]
+    value = compute(str(repo))
+    if value is None:
+        return value  # a failure or a detached HEAD may be fixed without those files changing
+    if len(_GIT_FACTS) >= _GIT_FACTS_MAX:
+        _GIT_FACTS.clear()
+    _GIT_FACTS[key] = (fingerprint, value)
+    return value
+
+
+def _worktree_head(repo: Path) -> Path | None:
+    """The `HEAD` file of a linked worktree: where its `.git` pointer file says its private git
+    directory is. None when the pointer cannot be read as one (then the branch is asked of git)."""
+    try:
+        first = (repo / ".git").read_text().splitlines()[0]
+    except (OSError, IndexError, UnicodeDecodeError):
+        return None
+    if not first.startswith("gitdir:"):
+        return None
+    gitdir = Path(first.split(":", 1)[1].strip())
+    return (gitdir if gitdir.is_absolute() else repo / gitdir) / "HEAD"
+
+
 async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
     """The disk census: the graph only models what it was told about, while the disk holds
     the full history of what actually exists, and a memory graph that doesn't know its own
@@ -235,12 +289,8 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
     reconnect can't reach the graph in the first place because the ambiguous case above
     refuses outright, so a second confirmation walk would buy no correctness gain here,
     only latency."""
+    from src.orchestrator import project_identity
     from src.orchestrator.capture import _mint_or_find_repo, _resolve_repo, _resolve_repo_by_remote
-    from src.orchestrator.project_identity import (
-        _git_remote,
-        git_current_branch,
-        worktree_parent_path,
-    )
 
     observed = datetime.now(UTC)
     ec = EvidenceClass.DIRECT_OBSERVATION.value
@@ -263,7 +313,8 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
         # Worktree of its parent project via a `worktree_of` link instead, never a second
         # SoftwareProject.
         if (repo / ".git").is_file():
-            parent_path = worktree_parent_path(str(repo))
+            parent_path = _git_fact(
+                "parent", repo, [repo / ".git"], project_identity.worktree_parent_path)
             if parent_path is None:
                 refused.append({"name": name, "path": str(repo),
                                 "reason": "looks like a worktree (.git is a file) but its "
@@ -287,7 +338,9 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
                 "Worktree", f"worktree:{name}", "disk-census")
             await actions.assert_property(tree_obj, "on_disk_path", str(repo),
                                           "disk-census", observed, 0.9, evidence_class=ec)
-            branch = git_current_branch(str(repo))
+            head = _worktree_head(repo)
+            branch = (_git_fact("branch", repo, [head], project_identity.git_current_branch)
+                      if head is not None else project_identity.git_current_branch(str(repo)))
             if branch:
                 await actions.assert_property(tree_obj, "branch", branch, "disk-census",
                                               observed, 0.9, evidence_class=ec)
@@ -301,7 +354,8 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
             worktrees.append(name)
             continue
 
-        _, remote_url = _git_remote(str(repo))
+        _, remote_url = _git_fact(
+            "remote", repo, [repo / ".git" / "config"], project_identity._git_remote)
         existing = await _resolve_repo(actions.pool, name)
         if existing is None and remote_url:
             # The location fix: a renamed directory fails the name lookup above and would
