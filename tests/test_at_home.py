@@ -69,7 +69,7 @@ def test_the_nas_waits_with_its_reason_and_whether_you_are_home_right_now() -> N
 
     home = by_key(at_home.checklist(sources(
         offload_receipt=lambda n: {}, drill_receipt=lambda u: {}), now=NOW))["nas_offload"]
-    assert "you are on the home network now (enp0s31f6)" in home["why"]
+    assert "You are on the home network now (enp0s31f6)" in home["why"]
 
 
 def test_the_nas_is_done_only_with_a_current_offload_and_a_passed_restore_test() -> None:
@@ -252,3 +252,36 @@ def test_the_checklist_is_read_only() -> None:
     for name in ("subprocess", "run_restic", "copy_to_target", "envelope_open", "envelope_verify",
                  "nas_first_offload", "_run_restic_backup", "mark_opened"):
         assert name not in code, name
+
+
+# ---- the thread-status query, against the database --------------------------------------------
+
+
+async def test_the_thread_status_query_reads_open_resolved_and_missing(actions: Any) -> None:
+    from src.orchestrator.capture import open_thread, resolve_thread
+
+    thread = await open_thread(actions, "STORAGE S6 stand-in: remove the old copy", source="test")
+    prefix = str(thread)[:8]
+
+    assert await at_home.thread_status(actions.pool, prefix) == "open"
+
+    await resolve_thread(actions, str(thread), because="done")
+    assert await at_home.thread_status(actions.pool, prefix) == "resolved"
+
+    assert await at_home.thread_status(actions.pool, "00000000") is None
+
+
+async def test_the_real_sources_read_the_live_shapes(
+    actions: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator.capture import open_thread
+
+    thread = await open_thread(actions, "stand-in for the plaintext copy job", source="test")
+    monkeypatch.setattr(at_home, "PLAINTEXT_COPY_THREAD", f"thread:{str(thread)[:8]}")
+
+    src = await at_home.real_sources(actions.pool, now=NOW)
+    result = at_home.checklist(src, now=NOW)
+
+    assert src.plaintext_thread_open() is True  # the thread is open
+    assert [i["key"] for i in result["items"]][-1] == "plaintext_copy"
+    assert result["items"][-1]["status"] in ("blocked", "waiting")

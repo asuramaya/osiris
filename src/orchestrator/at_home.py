@@ -78,14 +78,14 @@ def envelope_items(section: dict[str, Any]) -> list[dict[str, Any]]:
     out.append(_item(
         "envelope_code", 2, "A recovery code for the envelope", DONE if codes else WAITING,
         "a recovery code is enrolled." if codes else
-        "no recovery code yet: a lost hardware key would be the only way in.",
+        "no recovery code yet: if the hardware key is lost, nothing else opens the vault key.",
         "osiris soul-key envelope add-code"))
     out.append(_item(
         "envelope_key", 3, "A second hardware key for the envelope",
         DONE if len(hardware) >= 2 else WAITING,
         f"{len(hardware)} hardware keys are enrolled." if len(hardware) >= 2 else
-        f"only {len(hardware)} hardware key is enrolled: losing it would leave the recovery "
-        "code alone.",
+        f"only {len(hardware)} hardware key is enrolled: a second one means losing one key "
+        "does not lock you out.",
         "osiris soul-key envelope add-key"))
     return out
 
@@ -114,9 +114,9 @@ def nas_item(src: Sources, now: datetime) -> dict[str, Any]:
     if not restored:
         problems.append("the restore test has not passed against it")
     seen = src.presence(target)
-    here = (f"you are on the home network now ({seen.get('dev')}): good time to run it."
+    here = (f"You are on the home network now ({seen.get('dev')}): good time to run it."
             if seen.get("present") and seen.get("dev") else
-            f"you are not on the home network ({seen.get('reason') or 'route unknown'}): "
+            f"You are not on the home network ({seen.get('reason') or 'route unknown'}): "
             "run it when you are home on the LAN.")
     return _item("nas_offload", 4, "The NAS first offload", WAITING,
                  "; ".join(problems) + ". " + here,
@@ -252,6 +252,16 @@ async def surface(pool: Any, result: dict[str, Any], *, now: datetime | None = N
 # ---- the real sources -------------------------------------------------------------------------
 
 
+async def thread_status(pool: Any, id_prefix: str) -> str | None:
+    """The status of the Thread whose id starts with `id_prefix` ("open", "resolved", ...), or None
+    when no such thread exists. Read through `winning_props`, the way every thread reader does."""
+    value = await pool.fetchval(
+        "SELECT (SELECT value #>> '{}' FROM winning_props(ARRAY[o.id]::uuid[]) "
+        "        WHERE name='status') FROM objects o "
+        "WHERE o.type='Thread' AND o.id::text LIKE $1 || '%' LIMIT 1", id_prefix)
+    return None if value is None else str(value)
+
+
 async def real_sources(pool: Any, *, now: datetime | None = None) -> Sources:
     """The checklist's sources, read from the live system once: the envelope block, the enabled NAS
     target and its receipts, and whether the plaintext copy's job is still open."""
@@ -274,11 +284,7 @@ async def real_sources(pool: Any, *, now: datetime | None = None) -> Sources:
         stale_days = int((await settings_with_overlay(pool)).osiris_offload_stale_days) or 7
     except Exception:  # noqa: BLE001 - the limit is display only
         stale_days = 7
-    status = await pool.fetchval(
-        "SELECT (SELECT value #>> '{}' FROM winning_props(ARRAY[o.id]::uuid[]) "
-        "        WHERE name='status') FROM objects o "
-        "WHERE o.type='Thread' AND o.id::text LIKE $1 || '%' LIMIT 1",
-        PLAINTEXT_COPY_THREAD.split(":", 1)[1])
+    status = await thread_status(pool, PLAINTEXT_COPY_THREAD.split(":", 1)[1])
     receipts = offload_receipts()
     drills = restore_drill_receipts()
     section = envelope_section(
