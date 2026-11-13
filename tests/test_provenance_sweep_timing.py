@@ -126,7 +126,9 @@ async def test_the_lane_works_through_the_leftovers_in_slices_and_then_starts_ov
     assert not await _cursor(actions)  # a finished pass clears the position
     again = await capture.backfill_lineage_repo_links_at_write_time(
         actions, actor="test", dry_run=False, because="test", resume=True)
-    assert again["scanned"] >= 1  # the next pass starts over from the first leftover
+    # the next pass starts over from the first leftover, but the threads it abstained on are
+    # judged: it does not walk them again
+    assert not ({e["id"] for e in again["plan"]} & threads)
 
 
 async def test_a_budget_that_runs_out_stops_the_lane_and_keeps_the_position(
@@ -158,3 +160,71 @@ async def test_without_resume_the_lane_scans_everything_as_before(actions: Any) 
 
     assert out["scanned"] >= 3 and "more_remain" not in out
     assert not await _cursor(actions)  # a dry run touches no position
+
+
+async def _second_summary(actions: Any, thread_id: Any, tag: str) -> None:
+    """A second summary assertion on the thread from another source and time: its own row in
+    the lane's result."""
+    from datetime import UTC, datetime, timedelta
+
+    await actions.assert_property(
+        thread_id, "summary", f"amended {tag}", f"agent:{tag}-iii",
+        datetime.now(UTC) + timedelta(seconds=5), 0.9)
+
+
+async def test_a_slice_never_cuts_between_the_rows_of_one_object(
+    actions: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One object with several summary rows used to be split by the row limit: the cursor was
+    its id, so the rest of its rows were stepped past. A slice is a set of objects now, and each
+    object arrives whole."""
+    monkeypatch.setattr(capture, "_AT_WRITE_TIME_SLICE_ROWS", 3)  # odd: cuts mid-object by rows
+    tags = [f"whole{i}" for i in range(4)]
+    objs = {}
+    for tag in tags:
+        objs[tag] = await _ambiguous(actions, tag)
+        await _second_summary(actions, objs[tag], tag)  # two rows for every object
+    want = {str(v) for v in objs.values()}
+    per_object: dict[str, int] = {}
+    while True:
+        out = await capture.backfill_lineage_repo_links_at_write_time(
+            actions, actor="test", dry_run=True, resume=True)
+        for e in out["plan"]:
+            if e["id"] in want:
+                per_object[e["id"]] = per_object.get(e["id"], 0) + 1
+        if not out["more_remain"]:
+            break
+    assert set(per_object) == want
+    assert all(n == 2 for n in per_object.values()), per_object  # no object split across slices
+
+
+async def test_the_heartbeat_does_not_walk_objects_it_already_abstained_on(
+    actions: Any,
+) -> None:
+    thread = str(await _ambiguous(actions, "judged"))
+    first = await capture.backfill_lineage_repo_links_at_write_time(
+        actions, actor="test", dry_run=False, because="test", resume=True)
+    assert thread in {e["id"] for e in first["plan"] if e["verdict"] == "abstain"}
+    second = await capture.backfill_lineage_repo_links_at_write_time(
+        actions, actor="test", dry_run=False, because="test", resume=True)
+    assert thread not in {e["id"] for e in second["plan"]}
+    # a manual scan (no resume) still sees everything, as before
+    manual = await capture.backfill_lineage_repo_links_at_write_time(
+        actions, actor="test", dry_run=True)
+    assert thread in {e["id"] for e in manual["plan"]}
+
+
+def test_the_heartbeat_logs_counts_and_not_the_plans() -> None:
+    big = {"lanes": {"agent": {"scanned": 98, "to_mint": 1, "to_abstain": 97,
+                               "plan": [{"id": "x" * 40}] * 98},
+                     "decision_thread_at_write_time": {"scanned": 3, "to_mint": 0,
+                                                       "to_abstain": 3, "more_remain": True,
+                                                       "plan": [{"id": "y"}] * 3},
+                     "reference_error": "RuntimeError('db hiccup')"},
+           "total_minted": 1, "total_abstained": 100}
+    out = capture.sweep_summary(big)
+    assert "plan" not in str(out) and len(str(out)) < 400
+    assert out["lanes"]["agent"] == {"scanned": 98, "to_mint": 1, "to_abstain": 97}
+    assert out["lanes"]["decision_thread_at_write_time"]["more_remain"] is True
+    assert out["lanes"]["reference_error"] == "RuntimeError('db hiccup')"
+    assert out["total_minted"] == 1

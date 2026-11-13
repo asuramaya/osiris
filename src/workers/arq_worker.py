@@ -1027,7 +1027,7 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
         reissue_stale_offices,
         sweep_stacked_office_headers,
     )
-    from src.orchestrator.capture import apply_provenance_sweep_heartbeat
+    from src.orchestrator.capture import apply_provenance_sweep_heartbeat, sweep_summary
     from src.orchestrator.fleet_prune import prune_execute
     from src.orchestrator.house_hygiene import apply_ghost_house_sweep
     from src.orchestrator.migration_0060 import apply_migration_0060
@@ -1089,7 +1089,7 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
         actions, actor="cron:classification_laws_heartbeat"))
     provenance_minted = int(provenance.get("total_minted", 0))
     if provenance_minted or any(k.endswith("_error") for k in provenance.get("lanes", {})):
-        _log.info("provenance sweep heartbeat: %s", provenance)
+        _log.info("provenance sweep heartbeat: %s", sweep_summary(provenance))
 
     reissue_scope = reissue_houses(
         (await settings_with_overlay(actions.pool)).osiris_boot_reissue_houses)
