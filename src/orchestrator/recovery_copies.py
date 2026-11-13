@@ -224,11 +224,11 @@ def copy_to_target(
             "this kind of target cannot hold a plain file; a copy inside the repository would "
             "need the very password it protects", now)
     if receipt.get("sha256") == _sha256(src) and not receipt.get("last_error"):
-        try:
-            age = (datetime.now(UTC) - datetime.fromisoformat(
-                receipt["last_copied_at"])).total_seconds()
-        except (KeyError, ValueError):
-            age = _SFTP_RECHECK_SECONDS
+        from src.orchestrator.instants import parse_time
+
+        copied_at = parse_time(receipt.get("last_copied_at"))
+        age = ((datetime.now(UTC) - copied_at).total_seconds() if copied_at
+               else _SFTP_RECHECK_SECONDS)
         if age < _SFTP_RECHECK_SECONDS:
             return None
     return _record(name, "restic", src, sftp_copy(src, url), now)

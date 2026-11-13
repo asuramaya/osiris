@@ -28,10 +28,9 @@ PASS_BUDGET_SECONDS = 1500.0  # no new drill starts once a pass has used this mu
 
 
 def _parse(ts: Any) -> datetime | None:
-    try:
-        return datetime.fromisoformat(ts) if ts else None
-    except (TypeError, ValueError):
-        return None
+    from src.orchestrator.instants import parse_time
+
+    return parse_time(ts)
 
 
 def drill_due(drill_receipt: dict[str, Any], offload_receipt: dict[str, Any],
