@@ -37,10 +37,43 @@ alive, never less.
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
 import asyncpg
+
+# directories that never hold a session transcript: each project dir carries one `memory` dir
+# (Claude Code's notes), which is half of the ~27,000 directories under the transcripts root
+_PRUNE_DIRS = frozenset({"memory"})
+
+
+def _jsonl_files(root: Path) -> list[Path]:
+    """Every `*.jsonl` under `root`, at any depth: what `root.rglob("*.jsonl")` returned, found
+    with `os.scandir` and without entering the `memory` directories. The tree holds ~13,700
+    project directories (and as many `memory` ones), and rglob built a Path and a stat for each:
+    0.75 s a tick, 120 ticks an hour; this walk is ~0.08 s. Symlinked directories are not followed
+    (as rglob did not). An unreadable directory is skipped, not fatal."""
+    found: list[Path] = []
+    stack = [str(root)]
+    while stack:
+        here = stack.pop()
+        try:
+            entries = os.scandir(here)
+        except OSError:
+            continue
+        with entries:
+            for entry in entries:
+                try:
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                except OSError:
+                    continue
+                if is_dir:
+                    if entry.name not in _PRUNE_DIRS:
+                        stack.append(entry.path)
+                elif entry.name.endswith(".jsonl"):
+                    found.append(Path(entry.path))
+    return found
 
 
 def _sessions(root: Path) -> list[tuple[str, datetime]]:
@@ -50,11 +83,10 @@ def _sessions(root: Path) -> list[tuple[str, datetime]]:
     serves the fleet must not stall on the filesystem.
     """
     out: list[tuple[str, datetime]] = []
-    try:
-        paths = list(root.expanduser().rglob("*.jsonl"))
-    except OSError:
+    root = root.expanduser()
+    if not root.is_dir():
         return out
-    for p in paths:
+    for p in _jsonl_files(root):
         if p.parent.name.endswith("-osiris-extract"):
             continue  # the extractor's own scratch sessions are not agents
         try:
