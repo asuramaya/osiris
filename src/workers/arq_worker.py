@@ -795,14 +795,35 @@ async def embed_pass(ctx: dict[str, Any]) -> int:
     return report["embedded"]
 
 
+# neighborhood_pass is a DAILY job that also carries run_at_startup (every cron does, so a
+# crash-looping worker cannot silently miss its window). It then ran at every one of the ~70
+# worker restarts a day of deploys: 150 to 215 s and one to three LLM summaries each time, 74
+# metered calls and $1.24 on 2026-11-11 against one call a day when the box was left alone. So
+# it keeps its own mark, written only when a pass really finished, and a start-up run (or any
+# other) inside this gap of that mark does nothing (10 hours: a pass finished by a late-day
+# restart must not make the next 09:10 slot skip).
+_NEIGHBORHOOD_DONE_KEY = "neighborhood_pass:done"
+_NEIGHBORHOOD_MIN_GAP_SECS = 10 * 3600  # a pass done before 23:10 never holds the next 09:10 slot
+
+
 async def neighborhood_pass(ctx: dict[str, Any]) -> int:
     """Rung 4's daily walk (ruling a0cfcca1): fold DERIVED echoes into their deliberate
     captures (mechanical, free), then refresh up to 3 stale neighborhood summaries
-    (fingerprint-watermarked, an unchanged repo costs nothing; metered in llm_usage)."""
+    (fingerprint-watermarked, an unchanged repo costs nothing; metered in llm_usage).
+    Runs at most once in 10 hours however often the worker restarts."""
     from src.ingest.providers import llm_provider
+    from src.orchestrator.monitor import get_cursor, set_cursor
     from src.orchestrator.neighborhoods import consolidate_pass, summarize_neighborhoods
 
     actions: Actions = ctx["cascade"].actions
+    done = await get_cursor(actions.pool, _NEIGHBORHOOD_DONE_KEY)
+    if done:
+        try:
+            age = (datetime.now(UTC) - datetime.fromisoformat(done)).total_seconds()
+        except ValueError:
+            age = _NEIGHBORHOOD_MIN_GAP_SECS  # an unreadable mark does not hold the job back
+        if age < _NEIGHBORHOOD_MIN_GAP_SECS:
+            return 0
     try:
         mech = await consolidate_pass(actions)
         llm = llm_provider()
@@ -810,6 +831,7 @@ async def neighborhood_pass(ctx: dict[str, Any]) -> int:
     except Exception as exc:  # a model/DB hiccup must not kill the cron
         _log.warning("neighborhood pass failed: %r", exc)
         return 0
+    await set_cursor(actions.pool, _NEIGHBORHOOD_DONE_KEY, datetime.now(UTC).isoformat())
     report = {**mech, **summ}
     if any(report.values()):
         _log.info("neighborhood pass: %s", report)

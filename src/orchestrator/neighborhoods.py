@@ -437,8 +437,9 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
                 await actions.assert_property(obj, "remote_url", remote_url, "disk-census",
                                               observed, 0.9, evidence_class=ec)
                 remoted.append(name)
-            minted.append(name)
-            continue
+            if not discovered_current:
+                minted.append(name)  # a first sighting only: an object that was already here
+            continue                 # (the resolver above missed it) is not a mint
         known += 1
         # No-op reassertion guard: this used to compare against `current_assertions` (the
         # cross-source, evidence-graded winner) rather than disk-census's own prior value,
