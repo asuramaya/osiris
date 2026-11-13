@@ -19,10 +19,19 @@ BARE = re.compile(
     r"(?P<after>\s*,\s*(?:\w+\.)?id\s+DESC)?", re.I)
 
 
+# Code that already ran, or runs once at boot or by hand, exactly as written: its reads are left
+# as they were so what ran stays what ran.
+FROZEN = ("src/orchestrator/graph_migrations.py", "src/orchestrator/migration_0062.py")
+FROZEN_PREFIX = "scripts/backfill_"
+
+
 def _sql_strings() -> list[tuple[str, int, str]]:
     found = []
     for sub in ("src", "scripts"):
         for path in sorted((ROOT / sub).rglob("*.py")):
+            rel = str(path.relative_to(ROOT))
+            if rel in FROZEN or rel.startswith(FROZEN_PREFIX):
+                continue
             for node in ast.walk(ast.parse(path.read_text())):
                 if isinstance(node, ast.Constant) and isinstance(node.value, str):
                     found.append((str(path.relative_to(ROOT)), node.lineno, node.value))

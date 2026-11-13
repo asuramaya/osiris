@@ -46,11 +46,9 @@ _CONF = confidence_for(EvidenceClass.DIRECT_OBSERVATION)
 _PATHED_PROJECTS_SQL = """
     SELECT o.id, o.canonical,
         (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id
-         AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC,
-         a.id DESC LIMIT 1) AS name,
+         AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name,
         (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id
-         AND a.name='on_disk_path' ORDER BY a.confidence DESC, a.observed_at DESC,
-         a.id DESC LIMIT 1)
+         AND a.name='on_disk_path' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)
         AS on_disk_path
     FROM objects o
     WHERE o.type='SoftwareProject' AND o.status='active'
@@ -80,7 +78,7 @@ async def plan_migration_0062(pool: asyncpg.Pool) -> dict[str, Any]:
             parent_name = await pool.fetchval(
                 "SELECT a.value #>> '{}' FROM current_assertions a "
                 "WHERE a.object_id=$1 AND a.name='name' "
-                "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", parent_obj)
+                "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", parent_obj)
         to_fold.append({
             "old_id": row["id"], "old_canonical": row["canonical"], "name": name,
             "on_disk_path": path, "branch": git_current_branch(path),
