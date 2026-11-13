@@ -13,6 +13,64 @@ coordinating only through Postgres + Redis (no RPC mesh between them):
 This is **Cut 1** of the deployment sequence in [`../ROADMAP.md`](../ROADMAP.md): same
 machine, two units, fate-isolated. Everything before this ran in one process.
 
+## What changed on 2026-11-12 and 11-13
+
+Grouped by what you notice, and what you need to do. Numbers are measured on the live machine.
+
+**Your to-do list: `osiris at-home`.** One command lists everything that waits only on you being
+there or giving your word, cheapest and safest first, each with the exact command to paste. It only
+looks; it changes nothing. A line on your desk tells you once when the list changes (and again after
+a week if nothing moves); a timer checks every morning at 09:40. Today it shows:
+1. `osiris envelope-drill`: touch each security key once to prove it still opens the key envelope.
+2. `osiris soul-key envelope add-code`: write down a recovery code.
+3. `osiris soul-key envelope add-key`: enroll a second security key.
+4. `osiris nas-first-offload --name nas`: the first full backup to the NAS. It needs the home
+   network; `osiris nas-first-offload --check` first is a safe, read-only look. It never touches the
+   old plaintext copy on the NAS.
+5. The old plaintext NAS copy (about 162 GB) can go once item 4 and its restore test pass. Waits for
+   your word; nothing deletes it by itself.
+6. The stopped database container `osiris-pg-pre-repack` (kept as a way back from the 11-12 swap).
+   Remove only the container (`docker rm osiris-pg-pre-repack`, without `-v`), never the volume:
+   it points at the live database's data.
+7. Two scratch folders an agent left (`~/code/zzscratch-imh` and its twin under `~/.claude/projects`).
+   Nothing removes them without your word.
+8. Optional: the Claude rebuild probe, if you want it. You chose "later".
+
+**The key envelope.** The soul store's key can now be opened by more than one thing: today one
+security key, and you can add a second key and a printed recovery code. `osiris envelope-drill`
+proves each one still opens it (a touch, or a typed code), and a daily check at 09:20 puts a line on
+your desk when a key has not been proven lately. Only you can enroll or open with a real key; the
+agents never do.
+
+**The database.** On 11-12 the database moved to an image with `pg_repack` (Postgres 16.16, was
+16.14), on the same data volume. The switch took 2.3 s. Compacting a big table no longer locks it
+for the whole rewrite: measured live under a reader and a writer, reads were blocked about 13 ms
+and writes about 68 ms, against about 350 ms for the old rewrite on the same table. Compaction now runs only between 03:00 and 05:00 local time: if the machine
+slept through the night, that night's compaction is skipped, not run late in your day. (A wake-up
+on 11-12 had run a daytime rewrite of the audit log, 1.67 GB down to 81 MB in 672 s.)
+
+**The background worker.** It used to freeze for about 290 s at a time, because one job held a
+lock while waiting on database connections that other jobs were using. That is fixed. Measured on
+11-13 after the fixes (before, now):
+- The mail dispatcher: 35 s while stuck, now a median of 0.08 s and 0.18 s at the slow end.
+- Liveness sensing: 0.56 s, now 0.13 s.
+- The daily classification check: over 300 s, now 11 to 14 s.
+- No stall of 60 s or more since the fix.
+
+A restart no longer repeats daily jobs. The three daily jobs that used to run at every start (the
+daily summary pass, the retention report, the cold-storage folding) now skip a start if they
+already ran within their period; before, deploy-heavy days made 74 model calls for summaries and
+folded cold storage 20 times faster than intended. And if a restart did make the worker miss a
+daily job (housekeeping, retention, cold-storage folding), it runs when the worker comes back.
+
+**The shared checkout is guarded.** On 11-13 an agent detached the main checkout in the middle of a
+test run and the run had to be thrown away. Now moving it off `main` is refused, and the test
+runner refuses to deploy a run whose checkout moved. Agents use their own worktrees. If you ever
+need to move it yourself, set `OSIRIS_ALLOW_SHARED_HEAD_MOVE=1` for that command.
+
+**Deploy notices.** Each deploy now sends one "back up, reconnect" notice instead of two, and it
+retires the older unread ones.
+
 ## What changed on 2026-11-11
 
 A day of fixes, grouped by what you feel. Speed figures are measured on the live machine
