@@ -331,6 +331,23 @@ _DERIVE_TIER = EvidenceClass.DIRECT_OBSERVATION
 _DERIVE_CONF = confidence_for(_DERIVE_TIER)
 
 
+def _judged_sql(link_type: str, *, abstention: bool = True) -> str:
+    """The heartbeat's `skip_judged` clause for an orphan query over `objects o`: leave out an
+    object that already carries a live unresolved `derivation_abstained_<link_type>` (judged:
+    `retryable_abstentions` owns trying it again) and one whose `link_type` link was deliberately
+    deactivated (held: `derive_or_abstain` never recreates it, so re-planning it every tick
+    only costs time). A manual call and a dry run never pass it and see everything."""
+    clause = (
+        " AND NOT EXISTS (SELECT 1 FROM links d WHERE d.from_id=o.id AND d.type='"
+        + link_type + "' AND d.valid_until IS NOT NULL AND d.valid_until <= now())")
+    if abstention:
+        clause += (
+            " AND NOT EXISTS (SELECT 1 FROM current_assertions ca WHERE ca.object_id=o.id "
+            "AND ca.name='derivation_abstained_" + link_type + "' "
+            "AND NOT (ca.value ? 'resolved'))")
+    return clause
+
+
 def _hold_back(entry: dict[str, Any]) -> None:
     """A lane planned a mint and `derive_or_abstain` made none, because a link of that type to
     that project already exists (`derive_or_abstain` does not look at `valid_until`, so a link
@@ -1048,7 +1065,8 @@ async def resolve_agent_orphans(
     judged = (
         " AND NOT EXISTS (SELECT 1 FROM current_assertions ca WHERE ca.object_id=o.id "
         "AND (ca.name='unlinked_because' OR (ca.name='derivation_abstained_works_in' "
-        "AND NOT (ca.value ? 'resolved'))))" if skip_judged else "")
+        "AND NOT (ca.value ? 'resolved'))))"
+        + _judged_sql("works_in", abstention=False) if skip_judged else "")
     rows = await pool.fetch(
         "SELECT o.id, o.canonical, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -1115,7 +1133,7 @@ async def resolve_agent_orphans(
 
 async def resolve_reference_orphans(
     actions: Actions, *, actor: str = "provenance-sweep:agent",
-    dry_run: bool = True, because: str | None = None,
+    dry_run: bool = True, because: str | None = None, skip_judged: bool = False,
 ) -> dict[str, Any]:
     """PROVENANCE SWEEP, REFERENCE LANE: links every zero-live-link
     Reference to its project, resolved from its own `topic` property against a real
@@ -1142,7 +1160,9 @@ async def resolve_reference_orphans(
     retry every abstention this records for free the moment its shape changes.
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
-    a repeat call finds nothing to scan once an object is linked."""
+    a repeat call finds nothing to scan once an object is linked. `skip_judged=True` (the
+    heartbeat's call) also leaves out an object already abstained on or whose link was
+    deliberately deactivated; a manual call and a dry run see everything."""
     if not dry_run and not (because or "").strip():
         return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
@@ -1157,7 +1177,8 @@ async def resolve_reference_orphans(
         "  AS topic "
         "FROM objects o WHERE o.type='Reference' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM links l WHERE (l.from_id=o.id OR l.to_id=o.id) "
-        "AND (l.valid_until IS NULL OR l.valid_until > now()))")
+        "AND (l.valid_until IS NULL OR l.valid_until > now()))"
+        + (_judged_sql("in_repo") if skip_judged else ""))
     plan: list[dict[str, Any]] = []
     minted = 0
     abstained = 0
@@ -1204,7 +1225,7 @@ async def resolve_reference_orphans(
 
 async def resolve_practice_orphans(
     actions: Actions, *, actor: str = "provenance-sweep:agent",
-    dry_run: bool = True, because: str | None = None,
+    dry_run: bool = True, because: str | None = None, skip_judged: bool = False,
 ) -> dict[str, Any]:
     """PROVENANCE SWEEP, PRACTICE LANE: links every Practice with no
     live `in_repo` edge of its own to its project, resolved from the distinct projects its
@@ -1228,7 +1249,9 @@ async def resolve_practice_orphans(
     candidates, nothing to derive).
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
-    a repeat call finds nothing to scan once an object is linked."""
+    a repeat call finds nothing to scan once an object is linked. `skip_judged=True` (the
+    heartbeat's call) also leaves out an object already abstained on or whose link was
+    deliberately deactivated; a manual call and a dry run see everything."""
     if not dry_run and not (because or "").strip():
         return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
@@ -1236,7 +1259,8 @@ async def resolve_practice_orphans(
     rows = await pool.fetch(
         "SELECT o.id, o.canonical FROM objects o WHERE o.type='Practice' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
-        "AND (l.valid_until IS NULL OR l.valid_until > now()))")
+        "AND (l.valid_until IS NULL OR l.valid_until > now()))"
+        + (_judged_sql("in_repo") if skip_judged else ""))
     plan: list[dict[str, Any]] = []
     minted = 0
     abstained = 0
@@ -1283,7 +1307,7 @@ async def resolve_practice_orphans(
 
 async def resolve_superstition_orphans(
     actions: Actions, *, actor: str = "provenance-sweep:agent",
-    dry_run: bool = True, because: str | None = None,
+    dry_run: bool = True, because: str | None = None, skip_judged: bool = False,
 ) -> dict[str, Any]:
     """PROVENANCE SWEEP, SUPERSTITION LANE: links every
     zero-live-in_repo Superstition to its project, resolved from its own `killed_by`
@@ -1302,7 +1326,9 @@ async def resolve_superstition_orphans(
     names.
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
-    a repeat call finds nothing to scan once an object is linked."""
+    a repeat call finds nothing to scan once an object is linked. `skip_judged=True` (the
+    heartbeat's call) also leaves out an object already abstained on or whose link was
+    deliberately deactivated; a manual call and a dry run see everything."""
     if not dry_run and not (because or "").strip():
         return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
@@ -1314,7 +1340,8 @@ async def resolve_superstition_orphans(
         "  AS killed_by "
         "FROM objects o WHERE o.type='Superstition' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
-        "AND (l.valid_until IS NULL OR l.valid_until > now()))")
+        "AND (l.valid_until IS NULL OR l.valid_until > now()))"
+        + (_judged_sql("in_repo") if skip_judged else ""))
     plan: list[dict[str, Any]] = []
     minted = 0
     abstained = 0
@@ -1565,11 +1592,11 @@ async def apply_provenance_sweep_heartbeat(
         actions, actor=actor, dry_run=False, because=because,
         budget_secs=_AT_WRITE_TIME_BUDGET_SECS, resume=True))
     await lane("reference", lambda: resolve_reference_orphans(
-        actions, actor=actor, dry_run=False, because=because))
+        actions, actor=actor, dry_run=False, because=because, skip_judged=True))
     await lane("practice", lambda: resolve_practice_orphans(
-        actions, actor=actor, dry_run=False, because=because))
+        actions, actor=actor, dry_run=False, because=because, skip_judged=True))
     await lane("superstition", lambda: resolve_superstition_orphans(
-        actions, actor=actor, dry_run=False, because=because))
+        actions, actor=actor, dry_run=False, because=because, skip_judged=True))
     await lane("seat", lambda: resolve_seat_orphans(
         actions, actor=actor, dry_run=False, because=because))
     await lane("project", lambda: resolve_project_orphans(

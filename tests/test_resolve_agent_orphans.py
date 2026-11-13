@@ -234,3 +234,23 @@ async def test_a_planned_mint_that_a_retired_link_blocks_is_counted_as_held_not_
     planned = await resolve_agent_orphans(actions, root=tmp_path)  # a dry run reports the plan
     [dry] = [e for e in planned["plan"] if e["canonical"] == "agent:retired1"]
     assert dry["verdict"] == "mint"
+
+
+async def test_the_heartbeat_leaves_out_an_agent_whose_link_was_retired(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    session_uuid = "ffffffff-0000-4000-8000-00000000000a"
+    _write_session_dir(tmp_path, "-home-x-code-agentheld", session_uuid, "agheld01")
+    await _orphan_agent(actions, "agent:agheld01", session_uuid)
+    await resolve_agent_orphans(actions, root=tmp_path, dry_run=False, because="test")
+    [row] = await actions.pool.fetch("SELECT id FROM objects WHERE canonical='agent:agheld01'")
+    link = await actions.pool.fetchrow(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='works_in'", row["id"])
+    await actions.invalidate_link(row["id"], link["to_id"], "works_in", "test", _NOW,
+                                  reason="retired on purpose")
+
+    beat = await resolve_agent_orphans(
+        actions, root=tmp_path, dry_run=False, because="test", skip_judged=True)
+    assert "agent:agheld01" not in {e["canonical"] for e in beat["plan"]}
+    manual = await resolve_agent_orphans(actions, root=tmp_path)
+    assert "agent:agheld01" in {e["canonical"] for e in manual["plan"]}
