@@ -1,0 +1,67 @@
+#!/bin/sh
+# THE SHARED-CHECKOUT GUARD. In the shared checkout (the one directory every agent and the gate
+# read, /home/asuramaya/code/osiris) HEAD must stay on `main`. A `git checkout --detach`, a
+# `git switch other` or any other move of HEAD there changes every file under a running gate: a
+# 6 second detach once forced a re-gate. Worktrees are unaffected (each has its own HEAD).
+#
+# WHY THIS HOOK AND NOT ANOTHER. Git has no hook that runs BEFORE a checkout rewrites the working
+# tree. post-checkout runs after it and cannot refuse; core.hooksPath checks only choose which
+# hooks run. reference-transaction is the one hook that can REFUSE the move itself: in its
+# `prepared` phase a non-zero exit aborts the HEAD update ("fatal: ref updates aborted by hook").
+# By then git has already rewritten the files and the index for the checkout, so left alone the
+# refusal would leave a half-done checkout (new files, HEAD still main). The `aborted` phase puts
+# them back (a two-way read-tree from the refused target to HEAD, which carries local edits
+# along exactly as a checkout would). The files are therefore wrong for the length of the
+# checkout itself (well under a second), not for the length of whatever the mover meant to do.
+#
+# What passes: every update of a branch ref (commits, merges, `reset --keep` on main) and
+# `git checkout main` / `git switch main` from a detached HEAD. Only an update of HEAD itself
+# to anything but `ref:refs/heads/main` is refused, and only when this is the shared checkout
+# (git dir == common dir) and not `git worktree add` building a new worktree. OSIRIS_ALLOW_SHARED_HEAD_MOVE=1 overrides it, for the operator.
+GIT_DIR_ABS="$(git rev-parse --path-format=absolute --git-dir 2>/dev/null)" || exit 0
+COMMON_ABS="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || exit 0
+[ "$GIT_DIR_ABS" = "$COMMON_ABS" ] || exit 0   # a worktree: its own HEAD is its own business
+[ -z "$OSIRIS_ALLOW_SHARED_HEAD_MOVE" ] || exit 0
+MARK="$GIT_DIR_ABS/shared_checkout_guard_refused"
+
+# `git worktree add` writes the NEW worktree's HEAD from the shared checkout's own context (no
+# GIT_DIR, same cwd), so by environment it looks exactly like a move of the shared HEAD. It is
+# told apart by the half-built worktree: its admin dir exists and its HEAD file does not yet.
+creating_a_worktree() {
+    for d in "$COMMON_ABS"/worktrees/*/; do
+        [ -d "$d" ] && [ ! -e "${d}HEAD" ] && return 0
+    done
+    return 1
+}
+
+case "$1" in
+prepared)
+    while read -r old new ref; do
+        if [ "$ref" = HEAD ] && [ "$new" != "ref:refs/heads/main" ] && ! creating_a_worktree; then
+            case "$new" in
+            ref:*) target="$(git rev-parse -q --verify "${new#ref:}^{tree}" 2>/dev/null)" ;;
+            *) target="$(git rev-parse -q --verify "$new^{tree}" 2>/dev/null)" ;;
+            esac
+            [ -z "$target" ] || printf '%s\n' "$target" > "$MARK"
+            {
+                echo "REFUSED: this is the shared checkout, and HEAD must stay on main here."
+                echo "Moving it changes every file under a running gate. Use your own worktree:"
+                echo "  git worktree add -b <name> /home/asuramaya/code/osiris-wt/<name> main"
+                echo "(on main already? \`git show <ref>:<path>\` reads any commit without moving HEAD)"
+            } >&2
+            exit 1
+        fi
+    done
+    ;;
+aborted)
+    [ -f "$MARK" ] || exit 0
+    target="$(cat "$MARK")"
+    rm -f "$MARK"
+    # the refused checkout already put `target`'s files and index in place: put HEAD's back
+    git read-tree -m -u "$target" HEAD >/dev/null 2>&1 || {
+        echo "shared checkout guard: could not restore the files after the refused move;" >&2
+        echo "run \`git status\` and \`git read-tree -m -u $target HEAD\` in the shared checkout." >&2
+    }
+    ;;
+esac
+exit 0
