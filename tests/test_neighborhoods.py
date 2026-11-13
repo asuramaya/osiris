@@ -552,7 +552,7 @@ async def test_the_census_counts_a_mint_only_the_first_time_it_sees_a_repo(
     """When the name resolver misses an object that already exists under its canonical, the mint
     branch runs on every walk for it; the worker logged "disk census minted 12 unmodeled repos"
     every five minutes, the same twelve. It wrote nothing, but it was not a mint."""
-    from src.orchestrator import capture
+    from src.orchestrator import capture, neighborhoods
     from src.orchestrator.neighborhoods import census_trees
 
     (tmp_path / "code" / "twice-seen" / ".git").mkdir(parents=True)
@@ -563,11 +563,58 @@ async def test_the_census_counts_a_mint_only_the_first_time_it_sees_a_repo(
     async def blind(pool: Any, name: str) -> None:
         return None
 
+    async def blind_many(pool: Any, names: list[str]) -> dict[str, Any]:
+        return {}
+
     monkeypatch.setattr(capture, "_resolve_repo", blind)
+    monkeypatch.setattr(neighborhoods, "_resolve_repos", blind_many)
     for _ in range(2):
         again = await census_trees(actions, roots=roots)
         assert again["minted"] == []  # it exists already: found, not minted
         assert again["refused"] == []
+
+
+async def test_an_unchanged_census_walk_writes_nothing_and_resolves_each_name_in_one_batch(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The walk used to re-assert every worktree's path and branch each time (80 UPDATEs of
+    observed_at a walk, every five minutes), resolve ~95 names one query at a time and open a
+    five-statement transaction per worktree to learn it existed."""
+    from src.orchestrator import capture, neighborhoods
+    from src.orchestrator.neighborhoods import census_trees
+
+    _real_repo_with_sibling_worktree(tmp_path, "batchparent", "batchparent-wt")
+    (tmp_path / "code" / "plain-one" / ".git").mkdir(parents=True)
+    roots = [str(tmp_path / "code")]
+    first = await census_trees(actions, roots=roots)
+    assert sorted(first["minted"]) == ["batchparent", "plain-one"]
+    assert first["worktrees"] == ["batchparent-wt"]
+
+    stamp = "SELECT count(*), max(observed_at) FROM assertions WHERE source_id='disk-census'"
+    before = await actions.pool.fetchrow(stamp)
+    singles: list[str] = []
+    real_one = capture._resolve_repo
+
+    async def counting(pool: Any, name: str) -> Any:
+        singles.append(name)
+        return await real_one(pool, name)
+
+    monkeypatch.setattr(capture, "_resolve_repo", counting)
+    batches: list[list[str]] = []
+    real_many = neighborhoods._resolve_repos
+
+    async def counting_many(pool: Any, names: list[str]) -> Any:
+        batches.append(list(names))
+        return await real_many(pool, names)
+
+    monkeypatch.setattr(neighborhoods, "_resolve_repos", counting_many)
+
+    again = await census_trees(actions, roots=roots)
+
+    assert again["minted"] == [] and again["worktrees"] == ["batchparent-wt"]
+    assert tuple(await actions.pool.fetchrow(stamp)) == tuple(before)  # not one row touched
+    assert batches == [["batchparent", "plain-one"]]  # every plain repo in ONE query
+    assert singles == []  # the worktree's parent was already in the batch
 
 
 # --- the read-back ("I could not have discovered my own zero") -----------------------
