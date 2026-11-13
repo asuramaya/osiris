@@ -46,7 +46,8 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
               dm_active: int = 120, seat_cap: int = 0,
               dm_resume_model: str = "",
               extract_provider: str = "claude-cli", api_key: str = "",
-              wake_enabled: bool = True, stale_idle_mins: int = 30) -> SimpleNamespace:
+              wake_enabled: bool = True, stale_idle_mins: int = 30,
+              dm_sweep_max_age: int = 0) -> SimpleNamespace:
     # grace defaults to 0 (disabled) so the rate-cap / lease tests exercise those bounds in
     # isolation; the wake-grace tests set it explicitly. sense="" → resume resolution looks at
     # ~/.claude/projects (no anchored transcript for the test ids there → mint), so the legacy
@@ -74,6 +75,7 @@ def _settings(*, enabled: bool, rate_cap: int = 5, window: int = 3600,
                            osiris_dm_active_secs=dm_active,
                            osiris_seat_wake_hourly_cap=seat_cap,
                            osiris_dm_resume_model=dm_resume_model,
+                           osiris_dm_sweep_max_age_secs=dm_sweep_max_age,  # 0: no bound
                            # spend_is_metered(st) reads these: default is the local Claude CLI
                            # (a subscription) → the dollar ceiling is INERT, which is why the
                            # daily_usd=-1 dispatch tests never trip it. The ceiling test below
@@ -1990,6 +1992,34 @@ async def test_an_ask_behind_an_fyi_in_the_same_addressees_slot_is_reached(
     assert [(a, m) for a, m, _ in rows if a == "agent:abcd1234"] == [
         ("agent:abcd1234", int(ask["id"]))]
     assert int(fyi["id"]) not in [m for _, m, _ in rows]
+
+
+async def test_an_old_ask_behind_an_old_fyi_stays_pull_only_and_a_fresh_one_is_reached(
+    actions: Actions,
+) -> None:
+    """Excluding fyi frees the slot it held, and behind it sit months of unread asks: 887 on 35
+    live seats. Without an age bound the sweep would wake each seat about every one of them.
+    Older than the bound is pull-only; a fresh ask behind the same old fyi is still reached."""
+    old_fyi = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                                 to_agent="agent:abcd1234", body="months ago", grade="fyi")
+    old_ask = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                                 to_agent="agent:abcd1234", body="months ago too", grade="ask")
+    await actions.pool.execute(
+        "UPDATE fleet_messages SET created_at = now() - interval '60 days' WHERE id = ANY($1)",
+        [int(old_fyi["id"]), int(old_ask["id"])])
+    fresh = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                               to_agent="agent:abcd1234", body="today", grade="ask")
+    day = 86_400
+
+    bounded = await trigger_module._dms_with_unread(actions.pool, 900, (), 3 * day)
+    unbounded = await trigger_module._dms_with_unread(actions.pool, 900, (), 0)
+
+    assert [m for _, m, _ in bounded] == [int(fresh["id"])]
+    assert [m for _, m, _ in unbounded] == [int(old_ask["id"])]  # 0 means no bound
+    await actions.pool.execute(
+        "UPDATE fleet_messages SET read_at = now() WHERE id=$1", int(fresh["id"]))
+    assert await trigger_module._dms_with_unread(
+        actions.pool, 900, (), 3 * day) == []  # nothing recent left: nothing to chase
 
 
 async def test_a_message_the_sweep_found_settled_is_skipped_for_an_hour_then_rechecked(

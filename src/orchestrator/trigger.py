@@ -672,7 +672,7 @@ def _window_for(windows: list[dict[str, Any]], anchor_sids: set[str]) -> str | N
 
 
 async def _dms_with_unread(
-    pool: asyncpg.Pool, lease_secs: int, skip_ids: Sequence[int] = (),
+    pool: asyncpg.Pool, lease_secs: int, skip_ids: Sequence[int] = (), max_age_secs: int = 0,
 ) -> list[tuple[str, int, str | None]]:
     """(addressee, oldest deliverable DM id, sender) for every agent with unsettled DM mail.
     Each row feeds dispatch_dm (the background-session adapter): deliver to a mid-turn
@@ -686,11 +686,17 @@ async def _dms_with_unread(
     documented loop terminator, and a grade does not change), and any id in `skip_ids` (the
     sweep passes the ones it has already found settled by the addressee's lineage, a verdict
     that cannot undo). Re-dispatching those ~110 messages every tick was most of this cron's
-    time."""
+    time.
+
+    `max_age_secs` (0 = none) leaves a message older than that pull-only: the sweep's contract
+    for mail it cannot or should not push. Excluding fyi frees the slot it held, and behind it
+    sit months of unread asks (887 on 35 live seats): without a bound every live seat would be
+    woken about each of them, up to the hourly cap, until each had had its one wake."""
     rows = await pool.fetch(
         "SELECT DISTINCT ON (m.to_agent) m.to_agent, m.id, m.from_agent FROM fleet_messages m "
         "WHERE m.to_agent IS NOT NULL AND m.to_agent <> $1 AND m.read_at IS NULL "
         "AND m.grade IS DISTINCT FROM 'fyi' AND m.id <> ALL($3::bigint[]) "
+        "AND ($4 <= 0 OR m.created_at > now() - make_interval(secs => $4)) "
         "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
         "  AND r.agent_id=m.to_agent AND r.read_at IS NOT NULL) "
         "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
@@ -701,7 +707,8 @@ async def _dms_with_unread(
         # and starve every newer ask behind it, including one that was told 'mid-turn'.
         "AND COALESCE((SELECT w.mode FROM agent_wakes w WHERE w.message_id=m.id "
         "  ORDER BY w.woke_at DESC LIMIT 1), '') NOT IN ('dm-reply', 'dm-resume', 'dm-poke') "
-        "ORDER BY m.to_agent, m.created_at", OPERATOR_ADDR, lease_secs, list(skip_ids))
+        "ORDER BY m.to_agent, m.created_at", OPERATOR_ADDR, lease_secs, list(skip_ids),
+        max_age_secs)
     return [(r["to_agent"], r["id"], r["from_agent"]) for r in rows]
 
 
@@ -6401,7 +6408,8 @@ async def trigger_mail_tick(
     # addressee's DM stays pull-only and follows the seat at the next mint.
     sweep_now = time.monotonic()
     for agent_id, msg_id, sender in await _dms_with_unread(
-            pool, st.osiris_mail_lease_secs, _settled_to_skip(sweep_now)):
+            pool, st.osiris_mail_lease_secs, _settled_to_skip(sweep_now),
+            st.osiris_dm_sweep_max_age_secs):
         if not st.osiris_trigger_enabled:
             report["skipped"] += 1
             continue

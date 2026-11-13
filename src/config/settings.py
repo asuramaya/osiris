@@ -233,6 +233,11 @@ class Settings(BaseSettings):
     # it; if no ack or reply settles it within this window, it redelivers, so a response
     # severed by a server bounce costs a duplicate, never a silent loss.
     osiris_mail_lease_secs: int = 900
+    # The backstop sweep only chases direct messages younger than this. An older one stays
+    # pull-only (readable in the box, never a wake): a message months old that was never read
+    # is not worth a turn, and without a bound the sweep would walk every live seat's
+    # backlog, one wake an hour each. 0 means no bound.
+    osiris_dm_sweep_max_age_secs: int = 259_200
     # Resume-not-mint: the wake dispatch order is deliver, then resume, then mint. A
     # transcript larger than this is at the context ceiling, not resumable, so the wake
     # mints a fresh session instead. An owner whose mount is fresher than
