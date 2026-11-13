@@ -205,21 +205,21 @@ def test_freshest_transcript_mtime_walks_the_tree_exactly_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A regression in `classification_laws_heartbeat`: the
-    FIRST version of `_freshest_transcript_mtime` called `root.rglob(...)` ONCE PER sid.
+    FIRST version of `_freshest_transcript_mtime` walked the tree (`root.rglob(...)`) ONCE PER sid.
     For a lineage carrying thousands of `anchor_sid` rows, that turned one liveness
     check into thousands of full-tree walks (about 1s each, measured live), long
     enough to hold `arq_worker._boot_lock` for the cron's whole run and starve every
     sibling behind it. This pins the fix directly: the walk itself must happen AT MOST
     ONCE per call, no matter how many sids are requested."""
     calls = 0
-    real_rglob = Path.rglob
+    real_walk = mounts.jsonl_files
 
-    def counting_rglob(self: Path, pattern: str) -> Any:
+    def counting_walk(root: Path) -> Any:
         nonlocal calls
         calls += 1
-        return real_rglob(self, pattern)
+        return real_walk(root)
 
-    monkeypatch.setattr(Path, "rglob", counting_rglob)
+    monkeypatch.setattr(mounts, "jsonl_files", counting_walk)
     (tmp_path / "-repo").mkdir()
     (tmp_path / "-repo" / "aaaa1111-0000-0000-0000-000000000001.jsonl").write_text("{}\n")
     sids = [f"aaaa1111-0000-0000-0000-{i:012d}" for i in range(4000)]

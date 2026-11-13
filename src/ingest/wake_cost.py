@@ -37,6 +37,7 @@ import asyncpg
 
 from src.ingest.providers import Usage
 from src.ingest.sessions import _WAKE_FIRST_TURN
+from src.ingest.transcript_walk import jsonl_files
 from src.ingest.usage import record_usage
 
 _METERED = "wake-metered:"
@@ -97,11 +98,7 @@ def _tally(path: Path) -> tuple[str, Usage] | None:
 
 
 def _wake_files(root: Path) -> list[Path]:
-    try:
-        return [p for p in root.expanduser().rglob("*.jsonl")
-                if not p.parent.name.endswith("-osiris-extract")]
-    except OSError:
-        return []
+    return [p for p in jsonl_files(root) if not p.parent.name.endswith("-osiris-extract")]
 
 
 def _receipt(stem: str) -> float | None:

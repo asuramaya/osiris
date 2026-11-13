@@ -31,6 +31,7 @@ from typing import Any
 import asyncpg
 
 from src.actions.core import Actions
+from src.ingest.transcript_walk import jsonl_files
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -1069,11 +1070,8 @@ _transcript_index_lock = threading.Lock()
 
 def _walk_transcripts(root: Path) -> dict[str, Path]:
     index: dict[str, Path] = {}
-    try:
-        for p in root.expanduser().rglob("*.jsonl"):
-            index[p.stem] = p
-    except OSError:
-        pass
+    for p in jsonl_files(root):
+        index[p.stem] = p
     return index
 
 
