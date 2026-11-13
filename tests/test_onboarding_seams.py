@@ -384,10 +384,19 @@ async def test_live_succession_folds_a_SILENT_compaction_head(actions: Actions) 
 
     assert out.get("minted") == "agent:1de40004-ii", "the numeral is reused, the phantom folded"
     assert out.get("from") == "agent:1de40004", "chains onto the ROOT, skipping the phantom"
+    # The fold really happened: the phantom was flagged a false mint at the moment it was folded.
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='false_mint' AND a.value #>> '{}' = 'true'",
+        phantom) == 1
+    # ... and the numeral it freed was adopted by the live heir, so the CURRENT reading is the
+    # heir's own "not a false mint". (This used to assert "true" and passed only while Postgres
+    # happened to return the fold's row before the reinstating row: both carried the same
+    # observed_at.)
     assert await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical=$1 AND a.name='false_mint' "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", phantom) == "true"
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", phantom) == "false"
 
 
 async def test_a_promoted_mount_row_FOLLOWS_the_lineage_head(
