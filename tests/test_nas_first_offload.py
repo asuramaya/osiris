@@ -211,7 +211,7 @@ async def test_check_only_runs_the_two_read_only_steps_and_uploads_nothing() -> 
     rc, lines = await _run(world, check_only=True)
 
     assert rc == 0 and world.calls == ["presence", "repo_state"]
-    assert lines[-1].startswith("check only")
+    assert lines[-2].startswith("check only") and "nas-first-offload" in lines[-1]
 
 
 async def test_check_only_on_a_missing_repository_does_not_create_it() -> None:
@@ -241,3 +241,180 @@ def test_the_command_never_mentions_or_touches_the_plaintext_key_copy() -> None:
     code = source.split('"""', 2)[2]  # everything after the module docstring
 
     assert "plaintext" not in code and "soul.key" not in code
+
+
+# ---- the real restic calls, against a fake `restic` on PATH -----------------------------------
+
+_FAKE_RESTIC = '''#!{python}
+import json, os, sys
+state = json.load(open(os.environ["FAKE_RESTIC_STATE"]))
+args = sys.argv[1:]
+cmd = args[0] if args else ""
+if cmd == "list":
+    sys.exit(0)  # no locks
+if cmd == "snapshots":
+    out = state.get("stdout", "")
+    if out:
+        sys.stdout.write(out)
+    if state.get("stderr"):
+        print(state["stderr"], file=sys.stderr)
+    sys.exit(state.get("exit", 0))
+if cmd == "init":
+    print(state.get("init_stderr", ""), file=sys.stderr)
+    sys.exit(state.get("init_exit", 0))
+sys.exit(0)
+'''
+
+
+@pytest.fixture
+def fake_restic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    import json
+    import os
+    import stat
+    import sys
+
+    state_path = tmp_path / "state.json"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    exe = bin_dir / "restic"
+    exe.write_text(_FAKE_RESTIC.format(python=sys.executable))
+    exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_RESTIC_STATE", str(state_path))
+
+    def configure(**state: Any) -> None:
+        state_path.write_text(json.dumps(state))
+
+    configure()
+    return configure
+
+
+def _snaps(*rows: dict[str, Any]) -> str:
+    import json
+
+    return json.dumps(list(rows))
+
+
+def _row(short: str, when: str, paths: list[str] | None = None) -> dict[str, Any]:
+    return {"id": short + "f" * 56, "short_id": short, "time": when,
+            "paths": paths or ["/home/u/osiris-vault"]}
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("2026-11-13T11:05:00.123456789-06:00", datetime(2026, 11, 13, 17, 5, 0, 123456, tzinfo=UTC)),
+    ("2026-11-13T17:05:00Z", datetime(2026, 11, 13, 17, 5, 0, tzinfo=UTC)),
+    ("2026-11-13T17:05:00+00:00", datetime(2026, 11, 13, 17, 5, 0, tzinfo=UTC)),
+    ("2026-11-13T17:05:00", datetime(2026, 11, 13, 17, 5, 0, tzinfo=UTC)),
+    ("not a time", None), ("", None), (None, None),
+])
+def test_snapshot_times_are_read_as_instants(text: Any, expected: datetime | None) -> None:
+    assert nas.parse_time(text) == expected
+
+
+def test_the_newest_snapshot_is_found_out_of_order_and_across_time_zones(
+    fake_restic: Any,
+) -> None:
+    # as strings these sort the other way round: 12:00-06:00 is 18:00 UTC, 14:00Z is earlier
+    fake_restic(stdout=_snaps(
+        _row("aaaaaaaa", "2026-11-13T14:00:00Z"),
+        _row("bbbbbbbb", "2026-11-13T12:00:00.5-06:00"),   # 18:00 UTC: the newest
+        _row("cccccccc", "2026-11-13T09:00:00+00:00")))
+
+    got = nas._latest_snapshot("sftp:nas:/r", b"pw")
+
+    assert got is not None and got["id"] == "bbbbbbbb"
+    assert got["time"].startswith("2026-11-13T18:00:00")
+    assert got["paths"] == ["/home/u/osiris-vault"]
+
+
+def test_an_empty_repository_has_no_latest_snapshot(fake_restic: Any) -> None:
+    fake_restic(stdout="[]")
+    assert nas._latest_snapshot("sftp:nas:/r", b"pw") is None
+
+
+def test_malformed_snapshot_output_is_no_snapshot_not_a_crash(fake_restic: Any) -> None:
+    fake_restic(stdout="{this is not json")
+    assert nas._latest_snapshot("sftp:nas:/r", b"pw") is None
+    fake_restic(stdout='[{"id": "x", "short_id": "xxxxxxxx", "time": "garbage"}]')
+    assert nas._latest_snapshot("sftp:nas:/r", b"pw") is None
+    fake_restic(stdout='["a string", 3, null]')
+    assert nas._latest_snapshot("sftp:nas:/r", b"pw") is None
+
+
+def test_a_failing_snapshot_listing_is_no_snapshot(fake_restic: Any) -> None:
+    fake_restic(stdout=_snaps(_row("aaaaaaaa", "2026-11-13T14:00:00Z")), exit=1)
+    assert nas._latest_snapshot("sftp:nas:/r", b"pw") is None
+
+
+async def test_a_snapshot_with_a_nanosecond_local_time_passes_the_freshness_check(
+    fake_restic: Any,
+) -> None:
+    fresh = (NOW - timedelta(minutes=3)).astimezone(timezone_minus_six()).isoformat()
+    fake_restic(stdout=_snaps(_row("ab12cd34", fresh)))
+    world = World()
+    real = nas._latest_snapshot("sftp:nas:/r", b"pw")
+    assert real is not None
+    world.snapshot = real
+
+    rc, lines = await _run(world)
+
+    assert rc == 0 and any("ab12cd34" in ln for ln in lines)
+
+
+def timezone_minus_six() -> Any:
+    from datetime import timezone
+
+    return timezone(timedelta(hours=-6))
+
+
+@pytest.mark.parametrize("state,expect", [
+    ({"stdout": "[]", "exit": 0}, ("ok", 0)),
+    ({"stdout": '[{"id": "x"}, {"id": "y"}]', "exit": 0}, ("ok", 2)),
+    ({"stdout": "garbage", "exit": 0}, ("ok", 0)),
+    ({"stderr": "Fatal: unable to open config file: no such file or directory", "exit": 10},
+     ("missing", "")),
+    ({"stderr": "Fatal: the repository wording changed", "exit": 10}, ("missing", "")),
+    ({"stderr": "Fatal: wrong password or no key found", "exit": 12}, ("error", None)),
+    ({"stderr": "Fatal: unable to create lock: repository is already locked exclusively by "
+                "PID 7 on box", "exit": 11}, ("busy", None)),
+    ({"stderr": "Fatal: unable to open config file: ssh: connect to host truenas port 22: "
+                "No route to host", "exit": 1}, ("unreachable", None)),
+])
+def test_the_repository_state_follows_restics_exit_codes(
+    fake_restic: Any, state: dict[str, Any], expect: tuple[str, Any],
+) -> None:
+    fake_restic(**state)
+
+    kind, info = nas._repo_state("sftp:nas:/r", b"pw")
+
+    assert kind == expect[0]
+    if expect[1] is not None:
+        assert info == expect[1]
+    else:
+        assert isinstance(info, str) and info  # a reason is always given
+
+
+def test_a_wrong_password_never_reads_as_a_missing_repository(fake_restic: Any) -> None:
+    # exit 12 with text that says "does not exist" must still not allow a first-time create
+    fake_restic(stderr="Fatal: repository does not exist", exit=12)
+
+    kind, _ = nas._repo_state("sftp:nas:/r", b"pw")
+
+    assert kind == "error"
+
+
+def test_creating_a_repository_reports_restics_own_failure(fake_restic: Any) -> None:
+    fake_restic(init_exit=1, init_stderr="Fatal: create repository failed: permission denied")
+    assert "permission denied" in (nas._init_repo("sftp:nas:/r", b"pw") or "")
+
+    fake_restic(init_exit=0)
+    assert nas._init_repo("sftp:nas:/r", b"pw") is None
+
+
+async def test_check_prints_the_exact_command_to_run_next() -> None:
+    world = World()
+
+    rc, lines = await _run(world, check_only=True)
+
+    assert rc == 0
+    assert lines[-1] == "to do the offload, run: osiris nas-first-offload --name nas"

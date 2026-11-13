@@ -104,10 +104,27 @@ def _offload(repo: str, password: bytes, source: Path) -> tuple[str | None, str 
     return fail, (notes[0] if notes else None)
 
 
+def parse_time(text: object) -> datetime | None:
+    """A restic snapshot time as an aware UTC datetime. restic writes the box's local offset
+    ("...-06:00"), sometimes 'Z', and nanoseconds; none of that may change which snapshot is the
+    newest, so times are compared as instants, never as strings."""
+    import re
+
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    raw = re.sub(r"(\.\d{6})\d+", r"\1", raw)  # nanoseconds: keep microseconds
+    try:
+        when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when.astimezone(UTC) if when.tzinfo else when.replace(tzinfo=UTC)
+
+
 def _latest_snapshot(repo: str, password: bytes) -> dict[str, Any] | None:
     from src.orchestrator import restic_locks
 
-    done = restic_locks.run_restic(["snapshots", "--json", "--latest", "1"], _env(repo, password),
+    done = restic_locks.run_restic(["snapshots", "--json"], _env(repo, password),
                                    timeout=120, text=False)
     if done.returncode != 0:
         return None
@@ -115,12 +132,16 @@ def _latest_snapshot(repo: str, password: bytes) -> dict[str, Any] | None:
         rows = json.loads(done.stdout or b"[]")
     except ValueError:
         return None
-    rows = [r for r in rows if isinstance(r, dict) and r.get("time")]
-    if not rows:
+    dated: list[tuple[datetime, dict[str, Any]]] = []
+    for r in rows:
+        when_r = parse_time(r.get("time")) if isinstance(r, dict) else None
+        if when_r is not None and isinstance(r, dict):
+            dated.append((when_r, r))
+    if not dated:
         return None
-    newest = max(rows, key=lambda r: str(r["time"]))
+    when, newest = max(dated, key=lambda pair: pair[0])
     return {"id": str(newest.get("short_id") or str(newest.get("id", ""))[:8]),
-            "time": str(newest["time"]), "paths": list(newest.get("paths") or [])}
+            "time": when.isoformat(), "paths": list(newest.get("paths") or [])}
 
 
 def _ever_offloaded(name: str) -> bool:
@@ -242,6 +263,7 @@ async def run(
                         "then run this again.")
         if check_only:
             say("check only: steps 1 and 2 passed; nothing was uploaded.")
+            say(f"to do the offload, run: osiris nas-first-offload --name {name}")
             return 0
 
         # 3. THE OFFLOAD
@@ -259,10 +281,13 @@ async def run(
         if snap is None:
             return stop(4, "the repository shows no snapshot after the offload.",
                         "do not trust this backup; run this again and read restic's own message.")
-        taken = datetime.fromisoformat(snap["time"].replace("Z", "+00:00"))
+        taken = parse_time(snap["time"])
+        if taken is None:
+            return stop(4, f"the newest snapshot ({snap['id']}) has no readable time.",
+                        "run this again; if it repeats, read `restic snapshots` by hand.")
         if deps.now() - taken > FRESH_SNAPSHOT:
-            return stop(4, f"the newest snapshot ({snap['id']}) is from {taken:%Y-%m-%d %H:%M}, "
-                           "not from this run.",
+            return stop(4, f"the newest snapshot ({snap['id']}) is from "
+                           f"{taken:%Y-%m-%d %H:%M}, not from this run.",
                         "run this again; if it repeats, the backup is not writing a snapshot.")
         step(4, f"a fresh snapshot exists: {snap['id']} at {taken:%Y-%m-%d %H:%M} UTC.")
 
