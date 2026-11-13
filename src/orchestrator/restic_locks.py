@@ -170,11 +170,9 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _parse_time(raw: Any) -> datetime | None:
-    try:
-        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    from src.orchestrator.instants import parse_time
+
+    return parse_time(raw)
 
 
 def read_locks(env: dict[str, str], restic: Runner = _run) -> list[Lock] | str:

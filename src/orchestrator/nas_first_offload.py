@@ -33,6 +33,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from src.orchestrator.instants import parse_time
+
 TOTAL = 6
 FRESH_SNAPSHOT = timedelta(minutes=60)
 
@@ -102,23 +104,6 @@ def _offload(repo: str, password: bytes, source: Path) -> tuple[str | None, str 
     fail = _run_restic_backup(repository=repo, password=password, source=source,
                               init_if_needed=False, notes=notes)
     return fail, (notes[0] if notes else None)
-
-
-def parse_time(text: object) -> datetime | None:
-    """A restic snapshot time as an aware UTC datetime. restic writes the box's local offset
-    ("...-06:00"), sometimes 'Z', and nanoseconds; none of that may change which snapshot is the
-    newest, so times are compared as instants, never as strings."""
-    import re
-
-    raw = str(text or "").strip()
-    if not raw:
-        return None
-    raw = re.sub(r"(\.\d{6})\d+", r"\1", raw)  # nanoseconds: keep microseconds
-    try:
-        when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return when.astimezone(UTC) if when.tzinfo else when.replace(tzinfo=UTC)
 
 
 def _latest_snapshot(repo: str, password: bytes) -> dict[str, Any] | None:

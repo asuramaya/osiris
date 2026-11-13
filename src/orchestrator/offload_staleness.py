@@ -17,12 +17,9 @@ DEFAULT_STALE_DAYS = 7
 
 
 def _parse(value: object) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
+    from src.orchestrator.instants import parse_time
+
+    return parse_time(value)
 
 
 def _date(value: object) -> str:

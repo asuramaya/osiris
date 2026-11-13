@@ -118,10 +118,9 @@ def _tpm_step(soul_key: dict[str, Any], key_present: bool) -> dict[str, Any]:
 
 
 def _when(value: Any) -> datetime | None:
-    try:
-        return datetime.fromisoformat(value) if value else None
-    except (TypeError, ValueError):
-        return None
+    from src.orchestrator.instants import parse_time
+
+    return parse_time(value)
 
 
 def _restore_test_step(
