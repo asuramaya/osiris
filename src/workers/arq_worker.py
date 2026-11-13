@@ -1836,6 +1836,35 @@ def _is_stale_tick(name: str, ctx: dict[str, Any], every: int,
     return True
 
 
+# THE STARTUP RUN OF A DAILY JOB. Every cron carries run_at_startup so a worker that crash-loops
+# cannot silently miss its whole window; for a job that runs every few minutes a repeat at startup
+# is free. A job that runs once a day is not: with a dozen restarts a day (every deploy) the nightly
+# LLM pass ran on every one of them (74 calls on a day it should have made 1), and the retention
+# pass posted its desk line each time. A startup run of a job with a period of an hour or more is
+# therefore made only when the job has NOT succeeded within 90% of its period: a missed slot or a
+# failed last run still catches up, a restart on the same day does not.
+_DAILY_FLOOR_SECS = 3600
+_RECENT_FRACTION = 0.9
+
+
+async def _ran_recently(ctx: dict[str, Any], name: str, every: int) -> bool:
+    """Did `name` last succeed within `_RECENT_FRACTION` of its period? False when it cannot be
+    told (no record, an unreadable one): then the job runs, as before."""
+    import json
+
+    from src.orchestrator.monitor import get_cursor
+
+    try:
+        raw = await get_cursor(ctx["cascade"].actions.pool, f"job:{name}")
+        blob = json.loads(raw) if raw else {}
+        last_ok = datetime.fromisoformat(blob["last_ok"])
+    except (KeyError, ValueError, TypeError, OSError, AttributeError):
+        return False
+    except Exception:  # noqa: BLE001 - never block a startup run on a read failure
+        return False
+    return (datetime.now(UTC) - last_ok).total_seconds() < every * _RECENT_FRACTION
+
+
 def watched(fn: Any, *, every: int, heavy: bool = False) -> Any:
     """THE SEAM WHERE A JOB CANNOT LIE ABOUT ITS OWN HEALTH.
 
@@ -1869,6 +1898,11 @@ def watched(fn: Any, *, every: int, heavy: bool = False) -> Any:
             return 0
         deadline = ctx.get("boot_serialize_until")
         if deadline is not None and time.monotonic() < deadline:
+            if every >= _DAILY_FLOOR_SECS and await _ran_recently(ctx, fn.__name__, every):
+                # a daily or rarer job's startup run exists to catch up a missed slot: when it
+                # already did its work within its own period, a restart does not repeat it
+                _log.info("%s skipped at startup: it already ran within its period", fn.__name__)
+                return 0
             if heavy:
                 await asyncio.sleep(max(0.0, deadline - time.monotonic()))
                 return await _run_watched(fn, ctx, every)
