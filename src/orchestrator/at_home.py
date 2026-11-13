@@ -177,6 +177,11 @@ def rollback_item(src: Sources) -> dict[str, Any]:
                  f"docker rm {ROLLBACK_CONTAINER}")
 
 
+def _shell_path(path: str) -> str:
+    """A path as the operator can paste it: double-quoted, with a leading ~/ as "$HOME"."""
+    return '"$HOME/' + path[2:] + '"' if path.startswith("~/") else f'"{path}"'
+
+
 def scratch_item(src: Sources) -> dict[str, Any]:
     found = [p for p in src.scratch() if p.get("exists")]
     title = "Remove the scratch folders an agent left"
@@ -185,7 +190,7 @@ def scratch_item(src: Sources) -> dict[str, Any]:
     names = "; ".join(f"{p['path']} ({_size(p.get('size'))})" for p in found)
     return _item("scratch_dirs", 7, title, WAITING,
                  f"still there: {names}. This needs your word; nothing deletes them by itself.",
-                 "rm -r " + " ".join(str(p["path"]) for p in found))
+                 "rm -r " + " ".join(_shell_path(str(p["path"])) for p in found))
 
 
 def probe_item(src: Sources) -> dict[str, Any]:
@@ -249,7 +254,10 @@ def render(result: dict[str, Any]) -> list[str]:
         if any(i["status"] == OPTIONAL for i in result["items"]):
             return ["Nothing is waiting on you.", *_optional_lines(result)]
         return ["Nothing is waiting on you. Everything on the at-home list is done."]
-    lines = [f"{result['pending']} thing(s) waiting on you, cheapest and safest first:"]
+    waiting = sum(1 for i in result["items"] if i["status"] == WAITING)
+    blocked = sum(1 for i in result["items"] if i["status"] == BLOCKED)
+    head = f"{waiting} waiting" + (f", {blocked} blocked" if blocked else "")
+    lines = [f"{head} on you, cheapest and safest first:"]
     for i, item in enumerate(result["items"], 1):
         mark = {"done": "done   ", "waiting": "waiting", "blocked": "blocked",
                 "optional": "optional"}[item["status"]]

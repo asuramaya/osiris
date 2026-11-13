@@ -163,7 +163,7 @@ def test_the_terminal_text_names_each_command_and_marks_blocked_items() -> None:
 
     lines = at_home.render(result)
 
-    assert lines[0] == "2 thing(s) waiting on you, cheapest and safest first:"
+    assert lines[0] == "1 waiting, 1 blocked on you, cheapest and safest first:"
     text = "\n".join(lines)
     assert "[waiting] The NAS first offload" in text
     assert "run: osiris nas-first-offload --name nas" in text
@@ -375,3 +375,22 @@ def test_the_real_readers_say_absent_and_unreadable_apart(monkeypatch: pytest.Mo
                                                  "size": 28672}
     assert at_home_readers.read_scratch((str(tmp_path / "nope"),)) == [
         {"path": str(tmp_path / "nope"), "exists": False, "size": None}]
+
+
+def test_every_run_command_is_complete_and_pasteable() -> None:
+    result = at_home.checklist(sources(rollback_container=lambda: BOX, scratch=lambda: SCRATCH),
+                               now=NOW)
+    commands = [i["command"] for i in result["items"] if i["command"]]
+    commands += [i["then"] for i in result["items"] if i.get("then")]
+
+    assert commands and all("..." not in c and "\u2026" not in c for c in commands)
+    rm = by_key(result)["scratch_dirs"]["command"]
+    assert rm == 'rm -r "$HOME/code/zzscratch-imh" "$HOME/.claude/projects/-x"'
+
+
+def test_the_header_counts_waiting_and_blocked_apart() -> None:
+    result = at_home.checklist(sources(rollback_container=lambda: BOX, scratch=lambda: SCRATCH,
+                                       offload_receipt=lambda n: {}, drill_receipt=lambda u: {}),
+                               now=NOW)
+
+    assert at_home.render(result)[0] == "3 waiting, 1 blocked on you, cheapest and safest first:"
