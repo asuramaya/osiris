@@ -2167,6 +2167,53 @@ async def test_backfill_dsh_ingests_every_discovered_session(
 
 
 @_ZSTD_NOT_ON_PATH
+async def test_backfill_dsh_does_not_decompress_a_session_file_that_has_not_changed(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every tick used to decompress every DSH session just to learn nothing was new (~1.5 s a
+    sweep). A file already ingested to its end, with the same mtime and size, is skipped on a
+    stat; a rewrite (new lines) is read again; a file that could not be read is retried."""
+    from typing import Any
+
+    from src.ingest import soul_store
+    from src.ingest.harness import SessionLocator
+
+    soul_store._DSH_INGESTED.clear()
+    zst = tmp_path / "session.jsonl.zstd"
+    _make_dsh_session(zst, session_id="sess-gate", n=3)
+    locator = SessionLocator(
+        anchor_sid="dshgt000", session_id="sess-gate", harness="dsh",
+        source_path=str(zst), cwd=str(tmp_path), project="t", anchored=True)
+
+    def _fake_enumerate(self: Any, *, root: Path | None = None) -> Any:
+        yield locator
+
+    monkeypatch.setattr("src.ingest.harness.dsh.DshSessionAdapter.enumerate", _fake_enumerate)
+    reads: list[str] = []
+    real = SoulStore._ingest_dsh_checked
+
+    async def counting(self: SoulStore, source_path: str, anchor_sid: str) -> tuple[int, bool]:
+        reads.append(source_path)
+        return await real(self, source_path, anchor_sid)
+
+    monkeypatch.setattr(SoulStore, "_ingest_dsh_checked", counting)
+
+    assert await store.backfill_dsh() == {str(zst): 1}
+    assert await store.backfill_dsh() == {} and await store.backfill_dsh() == {}
+    assert len(reads) == 1  # two later sweeps cost a stat each
+
+    _make_dsh_session(zst, session_id="sess-gate", n=2, start=3)  # the harness rewrote it
+    assert await store.backfill_dsh() == {str(zst): 1}
+    assert len(reads) == 2
+
+    soul_store._DSH_INGESTED.clear()
+    zst.write_bytes(b"not really zstd")  # unreadable: never remembered as "nothing new"
+    await store.backfill_dsh()
+    await store.backfill_dsh()
+    assert len(reads) == 4
+
+
+@_ZSTD_NOT_ON_PATH
 async def test_verify_dsh_round_trip_sample_clean_when_file_matches_store(
     store: SoulStore, tmp_path: Path,
 ) -> None:
