@@ -223,6 +223,21 @@ async def _dm_eligible(pool: asyncpg.Pool, agent_id: str) -> bool:
     return await _dm_ineligibility(pool, agent_id) is None
 
 
+# The sender of the one notice a deploy posts about restarting osiris-mcp.
+DEPLOY_NOTICE_SENDER = "deploy:disconnect-warning"
+
+
+async def moot_older_deploy_notices(pool: asyncpg.Pool, *, newer_id: int) -> int:
+    """A deploy notice is only news until the next deploy. Settles every still-unread (or
+    leased and unsettled) deploy notice older than `newer_id`, marked read and moot with the
+    reason; nothing is deleted. Returns how many it settled."""
+    res = await pool.execute(
+        "UPDATE fleet_messages SET read_at=now(), moot_at=now(), moot_by=$1, moot_note=$2 "
+        "WHERE from_agent=$1 AND id < $3 AND read_at IS NULL AND moot_at IS NULL",
+        DEPLOY_NOTICE_SENDER, f"replaced by a newer deploy notice (#{newer_id})", newer_id)
+    return int(res.split()[-1])
+
+
 async def settle_history_at_join(
     pool: asyncpg.Pool, project: str | None, agent_id: str
 ) -> int:

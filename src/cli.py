@@ -4375,6 +4375,39 @@ async def _real_ensure_key_setup() -> dict[str, Any]:
     return await asyncio.to_thread(ensure_key_setup)
 
 
+async def _post_deploy_notice(pool: Any, sha: str | None, health_ready: bool) -> None:
+    """THE DEPLOY NOTICE: ONE message per deploy, posted after the restart, so a session that
+    was cut mid-call finds it waiting when it reconnects. A restart drops every live
+    streamable-HTTP session silently and health/smoke probe a FRESH connection, so they can
+    never see a stale one (a specimen, 2026-09-01: 15 agents live, 22 requests came back 404,
+    and the first symptom was "graph unreachable"). Reconnecting is the client's job (automount
+    re-adopts on the next mount()); this says what happened and when. It used to be two
+    broadcasts per deploy (before and after), which left dozens of unread notices in every
+    inbox after a busy day. Now there is one, and it settles every older deploy notice that is
+    still unread, because a deploy notice is only news until the next deploy. A mail hiccup
+    here never blocks or fails the deploy."""
+    from src.orchestrator.mailbox import (
+        DEPLOY_NOTICE_SENDER,
+        moot_older_deploy_notices,
+        send_message,
+    )
+
+    short = sha[:8] if sha else "?"
+    body = (f"deploy {short}: osiris-mcp restarted and is back up. A session cut mid-call: "
+            "your next call reconnects (streamable-HTTP sessions do not survive a restart; "
+            "automount re-adopts on your next mount())." if health_ready else
+            f"deploy {short}: osiris-mcp restarted but the console health check did not "
+            "come up yet. A session cut mid-call: your next call reconnects once it is up.")
+    try:
+        sent = await send_message(
+            pool, from_agent=DEPLOY_NOTICE_SENDER, from_project="osiris",
+            to_project="osiris", grade="fyi", body=body)
+        if not sent.get("dedup"):
+            await moot_older_deploy_notices(pool, newer_id=int(sent["id"]))
+    except Exception as exc:  # noqa: BLE001
+        print(f"NOTE: deploy notice failed to send: {exc}")
+
+
 async def cmd_deploy(
     *, repo_root: Path | None = None, git_status: GitStatus = _real_git_status,
     restart: RestartServices = _real_restart_services, pool: asyncpg.Pool | None = None,
@@ -4489,7 +4522,6 @@ async def cmd_deploy(
             alarm_withheld_deploy_record,
             check_diverged_since_last_deploy,
         )
-        from src.orchestrator.mailbox import send_message
         from src.orchestrator.monitor import get_cursor
 
         # Captured BEFORE `record_deploy` below overwrites this same cursor to the NEW
@@ -4570,26 +4602,6 @@ async def cmd_deploy(
 
         tools_before = await list_tools()
 
-        # THE DISCONNECT WARNING: a live
-        # specimen (2026-09-01 19:10:57) restarted osiris-mcp with 15 agents live,
-        # every streamable-HTTP session died silently, 22 requests came back 404, and the
-        # operator's first symptom was "graph unreachable." health/smoke probe a FRESH
-        # connection and can never see a stale one, so the deploy ledger read clean while
-        # every live session was in fact broken. Reconnect itself is the harness client's
-        # own job (automount re-adopts on the next mount()); the warning is the whole
-        # fix. A mail hiccup here must never block or fail the deploy itself.
-        deploy_sha = _git_head(root)
-        try:
-            await send_message(
-                pool, from_agent="deploy:disconnect-warning", from_project="osiris",
-                to_project="osiris", grade="fyi",
-                body=f"deploy {deploy_sha[:8] if deploy_sha else '?'} restarting "
-                     "osiris-mcp. Your next call reconnects (streamable-HTTP sessions "
-                     "do not survive the restart; automount re-adopts on your next "
-                     "mount()).")
-        except Exception as exc:  # noqa: BLE001
-            print(f"NOTE: pre-restart disconnect warning failed to send: {exc}")
-
         # A LIVE INCIDENT: restarting straight into a running
         # pg_dump made the console hang at startup behind the dump's own lock on
         # `triggers`, and the health/smoke poller burned its OWN timeout reporting a
@@ -4624,18 +4636,11 @@ async def cmd_deploy(
         if health_ready:
             print(f"health: up after {health_waited:.0f}s" if health_waited
                   else "health: up immediately")
-            try:
-                await send_message(
-                    pool, from_agent="deploy:disconnect-warning", from_project="osiris",
-                    to_project="osiris", grade="fyi",
-                    body=f"deploy {deploy_sha[:8] if deploy_sha else '?'}: osiris-mcp is "
-                         "back up. Reconnect now.")
-            except Exception as exc:  # noqa: BLE001
-                print(f"NOTE: post-restart reconnect notice failed to send: {exc}")
         else:
             print(f"health: not up after waiting {health_waited:.0f}s (ceiling). The "
                   "console did not come up; this is a real startup failure, not a "
                   "smoke-timing false alarm")
+        await _post_deploy_notice(pool, _git_head(root), health_ready)
 
         # THE MCP SOCKET WAIT: `/health` above answers for the CONSOLE, a different process,
         # so "health: up immediately" is no evidence MCP itself is listening. Since the soul
