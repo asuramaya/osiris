@@ -47,8 +47,9 @@ def test_when_everything_is_done_nothing_is_pending() -> None:
     result = at_home.checklist(sources(plaintext_thread_open=lambda: False), now=NOW)
 
     assert result["pending"] == 0 and result["next"] is None
-    assert at_home.render(result) == ["Nothing is waiting on you. Everything on the at-home "
-                                      "list is done."]
+    lines = at_home.render(result)
+    assert lines[0] == "Nothing is waiting on you."
+    assert "Claude rebuild probe" in lines[1] and "optional" in lines[1]
 
 
 def test_the_nas_waits_with_its_reason_and_whether_you_are_home_right_now() -> None:
@@ -150,9 +151,10 @@ def test_items_are_ordered_cheapest_and_safest_first() -> None:
     result = at_home.checklist(nothing_done, now=NOW)
 
     assert [i["key"] for i in result["items"]] == [
-        "envelope_drill", "envelope_code", "envelope_key", "nas_offload", "plaintext_copy"]
+        "envelope_drill", "envelope_code", "envelope_key", "nas_offload", "plaintext_copy",
+        "rollback_container", "scratch_dirs", "rebuild_probe"]
     assert result["next"]["key"] == "envelope_drill"  # the first thing to do
-    assert result["pending"] == 5 and result["done"] == 0
+    assert result["pending"] == 5 and result["done"] == 2
 
 
 def test_the_terminal_text_names_each_command_and_marks_blocked_items() -> None:
@@ -279,9 +281,97 @@ async def test_the_real_sources_read_the_live_shapes(
     thread = await open_thread(actions, "stand-in for the plaintext copy job", source="test")
     monkeypatch.setattr(at_home, "PLAINTEXT_COPY_THREAD", f"thread:{str(thread)[:8]}")
 
+    from src.orchestrator import at_home_readers
+
+    monkeypatch.setattr(at_home_readers, "read_rollback_container", lambda: None)
+    monkeypatch.setattr(at_home_readers, "read_scratch", lambda: [])
     src = await at_home.real_sources(actions.pool, now=NOW)
     result = at_home.checklist(src, now=NOW)
 
     assert src.plaintext_thread_open() is True  # the thread is open
-    assert [i["key"] for i in result["items"]][-1] == "plaintext_copy"
-    assert result["items"][-1]["status"] in ("blocked", "waiting")
+    assert [i["key"] for i in result["items"]][-4] == "plaintext_copy"
+    assert result["items"][-4]["status"] in ("blocked", "waiting")
+
+
+BOX = {"status": "exited", "image": "postgres:16", "size": 28672}
+SCRATCH = [{"path": "~/code/zzscratch-imh", "exists": True, "size": 8192},
+           {"path": "~/.claude/projects/-x", "exists": True, "size": 884736}]
+
+
+def test_the_word_only_items_show_what_is_there_and_never_delete() -> None:
+    result = at_home.checklist(sources(plaintext_thread_open=lambda: False,
+                                       rollback_container=lambda: BOX, scratch=lambda: SCRATCH),
+                               now=NOW)
+    items = by_key(result)
+
+    box, scratch = items["rollback_container"], items["scratch_dirs"]
+    assert box["status"] == at_home.WAITING and "postgres:16" in box["why"]
+    assert "28.0 KB" in box["why"] and "needs your word; nothing deletes it by itself" in box["why"]
+    assert "never the volume" in box["why"]
+    assert scratch["status"] == at_home.WAITING and "zzscratch-imh (8.0 KB)" in scratch["why"]
+    assert result["pending"] == 2
+    src_text = Path(at_home.__file__).read_text()
+    assert "rmtree" not in src_text and "os.remove" not in src_text and "unlink(" in src_text
+    # the only unlink is the state-file temp; nothing in the module runs docker rm or rm
+    assert '"rm"' not in src_text and '"rm",' not in src_text
+
+
+def test_they_are_done_when_the_things_are_absent() -> None:
+    result = at_home.checklist(
+        sources(plaintext_thread_open=lambda: False,
+                scratch=lambda: [{"path": "a", "exists": False, "size": None}]), now=NOW)
+    items = by_key(result)
+
+    assert items["rollback_container"]["status"] == at_home.DONE
+    assert items["scratch_dirs"]["status"] == at_home.DONE
+    assert result["pending"] == 0
+
+
+def test_the_probe_is_optional_until_its_obligation_closes_and_is_never_counted() -> None:
+    open_ = at_home.checklist(sources(plaintext_thread_open=lambda: False), now=NOW)
+    closed = at_home.checklist(sources(plaintext_thread_open=lambda: False,
+                                       probe_thread_open=lambda: False), now=NOW)
+
+    assert by_key(open_)["rebuild_probe"]["status"] == at_home.OPTIONAL
+    assert "probe_rebuild.py A" in by_key(open_)["rebuild_probe"]["command"]
+    assert open_["pending"] == 0 and open_["next"] is None
+    assert by_key(closed)["rebuild_probe"]["status"] == at_home.DONE
+
+
+def test_an_unreadable_word_source_shows_unreadable_not_done() -> None:
+    def boom() -> Any:
+        raise RuntimeError("docker is down")
+
+    result = at_home.checklist(sources(rollback_container=boom, scratch=boom), now=NOW)
+    items = by_key(result)
+
+    assert items["rollback_container"]["status"] == at_home.WAITING
+    assert "could not be read" in items["scratch_dirs"]["why"]
+
+
+def test_the_probe_does_not_make_the_desk_line_fire() -> None:
+    result = at_home.checklist(sources(plaintext_thread_open=lambda: False), now=NOW)
+
+    assert [i["key"] for i in result["items"] if i["status"] == at_home.WAITING] == []
+
+
+def test_the_real_readers_say_absent_and_unreadable_apart(monkeypatch: pytest.MonkeyPatch,
+                                                          tmp_path: Path) -> None:
+    import subprocess as sp
+
+    from src.orchestrator import at_home_readers
+
+    def fake(argv: list[str], **kw: Any) -> sp.CompletedProcess[str]:
+        return sp.CompletedProcess(argv, 1, "", "Error: No such object: osiris-pg-pre-repack")
+
+    monkeypatch.setattr(sp, "run", fake)
+    assert at_home_readers.read_rollback_container() is None
+    monkeypatch.setattr(sp, "run", lambda argv, **kw: sp.CompletedProcess(argv, 1, "", "denied"))
+    with pytest.raises(RuntimeError):
+        at_home_readers.read_rollback_container()
+    monkeypatch.setattr(sp, "run", lambda argv, **kw: sp.CompletedProcess(
+        argv, 0, "exited|postgres:16|28672\n", ""))
+    assert at_home_readers.read_rollback_container() == {"status": "exited", "image": "postgres:16",
+                                                 "size": 28672}
+    assert at_home_readers.read_scratch((str(tmp_path / "nope"),)) == [
+        {"path": str(tmp_path / "nope"), "exists": False, "size": None}]
