@@ -24,6 +24,7 @@ import os
 import re
 import tempfile
 import time
+import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -58,8 +59,45 @@ RECEIPTS = Path.home() / ".osiris" / "wake-receipts"
 
 _log = logging.getLogger("osiris.trigger")
 
-_HELD_SPAWN_LOCKS: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
+class _Hold:
+    """One live hold of a seat's spawn lock. A task started inside the door copies the
+    contextvar and sees the hold while the door is open (it may use the door's lock), but a
+    child that outlives the door finds it `released` and must take the lock like anyone."""
+
+    __slots__ = ("key", "released")
+
+    def __init__(self, key: str) -> None:
+        self.key = key
+        self.released = False
+
+
+_HELD_SPAWN_LOCKS: contextvars.ContextVar[frozenset[_Hold]] = contextvars.ContextVar(
     "osiris_held_spawn_locks", default=frozenset())
+
+# At most this many side connections (one per waiting or holding door) per process, so a
+# stalled spawn cannot gather enough waiters to fill the server's connection limit.
+SIDE_CONNECTION_CAP = 8
+
+
+class _LoopLocks:
+    """Per-event-loop state for `seat_spawn_lock`: one in-memory lock per key, so waiters in
+    this process queue on memory and not on Postgres backends, and the side-connection cap."""
+
+    def __init__(self) -> None:
+        self.keys: dict[str, tuple[asyncio.Lock, int]] = {}
+        self.slots = asyncio.Semaphore(SIDE_CONNECTION_CAP)
+
+
+_LOOP_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _LoopLocks] = (
+    weakref.WeakKeyDictionary())
+
+
+def _loop_locks() -> _LoopLocks:
+    loop = asyncio.get_running_loop()
+    state = _LOOP_LOCKS.get(loop)
+    if state is None:
+        state = _LOOP_LOCKS[loop] = _LoopLocks()
+    return state
 
 
 async def spawn_lock_key(pool: asyncpg.Pool, target: str) -> str:
@@ -147,23 +185,53 @@ async def seat_spawn_lock(
     `SPAWN_HOLD_BOUND` plus a spawn), then raises `SpawnInProgress`. The lock dies with its
     connection, so a crashed launch never leaves it held."""
     key = f"osiris:spawn:{handle}"
-    if key in _HELD_SPAWN_LOCKS.get():
-        yield  # this task already holds it (a door called inside a door): never wait on self
+    if any(h.key == key and not h.released for h in _HELD_SPAWN_LOCKS.get()):
+        yield  # this door already holds it (a door called inside a door): never wait on self
         return
     from src.db.pool import open_side_connection
 
-    conn: Any = None
     deadline = time.monotonic() + wait
-    token: contextvars.Token[frozenset[str]] | None = None
-    # The lock lives on a connection of its own, NOT a slot of the shared pool. The door that
-    # holds it goes on calling the pool (twin check, roster, mounts) for as long as it holds,
-    # so a pool slot pinned by the lock plus the holder's own nested acquires deadlocks the
-    # pool as soon as the holders reach its size: with four DM dispatches in flight on the
-    # worker's 4-slot pool, every other job (heartbeat, trigger_mail, sense_liveness) waited
-    # out the acquire bound, about 290 s at a time. A pool slot is the fallback only when the
-    # pool did not record how it connects.
-    side = await open_side_connection(pool)
+
+    def _left() -> float:
+        return deadline - time.monotonic()
+
+    state = _loop_locks()
+    mem, users = state.keys.get(key) or (asyncio.Lock(), 0)
+    state.keys[key] = (mem, users + 1)
+    mem_held = side_slot = False
+    side: Any = None
+    conn: Any = None
+    hold: _Hold | None = None
+    token: contextvars.Token[frozenset[_Hold]] | None = None
     try:
+        # Same-process waiters queue here, in memory, holding no database connection.
+        try:
+            await asyncio.wait_for(mem.acquire(), timeout=max(0.0, _left()))
+            mem_held = True
+            await asyncio.wait_for(state.slots.acquire(), timeout=max(0.0, _left()))
+            side_slot = True
+        except TimeoutError:
+            raise SpawnInProgress(handle) from None
+        # The lock lives on a connection of its own, NOT a slot of the shared pool. The door
+        # that holds it goes on calling the pool (twin check, roster, mounts) for as long as
+        # it holds, so a pool slot pinned by the lock plus the holder's own nested acquires
+        # deadlocks the pool as soon as the holders reach its size: with four DM dispatches
+        # in flight on the worker's 4-slot pool, every other job waited out the acquire
+        # bound, about 290 s at a time. A server that is full is waited out, never answered
+        # with a pool slot; a pool slot is the fallback only when the pool did not record how
+        # it connects, or the connect failed for another reason (logged).
+        while side is None:
+            try:
+                side = await open_side_connection(pool)
+                break
+            except asyncpg.TooManyConnectionsError:
+                if _left() <= 0:
+                    raise SpawnInProgress(handle) from None
+                await asyncio.sleep(0.5)
+            except (OSError, asyncpg.PostgresError, TimeoutError) as exc:
+                _log.warning("spawn lock %s: no side connection (%r), using a pool slot",
+                             handle, exc)
+                break
         while True:
             candidate = side if side is not None else await pool.acquire()
             try:
@@ -178,12 +246,15 @@ async def seat_spawn_lock(
                 break
             if side is None:
                 await pool.release(candidate)
-            if time.monotonic() >= deadline:
+            if _left() <= 0:
                 raise SpawnInProgress(handle)
             await asyncio.sleep(0.25)
-        token = _HELD_SPAWN_LOCKS.set(_HELD_SPAWN_LOCKS.get() | {key})
+        hold = _Hold(key)
+        token = _HELD_SPAWN_LOCKS.set(_HELD_SPAWN_LOCKS.get() | {hold})
         yield
     finally:
+        if hold is not None:
+            hold.released = True
         if token is not None:
             _HELD_SPAWN_LOCKS.reset(token)
         # A side connection dies with its lock: closing it drops the session-level lock even
@@ -197,11 +268,23 @@ async def seat_spawn_lock(
                 finally:
                     await pool.release(conn)
         finally:
-            if side is not None:
-                try:
-                    await asyncio.wait_for(asyncio.shield(side.close()), timeout=5)
-                except BaseException:  # noqa: BLE001 - cancelled or stuck: drop it
-                    side.terminate()
+            try:
+                if side is not None:
+                    try:
+                        await asyncio.wait_for(asyncio.shield(side.close()), timeout=5)
+                    except BaseException:  # cancelled or stuck: drop it, and let a
+                        side.terminate()   # cancellation go on
+                        raise
+            finally:
+                if side_slot:
+                    state.slots.release()
+                if mem_held:
+                    mem.release()
+                held, count = state.keys.get(key, (mem, 1))
+                if count <= 1:
+                    state.keys.pop(key, None)
+                else:
+                    state.keys[key] = (held, count - 1)
 
 # the trigger speaks in its own name when it gives up, never in an agent's
 _TRIGGER_AGENT = "agent:osiris-trigger"
@@ -2243,7 +2326,6 @@ async def _resume_occupancy_gate(
     return None
 
 
-@_spawn_locked(_pool_of_pool, _addressee_kw, _SPAWN_BUSY_MODE)
 async def dispatch_dm(
     pool: asyncpg.Pool, *, addressee: str, msg_id: int, sender: str | None,
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
@@ -2259,10 +2341,29 @@ async def dispatch_dm(
     check naturally falls open into a real nudge the moment its turn actually ends. What
     was missing was a durable answer to "was this message caught mid-turn, and when did we
     last check" - this closes that, nothing else."""
-    result = await _dispatch_dm_body(
-        pool, addressee=addressee, msg_id=msg_id, sender=sender, settings=settings,
-        spawn=spawn, windows=windows, poke=poke, jobs=jobs, nudge=nudge,
-        agents_json=agents_json, fresh_spawn=fresh_spawn, sleep=sleep)
+    # THE SEAT'S SPAWN LOCK IS TAKEN LATE, only when this dispatch is about to start or resume a
+    # body. The backstop sweep re-dispatches every unsettled message every tick, and nearly all
+    # of those end at a cheap verdict (fyi, human-attended, paused, settled, braked, mid-turn):
+    # holding the lock for those was about ten grants a second, each a database connection.
+    # The body asks for the lock at the two points where it can spawn (the fresh-heir mint and
+    # the occupancy check that precedes a resume) through `spawn_gate`, and the stack gives it
+    # back when the dispatch ends.
+    key: str | None = None
+    try:
+        async with contextlib.AsyncExitStack() as stack:
+            async def spawn_gate() -> None:
+                nonlocal key
+                if key is None:
+                    key = await spawn_lock_key(pool, addressee)
+                await stack.enter_async_context(seat_spawn_lock(pool, key))
+
+            result = await _dispatch_dm_body(
+                pool, addressee=addressee, msg_id=msg_id, sender=sender, settings=settings,
+                spawn=spawn, windows=windows, poke=poke, jobs=jobs, nudge=nudge,
+                agents_json=agents_json, fresh_spawn=fresh_spawn, sleep=sleep,
+                spawn_gate=spawn_gate)
+    except SpawnInProgress:
+        return _SPAWN_BUSY_MODE(key or addressee)
     await pool.execute(
         "UPDATE fleet_messages SET dispatch_mode=$1, dispatch_mode_at=now() WHERE id=$2",
         result["mode"], msg_id)
@@ -2274,6 +2375,7 @@ async def _dispatch_dm_body(
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
     poke: Any = None, jobs: Any = None, nudge: Any = None, agents_json: Any = None,
     fresh_spawn: Any = None, sleep: Any = None,
+    spawn_gate: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, str]:
     """Dispatch one DM: the whole delivery grammar in one function, shared verbatim by
     send()'s immediate leg and the worker tick's backstop sweep (two callers, one rule: the
@@ -2658,6 +2760,8 @@ async def _dispatch_dm_body(
         house = facts.get("house") if facts else None
         if (miss_gate == "compaction" and seat_id is not None and launch_cwd
                 and handle and office):
+            if spawn_gate is not None:
+                await spawn_gate()  # about to mint a body: one spawn per seat at a time
             anchor = _launch_anchor(seat_id)
             # The ledger row goes in under an advisory lock, before the mint, matching
             # dispatch_dm's own established discipline elsewhere in this function: two
@@ -2739,6 +2843,8 @@ async def _dispatch_dm_body(
     # whether anybody is already sitting there. A `-p --resume` beside a live process
     # would run a second copy of the same identity - refuse it here, before the spend,
     # never after.
+    if spawn_gate is not None:
+        await spawn_gate()  # the occupancy read and any resume after it, one at a time per seat
     occupied = await _resume_occupancy_gate(
         (graph_resume[0], graph_resume[1], graph_resume[2], graph_resume[3]),
         agents_json=agents_json, spawn_cwd=spawn_cwd)

@@ -286,13 +286,11 @@ async def open_side_connection(pool: Any) -> asyncpg.Connection | None:
     the shared pool and then calls the pool again deadlocks it once the holders reach the pool
     size (the 2026-09-29 wedge, and again in 2026-11 with the seat spawn lock: several DM
     dispatches each held a slot of a 4-slot worker pool, every other job waited out the
-    acquire bound). None when the pool did not record how it connects; the caller then falls
-    back to a pool slot. The caller closes it."""
+    acquire bound). None only when the pool did not record how it connects (the caller then
+    uses a pool slot); a failed connect RAISES (`asyncpg.TooManyConnectionsError` when the
+    server is full), never reads as "no side connection". The caller closes it."""
     recorded = getattr(pool, "__dict__", {}).get("_osiris_side_connect")
     if recorded is None:
         return None
     dsn, server_settings = recorded
-    try:
-        return await asyncpg.connect(dsn=dsn, server_settings=server_settings, timeout=10)
-    except (OSError, asyncpg.PostgresError, TimeoutError):
-        return None
+    return await asyncpg.connect(dsn=dsn, server_settings=server_settings, timeout=10)
