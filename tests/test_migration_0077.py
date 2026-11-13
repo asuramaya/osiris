@@ -54,20 +54,31 @@ async def test_the_chain_reaches_0077_and_the_index_exists(actions: Actions) -> 
     assert await _has_index(actions)
 
 
+async def _plan_without_seqscan(actions: Actions, explain: str) -> str:
+    """The plan for `explain` with sequential scans off. The SET and the EXPLAIN must run on ONE
+    connection, inside one transaction (`SET LOCAL`): `pool.execute("SET ...")` followed by
+    `pool.fetch("EXPLAIN ...")` can land on two different pool connections, and the EXPLAIN then
+    plans with the default settings (a sequential scan on a near-empty table), which is the
+    flake this replaces. It also keeps the setting from outliving the test on a pooled
+    connection."""
+    async with actions.pool.acquire() as conn, conn.transaction():
+        await conn.execute("SET LOCAL enable_seqscan = off")
+        return "\n".join(r[0] for r in await conn.fetch(explain))
+
+
 async def test_a_canonical_only_lookup_uses_it(actions: Actions) -> None:
-    await actions.pool.execute("SET enable_seqscan = off")
-    plan = "\n".join(r[0] for r in await actions.pool.fetch(
-        "EXPLAIN SELECT id FROM objects WHERE canonical = 'seat:0abe4f62'"))
+    plan = await _plan_without_seqscan(
+        actions, "EXPLAIN SELECT id FROM objects WHERE canonical = 'seat:0abe4f62'")
     assert "objects_canonical_idx" in plan, plan
 
 
 async def test_the_inflight_count_uses_the_partial_index(actions: Actions) -> None:
     assert await actions.pool.fetchval(
         "SELECT 1 FROM pg_indexes WHERE indexname='message_recipients_inflight_idx'")
-    await actions.pool.execute("SET enable_seqscan = off")
-    plan = "\n".join(r[0] for r in await actions.pool.fetch(
+    plan = await _plan_without_seqscan(
+        actions,
         "EXPLAIN SELECT count(*) FROM message_recipients r WHERE r.read_at IS NULL "
-        "AND r.delivered_at IS NOT NULL AND r.delivered_at >= now() - interval '1 hour'"))
+        "AND r.delivered_at IS NOT NULL AND r.delivered_at >= now() - interval '1 hour'")
     assert "message_recipients_inflight_idx" in plan, plan
 
 
