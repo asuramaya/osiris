@@ -64,3 +64,26 @@ def test_sessions_skip_the_extractors_scratch_dir_and_report_each_mtime(tmp_path
     assert set(seen) == {"aaaaaaaa-1111", "agent-x", "top"}
     assert abs(seen["aaaaaaaa-1111"].timestamp() - stamp) < 1
     assert liveness._sessions(tmp_path / "missing") == []
+
+
+def test_claude_enumerate_finds_the_same_sessions_without_visiting_empty_project_dirs(
+    tmp_path: Path,
+) -> None:
+    from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
+
+    (tmp_path / "-home-u-proj" / "memory").mkdir(parents=True)          # no transcript here
+    (tmp_path / "-home-u-proj" / "aaaaaaaa-1111-2222.jsonl").write_text("{}")
+    (tmp_path / "-home-u-proj" / "short.jsonl").write_text("{}")          # anchor under 8 chars
+    sub = tmp_path / "-home-u-proj" / "aaaaaaaa-1111-2222" / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-deadbeef01.jsonl").write_text("{}")
+    (tmp_path / "-home-u-empty" / "memory").mkdir(parents=True)
+    (tmp_path / "-home-u-x-osiris-extract").mkdir()
+    (tmp_path / "-home-u-x-osiris-extract" / "bbbbbbbb-3333.jsonl").write_text("{}")
+    (tmp_path / "loose.jsonl").write_text("{}")                           # not in a project dir
+
+    found = sorted((loc.session_id, loc.channel) for loc in
+                   ClaudeJsonlAdapter().enumerate(root=tmp_path))
+
+    assert found == [("aaaaaaaa-1111-2222", "primary"), ("agent-deadbeef01", "sidechain")]
+    assert list(ClaudeJsonlAdapter().enumerate(root=tmp_path / "missing")) == []

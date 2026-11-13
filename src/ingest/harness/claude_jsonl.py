@@ -222,12 +222,28 @@ class ClaudeJsonlAdapter:
         base = (root or (Path.home() / ".claude" / "projects")).expanduser()
         if not base.is_dir():
             return
-        for proj_dir in base.iterdir():
-            if not proj_dir.is_dir():
+        # os.scandir, not iterdir + is_dir + glob: the root holds ~13,700 project directories
+        # (most with no transcript, only a `memory` directory), and a Path, a stat and a glob
+        # object for each made this walk ~0.6 s, twice a backfill tick. The project name is
+        # decoded only for a directory that actually has a transcript.
+        try:
+            with os.scandir(base) as top:
+                projects = [e for e in top if e.is_dir()]
+        except OSError:
+            return
+        for proj_entry in projects:
+            proj_dir = Path(proj_entry.path)
+            try:
+                with os.scandir(proj_entry.path) as it:
+                    names = [e.name for e in it if e.name.endswith(".jsonl")]
+            except OSError:
+                continue
+            if not names:
                 continue
             # Decode dir name into canonical project name without truncating hyphenated names
             project = decode_claude_project_name(proj_dir.name)
-            for path in proj_dir.glob("*.jsonl"):
+            for name in names:
+                path = proj_dir / name
                 # skip the miner's own extraction sidechains (wake_cost.py's rule)
                 if path.parent.name.endswith("-osiris-extract"):
                     continue
