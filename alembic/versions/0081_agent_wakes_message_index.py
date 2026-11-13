@@ -11,22 +11,15 @@ dispatch_dm and the abandoned/wake-count lookups ask the same question per messa
 no sort. Built CONCURRENTLY (own autocommit block, as 0054, 0077, 0078 and 0079): a live table,
 ShareUpdateExclusiveLock only, never a reader or a writer.
 
-A concurrent build that fails part way (a deadlock, a cancel, a crash) leaves an INVALID index
-behind, and `CREATE INDEX CONCURRENTLY IF NOT EXISTS` then sees the name and does nothing, so a
-retry would "succeed" with an index the planner never uses. So the migration first looks for an
-invalid index of this name and drops it, then builds.
+A concurrent build that fails part way leaves an INVALID index behind, which
+`CREATE INDEX CONCURRENTLY IF NOT EXISTS` would silently keep; `src.db.concurrent_index` (the
+shared helper for every concurrent migration) drops such a leftover before it builds.
 
 Revision ID: 0081
 Revises: 0080
 """
-import sqlalchemy as sa
 from alembic import op
-
-# a leftover from a failed concurrent build: present in pg_class, not valid in pg_index
-INVALID_SQL = (
-    "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
-    "WHERE c.relname = 'agent_wakes_message_time' AND NOT i.indisvalid"
-)
+from src.db.concurrent_index import create_index_concurrently, drop_index_concurrently
 
 revision = "0081"
 down_revision = "0080"
@@ -35,16 +28,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    leftover = op.get_bind().execute(sa.text(INVALID_SQL)).scalar()
-    with op.get_context().autocommit_block():
-        if leftover:
-            op.execute("DROP INDEX CONCURRENTLY IF EXISTS agent_wakes_message_time")
-        op.execute(
-            "CREATE INDEX CONCURRENTLY IF NOT EXISTS agent_wakes_message_time "
-            "ON agent_wakes (message_id, woke_at DESC)"
-        )
+    create_index_concurrently(
+        op, "agent_wakes_message_time", "agent_wakes", "(message_id, woke_at DESC)")
 
 
 def downgrade() -> None:
-    with op.get_context().autocommit_block():
-        op.execute("DROP INDEX CONCURRENTLY IF EXISTS agent_wakes_message_time")
+    drop_index_concurrently(op, "agent_wakes_message_time")

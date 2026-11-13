@@ -40,7 +40,7 @@ def _run(which: str, *, leftover: bool = False) -> list[str]:
 
     class _Bind:
         @staticmethod
-        def execute(stmt: object) -> _Result:
+        def execute(stmt: object, params: object = None) -> _Result:
             seen.append("read: " + str(stmt))
             return _Result()
 
@@ -106,18 +106,16 @@ async def test_the_invalid_index_check_sees_a_broken_index_and_not_a_good_one(
 ) -> None:
     """The migration's own query, run against a real index marked invalid the way a failed
     concurrent build leaves it."""
-    spec = importlib.util.spec_from_file_location(
-        "m0081b", ROOT / "alembic" / "versions" / "0081_agent_wakes_message_index.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    from src.db.concurrent_index import INVALID_SQL
+
+    sql = INVALID_SQL.replace(":name", "$1")  # sqlalchemy's bind style, asyncpg's
     pool = actions.pool
 
-    assert await pool.fetchval(module.INVALID_SQL) is None  # the good index is not flagged
+    assert await pool.fetchval(sql, _INDEX) is None  # the good index is not flagged
     await pool.execute(
         "UPDATE pg_index SET indisvalid = false WHERE indexrelid = $1::regclass", _INDEX)
     try:
-        assert await pool.fetchval(module.INVALID_SQL) == 1
+        assert await pool.fetchval(sql, _INDEX) == 1
     finally:
         await pool.execute(
             "UPDATE pg_index SET indisvalid = true WHERE indexrelid = $1::regclass", _INDEX)
