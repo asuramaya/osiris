@@ -27,7 +27,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -3301,6 +3301,7 @@ async def mint_heir(
     # that is already a real generation is never a safe mint target, tip or not; the walk
     # steps past it, same as any other closed path.
     adopted_heal = False
+    reinstated_at = now
     for _ in range(64):
         row = await actions.pool.fetchrow(
             "SELECT id, status FROM objects WHERE canonical=$1 AND type='Agent'", heir)
@@ -3313,6 +3314,13 @@ async def mint_heir(
                 row["id"])
             if healed_at is not None and (now - healed_at).total_seconds() <= _SEAM_DEBOUNCE_SECS:
                 adopted_heal = True
+                # The reinstatement must read as NEWER than the heal it reverses. A fold and
+                # the mint that adopts its numeral share one `now` (live_succession folds the
+                # phantom and mints onto its numeral in one call), and readers pick the current
+                # false_mint by (confidence, observed_at): with equal stamps the pick between
+                # "true" and "false" was whichever row Postgres returned first, so a live heir
+                # sometimes read as a false mint (undeliverable mail, a refused registration).
+                reinstated_at = max(now, healed_at + timedelta(microseconds=1))
                 break
             if healed_at is None:
                 already_real = await actions.pool.fetchval(
@@ -3335,12 +3343,12 @@ async def mint_heir(
         # transaction, so a reader never sees one without the other.
         async with actions.atomic() as t:
             for k, v in (("false_mint", False), ("retired", False)):
-                await t.assert_property(a, k, v, heir, now, confidence_for(do),
+                await t.assert_property(a, k, v, heir, reinstated_at, confidence_for(do),
                                         evidence_class=do.value)
             await t.assert_property(
                 a, "reinstated_because",
                 "numeral adopted by a real heir within the debounce window of its fold",
-                heir, now, confidence_for(do), evidence_class=do.value)
+                heir, reinstated_at, confidence_for(do), evidence_class=do.value)
     await actions.assert_property(a, "succeeded_from", ancestor_id, heir, now,
                                   confidence_for(do), evidence_class=do.value)
     await actions.assert_property(a, "minted_because", because, heir, now,

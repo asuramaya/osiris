@@ -117,3 +117,29 @@ async def test_the_husk_heal_is_one_transaction_a_failed_unwind_leaves_no_flag(
     assert out["applied"] is True
     assert await _prop(actions, "agent:ea570099-iii", "false_mint") == "true"
     assert await _prop(actions, "agent:ea570099", "succeeded_by") in ("", None)
+
+
+async def test_the_reinstatement_reads_newer_than_a_fold_made_at_the_same_instant(
+    actions: Actions,
+) -> None:
+    """live_succession folds a phantom and mints onto its numeral in one call, so the fold and
+    the adopting mint share one `now`. The reinstatement must still read as the newer stamp:
+    with equal stamps the current false_mint was whichever row Postgres returned first."""
+    ancestor = "agent:adopt0004"
+    at = datetime.now(UTC)
+    heir = await _healed_numeral(actions, ancestor, at)
+    anc_oid = await actions.create_or_find_object("Agent", ancestor, "test")
+
+    got, _oid = await mint_heir(actions, ancestor, anc_oid, because="compaction",
+                                succession=None, now=at)
+
+    assert got == heir
+    for _ in range(20):  # a tie was resolved by plan and row order: read it many times
+        assert await _prop(actions, heir, "false_mint") == "false"
+        assert await _prop(actions, heir, "retired") == "false"
+    stamps = await actions.pool.fetch(
+        "SELECT a.value #>> '{}' AS v, a.observed_at FROM assertions a "
+        "JOIN objects o ON o.id=a.object_id WHERE o.canonical=$1 AND a.name='false_mint' "
+        "ORDER BY a.observed_at", heir)
+    assert [r["v"] for r in stamps] == ["true", "false"]
+    assert stamps[1]["observed_at"] > stamps[0]["observed_at"]

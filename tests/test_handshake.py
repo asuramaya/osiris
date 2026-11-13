@@ -361,10 +361,18 @@ async def test_two_zero_turn_compactions_fold(actions: Actions, tmp_path: Path) 
     third = await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
                             root=root, jobs_home=tmp_path / "jobs", source="compact")
     assert third["agent"] == "agent:39fb22a2-ii", "the silent '-ii' folds; the numeral is reused"
+    # the fold happened (the silent '-ii' was flagged a false mint) ...
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='agent:39fb22a2-ii' AND a.name='false_mint' "
+        "AND a.value #>> '{}' = 'true'") == 1
+    # ... and the numeral it freed was adopted by the live heir, so the CURRENT reading is the
+    # heir's own "not a false mint" (this asserted "true" and passed only by row order: the fold
+    # and the adopting mint carried the same stamp)
     assert await actions.pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical='agent:39fb22a2-ii' AND a.name='false_mint' "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1") == "true"
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1") == "false"
 
 
 async def test_automount_honors_a_bound_seat(actions: Actions, tmp_path: Path) -> None:
