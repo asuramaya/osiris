@@ -93,6 +93,15 @@ async def _no_windows() -> list[dict[str, Any]]:
 
 
 @pytest.fixture(autouse=True)
+def _no_settled_cache() -> Any:
+    """The sweep's settled-message cache is process state keyed by message id, and every test
+    database starts its ids over: a verdict cached by one test must not skip another's."""
+    trigger_module._SETTLED_SEEN.clear()
+    yield
+    trigger_module._SETTLED_SEEN.clear()
+
+
+@pytest.fixture(autouse=True)
 def _dark_manager(monkeypatch: pytest.MonkeyPatch) -> None:
     """HERMETIC by default: no test in this module may consult a live daemon socket on the
     dev box: the roster default resolves late, so darkening the module attribute covers
@@ -1961,8 +1970,117 @@ async def test_an_fyi_dm_never_wakes(actions: Actions, tmp_path: Path) -> None:
     assert d["mode"] == "queued-fyi"
     # and the backstop sweep holds the same line, two callers, one grammar
     rep = await trigger_mail_tick(actions, settings=st, spawn=_boom)
-    assert rep.get("dm_queued") == 1 and rep["woke"] == 0
+    # an fyi can never wake anyone, so the sweep no longer even re-dispatches it every tick
+    assert rep.get("dm_queued") is None and rep["woke"] == 0
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+
+
+async def test_an_ask_behind_an_fyi_in_the_same_addressees_slot_is_reached(
+    actions: Actions,
+) -> None:
+    """`_dms_with_unread` keeps ONE message per addressee, the oldest unread. A never-waking fyi
+    used to hold that slot forever and starve every ask queued behind it."""
+    fyi = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                             to_agent="agent:abcd1234", body="for the record", grade="fyi")
+    ask = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                             to_agent="agent:abcd1234", body="please act", grade="ask")
+
+    rows = await trigger_module._dms_with_unread(actions.pool, 900)
+
+    assert [(a, m) for a, m, _ in rows if a == "agent:abcd1234"] == [
+        ("agent:abcd1234", int(ask["id"]))]
+    assert int(fyi["id"]) not in [m for _, m, _ in rows]
+
+
+async def test_a_message_the_sweep_found_settled_is_skipped_for_an_hour_then_rechecked(
+    actions: Actions,
+) -> None:
+    """A verdict that cannot undo (settled by the addressee's lineage) is not re-dispatched every
+    tick, and does not hold the addressee's slot; after the recheck window it is looked at
+    again, and a worker restart (an empty cache) looks at everything."""
+    first = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                               to_agent="agent:abcd1234", body="settled by a successor")
+    second = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                                to_agent="agent:abcd1234", body="a real one")
+    trigger_module._SETTLED_SEEN.clear()
+
+    assert [m for _, m, _ in await trigger_module._dms_with_unread(actions.pool, 900)] == [
+        int(first["id"])]
+    trigger_module._remember_settled(int(first["id"]), 1000.0)
+
+    skip = trigger_module._settled_to_skip(1000.0 + 60)
+    assert skip == [int(first["id"])]
+    assert [m for _, m, _ in await trigger_module._dms_with_unread(actions.pool, 900, skip)] == [
+        int(second["id"])]
+    # an hour on, it is checked once more; a restart is the same as an empty cache
+    assert trigger_module._settled_to_skip(1000.0 + trigger_module._SETTLED_RECHECK_SECS) == []
+    trigger_module._SETTLED_SEEN.clear()
+
+
+async def test_the_sweep_remembers_a_settled_verdict_and_never_a_changeable_one(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ids = {}
+    for name in ("a", "b"):
+        out = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                                 to_agent=f"agent:{name}0000001", body=name)
+        ids[name] = int(out["id"])
+
+    async def _fake(pool: Any, *, addressee: str, msg_id: int, **kw: Any) -> dict[str, str]:
+        return {"mode": "settled" if addressee.startswith("agent:a") else "queued-human",
+                "detail": ""}
+
+    monkeypatch.setattr(trigger_module, "dispatch_dm", _fake)
+    trigger_module._SETTLED_SEEN.clear()
+
+    await trigger_mail_tick(actions, settings=_settings(enabled=True, sense="/nonexistent"))
+
+    assert ids["a"] in trigger_module._SETTLED_SEEN
+    assert ids["b"] not in trigger_module._SETTLED_SEEN  # queued-human can change: re-asked
+    trigger_module._SETTLED_SEEN.clear()
+
+
+async def test_the_dispatch_stamp_is_written_on_a_change_or_when_old_and_always_for_in_flight(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                             to_agent="agent:abcd1234", body="x")
+    msg_id = int(out["id"])
+    verdict = {"mode": "queued-human"}
+
+    async def _body(pool: Any, **kw: Any) -> dict[str, str]:
+        return {"mode": verdict["mode"], "detail": ""}
+
+    monkeypatch.setattr(trigger_module, "_dispatch_dm_body", _body)
+
+    async def stamp() -> Any:
+        return await actions.pool.fetchval(
+            "SELECT dispatch_mode_at FROM fleet_messages WHERE id=$1", msg_id)
+
+    async def run() -> None:
+        await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender", settings=_settings(enabled=True, sense=""))
+
+    await run()
+    first = await stamp()
+    assert first is not None
+    await run()
+    assert await stamp() == first  # the same verdict a moment later is not rewritten
+    verdict["mode"] = "mid-turn"
+    await run()
+    changed = await stamp()
+    assert changed > first  # a change is written
+    await actions.pool.execute(
+        "UPDATE fleet_messages SET dispatch_mode_at = now() - interval '6 minutes' "
+        "WHERE id=$1", msg_id)
+    old = await stamp()
+    await run()
+    assert await stamp() > old  # a five-minute-old stamp is refreshed
+    verdict["mode"] = "queued-wake-in-flight"
+    await run()
+    before = await stamp()
+    await run()
+    assert await stamp() > before  # in-flight is always written: another lane reads its age
 
 
 # ═══ BROADCAST DISPATCH (task #151): the same grammar as a DM's, applied to the surface it

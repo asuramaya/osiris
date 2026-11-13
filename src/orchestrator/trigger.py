@@ -25,7 +25,7 @@ import re
 import tempfile
 import time
 import weakref
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
@@ -672,17 +672,25 @@ def _window_for(windows: list[dict[str, Any]], anchor_sids: set[str]) -> str | N
 
 
 async def _dms_with_unread(
-    pool: asyncpg.Pool, lease_secs: int
+    pool: asyncpg.Pool, lease_secs: int, skip_ids: Sequence[int] = (),
 ) -> list[tuple[str, int, str | None]]:
     """(addressee, oldest deliverable DM id, sender) for every agent with unsettled DM mail.
     Each row feeds dispatch_dm (the background-session adapter): deliver to a mid-turn
     addressee, poke an open manager window, resume the backgrounded session. There is no mint
     lane: a freshly spawned copy is not the addressee, and a private message must never be
     delivered to the wrong session. Undeliverable DMs stay pull-only (and follow the seat to
-    its next spawned session)."""
+    its next spawned session).
+
+    Two kinds of message never take an addressee's single slot, because neither can ever wake
+    anyone and each would starve the ask queued behind it: a grade='fyi' (it never wakes: the
+    documented loop terminator, and a grade does not change), and any id in `skip_ids` (the
+    sweep passes the ones it has already found settled by the addressee's lineage, a verdict
+    that cannot undo). Re-dispatching those ~110 messages every tick was most of this cron's
+    time."""
     rows = await pool.fetch(
         "SELECT DISTINCT ON (m.to_agent) m.to_agent, m.id, m.from_agent FROM fleet_messages m "
         "WHERE m.to_agent IS NOT NULL AND m.to_agent <> $1 AND m.read_at IS NULL "
+        "AND m.grade IS DISTINCT FROM 'fyi' AND m.id <> ALL($3::bigint[]) "
         "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
         "  AND r.agent_id=m.to_agent AND r.read_at IS NOT NULL) "
         "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
@@ -693,8 +701,28 @@ async def _dms_with_unread(
         # and starve every newer ask behind it, including one that was told 'mid-turn'.
         "AND COALESCE((SELECT w.mode FROM agent_wakes w WHERE w.message_id=m.id "
         "  ORDER BY w.woke_at DESC LIMIT 1), '') NOT IN ('dm-reply', 'dm-resume', 'dm-poke') "
-        "ORDER BY m.to_agent, m.created_at", OPERATOR_ADDR, lease_secs)
+        "ORDER BY m.to_agent, m.created_at", OPERATOR_ADDR, lease_secs, list(skip_ids))
     return [(r["to_agent"], r["id"], r["from_agent"]) for r in rows]
+
+
+# message id -> when the sweep found it settled by the addressee's lineage. That verdict cannot
+# undo (a read is never un-read), so the sweep stops re-dispatching it for an hour. In-process
+# only: a worker restart starts empty, and the hour re-checks anything that was cached.
+_SETTLED_SEEN: dict[int, float] = {}
+_SETTLED_RECHECK_SECS = 3600.0
+_SETTLED_MAX = 20000
+
+
+def _settled_to_skip(now: float) -> list[int]:
+    for stale in [i for i, at in _SETTLED_SEEN.items() if now - at >= _SETTLED_RECHECK_SECS]:
+        del _SETTLED_SEEN[stale]
+    return list(_SETTLED_SEEN)
+
+
+def _remember_settled(msg_id: int, now: float) -> None:
+    if len(_SETTLED_SEEN) >= _SETTLED_MAX:
+        _SETTLED_SEEN.clear()  # bounded: a flood costs a re-dispatch each, never memory
+    _SETTLED_SEEN[msg_id] = now
 
 
 async def _stuck_wake_in_flight_asks(
@@ -2364,8 +2392,14 @@ async def dispatch_dm(
                 spawn_gate=spawn_gate)
     except SpawnInProgress:
         return _SPAWN_BUSY_MODE(key or addressee)
+    # The stamp is audit-only, except that the stuck-wake lane reads `dispatch_mode_at` of a
+    # 'queued-wake-in-flight' message to know its window has elapsed. So that mode is always
+    # written; any other is written when it changed or its stamp is five minutes old. The sweep
+    # used to rewrite every unsettled message's row on every tick (~150 UPDATEs per 30 s).
     await pool.execute(
-        "UPDATE fleet_messages SET dispatch_mode=$1, dispatch_mode_at=now() WHERE id=$2",
+        "UPDATE fleet_messages SET dispatch_mode=$1, dispatch_mode_at=now() WHERE id=$2 "
+        "AND ($1 = 'queued-wake-in-flight' OR dispatch_mode IS DISTINCT FROM $1 "
+        "     OR dispatch_mode_at IS NULL OR dispatch_mode_at < now() - interval '5 minutes')",
         result["mode"], msg_id)
     return result
 
@@ -6365,13 +6399,17 @@ async def trigger_mail_tick(
     # mid-turn) retries here once the gate lifts. Two callers, one grammar, no drift.
     # No mint, ever: a private message is never handed to a stranger. An unresumable
     # addressee's DM stays pull-only and follows the seat at the next mint.
-    for agent_id, msg_id, sender in await _dms_with_unread(pool, st.osiris_mail_lease_secs):
+    sweep_now = time.monotonic()
+    for agent_id, msg_id, sender in await _dms_with_unread(
+            pool, st.osiris_mail_lease_secs, _settled_to_skip(sweep_now)):
         if not st.osiris_trigger_enabled:
             report["skipped"] += 1
             continue
         d = await dispatch_dm(pool, addressee=agent_id, msg_id=msg_id, sender=sender,
                               settings=st, spawn=spawn, windows=windows, poke=poke)
         mode = d["mode"]
+        if mode == "settled":
+            _remember_settled(msg_id, sweep_now)
         if mode == "resumed":
             report["resumed"] += 1
             report["woke"] += 1
