@@ -1,0 +1,9 @@
+[Unit]
+Description=Osiris at-home list (daily): one desk line when something waits only on the operator
+
+[Timer]
+OnCalendar=*-*-* 09:40:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

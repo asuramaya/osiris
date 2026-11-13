@@ -96,7 +96,7 @@ JSON_COMMANDS = frozenset({
     # is the timer's own ExecStart, safe to run by hand.
     "restic-key", "offload-runner",
     # the envelope drill: results as one JSON line, for a script that reads them
-    "envelope-drill",
+    "envelope-drill", "at-home",
     # the miner's proposals list for a script
     "proposals",
 })
@@ -380,3 +380,22 @@ async def test_cmd_envelope_drill_emits_json(monkeypatch: Any, capsys: Any) -> N
     assert await cmd_envelope_drill(pool=object(), as_json=True) == 0  # type: ignore[arg-type]
     body = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert body["results"][0]["status"] == "proved"
+
+
+async def test_cmd_at_home_emits_json(monkeypatch: Any, capsys: Any) -> None:
+    import json
+
+    from src.cli import cmd_at_home
+    from src.orchestrator import at_home
+
+    async def sources(pool: Any, **kw: Any) -> Any:
+        return at_home.Sources(
+            envelope=lambda: {"configured": False}, nas_target=lambda: None,
+            offload_receipt=lambda n: {}, drill_receipt=lambda u: {},
+            presence=lambda t: {}, plaintext_thread_open=lambda: True)
+
+    monkeypatch.setattr(at_home, "real_sources", sources)
+
+    assert await cmd_at_home(pool=object(), as_json=True) == 0  # type: ignore[arg-type]
+    body = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert body["pending"] >= 1 and body["items"]

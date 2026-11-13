@@ -1,0 +1,10 @@
+[Unit]
+Description=Osiris at-home list (read-only; tells the operator's desk once what waits only on them being there)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/osiris
+Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris?application_name=osiris-at-home
+Environment=REDIS_URL=redis://127.0.0.1:6396/0
+TimeoutStartSec=300
+ExecStart=%h/code/osiris/.venv/bin/python -m src.cli at-home --notify

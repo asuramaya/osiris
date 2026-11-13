@@ -5432,6 +5432,21 @@ async def _fn_backup_status(
     except Exception as exc:  # noqa: BLE001 - one section never blanks the panel
         envelope_out = {"error": f"envelope status unavailable: {type(exc).__name__}"}
 
+    # WHAT IS WAITING ONLY ON THE OPERATOR BEING PHYSICALLY THERE (osiris at-home): read-only.
+    try:
+        import asyncio as _asyncio
+
+        from src.orchestrator import at_home
+
+        home = await _asyncio.to_thread(
+            at_home.checklist, await at_home.real_sources(pool))
+        at_home_out: dict[str, Any] = {
+            "pending": home["pending"], "done": home["done"],
+            "items": [{k: i[k] for k in ("key", "title", "status", "why", "command")}
+                      for i in home["items"]]}
+    except Exception as exc:  # noqa: BLE001 - one section never blanks the panel
+        at_home_out = {"error": f"at-home list unavailable: {type(exc).__name__}"}
+
     # THE DISK/WAL BRAKE: whether the bulk-rewrite jobs are paused right now, and why
     try:
         from src.orchestrator.disk_brake import brake_state
@@ -5461,6 +5476,7 @@ async def _fn_backup_status(
         "pitr_drill": pitr_section,
         "missed_runs": missed_out,
         "envelope": envelope_out,
+        "at_home": at_home_out,
         "offbox": offbox_section,
     }
 
