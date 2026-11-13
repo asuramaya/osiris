@@ -122,3 +122,40 @@ async def test_a_practice_already_linked_is_never_rescanned(actions: Actions) ->
 
     out = await resolve_practice_orphans(actions)
     assert out["scanned"] == 0
+
+
+async def test_a_retired_link_is_held_and_the_heartbeat_stops_re_planning_it(
+    actions: Actions,
+) -> None:
+    """Four live practices read to_mint 4 on every tick: each had a link that was deliberately
+    invalidated, which derive_or_abstain never recreates. The result says held, and the
+    heartbeat's scan (skip_judged) leaves them out; a manual or dry-run scan still sees them."""
+    d1 = await record_decision(actions, "a ruling under repo:heldproj", source="agent:wp9")
+    await link_repo(actions, d1, "heldproj", _NOW)
+    practice = await _practice_witnessing(actions, "practice:held", d1)
+    first = await resolve_practice_orphans(actions, dry_run=False, because="test")
+    assert "practice:held" in {p["canonical"] for p in first["plan"] if p["verdict"] == "mint"}
+    project = await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='in_repo'", practice)
+    await actions.invalidate_link(practice, project, "in_repo", "test", _NOW,  # type: ignore[arg-type]
+                                  reason="retired on purpose")
+
+    again = await resolve_practice_orphans(actions, dry_run=False, because="test")
+    [entry] = [p for p in again["plan"] if p["canonical"] == "practice:held"]
+    assert entry["verdict"] == "already_linked" and again["held"] >= 1
+    beat = await resolve_practice_orphans(
+        actions, dry_run=False, because="test", skip_judged=True)
+    assert "practice:held" not in {p["canonical"] for p in beat["plan"]}
+    manual = await resolve_practice_orphans(actions)  # dry run
+    assert "practice:held" in {p["canonical"] for p in manual["plan"]}
+
+
+async def test_the_heartbeat_does_not_walk_a_practice_it_already_abstained_on(
+    actions: Actions,
+) -> None:
+    practice = await _practice_witnessing(actions, "practice:judgedonce")  # no witnesses
+    await resolve_practice_orphans(actions, dry_run=False, because="test", skip_judged=True)
+    beat = await resolve_practice_orphans(
+        actions, dry_run=False, because="test", skip_judged=True)
+    assert "practice:judgedonce" not in {p["canonical"] for p in beat["plan"]}
+    assert practice is not None
