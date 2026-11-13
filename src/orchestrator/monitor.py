@@ -654,7 +654,7 @@ async def _load_event(pool: asyncpg.Pool, row: asyncpg.Record) -> GraphEvent:
         if name:
             value = await pool.fetchval(
                 "SELECT value #>> '{}' FROM current_assertions "
-                "WHERE object_id=$1 AND name=$2 ORDER BY observed_at DESC LIMIT 1",
+                "WHERE object_id=$1 AND name=$2 ORDER BY observed_at DESC, id DESC LIMIT 1",
                 row["object_id"],
                 name,
             )
@@ -664,7 +664,7 @@ async def _load_event(pool: asyncpg.Pool, row: asyncpg.Record) -> GraphEvent:
         # after the tick), so a beat can match the whole object on its creation event.
         for r in await pool.fetch(
             "SELECT DISTINCT ON (name) name, value #>> '{}' AS v FROM current_assertions "
-            "WHERE object_id=$1 ORDER BY name, observed_at DESC",
+            "WHERE object_id=$1 ORDER BY name, observed_at DESC, id DESC",
             row["object_id"],
         ):
             props[r["name"]] = r["v"]

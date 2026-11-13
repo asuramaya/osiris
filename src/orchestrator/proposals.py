@@ -426,7 +426,7 @@ async def reopen(
     old = await actions.pool.fetchrow(
         "SELECT a.id, a.value #>> '{}' AS value FROM current_assertions a "
         "WHERE a.object_id=$1 AND a.name='reject_reason' "
-        "ORDER BY a.observed_at DESC LIMIT 1", row["id"])
+        "ORDER BY a.observed_at DESC, a.id DESC LIMIT 1", row["id"])
     if old is not None:
         await actions.supersede_assertion(
             row["id"], "reject_reason", old["id"], f"withdrawn: {old['value']}", actor, now,

@@ -2445,7 +2445,7 @@ async def _object_card(p: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, Any] 
     rows = await p.fetch(
         "SELECT DISTINCT ON (name) name, value #>> '{}' AS v, source_id, evidence_class, "
         "  confidence, observed_at FROM current_assertions WHERE object_id=$1 "
-        "ORDER BY name, observed_at DESC",
+        "ORDER BY name, observed_at DESC, id DESC",
         object_id,
     )
     props: list[dict[str, Any]] = []

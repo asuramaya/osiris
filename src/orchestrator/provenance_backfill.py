@@ -176,7 +176,7 @@ async def _anchor_sids(pool: asyncpg.Pool, agent_id: str) -> list[str]:
         "JOIN objects o ON o.id = a.object_id "
         "WHERE o.type = 'Agent' AND a.name LIKE 'anchor_sid:%' "
         "AND (o.canonical = $1 OR o.canonical = $2 OR o.canonical LIKE $2 || '-%') "
-        "ORDER BY a.observed_at DESC LIMIT $3",
+        "ORDER BY a.observed_at DESC, a.id DESC LIMIT $3",
         agent_id, base, _MAX_SIDS_PER_WRITER)
     return [str(r["sid"]) for r in rows if r["sid"]]
 

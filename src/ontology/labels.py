@@ -49,7 +49,7 @@ async def fetch_label_props(
     rows = await pool.fetch(
         "SELECT DISTINCT ON (object_id, name) object_id, name, value #>> '{}' AS v "
         "FROM current_assertions WHERE object_id = ANY($1::uuid[]) AND name = ANY($2::text[]) "
-        "ORDER BY object_id, name, confidence DESC NULLS LAST, observed_at DESC",
+        "ORDER BY object_id, name, confidence DESC NULLS LAST, observed_at DESC, id DESC",
         ids, list(LABEL_CHAIN))
     out: dict[uuid.UUID, dict[str, Any]] = {}
     for r in rows:

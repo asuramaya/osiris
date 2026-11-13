@@ -633,7 +633,7 @@ async def find_session_row(
         "SELECT o.canonical FROM current_assertions a "
         "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
         "WHERE a.name = 'anchor_sid:' || $1 "
-        "ORDER BY a.observed_at DESC LIMIT 1", sid8)
+        "ORDER BY a.observed_at DESC, a.id DESC LIMIT 1", sid8)
     if owner is None:
         owner = f"agent:{sid8}"  # lane 3: self-evident. Falls through to the same
         # base-lineage query below, which naturally returns None if no such lineage ever
@@ -1188,14 +1188,14 @@ async def _lineage_transcript_mtime(
             "JOIN objects o ON o.id=a.object_id "
             "WHERE o.type='Agent' AND a.name LIKE 'anchor_sid:%' "
             "AND (o.canonical=$1 OR o.canonical=$2 OR o.canonical LIKE $2 || '-%') "
-            "ORDER BY a.observed_at DESC LIMIT $3",
+            "ORDER BY a.observed_at DESC, a.id DESC LIMIT $3",
             agent_id, base, MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK)
     else:
         rows = await pool.fetch(
             "SELECT a.value #>> '{}' AS sid FROM current_assertions a "
             "JOIN objects o ON o.id=a.object_id "
             "WHERE o.type='Agent' AND a.name LIKE 'anchor_sid:%' AND o.canonical=$1 "
-            "ORDER BY a.observed_at DESC LIMIT $2",
+            "ORDER BY a.observed_at DESC, a.id DESC LIMIT $2",
             agent_id, MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK)
     sids = [r["sid"] for r in rows]
     # A session-derived identity (the agent id IS the first eight characters of its
@@ -1289,7 +1289,7 @@ async def agents_live(pool: asyncpg.Pool, agent_ids: list[str]) -> dict[str, boo
                 "  WHERE o.type = 'Agent' AND a.name LIKE 'anchor_sid:%' "
                 "    AND (o.canonical = h.aid OR o.canonical = h.base "
                 "         OR o.canonical LIKE h.base || '-%') "
-                "  ORDER BY a.observed_at DESC LIMIT $3) s",
+                "  ORDER BY a.observed_at DESC, a.id DESC LIMIT $3) s",
                 [a for a, _ in needy], [b for _, b in needy],
                 MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK):
             sids[r["aid"]].append(r["sid"])

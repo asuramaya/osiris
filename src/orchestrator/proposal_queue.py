@@ -162,7 +162,7 @@ async def pending(pool: asyncpg.Pool) -> list[dict[str, Any]]:
             target, what = "(new)", "create"
         miner = await pool.fetchval(
             "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id = $1 "
-            "AND a.name = 'miner' ORDER BY a.observed_at DESC LIMIT 1", row["id"])
+            "AND a.name = 'miner' ORDER BY a.observed_at DESC, a.id DESC LIMIT 1", row["id"])
         rows.append({
             "ref": r["canonical"], "title": title, "type": otype, "target": target,
             "link": what, "signal": cand.get("signal") or "", "miner": miner or "",

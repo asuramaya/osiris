@@ -305,7 +305,7 @@ async def _lineage_handle(actions: Actions, base: str) -> str | None:
         "SELECT h.value #>> '{}' FROM current_assertions h "
         "JOIN objects ho ON ho.id=h.object_id AND ho.type='Agent' "
         "WHERE h.name='handle' AND (ho.canonical=$1 OR ho.canonical LIKE $1||'-%') "
-        "ORDER BY h.observed_at DESC LIMIT 1", base)
+        "ORDER BY h.observed_at DESC, h.id DESC LIMIT 1", base)
     return str(val) if val else None
 
 
@@ -340,7 +340,7 @@ async def office_seat(
         "SELECT o.canonical FROM current_assertions d "
         "JOIN objects o ON o.id=d.object_id AND o.type='Agent' AND o.status='active' "
         "WHERE d.name='office' AND d.value #>> '{}' = $1 "
-        "ORDER BY d.observed_at DESC LIMIT 1", cwd)
+        "ORDER BY d.observed_at DESC, d.id DESC LIMIT 1", cwd)
     if deeded:
         base = _generation(str(deeded))[0]
         handle = await _lineage_handle(actions, base)
@@ -471,7 +471,7 @@ async def ledger_seat(actions: Actions, *, sid_prefix: str) -> str | None:
         "SELECT o.canonical FROM current_assertions a "
         "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
         "WHERE a.name = 'anchor_sid:' || $1 "
-        "ORDER BY a.observed_at DESC LIMIT 1", _sid8(sid))
+        "ORDER BY a.observed_at DESC, a.id DESC LIMIT 1", _sid8(sid))
     if owner is None:
         return None
     base = _generation(str(owner))[0]
@@ -1350,7 +1350,7 @@ async def automount(
             "SELECT d.value #>> '{}' FROM current_assertions d "
             "JOIN objects o ON o.id = d.object_id AND o.status = 'active' "
             "WHERE d.name = 'office' AND (o.canonical = $1 OR o.canonical LIKE $1 || '-%') "
-            "ORDER BY d.observed_at DESC LIMIT 1", base)
+            "ORDER BY d.observed_at DESC, d.id DESC LIMIT 1", base)
         # PREFER THE CHARTER FILE: a seat's charter.md is its own hand-maintained live
         # state, the offload target, richer and fresher than the standing orders. automount
         # runs on the same host as the office it names, so a disk check is a legitimate

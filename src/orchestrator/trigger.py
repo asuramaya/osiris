@@ -591,7 +591,7 @@ async def _repo_path(pool: asyncpg.Pool, project: str) -> str | None:
         "JOIN current_assertions pr ON pr.object_id=o.id AND pr.name='project' "
         "JOIN current_assertions cw ON cw.object_id=o.id AND cw.name='cwd' "
         "WHERE o.type='Agent' AND pr.value #>> '{}' = $1 "
-        "ORDER BY cw.observed_at DESC LIMIT 1", project)
+        "ORDER BY cw.observed_at DESC, cw.id DESC LIMIT 1", project)
 
 
 _RESUME_PROMPT = (
@@ -1009,7 +1009,7 @@ async def _paused(pool: asyncpg.Pool, canonicals: list[str]) -> str | None:
         "SELECT DISTINCT ON (o.canonical) o.canonical, a.value #>> '{}' AS v "
         "FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical = ANY($1::text[]) AND a.name='paused' "
-        "ORDER BY o.canonical, a.observed_at DESC", canonicals)
+        "ORDER BY o.canonical, a.observed_at DESC, a.id DESC", canonicals)
     for r in rows:
         if str(r["v"]).lower() == "true":
             return str(r["canonical"])
@@ -4084,7 +4084,7 @@ async def _harness_row_seat(pool: asyncpg.Pool, row: dict[str, Any]) -> str | No
     owner = await pool.fetchval(
         "SELECT o.canonical FROM current_assertions a "
         "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
-        "WHERE a.name = 'anchor_sid:' || $1 ORDER BY a.observed_at DESC LIMIT 1", sid8)
+        "WHERE a.name = 'anchor_sid:' || $1 ORDER BY a.observed_at DESC, a.id DESC LIMIT 1", sid8)
     if owner is None:
         base = f"agent:{sid8}"
         owner = await pool.fetchval(
