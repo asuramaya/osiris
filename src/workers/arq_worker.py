@@ -1754,6 +1754,43 @@ async def graph_layout_heartbeat(ctx: dict[str, Any]) -> int:
     return placed
 
 
+# STALE CRON TICKS: arq keeps each cron job's next_run across a suspend or a stall and enqueues
+# one tick per missed slot, so a worker that was away for hours finds hours of five-second ticks
+# queued and works through them one by one, hours late (the journal read `delayed=23093s`).
+# Each of those runs does real work and takes a pool slot, so the backlog never drained. A tick
+# of a short-cadence job that is already several cadences old says nothing the next fresh tick
+# will not, so it is dropped unrun. Daily and nightly jobs (cadence of an hour or more) are never
+# dropped here: their own catch-up and night-window gates decide what a late slot means.
+_STALE_TICK_MAX_CADENCE_SECS = 3600
+_STALE_TICK_FACTOR = 3.0
+_STALE_TICK_FLOOR_SECS = 30.0  # ordinary queue lag (a boot burst) is never stale
+_STALE_LOG_EVERY_SECS = 300.0
+_stale_skipped: dict[str, int] = {}
+_stale_logged_at: dict[str, float] = {}
+
+
+def _is_stale_tick(name: str, ctx: dict[str, Any], every: int,
+                   now: float | None = None) -> bool:
+    """True when this tick of a short-cadence job was due more than three cadences ago (and
+    more than the floor): drop it. One log line per job name per window, with the count."""
+    if every <= 0 or every >= _STALE_TICK_MAX_CADENCE_SECS:
+        return False
+    score = ctx.get("score")
+    if not isinstance(score, (int, float)):
+        return False
+    current = time.time() if now is None else now
+    late = current - score / 1000.0
+    if late <= max(_STALE_TICK_FACTOR * every, _STALE_TICK_FLOOR_SECS):
+        return False
+    _stale_skipped[name] = _stale_skipped.get(name, 0) + 1
+    if current - _stale_logged_at.get(name, 0.0) >= _STALE_LOG_EVERY_SECS:
+        _log.info("%s: skipped %d stale tick(s), the newest %.0f s late (cadence %d s)",
+                  name, _stale_skipped[name], late, every)
+        _stale_logged_at[name] = current
+        _stale_skipped[name] = 0
+    return True
+
+
 def watched(fn: Any, *, every: int, heavy: bool = False) -> Any:
     """THE SEAM WHERE A JOB CANNOT LIE ABOUT ITS OWN HEALTH.
 
@@ -1783,6 +1820,8 @@ def watched(fn: Any, *, every: int, heavy: bool = False) -> Any:
     """
     @functools.wraps(fn)
     async def run(ctx: dict[str, Any]) -> int:
+        if _is_stale_tick(fn.__name__, ctx, every):
+            return 0
         deadline = ctx.get("boot_serialize_until")
         if deadline is not None and time.monotonic() < deadline:
             if heavy:

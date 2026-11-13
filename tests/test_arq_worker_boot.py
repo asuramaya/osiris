@@ -162,3 +162,67 @@ async def test_boot_memtrace_aborts_early_on_the_rss_tripwire(
     monkeypatch.setattr(arq_worker, "_proc_mem_kb", _hot)
     await arq_worker._boot_memtrace(300.0)  # must not wait out the full 300s
     assert not tracemalloc.is_tracing()
+
+
+# --- stale cron ticks ------------------------------------------------------------------------
+
+def _tick_ctx(late_secs: float) -> dict[str, Any]:
+    ctx = _fake_ctx(boot_serialize_until=None)
+    ctx["score"] = (time.time() - late_secs) * 1000.0
+    return ctx
+
+
+@pytest.fixture(autouse=True)
+def _fresh_stale_counters(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(arq_worker, "_stale_skipped", {})
+    monkeypatch.setattr(arq_worker, "_stale_logged_at", {})
+
+
+async def test_a_short_cadence_tick_hours_late_is_dropped_unrun() -> None:
+    ran: list[int] = []
+
+    async def job(ctx: dict[str, Any]) -> int:
+        ran.append(1)
+        return 1
+
+    wrapped = arq_worker.watched(job, every=5)
+    assert await wrapped(_tick_ctx(23093.0)) == 0
+    assert ran == []  # the replayed tick of 6.4 h ago did no work
+    assert await wrapped(_tick_ctx(2.0)) == 1  # a fresh tick runs as always
+    assert ran == [1]
+
+
+async def test_ordinary_queue_lag_and_daily_jobs_are_never_dropped() -> None:
+    ran: list[str] = []
+
+    async def quick(ctx: dict[str, Any]) -> int:
+        ran.append("quick")
+        return 1
+
+    async def nightly(ctx: dict[str, Any]) -> int:
+        ran.append("nightly")
+        return 1
+
+    # 20 s behind a 5 s cadence is 4 cadences but under the 30 s floor: queue lag, not a backlog
+    assert await arq_worker.watched(quick, every=5)(_tick_ctx(20.0)) == 1
+    # a daily job hours late is the catch-up and night-window gates' business, never dropped here
+    assert await arq_worker.watched(nightly, every=86400)(_tick_ctx(23093.0)) == 1
+    # a tick with no score (not from the cron queue) is not judged
+    assert await arq_worker.watched(quick, every=5)(
+        _fake_ctx(boot_serialize_until=None)) == 1
+    assert ran == ["quick", "nightly", "quick"]
+
+
+async def test_stale_ticks_log_once_per_window_with_the_count(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def job(ctx: dict[str, Any]) -> int:
+        return 1
+
+    wrapped = arq_worker.watched(job, every=5)
+    with caplog.at_level("INFO", logger="osiris.worker"):
+        for _ in range(50):
+            await wrapped(_tick_ctx(23000.0))
+    lines = [r.message for r in caplog.records if "stale tick" in r.message]
+    assert len(lines) == 1 and "job: skipped 1 stale tick" in lines[0]
+    assert arq_worker._stale_skipped["job"] == 49  # counted, reported with the next line
