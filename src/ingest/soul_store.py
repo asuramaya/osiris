@@ -172,7 +172,8 @@ _INGEST_BATCH_LINES = 2000  # rows per INSERT + progress checkpoint
 
 
 def _iter_complete_line_batches(
-    source_path: str, batch_lines: int = _INGEST_BATCH_LINES,
+    source_path: str, batch_lines: int = _INGEST_BATCH_LINES, start_offset: int = 0,
+    progress: list[int] | None = None,
 ) -> Iterator[list[bytes]]:
     """Stream `source_path` in bounded chunks, yielding lists of up to `batch_lines`
     COMPLETE lines each: never holding the whole file, nor the whole split line list,
@@ -187,20 +188,32 @@ def _iter_complete_line_batches(
     Pure generator, no I/O interleaved with a caller's own async work inside the loop
     body: the file handle stays open only for the duration of iteration, a sync
     generator is fine here for the same blocking-call-lint reasoning `_read_source`
-    already documents (the read is blocking either way)."""
+    already documents (the read is blocking either way).
+
+    `start_offset` begins reading there, which the caller guarantees is the first byte of a line
+    (the byte before it is a newline). `progress[0]`, when given, is kept at the file offset just
+    after the last complete line read, so a caller that finishes can resume from it."""
     batch: list[bytes] = []
     carry = b""
+    read_to = start_offset
+    if progress is not None:
+        progress[0] = start_offset
     with open(source_path, "rb") as f:
+        if start_offset:
+            f.seek(start_offset)
         while True:
             chunk = f.read(_STREAM_CHUNK_BYTES)
             if not chunk:
                 break
+            read_to += len(chunk)
             data = carry + chunk
             end = data.rfind(b"\n")
             if end == -1:
                 carry = data  # no complete line in this window yet, keep accumulating
                 continue
             complete, carry = data[:end], data[end + 1:]
+            if progress is not None:
+                progress[0] = read_to - len(carry)
             batch.extend(complete.split(b"\n"))
             while len(batch) >= batch_lines:
                 yield batch[:batch_lines]
@@ -209,6 +222,33 @@ def _iter_complete_line_batches(
         yield batch
     # `carry`, if non-empty here, is a trailing unterminated fragment, dropped exactly
     # as `_split_lines` drops it; the next sweep re-reads it once it's `\n`-complete.
+
+
+# (harness, anchor_sid, source_path) -> (lines ingested, byte offset just after the last of them,
+# the file's inode). A growing transcript is 300 to 570 MB on this box, and every tick used to
+# read it again from byte 0, counting and discarding the lines already stored: ~0.5 s a session,
+# 2 to 3 s a tick for the handful that are active. With this the next tick seeks to where the
+# last one stopped. Process-local: after a restart each file is read once from the start.
+_RESUME_POINTS: dict[tuple[str, str, str], tuple[int, int, int]] = {}
+_RESUME_POINTS_MAX = 4096
+
+
+def _resume_offset(key: tuple[str, str, str], since: int, source_path: str) -> int:
+    """The byte offset to resume from, or 0 (read from the start). Only when the store holds
+    exactly the lines this process last ingested for that file, the file is the same inode and
+    no shorter than the offset, and the byte before the offset is a newline."""
+    point = _RESUME_POINTS.get(key)
+    if point is None or since <= 0 or point[0] != since:
+        return 0
+    try:
+        st = os.stat(source_path)
+        if st.st_ino != point[2] or st.st_size < point[1]:
+            return 0
+        with open(source_path, "rb") as f:
+            f.seek(point[1] - 1)
+            return point[1] if f.read(1) == b"\n" else 0
+    except OSError:
+        return 0
 
 
 def _path_mtime(path: Path) -> datetime | None:
@@ -713,10 +753,18 @@ class SoulStore:
         await ensure_dictionaries(self.pool)
         harness = harness or self._detect_harness(source_path)
         since, prev_hash = await self._progress(anchor_sid, harness=harness)
-        seen = 0
+        resume_key = (harness, anchor_sid, source_path)
+        start_offset = _resume_offset(resume_key, since, source_path)
+        seen = since if start_offset else 0  # the lines before the offset are already counted
         idx = since
         total_new = 0
-        for batch in _iter_complete_line_batches(source_path):
+        progress = [start_offset]
+        try:
+            inode: int | None = os.stat(source_path).st_ino  # before the read: see _RESUME_POINTS
+        except OSError:
+            inode = None
+        for batch in _iter_complete_line_batches(
+                source_path, start_offset=start_offset, progress=progress):
             # skip lines already ingested: counted, never hashed or held past this loop
             skip = max(0, since - seen)
             seen += len(batch)
@@ -750,6 +798,12 @@ class SoulStore:
                     await self._checkpoint(
                         harness, anchor_sid, source_path, idx, prev_hash, conn=conn)
             total_new += len(rows)
+        if inode is not None and idx > 0 and seen == idx:
+            if len(_RESUME_POINTS) >= _RESUME_POINTS_MAX:
+                _RESUME_POINTS.clear()
+            _RESUME_POINTS[resume_key] = (idx, progress[0], inode)
+        else:
+            _RESUME_POINTS.pop(resume_key, None)
         if total_new == 0 and since > 0 and seen == since:
             # THE STORE'S CLOCK IS "LAST SYNCED", NOT "LAST GREW": a full scan that
             # finds the file holds EXACTLY the lines the store already has is a

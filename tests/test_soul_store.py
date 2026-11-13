@@ -2544,3 +2544,100 @@ async def test_rewrap_soul_lines_key_broken_sample_is_capped(
         store.pool, new_fernet=new_fernet, old_fernet=wrong_old_fernet, dry_run=True)
     assert out["hot_broken_count"] == 5
     assert len(out["hot_broken_sample"]) == 2
+
+
+# --- a growing transcript resumes from the byte offset the last tick stopped at ----------------
+# (the worker re-read every active 300 to 570 MB transcript from byte 0 on every tick, counting
+# and discarding the lines already stored: 2 to 3 s of backfill_transcripts a tick)
+
+
+async def _spy_offsets(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    from typing import Any
+
+    from src.ingest import soul_store
+
+    seen: list[int] = []
+    real = soul_store._iter_complete_line_batches
+
+    def spy(source_path: str, batch_lines: int = 2000, start_offset: int = 0,
+            progress: list[int] | None = None) -> Any:
+        seen.append(start_offset)
+        return real(source_path, batch_lines, start_offset, progress)
+
+    monkeypatch.setattr(soul_store, "_iter_complete_line_batches", spy)
+    soul_store._RESUME_POINTS.clear()
+    return seen
+
+
+async def test_a_growing_transcript_resumes_from_where_the_last_tick_stopped(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    offsets = await _spy_offsets(monkeypatch)
+    lines = _synthetic_lines(9)
+    source = _write_transcript(tmp_path / "s" / "aaaa1111-session.jsonl", lines[:5])
+    assert await store.ingest_path(str(source), "aaaa1111") == 5
+    first_size = source.stat().st_size
+    with source.open("a") as fh:
+        fh.write("\n".join(lines[5:]) + "\n")
+
+    assert await store.ingest_path(str(source), "aaaa1111") == 4
+
+    assert offsets == [0, first_size]  # the second tick did not read the first 5 lines again
+    assert await store.verify_chain("aaaa1111", harness="claude-code") is True
+    # the chain is exactly what a from-scratch read of the whole file gives
+    whole = _write_transcript(tmp_path / "w" / "bbbb2222-session.jsonl", lines)
+    await store.ingest_path(str(whole), "bbbb2222")
+    chain = "SELECT line_hash FROM soul_lines WHERE anchor_sid=$1 ORDER BY line_idx"
+    assert [r[0] for r in await store.pool.fetch(chain, "aaaa1111")] == [
+        r[0] for r in await store.pool.fetch(chain, "bbbb2222")]
+    # an idle tick still resumes (and still counts as a verified sync)
+    assert await store.ingest_path(str(source), "aaaa1111") == 0
+    assert offsets[-1] == source.stat().st_size
+
+
+async def test_a_half_written_last_line_is_neither_lost_nor_duplicated_across_resumes(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _spy_offsets(monkeypatch)
+    lines = _synthetic_lines(4)
+    source = _write_transcript(tmp_path / "s" / "cccc3333-session.jsonl", lines[:3])
+    assert await store.ingest_path(str(source), "cccc3333") == 3
+    with source.open("a") as fh:
+        fh.write(lines[3][:20])  # the harness is mid-write: no newline yet
+    assert await store.ingest_path(str(source), "cccc3333") == 0
+    with source.open("a") as fh:
+        fh.write(lines[3][20:] + "\n")
+
+    assert await store.ingest_path(str(source), "cccc3333") == 1
+
+    assert await store.pool.fetchval(
+        "SELECT count(*) FROM soul_lines WHERE anchor_sid='cccc3333'") == 4
+    assert await store.verify_chain("cccc3333", harness="claude-code") is True
+
+
+async def test_it_reads_from_the_start_when_the_file_is_not_the_one_it_stopped_in(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A different inode, a shorter file, or a restart (an empty memory) each fall back to the
+    whole-file read the store always did."""
+    from src.ingest import soul_store
+
+    offsets = await _spy_offsets(monkeypatch)
+    lines = _synthetic_lines(6)
+    source = _write_transcript(tmp_path / "s" / "dddd4444-session.jsonl", lines[:4])
+    await store.ingest_path(str(source), "dddd4444")
+
+    replacement = _write_transcript(tmp_path / "s" / "new.jsonl", lines[:4])
+    os.replace(replacement, source)  # same content, another inode
+    await store.ingest_path(str(source), "dddd4444")
+    assert offsets == [0, 0]
+
+    soul_store._RESUME_POINTS.clear()  # a worker restart
+    await store.ingest_path(str(source), "dddd4444")
+    assert offsets == [0, 0, 0]
+
+    await store.ingest_path(str(source), "dddd4444")  # remembered again: resumes
+    assert offsets[-1] == source.stat().st_size
+    source.write_text("\n".join(lines[:2]) + "\n")  # truncated below the offset
+    await store.ingest_path(str(source), "dddd4444")
+    assert offsets[-1] == 0
