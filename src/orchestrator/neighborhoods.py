@@ -236,6 +236,37 @@ def _worktree_head(repo: Path) -> Path | None:
     return (gitdir if gitdir.is_absolute() else repo / gitdir) / "HEAD"
 
 
+async def _resolve_repos(pool: asyncpg.Pool, names: list[str]) -> dict[str, Any]:
+    """`capture._resolve_repo` for many names in two queries instead of one or two each: an
+    active SoftwareProject by its `name` property, its `repo:<name>` canonical or, last, a retired
+    canonical (object_aliases). The census asked it ~95 times a walk (~1 ms each, every five
+    minutes). Names that resolve to nothing are absent from the result. Like the one-name
+    version, it picks one object when several match (the lowest id, so the pick is stable)."""
+    if not names:
+        return {}
+    rows = await pool.fetch(
+        "SELECT DISTINCT ON (n.name) n.name, o.id FROM unnest($1::text[]) AS n(name) "
+        "JOIN objects o ON o.type='SoftwareProject' AND o.status='active' AND ("
+        "  o.canonical = n.name OR o.canonical = 'repo:' || n.name OR EXISTS ("
+        "    SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='name' AND a.value #>> '{}' = n.name)) "
+        "ORDER BY n.name, o.id", names)
+    found = {r["name"]: r["id"] for r in rows}
+    missing = [n for n in names if n not in found]
+    if missing:
+        aliased = await pool.fetch(
+            "SELECT DISTINCT ON (al.alias) al.alias, o.id FROM object_aliases al "
+            "JOIN objects o ON o.id=al.object_id "
+            "WHERE al.type='SoftwareProject' AND al.alias = ANY($1::text[]) "
+            "AND o.status='active' ORDER BY al.alias, o.id",
+            [f"repo:{n}" for n in missing])
+        by_alias = {r["alias"]: r["id"] for r in aliased}
+        for n in missing:
+            if f"repo:{n}" in by_alias:
+                found[n] = by_alias[f"repo:{n}"]
+    return found
+
+
 async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
     """The disk census: the graph only models what it was told about, while the disk holds
     the full history of what actually exists, and a memory graph that doesn't know its own
@@ -302,7 +333,28 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
     worktrees: list[str] = []
     refused: list[dict[str, str]] = []
     known = 0
-    for repo in _git_dirs(roots):
+    repos = _git_dirs(roots)
+    # what the graph already knows these checkouts as: one batch up front, then a memo for the
+    # walk (a name minted earlier in the same walk is found by a later checkout of it)
+    known_ids: dict[str, Any] = await _resolve_repos(
+        actions.pool, sorted({r.name for r in repos if (r / ".git").is_dir()}))
+    resolved_parents: dict[str, Any] = {}
+    # the Worktree objects that already exist (not merged away): `create_or_find_object` is a
+    # transaction of five statements per call, 40 times a walk, to learn what one query knows
+    tree_rows = await actions.pool.fetch(
+        "SELECT canonical, id FROM objects WHERE type='Worktree' AND status <> 'merged' "
+        "AND canonical = ANY($1::text[])",
+        [f"worktree:{r.name}" for r in repos if (r / ".git").is_file()])
+    known_trees: dict[str, Any] = {r["canonical"]: r["id"] for r in tree_rows}
+
+    async def resolve(name: str) -> Any:
+        if name in known_ids:
+            return known_ids[name]
+        if name not in resolved_parents:
+            resolved_parents[name] = await _resolve_repo(actions.pool, name)
+        return resolved_parents[name]
+
+    for repo in repos:
         name = repo.name
 
         # Worktrees are a first-class shape: `.git` being a file, not a directory, is the
@@ -322,12 +374,13 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
                                 "parent checkout could not be resolved: refusing to guess"})
                 continue
             parent_name = Path(parent_path).name
-            parent_obj = await _resolve_repo(actions.pool, parent_name)
+            parent_obj = await resolve(parent_name)
             if parent_obj is None:
                 try:
                     parent_obj = await _mint_or_find_repo(
                         actions, parent_name, observed, source="disk-census",
                         evidence_class=ec, confidence=0.9)
+                    resolved_parents[parent_name] = parent_obj
                     await actions.assert_property(parent_obj, "on_disk_path", parent_path,
                                                   "disk-census", observed, 0.9,
                                                   evidence_class=ec)
@@ -335,14 +388,19 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
                     refused.append({"name": name, "path": str(repo),
                                     "reason": f"parent project {parent_name!r}: {e}"})
                     continue
-            tree_obj = await actions.create_or_find_object(
+            tree_obj = known_trees.get(f"worktree:{name}") or await actions.create_or_find_object(
                 "Worktree", f"worktree:{name}", "disk-census")
-            await actions.assert_property(tree_obj, "on_disk_path", str(repo),
-                                          "disk-census", observed, 0.9, evidence_class=ec)
+            # guarded like the other branches: an unchanged value is not re-asserted (each call was
+            # a SELECT and an UPDATE of the row's observed_at, 80 a walk, every five minutes)
+            if not await actions.would_be_noop_assert(tree_obj, "on_disk_path", "disk-census",
+                                                       str(repo)):
+                await actions.assert_property(tree_obj, "on_disk_path", str(repo),
+                                              "disk-census", observed, 0.9, evidence_class=ec)
             head = _worktree_head(repo)
             branch = (_git_fact("branch", repo, [head], project_identity.git_current_branch)
                       if head is not None else project_identity.git_current_branch(str(repo)))
-            if branch:
+            if branch and not await actions.would_be_noop_assert(
+                    tree_obj, "branch", "disk-census", branch):
                 await actions.assert_property(tree_obj, "branch", branch, "disk-census",
                                               observed, 0.9, evidence_class=ec)
             exists = await actions.pool.fetchval(
@@ -357,7 +415,7 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
 
         _, remote_url = _git_fact(
             "remote", repo, [repo / ".git" / "config"], project_identity._git_remote)
-        existing = await _resolve_repo(actions.pool, name)
+        existing = await resolve(name)
         if existing is None and remote_url:
             # The location fix: a renamed directory fails the name lookup above and would
             # otherwise mint a duplicate. Try the remote_url as a second signal before
@@ -408,6 +466,7 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
             except ValueError as e:
                 refused.append({"name": name, "path": str(repo), "reason": str(e)})
                 continue
+            known_ids[name] = obj
             # Same check-current-first pattern as the "known" branch just below:
             # `_mint_or_find_repo` finding `obj` here does not mean this is genuinely the
             # first sighting. When `_resolve_repo`'s own (narrower) lookup keeps missing an
