@@ -529,7 +529,7 @@ async def _open_alarms_by_actor(
         "o.type='Thread'", "o.status='active'",
         "(e.actor LIKE 'boot:%' OR e.actor='deploy:withheld')",
         "COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),"
+        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),"
         "'open')='open'",
     ]
     params: list[Any] = []
@@ -540,7 +540,7 @@ async def _open_alarms_by_actor(
     rows = await pool.fetch(
         "SELECT o.id, o.canonical, "
         "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "AS summary "
         "FROM objects o JOIN object_events e ON e.object_id=o.id AND e.event_type='create' "
         "WHERE " + where,

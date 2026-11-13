@@ -26,25 +26,27 @@ import asyncpg
 _OBLIGATION_SUMMARY_SQL = (
     "COALESCE("
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), "
+    " AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+    "a.id DESC LIMIT 1), "
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1))"
+    " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1))"
 )
 _OBLIGATION_KIND_SQL = (
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)"
+    " AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1)"
 )
 _OBLIGATION_STATUS_SQL = (
     "COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')"
+    " AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC, "
+    "a.id DESC LIMIT 1),'open')"
 )
 _OBLIGATION_OWNER_SQL = (
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)"
+    " AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1)"
 )
 _OBLIGATION_STALE_AFTER_SQL = (
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='stale_after' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)"
+    " AND a.name='stale_after' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1)"
 )
 
 
@@ -392,17 +394,20 @@ async def _leased_assignment(
     row = await conn.fetchrow(
         "SELECT o.id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS summary "
         "FROM objects o WHERE o.type='Thread' AND o.status='active' "
         "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'') "
+        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1),'') "
         "   = 'obligation' "
         "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open') "
+        "   AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1),'open') "
         "   = 'open' "
         "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   = ANY($1::text[]) "
         "ORDER BY o.created_at DESC LIMIT 1", [seat_id, base])
     return {"id": row["id"], "summary": row["summary"]} if row is not None else None
@@ -521,7 +526,8 @@ async def _active_practices(conn: Any, limit: int = 25) -> list[dict[str, Any]]:
     rows = await conn.fetch(
         "SELECT o.id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS statement "
         "FROM objects o WHERE o.type='Practice' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "

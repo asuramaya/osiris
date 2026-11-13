@@ -107,7 +107,7 @@ async def survey(pool: asyncpg.Pool, root: Path) -> list[dict[str, str]]:
         handle = await pool.fetchval(
             "SELECT a.value#>>'{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
             "WHERE o.canonical=$1 AND a.name='handle' "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", r["agent_id"])
+            "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", r["agent_id"])
         out.append({"job_dir": r["job_dir"], "twin": r["agent_id"], "seat": real,
                     "project": r["project"] or "?", "sid": sid_of(path),
                     "handle": str(handle or "")})

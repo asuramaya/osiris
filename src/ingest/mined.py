@@ -166,7 +166,8 @@ async def consolidate_memory(
     rows = await pool.fetch(
         "SELECT o.id, "
         " (SELECT s.value #>> '{}' FROM current_assertions s WHERE s.object_id=o.id "
-        "   AND s.name='summary' ORDER BY s.confidence DESC, s.observed_at DESC LIMIT 1) "
+        "   AND s.name='summary' ORDER BY s.confidence DESC, s.observed_at DESC, "
+        "s.id DESC LIMIT 1) "
         "   AS summary,"
         " EXISTS (SELECT 1 FROM assertions a WHERE a.object_id=o.id AND a.name='summary' "
         "   AND a.evidence_class='self_declared') AS deliberate, "

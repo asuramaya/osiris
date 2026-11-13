@@ -476,7 +476,8 @@ async def backfill_bootstrap_orphan_references(
     projects = await pool.fetch(
         "SELECT o.canonical, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name "
+        "  AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) AS name "
         "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
     names = sorted(
         {(r["name"] or r["canonical"].removeprefix("repo:")) for r in projects if r["canonical"]},
@@ -532,7 +533,7 @@ async def mine_mentions(
     ents = await pool.fetch(
         "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='name' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS name "
         "FROM objects o WHERE o.status='active' "
         "  AND o.type NOT IN ('Reference','Commit','Thread','SoftwareProject') "
         "  AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
@@ -540,7 +541,7 @@ async def mine_mentions(
     docs = await pool.fetch(
         "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='body' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS body "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS body "
         "FROM objects o WHERE o.status='active' AND EXISTS (SELECT 1 FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='body')")
     named = [(e["id"], e["name"]) for e in ents if e["name"]]

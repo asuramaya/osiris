@@ -68,17 +68,19 @@ async def succession_chain(
         row = await pool.fetchrow(
             "SELECT o.id, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "   AND a.name='seat_generation' ORDER BY a.confidence DESC, a.observed_at DESC "
+            "   AND a.name='seat_generation' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC "
             "   LIMIT 1) AS generation, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "   AND a.name='minted_because' ORDER BY a.confidence DESC, a.observed_at DESC "
+            "   AND a.name='minted_because' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC "
             "   LIMIT 1) AS minted_because, "
             " (EXISTS (SELECT 1 FROM assertions x WHERE x.source_id=o.canonical "
             "     AND x.object_id != o.id) "
             "  OR EXISTS (SELECT 1 FROM fleet_messages WHERE from_agent=o.canonical)) "
             " AS wrote_anything, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "   AND a.name='session' ORDER BY a.confidence DESC, a.observed_at DESC "
+            "   AND a.name='session' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC "
             "   LIMIT 1) AS session "
             "FROM objects o WHERE o.canonical=$1 AND o.type='Agent'", cur)
         if row is None:
@@ -91,7 +93,7 @@ async def succession_chain(
             "SELECT a.value #>> '{}' FROM current_assertions a "
             "JOIN objects o ON o.id=a.object_id "
             "WHERE o.canonical=$1 AND a.name='succeeded_from' "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", cur)
+            "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", cur)
         if not nxt:
             break
         cur = str(nxt)

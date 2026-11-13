@@ -396,7 +396,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         worktree_rows = await p.fetch(
             "SELECT w.id, w.canonical, proj.id AS parent_id, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=w.id "
-            "   AND a.name='branch' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "   AND a.name='branch' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC LIMIT 1) "
             "   AS branch "
             "FROM links l "
             "JOIN objects w ON w.id = l.from_id AND w.type = 'Worktree' "

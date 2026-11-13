@@ -54,21 +54,23 @@ _SANCTIONED_NO_REGROW_ACTOR = "cron:no_regrow_heartbeat"
 _SUMMARY_SQL = (
     "COALESCE("
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), "
+    " AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+    "a.id DESC LIMIT 1), "
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1))"
+    " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1))"
 )
 _KIND_SQL = (
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)"
+    " AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1)"
 )
 _STATUS_SQL = (
     "COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')"
+    " AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC, "
+    "a.id DESC LIMIT 1),'open')"
 )
 _STALE_AFTER_SQL = (
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='stale_after' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)"
+    " AND a.name='stale_after' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1)"
 )
 
 
@@ -88,7 +90,7 @@ async def _candidate_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
         f" {_SUMMARY_SQL} AS summary, "
         f" {_STALE_AFTER_SQL} AS stale_after, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS owner, "
         " (SELECT max(sa.observed_at) FROM assertions sa WHERE sa.object_id=o.id "
         "   AND sa.evidence_class='self_declared') AS last_touched, "

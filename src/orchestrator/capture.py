@@ -262,7 +262,7 @@ async def _object_source(pool: asyncpg.Pool, obj_id: uuid.UUID) -> str | None:
     applies to the hatch. Never load-bearing for resolution itself."""
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT source_id FROM current_assertions WHERE object_id=$1 AND name='summary' "
-        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", obj_id)
+        "ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1", obj_id)
 
 
 async def mint_cites(
@@ -960,7 +960,7 @@ async def backfill_boot_alarm_commit_links(
     threads = await pool.fetch(
         "SELECT o.id, o.canonical, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "  AS summary "
         "FROM objects o "
         "WHERE o.type='Thread' AND o.status='active' "
@@ -1070,7 +1070,7 @@ async def resolve_agent_orphans(
     rows = await pool.fetch(
         "SELECT o.id, o.canonical, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='session' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AND a.name='session' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "  AS session "
         "FROM objects o WHERE o.type='Agent' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM links l WHERE (l.from_id=o.id OR l.to_id=o.id) "
@@ -1173,7 +1173,7 @@ async def resolve_reference_orphans(
     rows = await pool.fetch(
         "SELECT o.id, o.canonical, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='topic' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AND a.name='topic' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "  AS topic "
         "FROM objects o WHERE o.type='Reference' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM links l WHERE (l.from_id=o.id OR l.to_id=o.id) "
@@ -1336,7 +1336,8 @@ async def resolve_superstition_orphans(
     rows = await pool.fetch(
         "SELECT o.id, o.canonical, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='killed_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AND a.name='killed_by' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "  AS killed_by "
         "FROM objects o WHERE o.type='Superstition' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
@@ -1633,7 +1634,7 @@ async def _describe(pool: asyncpg.Pool, obj_id: uuid.UUID) -> tuple[str | None, 
     row = await pool.fetchrow(
         "SELECT o.type, "
         "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "AS summary FROM objects o WHERE o.id=$1", obj_id)
     if row is None:
         return None, None
@@ -1673,7 +1674,7 @@ async def abstained_derivations(
         "         a.observed_at, a.source_id "
         "  FROM current_assertions a "
         "  WHERE a.name LIKE 'derivation_abstained_%' AND ($1::text IS NULL OR a.name = $1) "
-        "  ORDER BY a.object_id, a.name, a.confidence DESC, a.observed_at DESC) "
+        "  ORDER BY a.object_id, a.name, a.confidence DESC, a.observed_at DESC, a.id DESC) "
         "SELECT * FROM latest WHERE NOT (value ? 'resolved') "
         "ORDER BY observed_at DESC LIMIT $2", name_filter, limit)
     sample: list[dict[str, Any]] = []
@@ -1727,7 +1728,7 @@ async def retryable_abstentions(
         "         a.observed_at, a.source_id "
         "  FROM current_assertions a "
         "  WHERE a.name LIKE 'derivation_abstained_%' AND ($1::text IS NULL OR a.name = $1) "
-        "  ORDER BY a.object_id, a.name, a.confidence DESC, a.observed_at DESC) "
+        "  ORDER BY a.object_id, a.name, a.confidence DESC, a.observed_at DESC, a.id DESC) "
         "SELECT * FROM latest "
         "WHERE (value ? 'candidate_count') AND (value->>'candidate_count')::int = 0 "
         "ORDER BY observed_at ASC LIMIT $2", name_filter, limit)
@@ -1769,7 +1770,7 @@ _AMBIGUOUS_SURVIVOR_CTE = (
     "         a.observed_at, a.source_id "
     "  FROM current_assertions a "
     "  WHERE a.name LIKE 'derivation_abstained_%' AND ($1::text IS NULL OR a.name = $1) "
-    "  ORDER BY a.object_id, a.name, a.confidence DESC, a.observed_at DESC), "
+    "  ORDER BY a.object_id, a.name, a.confidence DESC, a.observed_at DESC, a.id DESC), "
     "ambiguous AS ("
     "  SELECT *, jsonb_array_length(value->'candidates') AS original_candidate_count "
     "  FROM latest "
@@ -1968,13 +1969,16 @@ async def backfill_decided_in(
     rows = await actions.pool.fetch(
         "SELECT o.id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS summary, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='rationale' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='rationale' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS rationale, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='protocol' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='protocol' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS protocol "
         "FROM objects o WHERE o.type='Decision' AND o.status='active' "
         "AND o.merged_into IS NULL"
@@ -2362,7 +2366,7 @@ async def _enforce_required_links(
             "SELECT a.value FROM objects o JOIN current_assertions a "
             "ON a.object_id = o.id WHERE o.type = 'Type' "
             "AND o.canonical = $1 AND a.name = 'required_link_kinds' "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+            "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1",
             f"type:object:{type_name}")
         required = [k for k in (raw or ()) if k in kinds_in_scope]
         if not required:
@@ -2776,7 +2780,8 @@ async def record_decision(
             refuted_statement = await a.pool.fetchval(
                 "SELECT val.value #>> '{}' FROM current_assertions val "
                 "WHERE val.object_id=$1 AND val.name='statement' "
-                "ORDER BY val.confidence DESC, val.observed_at DESC LIMIT 1", refute_id)
+                "ORDER BY val.confidence DESC, val.observed_at DESC, "
+                "val.id DESC LIMIT 1", refute_id)
             await a.assert_property(refute_id, "refuted_by", str(d), source, observed,
                                     _CONF, evidence_class=_EC)
             await kill_superstition(a, refuted_statement or str(refute_id),
@@ -2884,7 +2889,7 @@ async def _resolve_ref(
             "SELECT o.id, "
             "  (SELECT a.value #>> '{}' FROM current_assertions a "
             "   WHERE a.object_id=o.id AND a.name=$3 "
-            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS text "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS text "
             "FROM objects o "
             "WHERE o.type=$1 AND o.status='active' AND o.id::text LIKE $2 || '%' LIMIT 6",
             type_, raw, text_field)
@@ -2925,10 +2930,12 @@ async def _decision_snapshot(pool: asyncpg.Pool, decision_id: uuid.UUID) -> dict
     row = await pool.fetchrow(
         "SELECT "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS summary, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "   AND a.name='rationale' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='rationale' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS rationale",
         decision_id)
     return {"summary": row["summary"], "rationale": row["rationale"]}
@@ -2958,7 +2965,7 @@ async def verify_ruling(
                         "resolve to a real Decision"}
     kind = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", did)
+        "AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", did)
     if kind != "ruling":
         return {"ok": False,
                 "error": f"{ruling_ref!r} resolves to a decision of kind {kind!r}, not "
@@ -2978,7 +2985,7 @@ async def _thread_summary(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | Non
     """The winning `summary` for a thread, used to name what a batch resolve closed."""
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1",
         thread_id,
     )
 
@@ -3045,7 +3052,7 @@ async def _open_obligation_thread_ids(
         "SELECT DISTINCT ON (object_id, name) object_id, name, value #>> '{}' AS v "
         "FROM current_assertions WHERE object_id = ANY($1::uuid[]) "
         "AND name IN ('status', 'kind') "
-        "ORDER BY object_id, name, confidence DESC, observed_at DESC",
+        "ORDER BY object_id, name, confidence DESC, observed_at DESC, id DESC",
         thread_ids)
     by_id: dict[uuid.UUID, dict[str, str]] = {}
     for r in rows:
@@ -3413,14 +3420,15 @@ async def find_near_duplicate_open_thread(
     rows = await pool.fetch(
         "SELECT o.id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS summary "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
         "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open'",
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'open')='open'",
         proj)
     candidates = [(r["id"], r["summary"]) for r in rows if r["summary"]]
     if not candidates:
@@ -3508,14 +3516,16 @@ async def find_near_duplicate_decision(
     rows = await pool.fetch(
         "SELECT o.id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS summary "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
         "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "WHERE o.type='Decision' AND o.merged_into IS NULL AND o.status='active' "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='superseded_by' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'')=''" + exclude_clause,
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1),'')=''" + exclude_clause,
         *params)
     candidates = [(r["id"], r["summary"]) for r in rows if r["summary"]]
     if not candidates:
@@ -3914,7 +3924,8 @@ async def open_thread(
 
 def _current_thread_prop(name: str) -> str:
     return (f"(SELECT a.value #>> '{{}}' FROM current_assertions a WHERE a.object_id=o.id "
-            f"AND a.name='{name}' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)")
+            f"AND a.name='{name}' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            f"a.id DESC LIMIT 1)")
 
 
 async def open_or_update_thread(
@@ -3993,22 +4004,23 @@ async def open_held_work(
     rows = await pool.fetch(
         "SELECT o.id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS summary, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='branch' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='branch' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS branch, "
         " (SELECT a.value FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='files_touched' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   AND a.name='files_touched' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC "
         "   LIMIT 1) AS files_touched, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS owner "
         "FROM objects o "
         "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'open')='open' "
         "  AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='branch')" + repo_clause,
         *params)
@@ -4040,7 +4052,7 @@ async def _current_owner(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | None
     lease when a near-duplicate obligation surfaces instead of minting a parallel build."""
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1",
         thread_id,
     )
 
@@ -4054,7 +4066,7 @@ async def _thread_named_properties(
     rows = await pool.fetch(
         "SELECT a.name, a.value #>> '{}' AS val FROM current_assertions a "
         "WHERE a.object_id=$1 AND a.name = ANY($2::text[]) "
-        "ORDER BY a.confidence DESC, a.observed_at DESC", thread_id, list(names))
+        "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC", thread_id, list(names))
     out: dict[str, str] = {}
     for r in rows:
         out.setdefault(r["name"], r["val"])  # first row per name is the winner (ORDER BY)
@@ -4091,7 +4103,8 @@ async def _thread_resolved_in(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str |
     gate or skip anything; resolve_thread always writes regardless of what this reads."""
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "AND a.name='resolved_in' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "AND a.name='resolved_in' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1",
         thread_id,
     )
 
@@ -4429,7 +4442,8 @@ async def resolve_threads_bulk(
     for ref, tid in matched.items():
         summary = await actions.pool.fetchval(
             "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-            "AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+            "AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC LIMIT 1",
             tid)
         already = await _thread_resolved_in(actions.pool, tid) is not None
         previews.append({
@@ -5495,14 +5509,16 @@ async def thread_answering_decisions(
         "SELECT DISTINCT thread_id, id, summary, created_at FROM ("
         "  SELECT l.to_id AS thread_id, d.id, d.created_at, "
         "   (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=d.id "
-        "    AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "    AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "    AS summary "
         "  FROM links l JOIN objects d ON d.id=l.from_id AND d.type='Decision' "
         "  WHERE l.to_id = ANY($1) AND l.type='answers' AND l.valid_until IS NULL "
         "  UNION ALL "
         "  SELECT l.from_id AS thread_id, d.id, d.created_at, "
         "   (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=d.id "
-        "    AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "    AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "    AS summary "
         "  FROM links l JOIN objects d ON d.id=l.to_id AND d.type='Decision' "
         "  WHERE l.from_id = ANY($1) AND l.type='resolved_by' AND l.valid_until IS NULL "
@@ -5565,7 +5581,8 @@ async def refute_practice(
     observed = datetime.now(UTC)
     statement = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", pid)
+        "AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1", pid)
     await actions.assert_property(pid, "refuted_by", killed_by, source, observed, _CONF,
                                   evidence_class=_EC)
     target = await _find_artifact(pool, killed_by)
@@ -5616,7 +5633,7 @@ async def amend_practice(
         return None
     refuted_by = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "AND a.name='refuted_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "AND a.name='refuted_by' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1",
         pid,
     )
     if refuted_by:
@@ -5661,7 +5678,7 @@ async def recent_dead_superstitions(
         "         a.value #>> '{}' AS val, a.observed_at "
         "  FROM current_assertions a JOIN objects o ON o.id = a.object_id "
         "  WHERE o.type = 'Superstition' AND o.status = 'active' "
-        "  ORDER BY a.object_id, a.name, a.confidence DESC, a.observed_at DESC) "
+        "  ORDER BY a.object_id, a.name, a.confidence DESC, a.observed_at DESC, a.id DESC) "
         "SELECT s.val AS statement, k.val AS killed_by, s.observed_at "
         "FROM latest s JOIN latest k ON k.object_id = s.object_id AND k.name = 'killed_by' "
         "WHERE s.name = 'statement' AND s.observed_at > now() - ($1 || ' days')::interval "
@@ -5930,7 +5947,7 @@ async def open_or_annotate_persisting_alarm(
     current_status = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
         "ON a.object_id=o.id WHERE o.canonical=$1 AND o.type='Thread' AND a.name='status' "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", canon)
+        "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", canon)
     if current_status == "resolved":
         tid = await annotate_thread(
             actions, canon,
@@ -5962,9 +5979,10 @@ async def open_or_annotate_persisting_alarm(
 LAST_SUMMARY_TOUCH_SQL = (
     "COALESCE("
     "(SELECT a.observed_at FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), "
+    " AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+    "a.id DESC LIMIT 1), "
     "(SELECT a.observed_at FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1))"
+    " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1))"
 )
 CONTESTED_SQL = (
     "EXISTS (SELECT 1 FROM current_assertions n WHERE n.object_id=o.id "
@@ -6073,7 +6091,8 @@ async def amend_decision(
         return None
     superseded_by = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "AND a.name='superseded_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "AND a.name='superseded_by' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1",
         did,
     )
     if superseded_by:

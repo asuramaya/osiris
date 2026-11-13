@@ -272,7 +272,7 @@ async def registry_census(
         "JOIN objects o ON o.type='Agent' AND o.canonical=m.agent_id AND o.status='active' "
         "WHERE COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='harness' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '') "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1), '') "
         "  NOT IN ('', 'claude-code') "
         "AND m.last_seen > now() - interval '5 minutes'")
     pulse_live = [{"agent_id": r["agent_id"], "job_dir": r["job_dir"],
@@ -1503,12 +1503,14 @@ async def while_away(
     spawns = await pool.fetch(
         "SELECT c.canonical, l.first_seen, "
         " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=c.id "
-        "   AND name='agent_type' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS kind, "
+        "   AND name='agent_type' ORDER BY confidence DESC, observed_at DESC, "
+        "id DESC LIMIT 1) AS kind, "
         " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=c.id "
-        "   AND name='source_model' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS model, "
+        "   AND name='source_model' ORDER BY confidence DESC, observed_at DESC, "
+        "id DESC LIMIT 1) AS model, "
         " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=c.id "
         "   AND name='spawn_witnessed' "
-        "   ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS witnessed "
+        "   ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1) AS witnessed "
         "FROM links l JOIN objects c ON c.id=l.from_id JOIN objects p ON p.id=l.to_id "
         "WHERE l.type='spawned_by' AND (p.canonical = $1 OR p.canonical LIKE $1 || '-%') "
         "  AND l.first_seen > $2 ORDER BY l.first_seen DESC LIMIT 8", base, since)

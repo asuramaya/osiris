@@ -103,7 +103,7 @@ async def _full_record(pool: asyncpg.Pool, oid: uuid.UUID, otype: str) -> dict[s
         "SELECT DISTINCT ON (a.name) a.name, a.value #>> '{}' AS value "
         "FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name NOT LIKE 'note:%' AND a.name NOT LIKE 'addendum:%' "
-        "ORDER BY a.name, a.confidence DESC, a.observed_at DESC", oid)
+        "ORDER BY a.name, a.confidence DESC, a.observed_at DESC, a.id DESC", oid)
     record: dict[str, Any] = {"id": str(oid)[:8], "canonical": canonical, "type": otype,
                               **{r["name"]: r["value"] for r in rows}}
     if otype == "Thread":
@@ -139,7 +139,8 @@ async def _full_record(pool: asyncpg.Pool, oid: uuid.UUID, otype: str) -> dict[s
         narrowers = await pool.fetch(
             "SELECT d.id, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=d.id "
-            "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC LIMIT 1) "
             "  AS summary "
             "FROM links l JOIN objects d ON d.id=l.from_id AND d.type='Decision' "
             "WHERE l.to_id=$1 AND l.type='narrows' AND l.valid_until IS NULL "
@@ -156,7 +157,8 @@ async def _full_record(pool: asyncpg.Pool, oid: uuid.UUID, otype: str) -> dict[s
         refuted = await pool.fetch(
             "SELECT p.id, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=p.id "
-            "  AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "  AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC LIMIT 1) "
             "  AS statement "
             "FROM links l JOIN objects p ON p.id=l.from_id AND p.type='Practice' "
             "WHERE l.to_id=$1 AND l.type='refuted_by' AND l.valid_until IS NULL "
@@ -167,7 +169,8 @@ async def _full_record(pool: asyncpg.Pool, oid: uuid.UUID, otype: str) -> dict[s
         killed = await pool.fetch(
             "SELECT s.id, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=s.id "
-            "  AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "  AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC LIMIT 1) "
             "  AS statement "
             "FROM links l JOIN objects s ON s.id=l.from_id AND s.type='Superstition' "
             "WHERE l.to_id=$1 AND l.type='killed_by' AND l.valid_until IS NULL "

@@ -81,7 +81,7 @@ _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 # A DECLARED RENAME MUST OUTRANK AN ORDINARY MOUNT'S OWN GUESS (live specimen: a project
 # renamed, then an ordinary later mount re-asserted the old name at the SAME
 # self_declared/0.9 confidence rename_project itself used. current_assertions' tie-break
-# (confidence DESC, observed_at DESC) then falls through to pure recency, so a later,
+# (confidence DESC, observed_at DESC, id DESC) then falls through to pure recency, so a later,
 # uninformed mount silently overturned a deliberate, testimony-backed rename). Written at
 # the SAME evidence_class (still a self-declaration, never a different kind of claim) but
 # a confidence strictly above the 0.9 ceiling every ordinary self_declared write is capped
@@ -175,7 +175,7 @@ async def project_name_for_disk_path(pool: asyncpg.Pool, path: str) -> str | Non
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT (SELECT a2.value #>> '{}' FROM current_assertions a2 "
         " WHERE a2.object_id=o.id AND a2.name='name' "
-        " ORDER BY a2.confidence DESC, a2.observed_at DESC LIMIT 1) "
+        " ORDER BY a2.confidence DESC, a2.observed_at DESC, a2.id DESC LIMIT 1) "
         "FROM objects o JOIN current_assertions a ON a.object_id=o.id "
         "WHERE o.type='SoftwareProject' AND o.status='active' AND a.name='on_disk_path' "
         "AND a.value #>> '{}' = $1 LIMIT 1", path)
@@ -231,7 +231,7 @@ async def _live_label(
     implementation for both."""
     name = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", oid)
+        "AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", oid)
     return str(name) if name else str(canonical).removeprefix("repo:")
 
 
@@ -528,7 +528,7 @@ async def project_identity_evidence(
             path = await pool.fetchval(
                 "SELECT a.value #>> '{}' FROM current_assertions a "
                 "WHERE a.object_id=$1 AND a.name='on_disk_path' "
-                "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", proj_row["id"])
+                "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", proj_row["id"])
             entry["on_disk_path"] = path
             if path:
                 is_repo, remote_url = _git_remote(path)
@@ -1185,7 +1185,7 @@ async def rename_project(
                          "genuinely free new_name instead"}
     old_name = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1",
         row["id"])
     # THE CANONICAL MIGRATES TOO: repo:<old> -> repo:<new_name>, the uuid and every edge
     # stay; the retired string becomes an ALIAS (object_aliases). Every refusal that
@@ -1293,7 +1293,7 @@ async def rename_project(
     # that it's still the winner a moment later.
     current_name_after_write = await actions.pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='name' "
-        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", row["id"])
+        "ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1", row["id"])
     rename_confirmed = current_name_after_write == new_name
     if not rename_confirmed:
         logger.warning(

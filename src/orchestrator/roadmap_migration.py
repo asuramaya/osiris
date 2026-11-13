@@ -191,7 +191,7 @@ async def apply_migration(
         row = await actions.pool.fetchrow(
             "SELECT a.value #>> '{}' AS arc FROM current_assertions a "
             "WHERE a.object_id=$1 AND a.name='arc' "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", tid,
+            "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", tid,
         )
         landed_arc = row["arc"] if row else None
         deduped = entry["arc"] is not None and landed_arc != entry["arc"]

@@ -64,11 +64,11 @@ _EXPIRED_BECAUSE = "expired unclaimed"
 _OPEN_THREADS_SQL = """
     SELECT o.id, o.canonical, o.created_at,
         (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id
-         AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)
+         AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1)
         AS owner,
         (SELECT COALESCE(
             (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=p.id
-             AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),
+             AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),
             regexp_replace(p.canonical, '^repo:', ''))
          FROM links l JOIN objects p ON p.id = l.to_id
          WHERE l.from_id=o.id AND l.type='in_repo'
@@ -76,10 +76,10 @@ _OPEN_THREADS_SQL = """
          ORDER BY l.first_seen DESC NULLS LAST LIMIT 1)
         AS repo,
         (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id
-         AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)
+         AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1)
         AS kind,
         (SELECT a.evidence_class FROM current_assertions a WHERE a.object_id=o.id
-         AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)
+         AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1)
         AS summary_evidence_class
     FROM objects o
     WHERE o.type='Thread' AND o.status='active'

@@ -247,10 +247,10 @@ async def classify_thread_owner(
 _OPEN_OBLIGATIONS_SQL = """
     SELECT o.id, o.canonical,
         (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id
-         AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)
+         AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1)
         AS owner,
         (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id
-         AND a.name='repo' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)
+         AND a.name='repo' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1)
         AS repo
     FROM objects o
     WHERE o.type='Thread' AND o.status='active'

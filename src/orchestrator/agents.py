@@ -400,10 +400,11 @@ async def seat_holders(pool: asyncpg.Pool, house: str | None, seat: str) -> list
         "SELECT o.canonical FROM objects o WHERE o.type='Agent' "
         "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='handle' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1), '')) = lower($1) "
         "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='project' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '') = COALESCE($2, '') "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1), '') = COALESCE($2, '') "
         # A healed phantom never held the seat (a past bug read a much higher generation
         # count than the number of minds that had ever actually acted). false_mint only: a
         # retired real holder still held it, so filtering retired holders would renumber
@@ -446,7 +447,7 @@ async def house_of(pool: asyncpg.Pool, agent_id: str) -> str | None:
         "SELECT a.value #>> '{}' FROM objects o "
         "JOIN current_assertions a ON a.object_id=o.id AND a.name='project' "
         "WHERE o.canonical=$1 "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent_id)
+        "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", agent_id)
 
 
 async def project_of(pool: asyncpg.Pool, agent_id: str, *, cwd: str | None = None) -> str | None:
@@ -612,7 +613,8 @@ async def correct_agent_house(
     if seat_generation is not None:
         was["seat_generation"] = await actions.pool.fetchval(
             "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-            "AND a.name='seat_generation' ORDER BY a.confidence DESC, a.observed_at DESC "
+            "AND a.name='seat_generation' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC "
             "LIMIT 1", row["id"])
         await actions.assert_property(row["id"], "seat_generation", str(seat_generation),
                                       actor, now, _CONF, evidence_class=_EC)
@@ -942,7 +944,7 @@ async def claim_name(
         "AND h.name='handle' WHERE o.type='Agent' AND lower(h.value #>> '{}') = lower($1) "
         "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='project' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '') "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1), '') "
         "  <> COALESCE($2, '') LIMIT 1",
         name, house)
     if elsewhere is not None and not holders:
@@ -1125,7 +1127,7 @@ async def resolve_seat(
         " (m.last_seen > now() - interval '15 minutes') AS live, "
         " COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='seat_generation' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '0') AS gen "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1), '0') AS gen "
         "FROM objects o "
         "LEFT JOIN agent_mounts m ON m.agent_id=o.canonical "
         "WHERE o.type='Agent' "
@@ -1133,7 +1135,7 @@ async def resolve_seat(
         # the record at a lower grade, and it must not answer to the name it no longer holds.
         "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='handle' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1), '')) = lower($1) "
         "AND NOT EXISTS (SELECT 1 FROM current_assertions r WHERE r.object_id=o.id "
         "  AND r.name IN ('retired','false_mint') AND r.value #>> '{}' = 'true') "
         # A visitor never answers to a name: a spawn wearing a handle is a leak, and
@@ -1199,10 +1201,11 @@ async def agent_seat(pool: asyncpg.Pool, agent_id: str) -> str | None:
     row = await pool.fetchrow(
         "SELECT "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS handle, "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) AS handle, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='seat_generation' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS gen "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS gen "
         "FROM objects o WHERE o.canonical=$1 AND o.type='Agent'", agent_id)
     if row is None or not row["handle"]:
         return None
@@ -1844,7 +1847,7 @@ async def _lineage_head_walk(
     row = await pool.fetchrow(
         "SELECT o.status='active' AS active, "
         " (SELECT ca.value #>> '{}' FROM current_assertions ca WHERE ca.object_id=o.id "
-        "   AND ca.name='false_mint' ORDER BY ca.confidence DESC, ca.observed_at DESC "
+        "   AND ca.name='false_mint' ORDER BY ca.confidence DESC, ca.observed_at DESC, ca.id DESC "
         "   LIMIT 1) = 'true' AS false_mint "
         "FROM objects o WHERE o.canonical=$1 AND o.type='Agent'", canonical)
     self_head = canonical if (row and row["active"] and not row["false_mint"]) else None
@@ -1971,7 +1974,7 @@ async def _succeeded_from_of(pool: asyncpg.Pool, canonical: str) -> str | None:
     val = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical=$1 AND a.name='succeeded_from' "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", canonical)
+        "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", canonical)
     return str(val) if val else None
 
 
@@ -2158,7 +2161,7 @@ async def misfiled_by_lineage(
 HANDOFF_LIVE_PREDICATE_SQL = (
     "(SELECT h.value #>> '{}' FROM current_assertions h "
     " WHERE h.object_id = o.id AND h.name = 'is_handoff' "
-    " ORDER BY h.confidence DESC, h.observed_at DESC LIMIT 1) = 'true' "
+    " ORDER BY h.confidence DESC, h.observed_at DESC, h.id DESC LIMIT 1) = 'true' "
     "OR ("
     "  NOT EXISTS (SELECT 1 FROM current_assertions h2 "
     "              WHERE h2.object_id = o.id AND h2.name = 'is_handoff') "
@@ -2208,7 +2211,7 @@ async def nearest_handoff_ancestor(
     is_handoff property asserted at all (genuine pre-property legacy records); an object
     that has the property, however it currently resolves, is never routed through
     prose-matching. The property's current value is resolved the same way every other
-    property-read in this codebase does (confidence DESC, observed_at DESC LIMIT 1), never
+    property-read in this codebase does (confidence DESC, observed_at DESC, id DESC LIMIT 1), never
     a bare EXISTS(value='true'), which a superseding assertion from a different source
     (the acker, not the original author) would leave sitting in current_assertions as a
     non-winning but still-existing row.
@@ -2258,7 +2261,7 @@ async def nearest_handoff_ancestor(
             "AND a.evidence_class = 'self_declared' "
             "AND o.type IN ('Thread','Decision') AND o.status = 'active' "
             f"AND ({ack_clause}) "
-            "ORDER BY o.id, a.confidence DESC, a.observed_at DESC", cur)
+            "ORDER BY o.id, a.confidence DESC, a.observed_at DESC, a.id DESC", cur)
         picks = sorted(rows, key=lambda r: r["observed_at"], reverse=True)[:2]
         if picks:
             return (cur, [dict(r) for r in picks]), True
@@ -2376,7 +2379,8 @@ async def _heal_completed(actions: Actions, grandancestor: str, phantom: str) ->
     current = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
         "ON o.id=a.object_id WHERE o.canonical=$1 AND o.type='Agent' "
-        "AND a.name='succeeded_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "AND a.name='succeeded_by' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1",
         grandancestor)
     return bool(current != phantom)
 
@@ -2425,7 +2429,7 @@ async def _report_half_healed_phantom(
     current_status = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
         "ON a.object_id=o.id WHERE o.canonical=$1 AND o.type='Thread' AND a.name='status' "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", canon)
+        "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", canon)
     if current_status == "resolved":
         await annotate_thread(
             actions, canon,
@@ -2512,7 +2516,8 @@ async def correct_succession(
 
     was = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "AND a.name='succeeded_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "AND a.name='succeeded_by' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1",
         row["id"])
     head_before = await lineage_head(actions.pool, agent_id)
 
@@ -2629,7 +2634,7 @@ async def _fold_zero_turn_ancestors(
             "SELECT DISTINCT ON (name) name, value #>> '{}' AS v, observed_at AS at "
             "FROM current_assertions WHERE object_id=$1 "
             "AND name IN ('succeeded_from', 'minted_because', 'false_mint') "
-            "ORDER BY name, confidence DESC, observed_at DESC", cur_oid)}
+            "ORDER BY name, confidence DESC, observed_at DESC, id DESC", cur_oid)}
         if meta.get("false_mint", (None, None))[0] == "true":
             grandancestor, _ = meta.get("succeeded_from", (None, None))
             if grandancestor and not await _heal_completed(actions, grandancestor, cur_id):
@@ -2723,13 +2728,13 @@ async def _skip_false_mint_ancestors(
     for _ in range(64):
         flagged = await actions.pool.fetchval(
             "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
-            "AND name='false_mint' ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+            "AND name='false_mint' ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1",
             cur_oid)
         if str(flagged).lower() != "true":
             return cur_id, cur_oid
         pred = await actions.pool.fetchval(
             "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
-            "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+            "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1",
             cur_oid)
         if not pred:
             return cur_id, cur_oid  # a false-minted root, nothing eligible above it
@@ -2772,17 +2777,18 @@ async def reinstate_generation(
         return {"ok": False, "detail": f"{agent_id!r} is not a known Agent object"}
     was_false_mint = await actions.pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
-        "AND name='false_mint' ORDER BY confidence DESC, observed_at DESC LIMIT 1", oid)
+        "AND name='false_mint' ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1", oid)
     was_retired = await actions.pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
-        "AND name='retired' ORDER BY confidence DESC, observed_at DESC LIMIT 1", oid)
+        "AND name='retired' ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1", oid)
     if str(was_false_mint).lower() != "true" and str(was_retired).lower() != "true":
         return {"ok": False,
                 "detail": f"{agent_id!r} is not currently false_mint or retired: "
                           "nothing to reinstate"}
     old_predecessor = await actions.pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
-        "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC LIMIT 1", oid)
+        "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC, "
+        "id DESC LIMIT 1", oid)
     # Walk past any consecutive false_mint ancestor to the nearest eligible one, the same
     # walk _skip_false_mint_ancestors does for the reanimation path, applied here to the
     # predecessor chain instead of the entry id (this function's own `agent_id` is the
@@ -2797,13 +2803,14 @@ async def reinstate_generation(
             break
         fm = await actions.pool.fetchval(
             "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
-            "AND name='false_mint' ORDER BY confidence DESC, observed_at DESC LIMIT 1", e_oid)
+            "AND name='false_mint' ORDER BY confidence DESC, observed_at DESC, "
+            "id DESC LIMIT 1", e_oid)
         if str(fm).lower() != "true":
             eligible_oid = e_oid
             break
         nxt = await actions.pool.fetchval(
             "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
-            "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+            "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1",
             e_oid)
         eligible = nxt
         hops += 1
@@ -3172,7 +3179,7 @@ async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -
             "SELECT o.canonical FROM objects o WHERE o.type='SoftwareProject' "
             "AND o.status='active' AND lower((SELECT a.value #>> '{}' "
             "FROM current_assertions a WHERE a.object_id=o.id AND a.name='name' "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)) = lower($1)",
+            "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1)) = lower($1)",
             project)
         if len(name_matches) == 1:
             canonical = name_matches[0]["canonical"]
@@ -3466,7 +3473,7 @@ async def mint_heir(
     # "Anna II".
     inherited = await actions.pool.fetchval(
         "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='handle' "
-        "ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+        "ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1",
         ancestor_oid)
     if inherited:
         await actions.assert_property(a, "handle", inherited, heir, now, _CONF,
@@ -3686,7 +3693,7 @@ async def _debounce_roundtrip(
         "SELECT DISTINCT ON (name) name, value #>> '{}' AS v, observed_at AS at "
         "FROM current_assertions WHERE object_id=$1 "
         "AND name IN ('succeeded_from','minted_because','model_succession') "
-        "ORDER BY name, confidence DESC, observed_at DESC", cur_oid)}
+        "ORDER BY name, confidence DESC, observed_at DESC, id DESC", cur_oid)}
     # Both model-transition mints heal; a compaction/clear/reanimation mint is a context
     # death, not model flapping, so there is no "left side" to return to.
     if meta.get("minted_because", (None, None))[0] not in ("live-swap", "model-succession"):
@@ -3775,7 +3782,7 @@ async def _already_reached(actions: Actions, *, agent_id: str, observed: str) ->
     seam = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical=$1 AND o.status='active' AND a.name='model_succession' "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent_id)
+        "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", agent_id)
     if not seam or "→" not in seam:
         return False
     right = seam.split("→", 1)[1].strip()
@@ -3944,7 +3951,7 @@ async def _winning_retired(actions: Actions, agent: uuid.UUID) -> bool:
     v = await actions.pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions "
         "WHERE object_id=$1 AND name='retired' "
-        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", agent)
+        "ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1", agent)
     return bool(v == "true")
 
 
@@ -4317,7 +4324,7 @@ async def _register_agent(
         # The project-name clobber: this used to reassert `name` from the caller's own
         # pin/identity.project unconditionally, at the same self-declared confidence a
         # deliberate rename_project/correct_project_name write uses. current_assertions'
-        # tie-break (confidence DESC, observed_at DESC) then falls through to pure recency,
+        # tie-break (confidence DESC, observed_at DESC, id DESC) then falls through to pure recency,
         # so any later, uninformed mount silently overturns an earlier, reasoned rename.
         # Measured live: one project's declared name was reverted to its old name by several
         # ordinary mounts over a couple of days, a recurring failure mode through a far more
@@ -4357,11 +4364,11 @@ async def _register_agent(
             existing_row = await actions.pool.fetchrow(
                 "SELECT value #>> '{}' AS name, confidence, source_id FROM current_assertions "
                 "WHERE object_id=$1 AND name='name' AND source_id=$2 "
-                "ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj, src)
+                "ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1", proj, src)
             top_row = await actions.pool.fetchrow(
                 "SELECT value #>> '{}' AS name FROM current_assertions "
                 "WHERE object_id=$1 AND name='name' "
-                "ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj)
+                "ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1", proj)
             existing_name = top_row["name"] if top_row else None
             # The supersede-not-outrank gap, project identity drift: measured live, one
             # project was renamed at 0.95 confidence, then a mount less than two minutes
@@ -4445,12 +4452,14 @@ async def seat_bearings(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     seat = await pool.fetchrow(
         "SELECT "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS handle, "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) AS handle, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='seat_generation' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS gen, "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS gen, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS house "
+        "   AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) AS house "
         "FROM objects o WHERE o.canonical=$1", agent_id)
     # The binding is part of who you are: an agent that actively holds a Seat object is
     # told so, whether or not it ever claimed a name for itself in the assertion world. An
@@ -4476,11 +4485,11 @@ async def seat_bearings(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     names = [r["handle"] for r in await pool.fetch(
         "SELECT DISTINCT (SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='handle' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS handle "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS handle "
         "FROM objects o WHERE o.type='Agent' "
         "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='project' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '') = $1", house)]
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1), '') = $1", house)]
     vacant = []
     for n in (x for x in names if x):
         holders = await seat_holders(pool, house, n)

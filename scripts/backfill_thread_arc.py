@@ -170,7 +170,8 @@ async def run(apply: bool) -> None:
             continue
         status = await pool.fetchval(
             "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-            "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", tid)
+            "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC LIMIT 1", tid)
         by_arc[arc] = by_arc.get(arc, 0) + 1
         print(f"  {short} ({status}) -> {arc}")
         if apply:

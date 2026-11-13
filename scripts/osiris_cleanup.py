@@ -294,7 +294,8 @@ def load_bound(dsn: str | None = None) -> Bound | None:
             seats = await conn.fetch(
                 "SELECT (SELECT a2.value #>> '{}' FROM current_assertions a2 "
                 "         WHERE a2.object_id=o.id AND a2.name='handle' "
-                "         ORDER BY a2.confidence DESC, a2.observed_at DESC LIMIT 1) AS handle, "
+                "         ORDER BY a2.confidence DESC, a2.observed_at DESC, "
+                "a2.id DESC LIMIT 1) AS handle, "
                 "       a.value #>> '{}' AS tree "
                 "FROM objects o JOIN current_assertions a "
                 "  ON a.object_id=o.id AND a.name='tree_cwd' "

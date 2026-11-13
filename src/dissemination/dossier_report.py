@@ -57,7 +57,7 @@ async def _crypto_section(
         "SELECT o.canonical, "
         "  (SELECT value #>> '{}' FROM current_assertions "
         "   WHERE object_id=o.id AND name='contract_name' "
-        "   ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS cname, "
+        "   ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1) AS cname, "
         "  l.properties AS props "
         "FROM links l JOIN objects o ON o.id=l.to_id AND o.status='active' "
         "WHERE l.from_id = ANY($1::uuid[]) AND l.type='transacted_with' "
@@ -99,7 +99,7 @@ def _sub(prop: str, ref: str) -> str:
     return (
         f"(SELECT value #>> '{{}}' FROM current_assertions "
         f"WHERE object_id={ref} AND name='{prop}' "
-        f"ORDER BY confidence DESC, observed_at DESC LIMIT 1)"
+        f"ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1)"
     )
 
 
@@ -110,7 +110,7 @@ async def build_dossier_report(pool: asyncpg.Pool, object_id: uuid.UUID) -> str:
         "SELECT type, canonical, "
         "  (SELECT value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id = o.id AND a.name='name' "
-        "   ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS name "
+        "   ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1) AS name "
         "FROM objects o WHERE o.id = ANY($1::uuid[]) AND o.status='active' "
         "ORDER BY (SELECT count(*) FROM current_assertions x WHERE x.object_id=o.id) DESC LIMIT 1",
         cluster,
@@ -157,7 +157,7 @@ async def build_dossier_report(pool: asyncpg.Pool, object_id: uuid.UUID) -> str:
         ") "
         "SELECT w.cur AS pid, w.role, w.source_id, "
         "  (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=w.cur "
-        "   AND a.name='name' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS nm "
+        "   AND a.name='name' ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1) AS nm "
         "FROM walk w JOIN objects p ON p.id=w.cur AND p.type='Person' AND p.status='active' "
         "WHERE NOT EXISTS "
         "  (SELECT 1 FROM objects o2 WHERE o2.id=w.cur AND o2.merged_into IS NOT NULL)",

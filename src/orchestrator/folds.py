@@ -117,7 +117,8 @@ async def living_heads(pool: asyncpg.Pool, agent_ids: list[str]) -> dict[str, st
     for r in await pool.fetch(
             "SELECT DISTINCT ON (o.id) o.canonical AS c, o.status = 'active' AS active, "
             " (SELECT ca.value #>> '{}' FROM current_assertions ca WHERE ca.object_id = o.id "
-            "   AND ca.name = 'false_mint' ORDER BY ca.confidence DESC, ca.observed_at DESC "
+            "   AND ca.name = 'false_mint' ORDER BY ca.confidence DESC, ca.observed_at DESC, "
+            "ca.id DESC "
             "   LIMIT 1) AS fm "
             "FROM objects o WHERE o.type = 'Agent' ORDER BY o.id"):
         if r["c"] in node:
@@ -614,7 +615,8 @@ async def unfold_agent(
     cur_base = _generation(dupe)[0]
     succ = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "AND a.name='succeeded_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "AND a.name='succeeded_by' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1",
         row["id"])
     stitch = bool(succ) and _generation(str(succ))[0] != cur_base
 
@@ -630,7 +632,8 @@ async def unfold_agent(
     reversible_threads = [dict(r) for r in await actions.pool.fetch(
         "SELECT o.id, o.canonical, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS summary "
         "FROM objects o "
         "JOIN current_assertions cur ON cur.object_id=o.id AND cur.name='owner' "

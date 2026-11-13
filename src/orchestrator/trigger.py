@@ -828,7 +828,7 @@ async def _retired(pool: asyncpg.Pool, agent_canonical: str) -> bool:
     v = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical=$1 AND a.name='retired' "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent_canonical)
+        "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", agent_canonical)
     return bool(v == "true")
 
 
@@ -3066,7 +3066,7 @@ async def _seat_attendance(pool: asyncpg.Pool, seat_id: str) -> str | None:
     value = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical=$1 AND o.type='Seat' AND o.status='active' AND a.name='attended' "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", seat_id)
+        "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", seat_id)
     return str(value) if value is not None else None
 
 
@@ -3466,7 +3466,7 @@ async def _explicit_window_tag(pool: asyncpg.Pool, label: str) -> str | None:
         return None
     value = await pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
-        "AND name='window_tag' ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+        "AND name='window_tag' ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1",
         proj_id)
     return str(value) if value else None
 
@@ -3514,7 +3514,7 @@ async def _governed_project_name(pool: asyncpg.Pool, seat_id: str | None,
     rows = await pool.fetch(
         "SELECT p.canonical, (SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=p.id AND a.name='name' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS name "
         "FROM links l JOIN objects s ON s.id=l.from_id JOIN objects p ON p.id=l.to_id "
         "WHERE s.canonical=$1 AND l.type='governs' AND p.type='SoftwareProject' "
         "AND p.status='active' AND (l.valid_until IS NULL OR l.valid_until > now())",
@@ -3839,12 +3839,13 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
         anchor_cwd = await pool.fetchval(
             "SELECT a.value #>> '{}' FROM current_assertions a "
             "JOIN objects o ON o.id=a.object_id WHERE o.canonical=$1 AND o.type='Seat' "
-            "AND a.name='anchor_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+            "AND a.name='anchor_cwd' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC LIMIT 1",
             seat_id)
         seat_handle = await pool.fetchval(
             "SELECT a.value #>> '{}' FROM current_assertions a "
             "JOIN objects o ON o.id=a.object_id WHERE o.canonical=$1 AND o.type='Seat' "
-            "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+            "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1",
             seat_id)
         singles.sort(reverse=True)
         for _, base in singles:
@@ -3873,7 +3874,7 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
     source = await pool.fetchval(
         "SELECT h.source_id FROM current_assertions h JOIN objects o ON o.id=h.object_id "
         "WHERE o.canonical=$1 AND o.type='Seat' AND h.name='handle' "
-        "ORDER BY h.confidence DESC, h.observed_at DESC LIMIT 1", seat_id)
+        "ORDER BY h.confidence DESC, h.observed_at DESC, h.id DESC LIMIT 1", seat_id)
     if not source:
         return None
     # Reviewed and left alone as a historical-attribution exclusion: an operator sentinel
@@ -3911,7 +3912,7 @@ async def _legacy_lineage_confession(
     source = await pool.fetchval(
         "SELECT h.source_id FROM current_assertions h JOIN objects o ON o.id=h.object_id "
         "WHERE o.canonical=$1 AND o.type='Seat' AND h.name='handle' "
-        "ORDER BY h.confidence DESC, h.observed_at DESC LIMIT 1", seat_id)
+        "ORDER BY h.confidence DESC, h.observed_at DESC, h.id DESC LIMIT 1", seat_id)
     # Reviewed and left alone: same historical-attribution exclusion as the sibling check
     # above, not live authorization, no project in scope.
     if not source or source in _OPERATOR_ACTORS or str(source).startswith(_FOUNDER_SOURCE_PREFIX):

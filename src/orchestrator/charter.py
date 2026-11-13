@@ -184,7 +184,7 @@ async def project_current_name(pool: asyncpg.Pool, repo_label: str) -> str:
     name = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.type='SoftwareProject' AND o.canonical=$1 AND a.name='name' "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1",
         f"repo:{repo_label}")
     return str(name) if name else repo_label
 

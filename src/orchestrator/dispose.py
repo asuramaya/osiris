@@ -106,7 +106,8 @@ _CANDIDATE_WHERE = (
     "  AND NOT EXISTS (SELECT 1 FROM assertions r WHERE r.object_id=o.id "
     "                  AND r.name='retracted') "
     "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    "    AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')"
+    "    AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC, "
+    "a.id DESC LIMIT 1),'open')"
     "    ='open' "
 )
 
@@ -139,7 +140,7 @@ async def candidates(
         # recency. Without observed_at a tie on confidence resolves arbitrarily, which is
         # exactly the class of bug that hygiene check exists to catch.
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "  AS summary "
         "FROM objects o JOIN origin g ON g.object_id=o.id " + scope +
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL " +
@@ -558,16 +559,16 @@ async def repair_stale_pile_summons(
     rows = await pool.fetch(
         "SELECT o.id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "  AS summary, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "  AS owner "
         "FROM objects o "
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "    WHERE a.object_id=o.id AND a.name='status' "
-        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open') = 'open'")
+        "    ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'open') = 'open'")
     to_resolve: list[dict[str, Any]] = []
     to_correct: list[dict[str, Any]] = []
     unmatched_owner: list[str] = []

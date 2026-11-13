@@ -972,7 +972,7 @@ async def migrate_commits_to_agents(
     rows = await pool.fetch(
         "SELECT c.id AS commit_id, c.canonical AS commit_canonical, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=c.id "
-        "   AND a.name='authored_date' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   AND a.name='authored_date' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC "
         "   LIMIT 1) AS authored_date, "
         " p.id AS project_id "
         "FROM objects c "
@@ -990,7 +990,7 @@ async def migrate_commits_to_agents(
         path_rows = await pool.fetch(
             "SELECT o.id, (SELECT a.value #>> '{}' FROM current_assertions a "
             "  WHERE a.object_id=o.id AND a.name='on_disk_path' "
-            "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS on_disk_path "
+            "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS on_disk_path "
             "FROM objects o WHERE o.id = ANY($1::uuid[])", project_ids)
         on_disk_paths = {r["id"]: r["on_disk_path"] for r in path_rows}
 
@@ -1079,7 +1079,7 @@ async def migrate_house_to_project(
     rows = await pool.fetch(
         "SELECT o.canonical AS seat_id, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='house' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='house' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS house "
         "FROM objects o WHERE o.type='Seat' AND o.status='active'")
 
@@ -1211,7 +1211,7 @@ async def migrate_holds_sandwich(
         "SELECT t.canonical AS seat, f.canonical AS holder, l.id, l.first_seen, "
         " l.valid_until, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=f.id "
-        "   AND a.name='minted_because' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   AND a.name='minted_because' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC "
         "   LIMIT 1) AS minted_because "
         "FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
         "WHERE l.type='holds' AND t.type='Seat' "
@@ -1358,7 +1358,7 @@ async def migrate_project_name_singular(
     depend on needs exactly one answer to read back.
 
     THE WINNER: highest confidence, ties broken by most recent `observed_at`, the
-    same `ORDER BY a.confidence DESC, a.observed_at DESC` every other "current winning
+    same `ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC` every other "current winning
     value" reader in this codebase already uses (charter_of, governed_trees, the seat-
     facts readers). `rename_project`'s own writes are confidence 0.95, deliberately
     above every ordinary evidence-class ceiling (SELF_DECLARED's own 0.9 is the highest
@@ -1387,7 +1387,7 @@ async def migrate_project_name_singular(
         names = await pool.fetch(
             "SELECT a.value #>> '{}' AS name FROM current_assertions a "
             "WHERE a.object_id=$1 AND a.name='name' "
-            "ORDER BY a.confidence DESC, a.observed_at DESC", r["oid"])
+            "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC", r["oid"])
         winner = names[0]["name"]
         entries.append({
             "project": r["canonical"], "winner": winner,

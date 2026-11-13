@@ -212,7 +212,7 @@ async def embed_backfill(
         " FROM current_assertions a JOIN objects o ON o.id = a.object_id "
         " WHERE o.status='active' AND a.name = ANY($1::text[]) "
         "   AND length(a.value #>> '{}') > 12 "
-        " ORDER BY o.id, a.name, a.confidence DESC, a.observed_at DESC "
+        " ORDER BY o.id, a.name, a.confidence DESC, a.observed_at DESC, a.id DESC "
         ") "
         "SELECT w.object_id, w.field, w.text FROM winners w "
         "LEFT JOIN search_vectors sv ON sv.object_id=w.object_id AND sv.field=w.field "

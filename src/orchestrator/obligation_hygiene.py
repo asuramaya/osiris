@@ -69,18 +69,20 @@ _SANCTIONED_HYGIENE_ACTOR = "cron:obligation_hygiene_heartbeat"
 _SUMMARY_SQL = (
     "COALESCE("
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), "
+    " AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+    "a.id DESC LIMIT 1), "
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1))"
+    " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1))"
 )
 
 _KIND_SQL = (
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)"
+    " AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1)"
 )
 _STATUS_SQL = (
     "COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')"
+    " AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC, "
+    "a.id DESC LIMIT 1),'open')"
 )
 
 
@@ -114,15 +116,17 @@ async def _open_obligation_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
         "SELECT o.id, o.created_at, "
         f" {_SUMMARY_SQL} AS summary, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS owner, "
         " (SELECT max(sa.observed_at) FROM assertions sa WHERE sa.object_id=o.id "
         "   AND sa.evidence_class='self_declared') AS last_touched, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='hygiene_stage' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='hygiene_stage' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS hygiene_stage, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='hygiene_nudged_at' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='hygiene_nudged_at' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS hygiene_nudged_at, "
         f" {CONTESTED_SQL} AS contested, "
         f" {LAST_SUMMARY_TOUCH_SQL} AS last_summary_touch "
@@ -610,7 +614,8 @@ async def hygiene_status(pool: asyncpg.Pool) -> dict[str, Any]:
     rows = await pool.fetch(
         "SELECT COALESCE(p.canonical, '(unfiled)') AS project, "
         " COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='hygiene_stage' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), "
+        "   AND a.name='hygiene_stage' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1), "
         "   'none') AS stage, "
         " count(*) AS n "
         "FROM objects o "

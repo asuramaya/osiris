@@ -1406,25 +1406,28 @@ async def automount(
             candidates = await actions.pool.fetch(
                 "SELECT o.id AS id, "
                 " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id = o.id "
-                "   AND a.name = 'summary' ORDER BY a.confidence DESC, a.observed_at DESC "
+                "   AND a.name = 'summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+                "a.id DESC "
                 "   LIMIT 1) AS summary, "
                 " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id = o.id "
-                "   AND a.name = 'owner' ORDER BY a.confidence DESC, a.observed_at DESC "
+                "   AND a.name = 'owner' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC "
                 "   LIMIT 1) AS owner "
                 "FROM objects o "
                 "WHERE o.type = 'Thread' AND o.status = 'active' AND o.merged_into IS NULL "
                 "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
                 "   WHERE a.object_id = o.id AND a.name = 'status' "
-                "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), 'open') = 'open' "
+                "   ORDER BY a.confidence DESC, a.observed_at DESC, "
+                "a.id DESC LIMIT 1), 'open') = 'open' "
                 "  AND (SELECT a.value #>> '{}' FROM current_assertions a "
                 "   WHERE a.object_id = o.id AND a.name = 'kind' "
-                "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation' "
+                "   ORDER BY a.confidence DESC, a.observed_at DESC, "
+                "a.id DESC LIMIT 1) = 'obligation' "
                 "  AND ((SELECT a.value #>> '{}' FROM current_assertions a "
                 "   WHERE a.object_id = o.id AND a.name = 'owner' "
-                "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = $1 "
+                "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) = $1 "
                 "   OR (SELECT a.value #>> '{}' FROM current_assertions a "
                 "   WHERE a.object_id = o.id AND a.name = 'owner' "
-                "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) LIKE $2) "
+                "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) LIKE $2) "
                 "ORDER BY o.created_at DESC LIMIT 10", ident.project or "", f"{base}%")
             newest = next(
                 (r for r in candidates if r["owner"] == ident.project
@@ -1646,7 +1649,8 @@ async def session_end(
 async def _seat_of(actions: Actions, agent_id: str) -> str | None:
     """The agent's claimed seat label (e.g. 'Agent V'), or None if still anonymous.
     Delegates to `seat_bearings` (agents.py), the correctly-ordered read
-    (`ORDER BY confidence DESC, observed_at DESC LIMIT 1` per property) that orient()/mount()
+    (`ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1` per property) that
+    orient()/mount()
     already use for the same question. A prior version reimplemented this with a bare
     `max(value)` aggregate across every current_assertions row for the name, instead of the
     one current (non-superseded) value. current_assertions can legitimately carry more than

@@ -58,7 +58,7 @@ async def _snapshot(pool: Any) -> dict[str, Any]:
         r["name"]: r["c"] for r in await pool.fetch(
             "SELECT (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
             "        AND a.name='name' "
-            "        ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name, "
+            "        ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS name, "
             " (SELECT count(*) FROM links l JOIN objects c ON c.id=l.from_id AND c.type='Commit' "
             "  WHERE l.to_id=o.id AND l.type='in_repo' "
             "  AND (l.valid_until IS NULL OR l.valid_until > now())) AS c "
@@ -77,10 +77,10 @@ async def _snapshot(pool: Any) -> dict[str, Any]:
         "SELECT role FROM ("
         " SELECT (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=f.id "
         "         AND a.name='role' "
-        "         ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS role, "
+        "         ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS role, "
         "  (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=f.id "
         "         AND a.name='content_hash' "
-        "         ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS h "
+        "         ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS h "
         " FROM objects f WHERE f.type='File') t "
         "WHERE role = ANY($1::text[]) AND h IS NOT NULL "
         "GROUP BY role HAVING count(DISTINCT h) > 1", list(_CONFIG_ROLES))

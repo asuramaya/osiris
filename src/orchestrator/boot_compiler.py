@@ -108,7 +108,7 @@ async def _manager_block(pool: asyncpg.Pool, manager_seat_id: str | None) -> tup
     handle = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
         "ON a.object_id=o.id AND a.name='handle' WHERE o.canonical=$1 "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", manager_seat_id)
+        "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", manager_seat_id)
     who = handle or manager_seat_id
     return (f"\nYour manager of record is **{who}**: the `managed_by` edge is live "
             f"in the graph.\n", who)
@@ -136,7 +136,7 @@ async def _team_block(pool: asyncpg.Pool, manager_seat_id: str) -> str:
         handle = await pool.fetchval(
             "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
             "ON a.object_id=o.id AND a.name='handle' WHERE o.canonical=$1 "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", worker_seat_id)
+            "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", worker_seat_id)
         repos = await charter_display_labels(pool, await charter_of(pool, worker_seat_id))
         repo_text = ", ".join(f"`{r}`" for r in repos) if repos else "no charter yet"
         lines.append(f"- **{handle or worker_seat_id}** ({worker_seat_id}): governs "
@@ -175,18 +175,22 @@ async def _armed_practices(
     rows = await pool.fetch(
         "SELECT o.id, "
         " (SELECT a.value #>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS statement, "
         " (SELECT a.value #>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='failure_prevented' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   AND a.name='failure_prevented' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC "
         "   LIMIT 1) AS failure_prevented, "
         " (SELECT a.value #>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='surface' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='surface' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS surface, "
         " (SELECT count(*) FROM links l WHERE l.from_id=o.id AND l.type='witnesses') "
         "   AS confirmed, "
         " (SELECT a.value #>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name LIKE 'amendment:%' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   AND a.name LIKE 'amendment:%' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC "
         "   LIMIT 1) AS latest_amendment "
         "FROM objects o WHERE o.type='Practice' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
@@ -714,7 +718,7 @@ async def reissue_office(
         peer_handle = await actions.pool.fetchval(
             "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
             "ON a.object_id=o.id AND a.name='handle' WHERE o.canonical=$1 "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", peer_seat)
+            "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", peer_seat)
         peer_block = _peer_addendum(peer_seat, peer_handle)
     seat_line = f", durable identity `{seat_id}`."
 
@@ -760,7 +764,7 @@ async def reissue_office(
         stamped = await actions.pool.fetchval(
             "SELECT a.value #>> '{}' FROM current_assertions a "
             "WHERE a.object_id=$1 AND a.name='boot_compiled_version' "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", row["id"])
+            "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", row["id"])
         if stamped != version:
             await actions.assert_property(row["id"], "boot_compiled_version", version,
                                           actor, datetime.now(UTC), _CONF,
@@ -936,7 +940,7 @@ async def boot_drift_gaps(pool: asyncpg.Pool) -> list[dict[str, str]]:
         stamped = await pool.fetchval(
             "SELECT a.value #>> '{}' FROM current_assertions a "
             "WHERE a.object_id=$1 AND a.name='boot_compiled_version' "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", row["id"])
+            "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", row["id"])
         if stamped and stamped != current:
             gaps.append({"seat_id": seat_id, "handle": handle, "house": house or "",
                         "stamped_version": stamped, "current_version": current})
@@ -966,7 +970,8 @@ def drift_nudge_summary(gap: dict[str, str]) -> str:
 
 def _current_prop(name: str) -> str:
     return (f"(SELECT a.value #>> '{{}}' FROM current_assertions a WHERE a.object_id=o.id "
-            f"AND a.name='{name}' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)")
+            f"AND a.name='{name}' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            f"a.id DESC LIMIT 1)")
 
 
 async def _open_drift_nudges(pool: asyncpg.Pool) -> dict[str, list[dict[str, Any]]]:
