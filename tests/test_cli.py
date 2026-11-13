@@ -3972,7 +3972,9 @@ async def _name_alias_dupe(actions: Actions, survivor: str, husk: str) -> None:
         "SoftwareProject", f"repo:{survivor}", "test")
     await actions.create_or_find_object("SoftwareProject", f"repo:{husk}", "test")
     await actions.assert_property(survivor_id, "name", survivor, "test", now, 0.9)
-    await actions.assert_property(survivor_id, "name", husk, "test-alias-source", now, 0.9)
+    # the alias ranks BELOW the primary name ("also called"): equal stamps would let the later
+    # write win the reading, and the alias would then be the survivor's name
+    await actions.assert_property(survivor_id, "name", husk, "test-alias-source", now, 0.8)
 
 
 async def test_cmd_deploy_name_alias_automerge_executes_by_default(

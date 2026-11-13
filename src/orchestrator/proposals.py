@@ -138,9 +138,11 @@ async def _resolved_count_since(
         "AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='owner' AND a.value #>> '{}' = $2) "
         "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = $3 "
+        "  AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) = $3 "
         "AND (SELECT a.observed_at FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) >= $4",
+        "  AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) >= $4",
         miner, owner, status, since,
     )
     return int(count or 0)
@@ -160,9 +162,11 @@ async def _proposals_made_since(
         "AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='owner' AND a.value #>> '{}' = $2) "
         "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='miner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = $1 "
+        "  AND a.name='miner' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) = $1 "
         "AND (SELECT a.observed_at FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='miner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) >= $3",
+        "  AND a.name='miner' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) >= $3",
         miner, owner, since,
     )
     return int(count or 0)
@@ -288,13 +292,13 @@ async def _proposal_row(pool: asyncpg.Pool, proposal: str) -> dict[str, Any] | N
     out: dict[str, Any] = {"id": proposal_id}
     status_row = await pool.fetchrow(
         "SELECT id, value FROM current_assertions WHERE object_id=$1 AND name='status' "
-        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", proposal_id)
+        "ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1", proposal_id)
     out["status"] = status_row["value"] if status_row else None
     out["status_assertion_id"] = status_row["id"] if status_row else None
     for name in ("candidate", "owner", "expires_at"):
         out[name] = await pool.fetchval(
             "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 AND a.name=$2 "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+            "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1",
             proposal_id, name)
     return out
 
@@ -447,7 +451,8 @@ async def sweep_expired(actions: Actions, *, actor: str = "miner:sweep") -> int:
     rows = await actions.pool.fetch(
         "SELECT o.id AS id, s.id AS status_id, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='expires_at' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='expires_at' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS expires_at "
         "FROM objects o JOIN current_assertions s ON s.object_id=o.id AND s.name='status' "
         "WHERE o.type='Proposal' AND s.value #>> '{}' = 'proposed'")
@@ -472,13 +477,14 @@ async def proposals_band(pool: asyncpg.Pool) -> dict[str, Any]:
     rows = await pool.fetch(
         "SELECT o.canonical AS proposal, "
         "  (SELECT a.value FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS owner, "
         "  (SELECT a.value FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='expires_at' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='expires_at' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS expires_at, "
         "  (SELECT a.observed_at FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS proposed_at "
         "FROM objects o "
         "WHERE o.type='Proposal' AND EXISTS ("

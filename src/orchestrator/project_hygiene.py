@@ -64,7 +64,8 @@ _CANDIDATES_SQL = """
         (SELECT oe.actor FROM object_events oe WHERE oe.object_id=o.id
          AND oe.event_type='create' ORDER BY oe.id ASC LIMIT 1) AS create_actor,
         (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id
-         AND a.name='on_disk_path' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)
+         AND a.name='on_disk_path' ORDER BY a.confidence DESC, a.observed_at DESC,
+         a.id DESC LIMIT 1)
         AS on_disk_path,
         (SELECT count(*) FROM links l JOIN objects t ON t.id=l.from_id
          WHERE l.to_id=o.id AND l.type='in_repo' AND t.type='Thread' AND t.status='active'

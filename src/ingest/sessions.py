@@ -1727,7 +1727,7 @@ async def _resolve_own_threads(
     own = await actions.pool.fetch(
         "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='summary' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS summary "
         "FROM objects o WHERE o.type='Thread' AND o.status='active' "
         "AND (SELECT value #>> '{}' FROM winning_props(ARRAY[o.id]::uuid[]) "
         "     WHERE name='status') = 'open' "
@@ -1766,7 +1766,7 @@ async def _known_projects(pool: asyncpg.Pool, exclude: str | None) -> dict[str, 
     rows = await pool.fetch(
         "SELECT (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "        AND a.name='name' "
-        "        ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name "
+        "        ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS name "
         "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
     ex = (exclude or "").removeprefix("repo:").strip().lower()
     out: dict[str, str] = {}

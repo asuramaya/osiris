@@ -598,11 +598,11 @@ async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, A
         " (SELECT a.value #>> '{}' FROM current_assertions a "
         "   JOIN objects o ON o.id=a.object_id "
         "   WHERE o.canonical=m.agent_id AND a.name='handle' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS handle, "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS handle, "
         " (SELECT a.value #>> '{}' FROM current_assertions a "
         "   JOIN objects o ON o.id=a.object_id "
         "   WHERE o.canonical=m.agent_id AND a.name='seat_generation' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS seat_gen, "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS seat_gen, "
         # seated: the visitor-gate discriminator, read not enforced. A row whose agent id is
         # just the session id echoed back, with no active object behind it, is a visiting
         # session (a background-pty host, a spare, a passing connection) and must never

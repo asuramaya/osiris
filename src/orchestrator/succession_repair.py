@@ -51,7 +51,8 @@ async def unresumed_heads(
     seats = await pool.fetch(
         "SELECT o.canonical AS seat_id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='anchor_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='anchor_cwd' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS anchor_cwd "
         "FROM objects o WHERE o.type='Seat' AND o.status='active' ORDER BY o.canonical")
     checked = 0

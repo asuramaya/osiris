@@ -509,7 +509,7 @@ async def _resolve_subagent_parent(
         return str(parent), True
     session = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "AND a.name='session' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "AND a.name='session' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1",
         subagent_oid)
     if not session:
         return None, False
@@ -635,10 +635,10 @@ async def file_subagents(
         "SELECT o.id, o.canonical, o.status, "
         " (SELECT a.value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='last_active' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS last_active, "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS last_active, "
         " (SELECT a.value#>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='patronym' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS patronym "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS patronym "
         "FROM objects o WHERE o.type='Agent' AND o.status='active' "
         f"AND o.canonical ~ '{_SUBAGENT_PATTERN}' "
         "AND ($1::text IS NULL OR EXISTS (SELECT 1 FROM current_assertions a "
@@ -789,13 +789,16 @@ async def unwitnessed_spawns(
     rows = await actions.pool.fetch(
         "SELECT c.canonical, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=c.id "
-        "   AND a.name='session' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='session' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS session, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=c.id "
-        "   AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS project, "
         " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=c.id "
-        "   AND a.name='last_active' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='last_active' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS last_active, "
         " l.first_seen AS spawned_by_since "
         "FROM links l JOIN objects p ON p.id=l.to_id JOIN objects c ON c.id=l.from_id "

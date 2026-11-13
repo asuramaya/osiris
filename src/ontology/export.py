@@ -41,7 +41,7 @@ async def _current_props(conn: Any, object_id: uuid.UUID) -> dict[str, Any]:
     """Highest-confidence current value per property name (point-of-use selection)."""
     rows = await conn.fetch(
         "SELECT DISTINCT ON (name) name, value FROM current_assertions "
-        "WHERE object_id = $1 ORDER BY name, confidence DESC, observed_at DESC",
+        "WHERE object_id = $1 ORDER BY name, confidence DESC, observed_at DESC, id DESC",
         object_id,
     )
     return {r["name"]: r["value"] for r in rows}

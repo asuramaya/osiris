@@ -6,7 +6,7 @@ correction call on an agent's house field proved this live: the right value ("58
 from a different source, the wrong one ("2", self-declared) stayed current, both
 simultaneously "current" per current_assertions' own definition (every row nothing else's
 supersedes points at), so a reader without an exact ORDER BY confidence DESC, observed_at
-DESC LIMIT 1 could still surface the wrong one.
+DESC, id DESC LIMIT 1 could still surface the wrong one.
 
 Deliberately narrow, not a general edit/delete escape hatch: it retires one named
 assertion, by id, on a caller-named (object, name), never a bare "whatever's current now",
@@ -42,7 +42,7 @@ async def list_assertions(actions: Actions, *, ref: str, name: str) -> dict[str,
         return {"error": f"no object matches {ref!r}"}
     rows = await pool.fetch(
         "SELECT id, value, source_id, confidence, observed_at FROM current_assertions "
-        "WHERE object_id=$1 AND name=$2 ORDER BY confidence DESC, observed_at DESC",
+        "WHERE object_id=$1 AND name=$2 ORDER BY confidence DESC, observed_at DESC, id DESC",
         object_id, name)
     return {
         "ref": ref, "object_id": str(object_id), "name": name,

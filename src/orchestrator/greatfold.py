@@ -113,10 +113,10 @@ async def seat_roster(pool: asyncpg.Pool, *, office_root: Path | None = None,
     rows = await pool.fetch(
         "SELECT o.canonical AS seat_id, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS handle, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='house' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='house' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS house "
         "FROM objects o WHERE o.type='Seat' AND o.status='active'")
     for r in rows:

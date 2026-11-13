@@ -4311,10 +4311,11 @@ async def _real_check_false_mint_live(
     rows = await pool.fetch(
         "SELECT o.canonical FROM objects o WHERE o.type='Agent' "
         "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='false_mint' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AND a.name='false_mint' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "  = 'true' "
         "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='retired' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AND a.name='retired' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "  IS DISTINCT FROM 'true' "
         "AND EXISTS (SELECT 1 FROM agent_mounts m WHERE m.agent_id=o.canonical "
         "  AND m.last_seen > now() - interval '900 seconds') "

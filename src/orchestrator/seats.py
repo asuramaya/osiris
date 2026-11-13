@@ -161,10 +161,11 @@ async def find_seat(pool: asyncpg.Pool, *, house: str | None, handle: str) -> st
         "SELECT o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
         "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='handle' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1), '')) = lower($1) "
         "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='house' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '') = COALESCE($2, '') "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1), '') = COALESCE($2, '') "
         "ORDER BY o.created_at LIMIT 1", handle, house)
 
 
@@ -183,7 +184,7 @@ async def seats_by_handle(pool: asyncpg.Pool, handle: str) -> list[str]:
         "SELECT o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
         "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='handle' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1), '')) = lower($1) "
         "ORDER BY o.created_at", handle)]
 
 
@@ -273,7 +274,7 @@ _HELD_SEAT_SQL = (
     "AND (canonical=$1 OR canonical=$2 OR canonical LIKE $2 || '-%')) "
     "SELECT h.canonical AS holder, t.canonical AS seat_id, "
     " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=t.id "
-    "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+    "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
     "   AS handle "
     "FROM h JOIN links l ON l.from_id=h.id JOIN objects t ON t.id=l.to_id "
     "WHERE l.type='holds' AND t.type='Seat' AND t.status='active' "
@@ -354,11 +355,12 @@ async def seat_by_handle(pool: asyncpg.Pool, handle: str) -> dict[str, Any] | No
     rows = await pool.fetch(
         "SELECT t.canonical AS seat_id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=t.id "
-        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS handle "
         "FROM objects t WHERE t.type='Seat' AND t.status='active' "
         "AND lower((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=t.id "
-        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)) "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1)) "
         "   = lower($1)",
         handle)
     if len(rows) != 1:
@@ -377,10 +379,11 @@ async def tree_seat_hint(pool: asyncpg.Pool, *, cwd: str) -> str | None:
     the ordinary project-only mount stays untouched."""
     row = await pool.fetchval(
         "SELECT (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "FROM objects o WHERE o.type='Seat' AND o.status='active' "
         "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='tree_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = $1",
+        "  AND a.name='tree_cwd' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) = $1",
         cwd)
     if row:
         return str(row)
@@ -637,7 +640,7 @@ async def fleet_occupancy(
     seats = await pool.fetch(
         "SELECT o.canonical AS seat_id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS handle "
         "FROM objects o WHERE o.type='Seat' AND o.status='active' ORDER BY o.canonical")
     # Same answers as asking seat_occupancy per seat, with the liveness reads done once for all
@@ -992,7 +995,7 @@ async def roster(
     seat_rows = await pool.fetch(
         "SELECT o.canonical AS seat_id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS handle "
         "FROM objects o WHERE o.type='Seat' AND o.status='active' ORDER BY o.canonical")
 
@@ -1312,7 +1315,7 @@ async def project_ledger(pool: asyncpg.Pool, *, limit: int = 200, offset: int = 
     rows = await pool.fetch(
         "SELECT o.id, o.canonical, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS name "
         "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active' "
         "ORDER BY o.canonical LIMIT $1 OFFSET $2", limit, offset)
@@ -1606,7 +1609,7 @@ async def team_roster(
     rows = await pool.fetch(
         "SELECT s.canonical AS seat, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=s.id "
-        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS handle, "
         "  h.holder AS holder "
         "FROM links mb JOIN objects s ON s.id=mb.from_id "
@@ -1663,7 +1666,7 @@ async def _own_house_stamp(pool: asyncpg.Pool, seat_id: str) -> tuple[str | None
     row = await pool.fetchrow(
         "SELECT a.value #>> '{}' AS house, a.source_id FROM objects o "
         "JOIN current_assertions a ON a.object_id=o.id AND a.name='house' "
-        "WHERE o.canonical=$1 ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "WHERE o.canonical=$1 ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1",
         seat_id)
     return (row["house"], row["source_id"]) if row else (None, None)
 
@@ -1814,16 +1817,18 @@ async def seat_facts(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any]:
     row = await pool.fetchrow(
         "SELECT "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS handle, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='intended_model' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   AND a.name='intended_model' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC "
         "   LIMIT 1) AS intended_model, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='anchor_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='anchor_cwd' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS anchor_cwd, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='tree_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='tree_cwd' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS tree_cwd "
         "FROM objects o WHERE o.canonical=$1 AND o.type='Seat' AND o.status='active'", seat_id)
     house = await derive_house(pool, seat_id)
@@ -2040,7 +2045,7 @@ async def rename_seat(
                          "(case-insensitive), a name belongs to one seat forever"}
     old_handle = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1",
         row["id"])
     now = datetime.now(UTC)
     await actions.assert_property(row["id"], "handle", new_handle, actor, now, _CONF,
@@ -2139,7 +2144,7 @@ async def bind_seat_tree(
         return {"error": f"no such seat: {seat_id!r}"}
     old_tree = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "AND a.name='tree_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "AND a.name='tree_cwd' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1",
         row["id"])
     # A seat-tree fabrication fix, operator-flagged: plain assert_property's own
     # supersession is same-source-only, so a manager's later, correct bind_seat_tree
@@ -2506,10 +2511,10 @@ async def backfill_unbound_seats(
     unbound = await pool.fetch(
         "SELECT o.canonical AS seat_id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS handle, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='house' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='house' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS house "
         "FROM objects o WHERE o.type='Seat' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_id=o.id AND l.type='holds' "
@@ -2579,7 +2584,8 @@ async def binding_of_handle(pool: asyncpg.Pool, name: str) -> dict[str, Any] | N
         "SELECT o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
         "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='handle' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1)", name)]
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1), '')) = lower($1)", name)]
     if len(seats) != 1:
         return None
     holder = await pool.fetchval(
@@ -2642,7 +2648,8 @@ async def seat_holder_ineligible(pool: asyncpg.Pool, name: str) -> str | None:
         "SELECT o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
         "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='handle' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1)", name)]
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1), '')) = lower($1)", name)]
     if len(seats) != 1:
         return None  # No seat, or an ambiguous handle: not this function's shape to name.
     rows = await pool.fetch(
@@ -2738,7 +2745,7 @@ async def _seat_display(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any]:
     row = await pool.fetchrow(
         "SELECT "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS handle "
         "FROM objects o WHERE o.canonical=$1 AND o.type='Seat' AND o.status='active'", seat_id)
     if row is None:
@@ -3540,21 +3547,23 @@ async def peer_ledger(pool: asyncpg.Pool, seat_a: str, seat_b: str) -> list[dict
     rows = await pool.fetch(
         "SELECT o.id, o.created_at, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS summary, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS kind, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS owner "
         "FROM objects o "
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
         "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "    AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "    AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "    = 'open' "
         "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "    AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "    AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "    = ANY($1) "
         "ORDER BY o.created_at ASC", [seat_a, seat_b])
     return [{"id": str(r["id"])[:8], "summary": r["summary"], "kind": r["kind"],

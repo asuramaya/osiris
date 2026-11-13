@@ -174,7 +174,7 @@ async def thread_closure_status(
     status_rows = await pool.fetch(
         "SELECT DISTINCT ON (object_id) object_id, value #>> '{}' AS status "
         "FROM current_assertions WHERE name = 'status' AND object_id = ANY($1::uuid[]) "
-        "ORDER BY object_id, confidence DESC, observed_at DESC",
+        "ORDER BY object_id, confidence DESC, observed_at DESC, id DESC",
         ids,
     )
     status_by_thread = {r["object_id"]: r["status"] for r in status_rows}
@@ -322,10 +322,10 @@ async def enumerate_threads(
         "SELECT o.id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='summary' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS summary, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='owner' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner, "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS owner, "
         " (SELECT max(sa.observed_at) FROM assertions sa WHERE sa.object_id=o.id "
         "   AND sa.evidence_class='self_declared') AS last_touched, "
         " EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id "

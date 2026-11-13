@@ -98,7 +98,7 @@ async def _resolve_software_project(pool: asyncpg.Pool, ref: str) -> asyncpg.Rec
         "WHERE o.type='SoftwareProject' AND o.status='active' "
         "AND (o.canonical=$1 OR (SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='name' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = $2)", canon, bare)
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) = $2)", canon, bare)
     if len(rows) > 1:
         raise AmbiguousProjectRef(ref, sorted(str(r["canonical"]) for r in rows))
     if rows:
@@ -111,7 +111,7 @@ async def _resolve_software_project(pool: asyncpg.Pool, ref: str) -> asyncpg.Rec
         "WHERE o.type='SoftwareProject' AND o.status='active' "
         "AND (lower(o.canonical)=lower($1) OR lower((SELECT a.value #>> '{}' "
         "  FROM current_assertions a WHERE a.object_id=o.id AND a.name='name' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)) = lower($2))",
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1)) = lower($2))",
         "repo:" + re.sub(r"(?i)^repo:", "", ref), re.sub(r"(?i)^repo:", "", ref))
     if len(rows) > 1:
         raise AmbiguousProjectRef(ref, sorted(str(r["canonical"]) for r in rows))
@@ -326,7 +326,7 @@ async def _contradicting_properties(
     """A mark-not-resolve primitive (dossier.py's `agreement` field, compositions.py's
     `contradicted` triage bucket), reused here as a REFUSAL SIGNAL instead of a display
     marker: for every property name either object currently carries, does each object's
-    own BELIEF (its winning value, the same `confidence DESC, observed_at DESC`
+    own BELIEF (its winning value, the same `confidence DESC, observed_at DESC, id DESC`
     resolution every other belief-read site in this codebase already uses, e.g.
     `trace_evidence`'s `believes`) disagree between the two objects? `name`/`tag` are
     excluded: a label difference is a fold's own PREMISE (two tags for one referent is
@@ -364,7 +364,7 @@ async def _contradicting_properties(
         "  FROM current_assertions "
         "  WHERE object_id = ANY($1::uuid[]) "
         "  AND name NOT IN ('name', 'tag', 'graph_x', 'graph_y', 'graph_layout_v') "
-        "  ORDER BY object_id, name, confidence DESC, observed_at DESC"
+        "  ORDER BY object_id, name, confidence DESC, observed_at DESC, id DESC"
         ") "
         "SELECT name FROM belief GROUP BY name HAVING count(DISTINCT v) > 1",
         [a_id, b_id])

@@ -200,10 +200,10 @@ async def _dm_ineligibility(pool: asyncpg.Pool, agent_id: str) -> str | None:
     row = await pool.fetchrow(
         "SELECT "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='retired' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   AND a.name='retired' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC "
         "   LIMIT 1) AS retired, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='false_mint' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   AND a.name='false_mint' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC "
         "   LIMIT 1) AS false_mint "
         "FROM objects o WHERE o.canonical=$1 AND o.type='Agent' AND o.status='active'",
         agent_id)
@@ -1114,7 +1114,8 @@ async def read_inbox(
             " EXISTS(SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
             "  AND a.name='is_sidechain' AND a.value #>> '{}' = 'true') AS is_sidechain, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "  AND a.name='patronym' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "  AND a.name='patronym' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC LIMIT 1) "
             "  AS patronym "
             "FROM objects o WHERE o.canonical = ANY($1::text[])", from_ids)
         sender_meta = {
@@ -1580,14 +1581,17 @@ async def _operator_queue(pool: asyncpg.Pool, limit: int = 100) -> list[dict[str
     rows = await pool.fetch(
         "SELECT o.id, o.created_at, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS s, "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) AS s, "
         " (SELECT a.evidence_class FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS ec, "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) AS ec, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS k, "
+        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) AS k, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='deferred_until' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS d, "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS d, "
         " (SELECT replace(p.canonical,'repo:','') FROM links l JOIN objects p ON p.id=l.to_id "
         "   WHERE l.from_id=o.id AND l.type='in_repo' AND p.type='SoftwareProject' "
         "   AND (l.valid_until IS NULL OR l.valid_until > now()) "
@@ -1595,13 +1599,13 @@ async def _operator_queue(pool: asyncpg.Pool, limit: int = 100) -> list[dict[str
         "FROM objects o "
         "WHERE o.type='Thread' AND o.status='active' "
         "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "  = 'operator' "
         "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='status' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'open')='open' "
         "ORDER BY (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "  IS DISTINCT FROM 'obligation', o.created_at DESC LIMIT $1", limit)
     today = datetime.now(UTC).date().isoformat()
     return [{"id": str(r["id"])[:8], "summary": (r["s"] or "")[:200],
@@ -1635,7 +1639,8 @@ async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
             " EXISTS(SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
             "  AND a.name='is_sidechain' AND a.value #>> '{}' = 'true') AS is_sidechain, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "  AND a.name='patronym' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "  AND a.name='patronym' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC LIMIT 1) "
             "  AS patronym "
             "FROM objects o WHERE o.canonical = ANY($1::text[])", from_ids)
         sender_meta = {

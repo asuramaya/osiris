@@ -115,7 +115,7 @@ async def _false_mint_live_candidates(
         "WHERE o.type='Agent' "
         "AND (SELECT value #>> '{}' FROM current_assertions "
         "     WHERE object_id=o.id AND name='false_mint' "
-        "     ORDER BY confidence DESC, observed_at DESC LIMIT 1) = 'true' "
+        "     ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1) = 'true' "
         "AND EXISTS (SELECT 1 FROM agent_mounts m WHERE m.agent_id=o.canonical "
         "  AND m.last_seen > now() - make_interval(secs => $1))",
         float(live_secs))
@@ -210,9 +210,9 @@ async def _half_healed_phantom_threads(pool: asyncpg.Pool) -> list[dict[str, Any
     rows = await pool.fetch(
         "SELECT o.id, o.created_at, "
         " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
-        "   AND name='status' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS st, "
+        "   AND name='status' ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1) AS st, "
         " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
-        "   AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) "
+        "   AND name='summary' ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1) "
         "   AS summary "
         "FROM objects o WHERE o.type='Thread' AND o.status='active' "
         "AND EXISTS (SELECT 1 FROM current_assertions ca WHERE ca.object_id=o.id "

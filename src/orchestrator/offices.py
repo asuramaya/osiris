@@ -70,7 +70,7 @@ async def seat_office_target(
     handle = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id="
         "  (SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active') "
-        "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1",
         seat_id)
     if not handle:
         return None
@@ -518,7 +518,7 @@ async def correct_own_pin_value(
     anchor_cwd = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
         "ON a.object_id=o.id AND a.name='anchor_cwd' WHERE o.canonical=$1 "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", bound["seat_id"])
+        "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", bound["seat_id"])
     if anchor_cwd and _resolved(Path(anchor_cwd)) not in touched and \
             (Path(anchor_cwd) / ".osiris").is_file():
         result["anchor"] = _correct_or_add_pin_value(anchor_cwd, key, value, reason=reason)
@@ -526,7 +526,7 @@ async def correct_own_pin_value(
     declared_tree = tree_cwd or await pool.fetchval(
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
         "ON a.object_id=o.id AND a.name='tree_cwd' WHERE o.canonical=$1 "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", bound["seat_id"])
+        "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", bound["seat_id"])
     workspace = Path(declared_tree) if declared_tree else \
         (workspace_root or (Path.home() / "code")) / handle
     if _resolved(workspace) not in touched and (workspace / ".osiris").is_file():
@@ -698,7 +698,7 @@ async def revert_own_pin_write(
     anchor_cwd = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
         "ON a.object_id=o.id AND a.name='anchor_cwd' WHERE o.canonical=$1 "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", bound["seat_id"])
+        "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", bound["seat_id"])
     if anchor_cwd and _resolved(Path(anchor_cwd)) not in touched and \
             _pin_backup_path(Path(anchor_cwd) / ".osiris").is_file():
         out["anchor"] = revert_pin_write(anchor_cwd)
@@ -932,7 +932,7 @@ async def _establish_pure_seat_office(
         peer_handle = await actions.pool.fetchval(
             "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
             "ON a.object_id=o.id AND a.name='handle' WHERE o.canonical=$1 "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", peer_seat)
+            "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", peer_seat)
         peer_addendum = _peer_addendum(peer_seat, peer_handle)
     orders = office / "CLAUDE.md"
     agents = office / "AGENTS.md"
@@ -1131,7 +1131,7 @@ async def establish_office(
             peer_handle = await actions.pool.fetchval(
                 "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
                 "ON a.object_id=o.id AND a.name='handle' WHERE o.canonical=$1 "
-                "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", peer_seat)
+                "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", peer_seat)
             peer_addendum = _peer_addendum(peer_seat, peer_handle)
     orders = office / "CLAUDE.md"
     agents = office / "AGENTS.md"
@@ -1305,7 +1305,7 @@ async def sweep_retired_office(
         "SELECT o.id, o.canonical, o.status FROM objects o WHERE o.type='Seat' "
         "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='handle' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1), '')) = lower($1) "
         "ORDER BY o.created_at", handle)
     if len(rows) > 1:
         return {"error": f"{len(rows)} Seat objects (any status) match handle {handle!r}; "
@@ -1417,7 +1417,7 @@ async def sweep_seat_workspace(
         "SELECT o.id, o.canonical, o.status FROM objects o WHERE o.type='Seat' "
         "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='handle' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1), '')) = lower($1) "
         "ORDER BY o.created_at", handle)
     if len(rows) > 1:
         return {"error": f"{len(rows)} Seat objects (any status) match handle {handle!r}; "

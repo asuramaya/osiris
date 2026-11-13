@@ -42,7 +42,7 @@ async def _name_of(pool: asyncpg.Pool, object_id: object) -> tuple[str, str, str
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id = $1::uuid "
         "AND a.name IN ('name', 'summary', 'statement') "
         "ORDER BY CASE a.name WHEN 'name' THEN 0 WHEN 'summary' THEN 1 ELSE 2 END, "
-        "a.confidence DESC, a.observed_at DESC LIMIT 1", str(object_id))
+        "a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", str(object_id))
     return row["type"], _label(title or row["canonical"]), row["canonical"]
 
 

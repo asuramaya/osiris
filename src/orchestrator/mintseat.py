@@ -104,7 +104,8 @@ async def _resolve_seat_ref(pool: Any, ref: str) -> str | None:
         "SELECT o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
         "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='handle' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1)", ref)
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1), '')) = lower($1)", ref)
     return str(rows[0]["canonical"]) if len(rows) == 1 else None
 
 
@@ -116,7 +117,7 @@ async def _person_collision(pool: Any, handle: str) -> str | None:
         "SELECT o.canonical FROM objects o WHERE o.type='Person' AND o.status='active' "
         "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='name' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1), '')) = lower($1) "
         "LIMIT 1", handle)
 
 
@@ -150,7 +151,7 @@ async def _near_miss(pool: Any, handle: str) -> str | None:
     rows = await pool.fetch(
         "SELECT (SELECT a.value #>> '{}' FROM current_assertions a "
         " WHERE a.object_id=o.id AND a.name='handle' "
-        " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS handle "
+        " ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS handle "
         "FROM objects o WHERE o.type='Seat' AND o.status='active'")
     for r in rows:
         cand = r["handle"]

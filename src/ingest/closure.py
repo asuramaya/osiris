@@ -132,7 +132,8 @@ async def _open_untouched_threads(
     return [dict(r) for r in await pool.fetch(
         "SELECT o.id, o.created_at, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS summary "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
         "AND (l.valid_until IS NULL OR l.valid_until > now()) "
@@ -140,7 +141,8 @@ async def _open_untouched_threads(
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
         "AND ($1::text IS NULL OR p.canonical = 'repo:' || $1) "
         "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open') "
+        "  AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1),'open') "
         "  = 'open' "
         # THE HARD GUARD: a person or agent touched it, so a git log does not get to answer
         # for it
@@ -165,13 +167,16 @@ async def _commits(
     return [dict(r) for r in await pool.fetch(
         "SELECT o.id, o.canonical, o.created_at, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='subject' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='subject' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS subject, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='rationale' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='rationale' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS rationale, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='authored_date' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='authored_date' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS at "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
         "AND (l.valid_until IS NULL OR l.valid_until > now()) "
@@ -423,10 +428,11 @@ async def _needs_human_threads(
     detail = await pool.fetch(
         "SELECT o.id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='resolved_because' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "  AND a.name='resolved_because' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC "
         "  LIMIT 1) AS resolved_because, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "  AND a.name='resolved_artifact' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "  AND a.name='resolved_artifact' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC "
         "  LIMIT 1) AS resolved_artifact "
         "FROM objects o WHERE o.id = ANY($1::uuid[])", ids)
     out = []

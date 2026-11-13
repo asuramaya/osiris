@@ -81,6 +81,7 @@ def _violates(sub: str) -> bool:
     return not re.search(
         r"ORDER\s+BY\s+(?:\w+\.)?confidence\s+DESC(?:\s+NULLS\s+LAST)?"
         r"\s*,\s*(?:\w+\.)?observed_at\s+DESC"
+        r"(?:\s*,\s*(?:\w+\.)?id\s+DESC)?"
         r"\s+LIMIT\s+1", body, re.IGNORECASE)
 
 

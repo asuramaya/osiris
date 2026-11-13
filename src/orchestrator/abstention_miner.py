@@ -302,7 +302,7 @@ async def _mention_counts(
     for field in text_fields:
         val = await pool.fetchval(
             "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-            "AND a.name=$2 ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+            "AND a.name=$2 ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1",
             obj_id, field)
         if val:
             parts.append(val)
@@ -503,7 +503,7 @@ async def _lane_scan(
     the first producer; the aggregate is for judging the rule, the picks use the real one.)"""
     fields = ", ".join(
         f"(SELECT a.value #>> '{{}}' FROM current_assertions a WHERE a.object_id=o.id "
-        f"AND a.name=${4 + k} ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)"
+        f"AND a.name=${4 + k} ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1)"
         for k in range(len(lane.text_fields)))
     rows = await pool.fetch(
         f"SELECT o.id, o.created_at, ARRAY[{fields}] AS parts " + _ELIGIBLE_SQL

@@ -173,7 +173,7 @@ async def compile_handoff(
     repo_root = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a "
         "WHERE a.object_id=$1 AND a.name='on_disk_path' "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", proj_id)
+        "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", proj_id)
     deployed_sha = await get_cursor(pool, f"deployed:{name}")
 
     shipped_rows = await pool.fetch(
@@ -183,10 +183,12 @@ async def compile_handoff(
         ") "
         "SELECT d.id, "
         " (SELECT a.value #>>'{}' FROM current_assertions a WHERE a.object_id=d.id "
-        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS summary, "
         " (SELECT a.value #>>'{}' FROM current_assertions a WHERE a.object_id=d.id "
-        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) AS kind, "
         " r.recorded_at, "
         " (SELECT array_agg(DISTINCT c.canonical) FROM links dl JOIN objects c ON c.id=dl.to_id "
         "   WHERE dl.from_id=d.id AND dl.type='decided_in') AS commit_canons "
@@ -218,7 +220,8 @@ async def compile_handoff(
         ") "
         "SELECT d.id AS new_id, "
         " (SELECT a.value #>>'{}' FROM current_assertions a WHERE a.object_id=d.id "
-        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS new_summary, "
         " sup.value #>>'{}' AS old_id_text, r.recorded_at "
         "FROM objects d "
@@ -236,7 +239,7 @@ async def compile_handoff(
         old_rows = await pool.fetch(
             "SELECT o.id, (SELECT a.value #>>'{}' FROM current_assertions a "
             "  WHERE a.object_id=o.id AND a.name='summary' "
-            "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary "
+            "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS summary "
             "FROM objects o WHERE o.id = ANY($1::uuid[])",
             [_uuid.UUID(i) for i in old_ids])
         old_summaries = {str(r["id"]): r["summary"] for r in old_rows}

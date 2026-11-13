@@ -24,6 +24,7 @@ async def _arc_map(pool: Any, short_ids: list[str]) -> dict[str, str]:
     rows = await pool.fetch(
         "SELECT substring(o.id::text, 1, 8) AS short_id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='arc' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS arc "
+        "   AND a.name='arc' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) AS arc "
         "FROM objects o WHERE substring(o.id::text, 1, 8) = ANY($1::text[])", short_ids)
     return {r["short_id"]: r["arc"] for r in rows if r["arc"]}

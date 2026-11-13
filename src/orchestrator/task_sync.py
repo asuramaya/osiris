@@ -203,7 +203,7 @@ async def reconcile(
             kind_rows = await pool.fetch(
                 "SELECT o.id, (SELECT a.value #>> '{}' FROM current_assertions a "
                 " WHERE a.object_id=o.id AND a.name='kind' "
-                " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind "
+                " ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS kind "
                 "FROM objects o WHERE o.id = ANY($1::uuid[])", ids,
             )
             for kr in kind_rows:
@@ -525,7 +525,7 @@ def archive_eligible_targets(
 _TASK_SYNC_ORPHAN_SQL = (
     "SELECT o.id, o.canonical, "
     " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+    "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
     "  AS summary "
     "FROM objects o "
     "WHERE o.type='Thread' AND o.status='active' "

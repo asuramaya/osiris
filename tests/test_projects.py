@@ -1927,7 +1927,9 @@ async def _name_alias(actions: Actions, oid, alias: str) -> None:
     is same-source-only, so two names from the SAME source would collapse to one current
     row, exactly the shape the real dtfb specimen does NOT have: its own two current
     names come from two distinct sources, confirmed live before writing this fixture)."""
-    await actions.assert_property(oid, "name", alias, "test-alias-source", NOW, 0.9)
+    # ranked BELOW the primary name (0.9): "also called" is a second name, and with equal
+    # stamps the later write would win the reading and become the survivor's name
+    await actions.assert_property(oid, "name", alias, "test-alias-source", NOW, 0.8)
 
 
 async def test_name_alias_automerge_finds_a_clean_pair_and_defaults_to_dry_run(

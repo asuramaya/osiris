@@ -72,7 +72,7 @@ async def _cluster(pool: asyncpg.Pool, object_id: uuid.UUID) -> list[uuid.UUID]:
     normalizes the same (the same company, still fragmented across bases pre-merge)."""
     name = await pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='name' "
-        "ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+        "ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1",
         object_id,
     )
     norm = normalize_org_name(name or "")
@@ -87,7 +87,7 @@ async def _cluster(pool: asyncpg.Pool, object_id: uuid.UUID) -> list[uuid.UUID]:
                 await pool.fetchval(
                     "SELECT value #>> '{}' FROM current_assertions "
                     "WHERE object_id=$1 AND name='name' "
-                    "ORDER BY confidence DESC, observed_at DESC LIMIT 1", r["object_id"]
+                    "ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1", r["object_id"]
                 ) or ""
             ) == norm:
                 ids.add(r["object_id"])
@@ -135,7 +135,7 @@ async def footprint_discrepancy(pool: asyncpg.Pool, object_id: uuid.UUID) -> dic
         SELECT DISTINCT o.id, o.type,
                (SELECT value #>> '{}' FROM current_assertions a
                 WHERE a.object_id=o.id AND a.name='name'
-                ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name,
+                ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS name,
                loc.value #>> '{}' AS location
         FROM nbr JOIN objects o ON o.id = nbr.id
         JOIN current_assertions loc ON loc.object_id = o.id AND loc.name = 'location'

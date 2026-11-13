@@ -349,7 +349,7 @@ async def _attach_labels(pool: asyncpg.Pool, hits: list[dict[str, Any]]) -> list
     CALL the object, which is exactly the reported bug (a hex hash where a sentence
     belongs, e.g. `practice:b1eb7520e783`).
     One batched fetch of each hit's LABEL_CHAIN-candidate properties (the same winning-
-    value tie-break as everywhere else: confidence DESC, observed_at DESC), resolved
+    value tie-break as everywhere else: confidence DESC, observed_at DESC, id DESC), resolved
     through the single canonical `resolve_label`, then `disambiguate_labels` across
     THIS result set so two hits that would otherwise truncate identically stay
     distinguishable. Adds `label`/`label_source` (resolve_label's own fields) and
@@ -434,7 +434,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             "  SELECT 1 FROM unnest($1::text[]) AS frag "
             "  WHERE o.id::text LIKE frag || '%' "
             "     OR regexp_replace(o.canonical, '^[^:]+:', '') LIKE frag || '%') "
-            "ORDER BY o.id, a.confidence DESC, a.observed_at DESC "
+            "ORDER BY o.id, a.confidence DESC, a.observed_at DESC, a.id DESC "
             "LIMIT $2", id_candidates, min(20, 5 * len(id_candidates)))
         if idrows:
             id_hits = [
@@ -559,7 +559,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             "SELECT DISTINCT ON (object_id) object_id, value #>> '{}' AS v "
             "FROM current_assertions WHERE name='superseded_by' "
             "AND object_id = ANY($1::uuid[]) "
-            "ORDER BY object_id, confidence DESC, observed_at DESC",
+            "ORDER BY object_id, confidence DESC, observed_at DESC, id DESC",
             [h["id"] for h in hits]) if (r["v"] or "").strip()}
         for h in hits:
             if h["id"] in buried:
@@ -572,7 +572,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             "SELECT DISTINCT ON (object_id) object_id, value #>> '{}' AS v "
             "FROM current_assertions WHERE name='refuted_by' "
             "AND object_id = ANY($1::uuid[]) "
-            "ORDER BY object_id, confidence DESC, observed_at DESC",
+            "ORDER BY object_id, confidence DESC, observed_at DESC, id DESC",
             [h["id"] for h in hits]) if (r["v"] or "").strip()}
         for h in hits:
             if h["id"] in refuted:
@@ -787,7 +787,7 @@ async def _semantic_hits(pool: asyncpg.Pool, q: str, limit: int) -> list[dict[st
         "JOIN unnest($1::uuid[], $2::text[]) AS want(oid, fld) "
         "  ON want.oid = o.id AND want.fld = a.name "
         "WHERE o.status = 'active' "
-        "ORDER BY o.id, a.name, a.confidence DESC, a.observed_at DESC",
+        "ORDER BY o.id, a.name, a.confidence DESC, a.observed_at DESC, a.id DESC",
         [c["object_id"] for c in cands], [c["field"] for c in cands])
     by_key = {(r["id"], r["field"]): r for r in rows}
     out: list[dict[str, Any]] = []
@@ -844,22 +844,22 @@ async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[st
         "SELECT o.canonical AS canonical, "
         " (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='name' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS title, "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS title, "
         " (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='vendor' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS vendor, "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS vendor, "
         " (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='topic' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS topic, "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS topic, "
         " (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='grounds' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS grounds, "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS grounds, "
         " (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='source_url' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS source, "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS source, "
         " (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='body' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS body "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS body "
         "FROM objects o WHERE o.type='Reference' AND o.status='active'"
     )
     # scope: the shared design canon (vendor-tagged) is visible to everyone; UNVENDORED project
@@ -920,7 +920,7 @@ async def _family_repos(pool: asyncpg.Pool, args: dict[str, Any]) -> dict[uuid.U
     repos = await pool.fetch(
         "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='name' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS name "
         "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
     have_files = {r["repo"] for r in await pool.fetch(
         "SELECT DISTINCT l.to_id AS repo FROM links l "
@@ -980,13 +980,13 @@ async def _fn_family_drift(
         "SELECT l.to_id AS repo, "
         " (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=f.id AND a.name='role' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS role, "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS role, "
         " (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=f.id AND a.name='content_hash' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS h, "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS h, "
         " (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=f.id AND a.name='license_type' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS lt "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS lt "
         "FROM links l JOIN objects f ON f.id=l.from_id AND f.type='File' "
         "WHERE l.type='in_repo' AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "AND l.to_id = ANY($1::uuid[])", list(rmap))
@@ -1035,15 +1035,15 @@ async def _fn_project(
         return {"Project": [{"note": "focus a repo, or pass args.repo = its name"}]}
     name = await pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='name' "
-        "ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+        "ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1",
         repo) or "(project)"
     commits = await pool.fetch(
         "SELECT (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=c.id "
         "        AND a.name='summary' "
-        "        ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+        "        ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS summary, "
         " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=c.id "
         "        AND a.name='authored_date' "
-        "        ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS date "
+        "        ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS date "
         "FROM links l JOIN objects c ON c.id=l.from_id AND c.type='Commit' "
         "WHERE l.to_id=$1 AND l.type='in_repo' "
         "AND (l.valid_until IS NULL OR l.valid_until > now()) "
@@ -1073,15 +1073,15 @@ async def _fn_project(
         "SELECT "
         " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=q.id "
         "  AND a.name='summary' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS summary, "
         " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=q.id "
         "  AND a.name='kind' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS kind "
         "FROM qualifying q LIMIT 20", repo)
     roles = await pool.fetch(
         "SELECT DISTINCT (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=f.id "
         "        AND a.name='role' "
-        "        ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS role "
+        "        ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS role "
         "FROM links l JOIN objects f ON f.id=l.from_id AND f.type='File' "
         "WHERE l.to_id=$1 AND l.type='in_repo' "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", repo)
@@ -1118,10 +1118,10 @@ async def _fn_project_worktrees(
         "SELECT p.id AS project_id, w.canonical, "
         " (SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=w.id AND a.name='name' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name, "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS name, "
         " (SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=w.id AND a.name='branch' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS branch "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS branch "
         "FROM links l "
         "JOIN objects w ON w.id=l.from_id AND w.type='Worktree' AND w.status='active' "
         "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
@@ -1157,7 +1157,7 @@ async def _fn_portfolio(
     rmap = {r["id"]: r["name"] for r in await pool.fetch(
         "SELECT o.id, (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='name' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS name "
         "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
         if r["name"] and (not want or r["name"].lower() in want)}
     if not rmap:
@@ -1179,10 +1179,10 @@ async def _fn_portfolio(
         "SELECT l.to_id AS repo, "
         " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='summary' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS s, "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS s, "
         " (SELECT value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='rationale' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS r "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS r "
         "FROM links l JOIN objects o ON o.id=l.from_id AND o.type='Commit' "
         "WHERE l.type='in_repo' AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "AND l.to_id = ANY($1::uuid[])", list(rmap)):
@@ -1498,23 +1498,23 @@ async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         "   AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1) AS project, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='summary' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS summary, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='kind' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS kind, "
         # THE ROT CANDIDATE'S EVIDENCE (closure-miner): a later
         # commit that looks like it did this. It is a QUESTION, never a verdict, it rides the
         # pile so the human can confirm a whole tree in one sitting instead of re-deriving each.
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='rot_candidate' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS probably_done, "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS probably_done, "
         " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
         "   AND sa.evidence_class='self_declared') AS untouched "
         "FROM objects o "
         "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'open')='open' "
         "ORDER BY o.created_at ASC LIMIT 3000")
     echoes = []
     for r in rows:
@@ -1744,7 +1744,7 @@ async def project_identity_census(pool: asyncpg.Pool) -> dict[str, Any]:
     stubs = await pool.fetch(
         "SELECT o.id, o.canonical, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS name "
         "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_id=o.id "
@@ -2363,12 +2363,12 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             "  GROUP BY object_id, name HAVING count(DISTINCT source_id) > 1), "
             "per_value AS (SELECT DISTINCT ON (ca.object_id, ca.name, ca.value #>> '{}') "
             "  ca.object_id, ca.name, ca.value #>> '{}' AS v, ca.source_id, ca.confidence, "
-            "  ca.observed_at "
+            "  ca.observed_at, ca.id "
             "  FROM current_assertions ca JOIN multi USING (object_id, name) "
             "  ORDER BY ca.object_id, ca.name, ca.value #>> '{}', "
-            "    ca.confidence DESC, ca.observed_at DESC), "
+            "    ca.confidence DESC, ca.observed_at DESC, ca.id DESC), "
             "ranked AS (SELECT *, row_number() OVER (PARTITION BY object_id, name "
-            "    ORDER BY confidence DESC, observed_at DESC) AS rn "
+            "    ORDER BY confidence DESC, observed_at DESC, id DESC) AS rn "
             "  FROM per_value) "
             "SELECT o.canonical, w.name AS field, w.v AS winner, w.source_id AS winner_source, "
             "  w.confidence AS winner_conf, r.v AS rival, r.source_id AS rival_source, "
@@ -2418,7 +2418,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             "SELECT o.canonical, op.source_id AS reopener, op.observed_at AS reopened_at, "
             "  re.source_id AS resolver, "
             "  (SELECT value #>> '{}' FROM current_assertions WHERE object_id=op.object_id "
-            "    AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS summary "
+            "    AND name='summary' ORDER BY confidence DESC, observed_at DESC, "
+            "id DESC LIMIT 1) AS summary "
             "FROM s op JOIN s re ON re.object_id=op.object_id "
             "JOIN objects o ON o.id=op.object_id "
             "WHERE op.v='open' AND re.v='resolved' AND op.observed_at > re.observed_at "
@@ -2441,7 +2442,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             "  ca.value #>> '{}' AS status, ca.observed_at AS win_at "
             "  FROM current_assertions ca JOIN objects o ON o.id=ca.object_id "
             "  WHERE ca.name='status' AND o.type='Thread' AND o.status='active' "
-            "  ORDER BY ca.object_id, ca.confidence DESC, ca.observed_at DESC), "
+            "  ORDER BY ca.object_id, ca.confidence DESC, ca.observed_at DESC, ca.id DESC), "
             "resolve_evidence AS (SELECT object_id, max(observed_at) AS resolved_at "
             "  FROM current_assertions WHERE name IN ('resolved_because', 'resolved_in') "
             "  GROUP BY object_id) "
@@ -2705,7 +2706,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                 "  AND o.status='active' "
                 "WHERE COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
                 "  WHERE a.object_id=o.id AND a.name='harness' "
-                "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '') "
+                "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1), '') "
                 "  NOT IN ('', 'claude-code') "
                 "AND m.last_seen > now() - interval '5 minutes' "
                 "ORDER BY o.canonical")])
@@ -2761,11 +2762,14 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         th = await pool.fetch(
             "SELECT o.id, o.created_at, "
             " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
-            "   AND name='status' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS st, "
+            "   AND name='status' ORDER BY confidence DESC, observed_at DESC, "
+            "id DESC LIMIT 1) AS st, "
             " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
-            "   AND name='kind' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS kind, "
+            "   AND name='kind' ORDER BY confidence DESC, observed_at DESC, "
+            "id DESC LIMIT 1) AS kind, "
             " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
-            "   AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS summary "
+            "   AND name='summary' ORDER BY confidence DESC, observed_at DESC, "
+            "id DESC LIMIT 1) AS summary "
             "FROM objects o WHERE o.type='Thread' AND o.status='active' "
             "  AND o.created_at < now() - make_interval(days => $1)", stale_days)
         now = datetime.now(UTC)
@@ -2785,7 +2789,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         open_th = await pool.fetch(
             "SELECT o.id, p.canonical AS repo, "
             " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
-            "   AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) "
+            "   AND name='summary' ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1) "
             "   AS summary, "
             " (SELECT max(a.observed_at) FROM assertions a WHERE a.object_id=o.id) AS moved "
             "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
@@ -2793,7 +2797,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
             "WHERE o.type='Thread' AND o.status='active' "
             "AND (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
-            "  AND name='status' ORDER BY confidence DESC, observed_at DESC LIMIT 1) = 'open' "
+            "  AND name='status' ORDER BY confidence DESC, observed_at DESC, "
+            "id DESC LIMIT 1) = 'open' "
             "ORDER BY moved ASC LIMIT 200")
         rot: list[dict[str, Any]] = []
         repos = {r["repo"] for r in open_th if r["summary"]}
@@ -2802,7 +2807,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             commits[repo] = await pool.fetch(
                 "SELECT o.canonical, o.created_at, "
                 " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
-                "   AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) "
+                "   AND name='summary' ORDER BY confidence DESC, observed_at DESC, "
+                "id DESC LIMIT 1) "
                 "   AS summary "
                 "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
                 "AND (l.valid_until IS NULL OR l.valid_until > now()) "
@@ -2842,7 +2848,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         unscoped = await pool.fetchval(
             "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
             "AND (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
-            "  AND name='status' ORDER BY confidence DESC, observed_at DESC LIMIT 1) = 'open' "
+            "  AND name='status' ORDER BY confidence DESC, observed_at DESC, "
+            "id DESC LIMIT 1) = 'open' "
             "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
             "  AND (l.valid_until IS NULL OR l.valid_until > now()))")
         land("rot-candidate-unscoped", "info", [
@@ -2864,7 +2871,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
             "AND o.merged_into IS NULL AND COALESCE((SELECT a.value #>> '{}' FROM "
             "current_assertions a WHERE a.object_id=o.id AND a.name='status' "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), 'open') = 'resolved' "
+            "ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC LIMIT 1), 'open') = 'resolved' "
             "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id "
             "  AND l.type IN ('resolved_by', 'closed_by') AND l.valid_until IS NULL) "
             "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_id=o.id "
@@ -3065,31 +3073,33 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         held_past_deadline = await pool.fetch(
             "SELECT o.id, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "   AND a.name='hold_holder' ORDER BY a.confidence DESC, a.observed_at DESC "
+            "   AND a.name='hold_holder' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC "
             "   LIMIT 1) AS holder, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "   AND a.name='hold_held' ORDER BY a.confidence DESC, a.observed_at DESC "
+            "   AND a.name='hold_held' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC "
             "   LIMIT 1) AS held, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "   AND a.name='hold_act' ORDER BY a.confidence DESC, a.observed_at DESC "
+            "   AND a.name='hold_act' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC "
             "   LIMIT 1) AS act, "
             " (SELECT (a.value #>> '{}')::timestamptz FROM current_assertions a "
             "   WHERE a.object_id=o.id AND a.name='hold_deadline' "
-            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS deadline "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS deadline "
             "FROM objects o "
             "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
             "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "    AND a.name='severity' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "    AND a.name='severity' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC LIMIT 1) "
             "    = 'hold' "
             "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "    AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "    AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC LIMIT 1) "
             "    = 'open' "
             "  AND (SELECT (a.value #>> '{}')::timestamptz FROM current_assertions a "
             "    WHERE a.object_id=o.id AND a.name='hold_deadline' "
-            "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) < now() "
+            "    ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) < now() "
             "ORDER BY (SELECT (a.value #>> '{}')::timestamptz FROM current_assertions a "
             "  WHERE a.object_id=o.id AND a.name='hold_deadline' "
-            "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) ASC")
+            "  ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) ASC")
         land("held-past-deadline", "warn", [
             {"subject": f"{r['holder']} holding {r['held']}'s act ({r['act']})",
              "detail": f"time-boxed hold expired {r['deadline'].isoformat()} with no "
@@ -3175,13 +3185,14 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         kindless = await pool.fetch(
             "SELECT o.canonical, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC LIMIT 1) "
             "   AS summary "
             "FROM objects o "
             "WHERE o.type='Thread' AND o.status='active' "
             "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
             "   WHERE a.object_id=o.id AND a.name='status' "
-            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'open')='open' "
             "  AND NOT EXISTS (SELECT 1 FROM current_assertions a "
             "   WHERE a.object_id=o.id AND a.name='kind')")
         land("kindless-open-thread", "warn", [
@@ -3201,13 +3212,14 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         owned = await pool.fetch(
             "SELECT o.canonical, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "a.id DESC LIMIT 1) "
             "   AS owner "
             "FROM objects o "
             "WHERE o.type='Thread' AND o.status='active' "
             "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
             "   WHERE a.object_id=o.id AND a.name='status' "
-            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'open')='open' "
             "  AND EXISTS (SELECT 1 FROM current_assertions a "
             "   WHERE a.object_id=o.id AND a.name='owner')")
         bad_owner: list[dict[str, Any]] = []
@@ -3458,7 +3470,7 @@ async def owner_lineage_roots(
             "SELECT DISTINCT ON (o.canonical) o.canonical, "
             "a.value #>> '{}' AS predecessor FROM current_assertions a "
             "JOIN objects o ON o.id=a.object_id WHERE a.name='succeeded_from' "
-            "ORDER BY o.canonical, a.confidence DESC, a.observed_at DESC")
+            "ORDER BY o.canonical, a.confidence DESC, a.observed_at DESC, a.id DESC")
     }
     resolved: dict[str, str] = {}  # memoized per-node root, shared across every owner
 
@@ -3609,9 +3621,10 @@ _NOT_HALTED = (
 _SUMMARY_DISPLAY_SQL = (
     "COALESCE("
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), "
+    " AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC, "
+    "a.id DESC LIMIT 1), "
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-    " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1))"
+    " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1))"
 )
 
 async def open_thread_wall(
@@ -3640,16 +3653,16 @@ async def open_thread_wall(
         f" {_SUMMARY_DISPLAY_SQL} AS summary, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='kind' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS kind, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='owner' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner, "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS owner, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='arc' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS arc, "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS arc, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='is_handoff' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS is_handoff, "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS is_handoff, "
         " (SELECT max(sa.observed_at) FROM assertions sa WHERE sa.object_id=o.id "
         "   AND sa.evidence_class='self_declared') AS last_touched, "
         " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
@@ -3660,7 +3673,7 @@ async def open_thread_wall(
         "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'open')='open' "
         "ORDER BY o.created_at DESC LIMIT 400", proj)
     # THE UNFILED OWNER MATCH: a thread opened without repo= carries no in_repo link, so
     # the join above can never see it. In one repro, a succession handoff thread hid from
@@ -3677,16 +3690,16 @@ async def open_thread_wall(
             f" {_SUMMARY_DISPLAY_SQL} AS summary, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
             "   AND a.name='kind' "
-            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS kind, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
             "   AND a.name='owner' "
-            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner, "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS owner, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
             "   AND a.name='arc' "
-            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS arc, "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS arc, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
             "   AND a.name='is_handoff' "
-            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS is_handoff, "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS is_handoff, "
             " (SELECT max(sa.observed_at) FROM assertions sa WHERE sa.object_id=o.id "
             "   AND sa.evidence_class='self_declared') AS last_touched, "
             " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
@@ -3696,16 +3709,16 @@ async def open_thread_wall(
             "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
             "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
             "   WHERE a.object_id=o.id AND a.name='status' "
-            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'open')='open' "
             "  AND NOT EXISTS (SELECT 1 FROM links fl WHERE fl.from_id=o.id "
             "   AND fl.type='in_repo' "
             "   AND (fl.valid_until IS NULL OR fl.valid_until > now())) "
             "  AND (COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
             "   WHERE a.object_id=o.id AND a.name='owner' "
-            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'') = $1 "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'') = $1 "
             "   OR COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
             "   WHERE a.object_id=o.id AND a.name='owner' "
-            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'') IN ("
+            "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'') IN ("
             "   SELECT o2.canonical FROM objects o2 "
             "     JOIN current_assertions pa ON pa.object_id=o2.id AND pa.name='project' "
             "     WHERE o2.type='Agent' AND o2.status='active' "
@@ -3791,7 +3804,7 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "     WHERE sa.object_id=o.id AND sa.evidence_class='self_declared') "
         "   AND (SELECT a.value #>> '{}' FROM current_assertions a "
         "     WHERE a.object_id=o.id AND a.name='kind' "
-        "     ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation') "
+        "     ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) = 'obligation') "
         "   AS obligations, "
         " count(*) FILTER (WHERE EXISTS (SELECT 1 FROM assertions sa "
         "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared')) AS wall, "
@@ -3805,7 +3818,7 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'open')='open' "
         "GROUP BY p.canonical ORDER BY count(*) DESC LIMIT 30")]
     # the fleet's TOP OF WALL: obligations (a duty never hides) plus any thread a human
     # actually TOUCHED, never the untouched echo mass; repo-less threads included (a
@@ -3816,13 +3829,13 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         f" {_SUMMARY_DISPLAY_SQL} AS summary, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "    AND a.name='kind' "
-        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+        "    ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS kind, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "    AND a.name='owner' "
-        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner, "
+        "    ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS owner, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "    AND a.name='arc' "
-        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS arc, "
+        "    ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS arc, "
         "  (SELECT max(sa2.observed_at) FROM assertions sa2 WHERE sa2.object_id=o.id "
         "    AND sa2.evidence_class='self_declared') AS last_touched, "
         "  (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
@@ -3834,7 +3847,7 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         " WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
         "   AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "    WHERE a.object_id=o.id AND a.name='status' "
-        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "    ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'open')='open' "
         " ORDER BY o.created_at DESC LIMIT 400) t "
         # ONE RULE, THREE LENSES. This predicate, the fleet pile above, and the scoped wall
         # below must agree or the numbers cannot add up, and a real production report once
@@ -3871,26 +3884,26 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "     WHERE sa.object_id=o.id AND sa.evidence_class='self_declared') "
         "   AND (SELECT a.value #>> '{}' FROM current_assertions a "
         "     WHERE a.object_id=o.id AND a.name='kind' "
-        "     ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation') "
+        "     ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) = 'obligation') "
         "   AS obligations, "
         " count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM assertions sa "
         "     WHERE sa.object_id=o.id AND sa.evidence_class='self_declared') "
         "   AND (SELECT a.value #>> '{}' FROM current_assertions a "
         "     WHERE a.object_id=o.id AND a.name='kind' "
-        "     ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = 'obligation') "
+        "     ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) = 'obligation') "
         "   AS guessed_obligations "
         "FROM objects o "
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'open')='open' "
         "  AND " + _NOT_HALTED)
     halted = await pool.fetchval(
         "SELECT count(*) FROM objects o "
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'open')='open' "
         "  AND NOT " + _NOT_HALTED)
     # UNFILED (from the same in_repo-scoping audit as ROT-CANDIDATE-UNSCOPED above):
     # `projects` above INNER JOINs in_repo, structurally, a per-project GROUP BY has
@@ -3904,7 +3917,7 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1),'open')='open' "
         "  AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
         "    AND (l.valid_until IS NULL OR l.valid_until > now()))")
     totals = {
@@ -4043,16 +4056,20 @@ async def _fn_practices(
         "WITH p AS ("
         "  SELECT o.id, "
         "   (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "    AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "    AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "     AS statement, "
         "   (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "    AND a.name='failure_prevented' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "    AND a.name='failure_prevented' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC "
         "    LIMIT 1) AS failure_prevented, "
         "   (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "    AND a.name='surface' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "    AND a.name='surface' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "     AS surface, "
         "   (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "    AND a.name='refuted_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "    AND a.name='refuted_by' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "     AS refuted_by, "
         "   (SELECT count(*) FROM links l WHERE l.from_id=o.id AND l.type='witnesses') "
         "     AS confirmed, "
@@ -4828,13 +4845,15 @@ async def _triage_type_gaps(
             SELECT o.id, o.canonical, o.created_at AS born,
                    (SELECT a.value #>> '{}' FROM current_assertions a
                     WHERE a.object_id = o.id AND a.name = 'kind'
-                    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind,
+                    ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) AS kind,
                    (SELECT a.value #>> '{}' FROM current_assertions a
                     WHERE a.object_id = o.id AND a.name = 'description'
-                    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS description,
+                    ORDER BY a.confidence DESC, a.observed_at DESC,
+                    a.id DESC LIMIT 1) AS description,
                    (SELECT a.value #>> '{}' FROM current_assertions a
                     WHERE a.object_id = o.id AND a.name = 'label_field'
-                    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS label_field,
+                    ORDER BY a.confidence DESC, a.observed_at DESC,
+                    a.id DESC LIMIT 1) AS label_field,
                    GREATEST(o.created_at, (SELECT max(a.observed_at) FROM current_assertions a
                                            WHERE a.object_id = o.id)) AS last_touch
             FROM objects o
@@ -4985,7 +5004,7 @@ async def _fn_closure_health(
     if repo is not None:
         repo_label = await pool.fetchval(
             "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='name' "
-            "ORDER BY confidence DESC, observed_at DESC LIMIT 1", repo) or str(repo)
+            "ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1", repo) or str(repo)
 
     buckets = await closure_buckets(pool, repo=repo)
     retracted_or_no_status = buckets["retracted_or_no_status"]
@@ -5015,7 +5034,7 @@ async def _fn_closure_health(
     status_at_rows = await pool.fetch(
         "SELECT DISTINCT ON (object_id) object_id, observed_at FROM current_assertions "
         "WHERE object_id = ANY($1::uuid[]) AND name = 'status' "
-        "ORDER BY object_id, confidence DESC, observed_at DESC",
+        "ORDER BY object_id, confidence DESC, observed_at DESC, id DESC",
         edgeless_ids) if edgeless_ids else []
     status_at_by_id = {r["object_id"]: r["observed_at"] for r in status_at_rows}
     post_fix_regression = sum(

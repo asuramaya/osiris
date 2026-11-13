@@ -112,7 +112,8 @@ async def ingest_project(
     row = await actions.pool.fetchrow(
         "SELECT id, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=objects.id "
-        "   AND a.name='on_disk_path' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='on_disk_path' ORDER BY a.confidence DESC, a.observed_at DESC, "
+        "a.id DESC LIMIT 1) "
         "   AS on_disk_path "
         "FROM objects WHERE canonical=$1 AND type='SoftwareProject' AND status='active'",
         canonical)
@@ -255,7 +256,7 @@ async def uningested_trees_alarm_tick(
         status = await actions.pool.fetchval(
             "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
             "ON a.object_id=o.id WHERE o.canonical=$1 AND o.type='Thread' AND a.name='status' "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", canon)
+            "ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1", canon)
         if status == "open":
             await resolve_thread(
                 actions, canon,

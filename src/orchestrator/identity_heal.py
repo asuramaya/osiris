@@ -131,7 +131,7 @@ async def heal_contradicting_property(
     rows = await actions.pool.fetch(
         "SELECT id, value #>> '{}' AS value, source_id, observed_at "
         "FROM current_assertions WHERE object_id=$1 AND name=$2 "
-        "ORDER BY confidence DESC, observed_at DESC", object_id, name)
+        "ORDER BY confidence DESC, observed_at DESC, id DESC", object_id, name)
     if len(rows) <= 1:
         return {"healed": False, "reason": "nothing to reconcile", "current": len(rows)}
     winner = rows[0]
@@ -255,7 +255,7 @@ async def detect_anchor_invariant_violations(actions: Actions) -> dict[str, list
     rows = await actions.pool.fetch(
         "SELECT o.canonical AS seat, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1) "
         "   AS handle, "
         " a.id, a.value #>> '{}' AS v, a.source_id, a.observed_at, a.confidence "
         "FROM current_assertions a JOIN objects o ON o.id=a.object_id "
@@ -331,7 +331,7 @@ async def heal_seat_anchor(
         return {"error": f"{seat_id} has no handle on record, cannot derive an office path"}
     handle = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
-        "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC, a.id DESC LIMIT 1",
         seat_row["id"])
     if not _office_dir_exists(target):
         return {"error": f"{target!r} does not exist on disk. This healer re-asserts "

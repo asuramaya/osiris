@@ -45,7 +45,7 @@ HUSKS_2026_07_14 = [
 async def _prop(actions: Actions, oid: uuid.UUID, name: str) -> str | None:
     return await actions.pool.fetchval(  # type: ignore[no-any-return]
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name=$2 "
-        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", oid, name)
+        "ORDER BY confidence DESC, observed_at DESC, id DESC LIMIT 1", oid, name)
 
 
 async def _oid(actions: Actions, canonical: str) -> uuid.UUID | None:
@@ -96,7 +96,8 @@ async def _verify_husk(actions: Actions, canonical: str) -> tuple[uuid.UUID | No
     # of the dry-run step.
     minted_at = await actions.pool.fetchval(
         "SELECT observed_at FROM current_assertions WHERE object_id=$1 "
-        "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC LIMIT 1", oid)
+        "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC, "
+        "id DESC LIMIT 1", oid)
     if minted_at is None:
         minted_at = await actions.pool.fetchval(
             "SELECT created_at FROM objects WHERE id=$1", oid)
