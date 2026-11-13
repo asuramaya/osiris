@@ -458,7 +458,7 @@ async def patronym_for(actions: Actions, parent_agent: str) -> str | None:
     handle = await pool.fetchval(
         "SELECT a.value#>>'{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE a.name='handle' AND (o.canonical=$1 OR $1 LIKE o.canonical||'-%') "
-        "ORDER BY a.observed_at DESC LIMIT 1", parent_agent)
+        "ORDER BY a.observed_at DESC, a.id DESC LIMIT 1", parent_agent)
     if not handle:
         return None
     gen = await pool.fetchval(
@@ -579,7 +579,7 @@ async def file_subagent(
                 "SELECT a.value#>>'{}' FROM current_assertions a "
                 "JOIN objects o ON o.id=a.object_id "
                 "WHERE a.name='handle' AND (o.canonical=$1 OR $1 LIKE o.canonical||'-%') "
-                "ORDER BY a.observed_at DESC LIMIT 1", parent)
+                "ORDER BY a.observed_at DESC, a.id DESC LIMIT 1", parent)
             if handle:
                 gen = await actions.pool.fetchval(
                     "SELECT a.value#>>'{}' FROM current_assertions a "

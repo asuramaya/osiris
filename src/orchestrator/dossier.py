@@ -85,7 +85,7 @@ async def entity_dossier(
     Fixed by SPLITTING the collision, not by repurposing the ambiguous key silently: the
     object's own lifecycle now renders as `"object_status"` (unambiguous), and a NEW
     `"status"` key carries the WINNING status-property value, using the same ordering
-    `winning_props` itself uses (confidence DESC, then observed_at DESC), or `None` when
+    `winning_props` itself uses (confidence DESC, observed_at DESC, id DESC), or `None` when
     this object type carries no `status` assertion at all (most types besides Thread/
     Decision never do). `properties` is UNCHANGED: the full multi-source "contradicting"/
     "agreeing"/"single" view still shows every source's own word, never collapsed;
@@ -128,7 +128,7 @@ async def entity_dossier(
         "SELECT name, value #>> '{}' AS value, source_id, evidence_class, confidence "
         "FROM current_assertions "
         "WHERE object_id=$1 AND name <> 'tag' "
-        "ORDER BY name, confidence DESC NULLS LAST, observed_at DESC",
+        "ORDER BY name, confidence DESC NULLS LAST, observed_at DESC, id DESC",
         object_id,
     )
     properties: dict[str, dict[str, Any]] = {}

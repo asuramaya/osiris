@@ -884,7 +884,7 @@ async def _handle_of(pool: asyncpg.Pool, agent_id: str) -> str | None:
         "JOIN objects o ON o.id=a.object_id "
         "WHERE a.name='handle' AND o.type='Agent' "
         "AND (o.canonical=$1 OR o.canonical LIKE $1 || '-%') "
-        "ORDER BY a.observed_at DESC LIMIT 1", base)
+        "ORDER BY a.observed_at DESC, a.id DESC LIMIT 1", base)
 
 
 async def _establish_pure_seat_office(
