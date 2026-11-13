@@ -9,13 +9,18 @@ from the real sources, and the exact command to run for it, the cheapest and saf
   3. a second hardware key for the envelope
   4. the NAS first offload (needs the home LAN; the first step is a read-only check)
   5. the old plaintext NAS copy's removal (needs your say-so, after step 4)
+  6. the stopped database rollback container (needs your say-so)
+  7. scratch folders left by an agent (need your say-so)
+  8. the optional Claude rebuild probe (only if you want it)
 
 Read-only: it opens nothing, uploads nothing and changes nothing. Each source is a function passed
 in, so the tests run it against fakes; a source that cannot be read says so and never hides the
 other items.
 
 Statuses: `done`, `waiting` (something for the operator to do, with why), `blocked` (waits for an
-earlier item first)."""
+earlier item first), `optional` (can wait for ever; never counted, never told to the desk).
+
+Items 5 to 7 only show what is there: no code here deletes anything."""
 from __future__ import annotations
 
 import json
@@ -26,7 +31,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-DONE, WAITING, BLOCKED = "done", "waiting", "blocked"
+DONE, WAITING, BLOCKED, OPTIONAL = "done", "waiting", "blocked", "optional"
+ROLLBACK_CONTAINER = "osiris-pg-pre-repack"
+ROLLBACK_TITLE = "Remove the stopped database rollback container"
+PROBE_COMMAND = ("cd ~/code/zzprobe-rebuild && "
+                 "python3 ~/.claude/jobs/aa0277bc/tmp/probe_rebuild.py A")
 # the open obligation that holds the old plaintext copy's removal, and the S4 job before it
 PLAINTEXT_COPY_THREAD = "thread:5dc7ea2b"
 _STATE_ENV = "OSIRIS_AT_HOME_STATE_FILE"
@@ -44,6 +53,10 @@ class Sources:
     presence: Callable[[dict[str, Any]], dict[str, Any]]   # network_presence.lan_presence
     plaintext_thread_open: Callable[[], bool | None]       # None when it cannot be read
     stale_days: int = 7
+    # the word-only items; the defaults say "nothing there" so older callers see them done
+    rollback_container: Callable[[], dict[str, Any] | None] = lambda: None
+    scratch: Callable[[], list[dict[str, Any]]] = lambda: []
+    probe_thread_open: Callable[[], bool | None] = lambda: None
 
 
 def _item(key: str, order: int, title: str, status: str, why: str,
@@ -139,6 +152,58 @@ def plaintext_item(src: Sources, nas: dict[str, Any]) -> dict[str, Any]:
                  "reply on the operator desk: delete the old plaintext NAS copy")
 
 
+def _size(n: object) -> str:
+    try:
+        size = float(n)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "unknown size"
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return "unknown size"
+
+
+def rollback_item(src: Sources) -> dict[str, Any]:
+    box = src.rollback_container()
+    title = ROLLBACK_TITLE
+    if box is None:
+        return _item("rollback_container", 6, title, DONE, f"{ROLLBACK_CONTAINER} is gone.")
+    return _item("rollback_container", 6, title, WAITING,
+                 f"{ROLLBACK_CONTAINER} ({box.get('image')}, {box.get('status')}) has been kept "
+                 f"since the repack swap; it holds {_size(box.get('size'))} of its own, and it "
+                 "points at the live database's data volume, so remove only the container, never "
+                 "the volume. This needs your word; nothing deletes it by itself.",
+                 f"docker rm {ROLLBACK_CONTAINER}")
+
+
+def _shell_path(path: str) -> str:
+    """A path as the operator can paste it: double-quoted, with a leading ~/ as "$HOME"."""
+    return '"$HOME/' + path[2:] + '"' if path.startswith("~/") else f'"{path}"'
+
+
+def scratch_item(src: Sources) -> dict[str, Any]:
+    found = [p for p in src.scratch() if p.get("exists")]
+    title = "Remove the scratch folders an agent left"
+    if not found:
+        return _item("scratch_dirs", 7, title, DONE, "both scratch folders are gone.")
+    names = "; ".join(f"{p['path']} ({_size(p.get('size'))})" for p in found)
+    return _item("scratch_dirs", 7, title, WAITING,
+                 f"still there: {names}. This needs your word; nothing deletes them by itself.",
+                 "rm -r " + " ".join(_shell_path(str(p["path"])) for p in found))
+
+
+def probe_item(src: Sources) -> dict[str, Any]:
+    title = "The Claude rebuild probe (optional)"
+    still_open = src.probe_thread_open()
+    if still_open is False:
+        return _item("rebuild_probe", 8, title, DONE, "its obligation is closed.")
+    return _item("rebuild_probe", 8, title, OPTIONAL,
+                 "you chose to do this later. Until it runs, Claude sessions are carried over by "
+                 "a brief plus recall instead of a rebuilt transcript. It writes only into a "
+                 "throwaway folder.", PROBE_COMMAND)
+
+
 def _when(value: object) -> datetime | None:
     from src.orchestrator.offload_staleness import _parse
 
@@ -167,25 +232,50 @@ def checklist(src: Sources, *, now: datetime | None = None) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         items.append(_item("plaintext_copy", 5, "Remove the old plaintext NAS copy", WAITING,
                            f"its state could not be read ({type(exc).__name__}).", None))
+    for fn, key, order, title in (
+            (rollback_item, "rollback_container", 6, ROLLBACK_TITLE),
+            (scratch_item, "scratch_dirs", 7, "Remove the scratch folders an agent left"),
+            (probe_item, "rebuild_probe", 8, "The Claude rebuild probe (optional)")):
+        try:
+            items.append(fn(src))
+        except Exception as exc:  # noqa: BLE001
+            items.append(_item(key, order, title, WAITING if key != "rebuild_probe" else OPTIONAL,
+                               f"its state could not be read ({type(exc).__name__}).", None))
     items.sort(key=lambda i: i["order"])
-    pending = [i for i in items if i["status"] != DONE]
-    return {"items": items, "pending": len(pending), "done": len(items) - len(pending),
+    pending = [i for i in items if i["status"] in (WAITING, BLOCKED)]
+    done = sum(1 for i in items if i["status"] == DONE)
+    return {"items": items, "pending": len(pending), "done": done,
             "next": next((i for i in items if i["status"] == WAITING), None)}
 
 
 def render(result: dict[str, Any]) -> list[str]:
     """Plain lines for the terminal."""
     if not result["pending"]:
+        if any(i["status"] == OPTIONAL for i in result["items"]):
+            return ["Nothing is waiting on you.", *_optional_lines(result)]
         return ["Nothing is waiting on you. Everything on the at-home list is done."]
-    lines = [f"{result['pending']} thing(s) waiting on you, cheapest and safest first:"]
+    waiting = sum(1 for i in result["items"] if i["status"] == WAITING)
+    blocked = sum(1 for i in result["items"] if i["status"] == BLOCKED)
+    head = f"{waiting} waiting" + (f", {blocked} blocked" if blocked else "")
+    lines = [f"{head} on you, cheapest and safest first:"]
     for i, item in enumerate(result["items"], 1):
-        mark = {"done": "done   ", "waiting": "waiting", "blocked": "blocked"}[item["status"]]
+        mark = {"done": "done   ", "waiting": "waiting", "blocked": "blocked",
+                "optional": "optional"}[item["status"]]
         lines.append(f"{i}. [{mark}] {item['title']}: {item['why']}")
-        if item["status"] == WAITING and item["command"]:
+        if item["status"] in (WAITING, OPTIONAL) and item["command"]:
             lines.append(f"       run: {item['command']}")
             if item.get("then"):
                 lines.append(f"       or first: {item['then']}")
     return lines
+
+
+def _optional_lines(result: dict[str, Any]) -> list[str]:
+    out = []
+    for item in result["items"]:
+        if item["status"] == OPTIONAL:
+            out.append(f"[optional] {item['title']}: {item['why']}")
+            out.append(f"       run: {item['command']}")
+    return out
 
 
 # ---- the desk line, told once per state ------------------------------------------------------
@@ -262,6 +352,22 @@ async def thread_status(pool: Any, id_prefix: str) -> str | None:
     return None if value is None else str(value)
 
 
+async def _captured(fn: Callable[[], Any]) -> Callable[[], Any]:
+    """Run a blocking read off the loop now; the returned function gives its value, or raises what
+    it raised, when the checklist asks for it (so one bad source shows as unreadable)."""
+    import asyncio
+
+    try:
+        value = await asyncio.to_thread(fn)
+    except Exception as exc:  # noqa: BLE001
+        error = exc
+
+        def failed() -> Any:
+            raise error
+        return failed
+    return lambda: value
+
+
 async def real_sources(pool: Any, *, now: datetime | None = None) -> Sources:
     """The checklist's sources, read from the live system once: the envelope block, the enabled NAS
     target and its receipts, and whether the plaintext copy's job is still open."""
@@ -285,6 +391,12 @@ async def real_sources(pool: Any, *, now: datetime | None = None) -> Sources:
     except Exception:  # noqa: BLE001 - the limit is display only
         stale_days = 7
     status = await thread_status(pool, PLAINTEXT_COPY_THREAD.split(":", 1)[1])
+    import asyncio
+
+    from src.orchestrator import at_home_readers as readers
+
+    box, scratch = await asyncio.gather(
+        _captured(readers.read_rollback_container), _captured(readers.read_scratch))
     receipts = offload_receipts()
     drills = restore_drill_receipts()
     section = envelope_section(
@@ -296,4 +408,6 @@ async def real_sources(pool: Any, *, now: datetime | None = None) -> Sources:
         drill_receipt=lambda url: drills.get(url) or {},
         presence=lan_presence,
         plaintext_thread_open=lambda: (None if status is None else status == "open"),
-        stale_days=stale_days)
+        stale_days=stale_days,
+        rollback_container=lambda: box(), scratch=lambda: scratch(),
+        probe_thread_open=lambda: None)
