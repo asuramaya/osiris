@@ -41,6 +41,7 @@ from pathlib import Path
 import asyncpg
 
 from src.ingest.scope import scope_match, sense_scopes
+from src.ingest.transcript_walk import jsonl_files
 
 # A session is ENDED when its transcript has been still this long. Generous on purpose: an
 # agent heads-down for twenty minutes is ALIVE, measured directly after a day spent learning
@@ -67,11 +68,7 @@ def _ended(root: Path, quiet_secs: int, scopes: list[str] | None = None) -> list
     marked swept, widening the scope later hands it to this very detector."""
     now = time.time()
     out: list[tuple[float, Path]] = []
-    try:
-        paths = list(root.expanduser().rglob("*.jsonl"))
-    except OSError:
-        return []
-    for p in paths:
+    for p in jsonl_files(root):
         if p.parent.name.endswith("-osiris-extract"):
             continue  # the session-miner's own scratch sessions: an instrument reading itself
         if not scope_match(p.parent.name, scopes or []):

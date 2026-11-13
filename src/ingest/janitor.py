@@ -52,6 +52,7 @@ from typing import Any
 
 from src.actions.core import Actions
 from src.ingest.sessions import _WAKE_FIRST_TURN, _is_self_documenting
+from src.ingest.transcript_walk import jsonl_files
 from src.parsers.base import EvidenceClass
 
 _SOURCE = "session-janitor"
@@ -93,7 +94,7 @@ def wake_origins(root: Path) -> set[str]:
     The fingerprint is the FIRST TURN, never a mention: a session that merely discusses the wake
     prompt (this one has, at length) is a real conversation and its work is real."""
     out: set[str] = set()
-    for p in root.expanduser().rglob("*.jsonl"):
+    for p in jsonl_files(root):
         if p.parent.name.endswith("-osiris-extract"):
             continue
         if _first_user_turn(p).lstrip().startswith(_WAKE_FIRST_TURN):

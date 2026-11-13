@@ -6,6 +6,7 @@ import os
 import time
 from pathlib import Path
 
+from src.ingest.transcript_walk import jsonl_files
 from src.orchestrator import liveness
 
 
@@ -24,7 +25,7 @@ def _tree(root: Path) -> None:
 def test_it_finds_what_rglob_finds_except_inside_memory_directories(tmp_path: Path) -> None:
     _tree(tmp_path)
 
-    mine = {p.relative_to(tmp_path).as_posix() for p in liveness._jsonl_files(tmp_path)}
+    mine = {p.relative_to(tmp_path).as_posix() for p in jsonl_files(tmp_path)}
     theirs = {p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*.jsonl")}
 
     assert theirs - mine == {"-home-u-proj/memory/notes.jsonl"}
@@ -44,7 +45,7 @@ def test_it_does_not_follow_a_symlinked_directory_and_skips_an_unreadable_one(
     (locked / "hidden.jsonl").write_text("{}")
     locked.chmod(0)
     try:
-        names = {p.name for p in liveness._jsonl_files(tmp_path)}
+        names = {p.name for p in jsonl_files(tmp_path)}
     finally:
         locked.chmod(0o700)
 
