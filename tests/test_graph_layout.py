@@ -206,11 +206,15 @@ def test_declump_one_dense_cluster_of_6000_coincident_points_stays_fast() -> Non
     # ALL points within a tiny radius of one spot -- one dense grid cell, not many
     pos = rng.uniform(-0.5, 0.5, size=(n, 2))
 
-    start = time.monotonic()
+    # CPU time, not wall time: the work is what must stay small. A wall clock also counts every
+    # second the test process was descheduled or frozen (a busy gate box, a machine that slept
+    # mid-run), which failed this test at 34.8 s for 3.5 s of work. Unloaded it takes about 5 s of
+    # CPU (all threads); the old pair loop took minutes, so 30 s still catches it.
+    start = time.process_time()
     out = _declump(pos, np.zeros((0, 2)), ids, min_sep=_MIN_SEPARATION)
-    elapsed = time.monotonic() - start
+    elapsed = time.process_time() - start
 
-    assert elapsed < 30.0, f"declump over one 6,000-point dense cluster took {elapsed:.1f}s"
+    assert elapsed < 30.0, f"declump over one 6,000-point dense cluster used {elapsed:.1f}s of CPU"
     # spot-check a real sample of pairs, not all 18M -- every checked pair meets the floor
     sample = rng.integers(0, n, size=(500, 2))
     for a, b in sample:
