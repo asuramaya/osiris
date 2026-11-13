@@ -36,6 +36,7 @@ never runs over session capture at all.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import hashlib
 import json
@@ -752,8 +753,18 @@ async def backfill_stale_in_repo_abstentions(
             "sample": sample, "because": because if not dry_run else None}
 
 
+# The at-write-time lane inside the heartbeat sweep works through the leftover objects in id order,
+# in slices that fit a time budget, and remembers where it stopped: the whole sweep runs under a
+# 60 s budget shared by eight lanes, and a lane that needs longer than its share used to be
+# cancelled every tick and start again from the first object, so it never got past the same rows.
+_AT_WRITE_TIME_CURSOR_KEY = "provenance:at_write_time:cursor"
+_AT_WRITE_TIME_SLICE_ROWS = 400
+_AT_WRITE_TIME_BUDGET_SECS = 20.0
+
+
 async def backfill_lineage_repo_links_at_write_time(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+    budget_secs: float | None = None, resume: bool = False,
 ) -> dict[str, Any]:
     """PROVENANCE SWEEP, DECISION/THREAD LANE REFINEMENT: the finer rung
     `backfill_lineage_repo_links` itself named as follow-up scope rather than build
@@ -776,25 +787,50 @@ async def backfill_lineage_repo_links_at_write_time(
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent for
     the same reason the sibling lane is: a repeat call finds nothing left to scan once an
-    object is linked, and re-abstaining just re-asserts the same fact."""
+    object is linked, and re-abstaining just re-asserts the same fact.
+
+    `resume=True` (the heartbeat's own call) works through the leftovers in id order from where
+    the last call stopped, in slices of `_AT_WRITE_TIME_SLICE_ROWS`, and stops when `budget_secs`
+    is spent: the result then says `more_remain` and the next call carries on. A finished pass
+    clears the position, so the next call starts over. Without `resume` it scans everything, as
+    before."""
     if not dry_run and not (because or "").strip():
         return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
     from src.orchestrator.agents import lineage_works_in_at
+    from src.orchestrator.monitor import get_cursor, set_cursor
 
     pool = actions.pool
-    rows = await pool.fetch(
+    began = time.monotonic()
+    after: uuid.UUID | None = None
+    if resume:
+        saved = await get_cursor(pool, _AT_WRITE_TIME_CURSOR_KEY)
+        with contextlib.suppress(ValueError):
+            after = uuid.UUID(saved) if saved else None
+    sql = (
         "SELECT DISTINCT o.id, o.type, a.source_id, a.observed_at FROM objects o "
         "JOIN assertions a ON a.object_id=o.id AND a.name='summary' "
         "WHERE o.type IN ('Decision','Thread') AND o.status='active' "
         "AND a.source_id LIKE 'agent:%' "
         "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
         "AND (l.valid_until IS NULL OR l.valid_until > now()))")
+    if resume:
+        rows = await pool.fetch(
+            sql + " AND ($1::uuid IS NULL OR o.id > $1::uuid) ORDER BY o.id LIMIT $2",
+            after, _AT_WRITE_TIME_SLICE_ROWS)
+    else:
+        rows = await pool.fetch(sql)
     observed = datetime.now(UTC)
     plan: list[dict[str, Any]] = []
     minted = 0
     abstained = 0
+    last_id: uuid.UUID | None = None
+    stopped_early = False
     for row in rows:
+        if budget_secs is not None and time.monotonic() - began >= budget_secs:
+            stopped_early = True
+            break
+        last_id = row["id"]
         lineage = await lineage_works_in_at(pool, row["source_id"], row["observed_at"])
         repo = lineage["resolved"]
         if repo is not None:
@@ -828,8 +864,17 @@ async def backfill_lineage_repo_links_at_write_time(
                                         lineage["candidate_ids"], actor,
                                         why_if_ambiguous=reason)
         plan.append(entry)
-    return {"dry_run": dry_run, "scanned": len(rows), "to_mint": minted,
-           "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
+    more_remain = False
+    if resume:
+        # a full slice or a budget stop means there may be more after `last_id`; a short slice
+        # that ran to its end means this pass is finished, so the position is cleared
+        more_remain = stopped_early or len(rows) >= _AT_WRITE_TIME_SLICE_ROWS
+        # a budget that ran out before the first row keeps the old position, never resets it
+        keep = str(last_id or after or "") if more_remain else ""
+        await set_cursor(pool, _AT_WRITE_TIME_CURSOR_KEY, keep)
+    return {"dry_run": dry_run, "scanned": len(plan), "to_mint": minted,
+           "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None,
+           **({"more_remain": more_remain} if resume else {})}
 
 
 # LANE 1 (built off Lane 0's derive_or_abstain above): the boot-startup watchdog's own
@@ -1444,14 +1489,18 @@ async def apply_provenance_sweep_heartbeat(
             lanes[f"{key}_error"] = repr(exc)
         spent[key] = round(time.monotonic() - began, 2)
         if spent[key] >= _SLOW_LANE_SECS:
-            logger.info("provenance sweep: lane %s took %.1f s", key, spent[key])
+            got = lanes.get(key)
+            detail = (f" (scanned {got.get('scanned')}, more remain {got.get('more_remain')})"
+                      if isinstance(got, dict) and "scanned" in got else "")
+            logger.info("provenance sweep: lane %s took %.1f s%s", key, spent[key], detail)
 
     await lane("agent", lambda: resolve_agent_orphans(
         actions, actor=actor, dry_run=False, because=because))
     await lane("decision_thread", lambda: backfill_lineage_repo_links(
         actions, actor=actor, dry_run=False, because=because, defer_abstention=True))
     await lane("decision_thread_at_write_time", lambda: backfill_lineage_repo_links_at_write_time(
-        actions, actor=actor, dry_run=False, because=because))
+        actions, actor=actor, dry_run=False, because=because,
+        budget_secs=_AT_WRITE_TIME_BUDGET_SECS, resume=True))
     await lane("reference", lambda: resolve_reference_orphans(
         actions, actor=actor, dry_run=False, because=because))
     await lane("practice", lambda: resolve_practice_orphans(
