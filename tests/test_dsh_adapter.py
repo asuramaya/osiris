@@ -150,6 +150,31 @@ def test_discovery_decompresses_an_unchanged_session_once_not_every_tick(
     assert len(calls) == 2 and locs[0].cwd == "/home/user/code/proj/renamed-and-longer"
 
 
+def test_a_file_replaced_by_rename_with_the_same_size_and_mtime_is_read_again(
+    tmp_path: Path,
+) -> None:
+    """mtime and size can both survive a rewrite (a same-length edit with the time restored);
+    the inode cannot survive a replace-by-rename."""
+    import os
+
+    from src.ingest.harness import dsh
+
+    dsh._HEAD_MEMO.clear()
+    zst = tmp_path / "s.jsonl.zstd"
+    _write_session(zst, session_id="session-aaaaaaaa", cwd="/home/u/aaa")
+    before = dsh._head_lines(zst)
+    st = zst.stat()
+    other = tmp_path / "other.jsonl.zstd"
+    _write_session(other, session_id="session-bbbbbbbb", cwd="/home/u/bbb")
+    assert other.stat().st_size == st.st_size  # same length, so size alone cannot tell
+    os.utime(other, ns=(st.st_atime_ns, st.st_mtime_ns))
+    os.replace(other, zst)
+
+    after = dsh._head_lines(zst)
+
+    assert before != after and "bbbbbbbb" in after[0]
+
+
 def test_a_session_that_cannot_be_read_is_not_remembered(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

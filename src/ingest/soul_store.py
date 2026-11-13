@@ -98,9 +98,9 @@ class _LazyFernet:
 _HARNESS = "claude-code"
 _CRUSH_HARNESS = "crush"
 _DSH_HARNESS = "dsh"
-# (mtime_ns, size) of each DSH session file this process has ingested to its end;
+# (mtime_ns, size, inode) of each DSH session file this process has ingested to its end;
 # see backfill_dsh
-_DSH_INGESTED: dict[str, tuple[int, int]] = {}
+_DSH_INGESTED: dict[str, tuple[int, int, int]] = {}
 _CRUSH_ROW_COLUMNS = (
     "id", "session_id", "role", "parts", "model", "provider",
     "created_at", "updated_at", "finished_at", "is_summary_message",
@@ -1024,13 +1024,15 @@ class SoulStore:
             if limit_per_adapter and per_source.get(source_path, 0) >= limit_per_adapter:
                 continue
             # A stat gate after all: a session file this process already ingested to its end
-            # and that has the same mtime and size has nothing new, and finding that out cost a
+            # and that has the same mtime, size and inode has nothing new, and finding that out
+            # cost a
             # whole `zstd` decompress per session per tick (~1.5 s a sweep). The stat is taken
             # BEFORE the ingest, so a write during it leaves the file looking changed next time.
             # Process-local: after a restart each file is checked once.
             try:
                 st = os.stat(source_path)
-                fingerprint: tuple[int, int] | None = (st.st_mtime_ns, st.st_size)
+                fingerprint: tuple[int, int, int] | None = (
+                    st.st_mtime_ns, st.st_size, st.st_ino)
             except OSError:
                 fingerprint = None
             if fingerprint is not None and _DSH_INGESTED.get(source_path) == fingerprint:
