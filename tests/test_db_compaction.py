@@ -26,15 +26,40 @@ from src.orchestrator.db_compaction import (
 SCRATCH = "compaction_scratch"
 
 
+async def _no_older_snapshots(pool: Any, deleted_by: str, *, wait_secs: float = 60.0) -> None:
+    """Wait until no other session in this database holds a snapshot older than the transaction
+    that deleted the rows. VACUUM and VACUUM FULL cannot free a tuple that some open snapshot
+    could still see, so on a shared test Postgres (other xdist workers, a long transaction) a
+    rewrite right after the DELETE reclaimed nothing: 23,920,640 to 23,887,872 bytes. A snapshot
+    taken after the delete committed does not hold the rows. Gives up after `wait_secs` (the test
+    then fails on the real load, never hangs)."""
+    import asyncio
+    import time
+
+    deadline = time.monotonic() + wait_secs
+    while True:
+        older = await pool.fetchval(
+            "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+            "AND pid <> pg_backend_pid() AND backend_xmin IS NOT NULL "
+            "AND age(backend_xmin) > age($1::text::xid)", deleted_by)
+        if not older or time.monotonic() >= deadline:
+            return
+        await asyncio.sleep(0.2)
+
+
 async def _bloated(actions: Actions, name: str = SCRATCH) -> None:
     """A table that was big and is now mostly free space: 20000 rows of ~1 KB, 95% deleted,
-    vacuumed (so the space is free inside the file, not returned)."""
+    vacuumed (so the space is free inside the file, not returned). The vacuum waits for any
+    older snapshot elsewhere to go first: the rows are only free once none can still see them."""
     await actions.pool.execute(f"DROP TABLE IF EXISTS {name}")
     await actions.pool.execute(
         f"CREATE TABLE {name} (id int PRIMARY KEY, pad text NOT NULL)")
     await actions.pool.execute(
         f"INSERT INTO {name} SELECT g, repeat('x', 1000) || g FROM generate_series(1, 20000) g")
-    await actions.pool.execute(f"DELETE FROM {name} WHERE id % 20 <> 0")
+    deleted_by = await actions.pool.fetchval(
+        f"WITH d AS (DELETE FROM {name} WHERE id % 20 <> 0 RETURNING 1) "
+        "SELECT pg_current_xact_id()::text")
+    await _no_older_snapshots(actions.pool, deleted_by)
     await actions.pool.execute(f"VACUUM {name}")
 
 
@@ -572,3 +597,37 @@ async def test_a_slept_through_slot_that_fires_by_day_rewrites_nothing(
     assert await db_compaction_heartbeat({"cascade": SimpleNamespace(actions=actions)}) == 0
     assert await last_receipts(actions.pool) == before
     assert (await db_compaction.table_sizes(actions.pool, SCRATCH))["total_bytes"] > 0
+
+
+async def test_a_rewrite_gives_the_space_back_even_with_an_older_snapshot_open_elsewhere(
+    actions: Actions, pg_dsn: str,
+) -> None:
+    """Another session holds a snapshot from before the delete for a couple of seconds, as
+    another test worker on the shared Postgres does: the setup waits it out, so the rewrite
+    reclaims the space every time instead of only on a quiet box."""
+    import asyncio
+    import time
+
+    import asyncpg
+
+    holder = await asyncpg.connect(pg_dsn)
+    try:
+        tx = holder.transaction(isolation="repeatable_read")
+        await tx.start()
+        await holder.fetchval("SELECT 1")  # the snapshot is taken here, before the delete
+        started = time.monotonic()
+
+        async def _release() -> None:
+            await asyncio.sleep(1.5)
+            await tx.rollback()
+
+        releaser = asyncio.create_task(_release())
+        await _bloated(actions)
+        assert time.monotonic() - started >= 1.0  # the setup waited for the old snapshot
+        await releaser
+    finally:
+        await holder.close()
+    before = (await table_sizes(actions.pool, SCRATCH))["total_bytes"]
+    engine = await rewrite_table(actions.pool, SCRATCH, seconds_left=120)
+    after = (await table_sizes(actions.pool, SCRATCH))["total_bytes"]
+    assert engine == "VACUUM FULL" and after < before / 4
