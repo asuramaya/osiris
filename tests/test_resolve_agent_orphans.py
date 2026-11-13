@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from src.actions.core import Actions
 from src.orchestrator.capture import resolve_agent_orphans
@@ -164,3 +165,72 @@ async def test_dry_run_never_writes_the_hatch_either(actions: Actions, tmp_path:
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
         "AND name='unlinked_because'", row["id"])
     assert because is None
+
+
+async def test_the_heartbeat_does_not_walk_agents_it_already_judged(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The heartbeat re-abstained the same ~98 agents (and walked the on-disk session tree
+    for them) every tick. With skip_judged it judges each once; a manual call still sees all."""
+    await _orphan_agent(actions, "agent:judged001", "deadbeef")
+    first = await resolve_agent_orphans(
+        actions, root=tmp_path, dry_run=False, because="test", skip_judged=True)
+    assert "agent:judged001" in {e["canonical"] for e in first["plan"]}
+
+    second = await resolve_agent_orphans(
+        actions, root=tmp_path, dry_run=False, because="test", skip_judged=True)
+    assert "agent:judged001" not in {e["canonical"] for e in second["plan"]}
+    manual = await resolve_agent_orphans(actions, root=tmp_path)
+    assert "agent:judged001" in {e["canonical"] for e in manual["plan"]}
+
+
+async def test_with_nothing_to_judge_the_session_tree_is_not_walked(
+    actions: Actions, tmp_path: Path, monkeypatch: Any,
+) -> None:
+    from src.orchestrator import lineage
+
+    walks: list[int] = []
+
+    def _walk(root: Path) -> list[Path]:
+        walks.append(1)
+        return []
+
+    class _NoRows:
+        pool = type("P", (), {"fetch": staticmethod(lambda *a, **k: _empty())})()
+
+    async def _empty() -> list[Any]:
+        return []
+
+    monkeypatch.setattr(lineage, "_session_dirs", _walk)
+    out = await resolve_agent_orphans(_NoRows(), root=tmp_path, skip_judged=True)  # type: ignore[arg-type]
+    assert out["scanned"] == 0 and walks == []
+
+
+async def test_a_planned_mint_that_a_retired_link_blocks_is_counted_as_held_not_minted(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """derive_or_abstain does not recreate a link someone invalidated, but the lane's plan used
+    to count the mint every tick (the practice lane read to_mint 4 forever). The result now says
+    held, and to_mint only counts what landed."""
+    session_uuid = "eeeeeeee-0000-4000-8000-000000000009"
+    _write_session_dir(tmp_path, "-home-x-code-retiredpro", session_uuid, "retired1")
+    await _orphan_agent(actions, "agent:retired1", session_uuid)
+    first = await resolve_agent_orphans(actions, root=tmp_path, dry_run=False, because="test")
+    assert first["to_mint"] >= 1
+    [row] = await actions.pool.fetch("SELECT id FROM objects WHERE canonical='agent:retired1'")
+    link = await actions.pool.fetchrow(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='works_in'", row["id"])
+    await actions.invalidate_link(row["id"], link["to_id"], "works_in", "test", _NOW,
+                                  reason="test: retired")
+
+    again = await resolve_agent_orphans(actions, root=tmp_path, dry_run=False, because="test")
+    [entry] = [e for e in again["plan"] if e["canonical"] == "agent:retired1"]
+    assert entry["verdict"] == "already_linked"
+    assert again["held"] >= 1
+    assert again["to_mint"] + again["to_abstain"] + again["held"] == len(again["plan"])
+    assert not await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='works_in' "
+        "AND valid_until IS NULL", row["id"])  # and nothing was recreated
+    planned = await resolve_agent_orphans(actions, root=tmp_path)  # a dry run reports the plan
+    [dry] = [e for e in planned["plan"] if e["canonical"] == "agent:retired1"]
+    assert dry["verdict"] == "mint"
