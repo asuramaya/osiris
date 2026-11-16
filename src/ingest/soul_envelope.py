@@ -118,7 +118,8 @@ def envelope_recipients(*, path: str | None = None) -> list[dict[str, Any]]:
     return [{"id": str(r.get("id", "")), "kind": r.get("kind"), "label": r.get("label", ""),
              "added_at": r.get("added_at"), "enrolled_at": r.get("added_at"),
              "last_opened_at": r.get("last_opened_at"), "unattended": False,
-             "needs_touch": r.get("kind") == KIND_HARDWARE, "needs_human": True}
+             "needs_touch": r.get("kind") == KIND_HARDWARE, "needs_human": True,
+             "rp_id": r.get("rp_id") if r.get("kind") == KIND_HARDWARE else None}
             for r in blob["recipients"] if isinstance(r, dict)]
 
 
@@ -418,6 +419,85 @@ def envelope_add_key(
     return {"recipient": _public(record)}
 
 
+def _b64_tolerant(value: str) -> bytes:
+    """base64url with or without padding, as a browser gives it."""
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def envelope_add_key_from_prf(
+    *, credential_id: str, salt: bytes, rp_id: str, prf: bytes, label: str = "security key",
+    path: str | None = None, raw_key: bytes | None = None,
+) -> dict[str, Any]:
+    """Seals the key to a hardware recipient whose credential a BROWSER created and whose PRF
+    output (at `salt`) it evaluated: the same record `envelope_add_key` makes from a plugged-in
+    key, without this process ever talking to the device. `credential_id` is the browser's
+    base64url id. The live key is wrapped here with HKDF(prf) and never leaves this process; the
+    stored copy is opened once with the same output to prove it round-trips. The new recipient
+    starts unproven, like every other. Refuses on the same grounds as `envelope_add_key`."""
+    from src.ingest import soul_crypto
+
+    recovery_path = recovery_file_path(path=path)
+    if not recovery_path.exists():
+        return {"error": f"no envelope at {recovery_path} yet: enroll the first key with "
+                         "`osiris soul-key enroll-recovery`, then add more here"}
+    try:
+        blob = _read_blob(recovery_path)
+    except (OSError, ValueError) as exc:
+        return {"error": f"the recovery file cannot be read: {exc}"}
+    key = raw_key if raw_key is not None else _live_key(path)
+    if key_fingerprint(key) != blob.get("key_fingerprint"):
+        return {"error": "the envelope protects an older key than the live one (the key was "
+                         "rotated since); re-seal the envelope to the current key first"}
+    try:
+        cred = _b64_tolerant(credential_id)
+    except (ValueError, TypeError):
+        return {"error": "the credential id is not valid base64url"}
+    if len(prf) != 32 or not cred or len(salt) != 32:
+        return {"error": "the key's answer was not the expected size: try the touch again"}
+    wrap = soul_crypto._hkdf_wrap_key(prf)
+    token = wrap.encrypt(key)
+    try:
+        if wrap.decrypt(token) != key:
+            return {"error": "the new key could not be read back: nothing was added"}
+    except InvalidToken:
+        return {"error": "the new key could not be read back: nothing was added"}
+    record = {"id": _next_id(blob, "k"), "kind": KIND_HARDWARE,
+              "label": label or "security key", "added_at": _now(), "last_opened_at": None,
+              "credential_id": base64.urlsafe_b64encode(cred).decode(),
+              "salt": base64.urlsafe_b64encode(salt).decode(),
+              "wrapped_key": base64.urlsafe_b64encode(token).decode(), "rp_id": rp_id}
+    blob["recipients"] = [*blob["recipients"], record]
+    _write_blob_atomic(recovery_path, blob)
+    return {"recipient": _public(record)}
+
+
+def envelope_challenge_material(
+    recipient_id: str, *, path: str | None = None,
+) -> dict[str, Any]:
+    """What a browser needs to evaluate a recipient's key: {kind, credential_id, salt, rp_id}
+    for a hardware recipient, {kind} for a code. None of it is secret (the envelope's wrapped copy
+    is useless without the key's own answer), but it is the recipient's own record, so it is only
+    handed out one recipient at a time. {"error"} when there is no such recipient."""
+    recovery_path = recovery_file_path(path=path)
+    if not recovery_path.exists():
+        return {"error": f"no envelope at {recovery_path}"}
+    try:
+        blob = _read_blob(recovery_path)
+    except (OSError, ValueError) as exc:
+        return {"error": f"the recovery file cannot be read: {exc}"}
+    rec = next((r for r in blob["recipients"]
+                if isinstance(r, dict) and r.get("id") == recipient_id), None)
+    if rec is None:
+        return {"error": f"no recipient {recipient_id!r}"}
+    if rec.get("kind") == KIND_CODE:
+        return {"kind": KIND_CODE}
+    from src.ingest import soul_crypto
+
+    return {"kind": rec.get("kind"), "credential_id": rec.get("credential_id"),
+            "salt": rec.get("salt"),
+            "rp_id": str(rec.get("rp_id") or blob.get("rp_id") or soul_crypto._DEFAULT_RP_ID)}
+
+
 # --- opening a recipient and proving it ------------------------------------------------------
 
 STATUS_OK = "ok"
@@ -507,7 +587,7 @@ def _classify_device_error(exc: Exception) -> tuple[str, str]:
 
 def envelope_open(
     recipient_id: str, *, path: str | None = None, interactive: bool = False,
-    code: str | None = None,
+    code: str | None = None, prf: bytes | None = None,
 ) -> OpenResult:
     """Opens the key using ONLY this recipient's own wrapped copy. It never reads the live key
     file or any carrier of it, so a success here cannot be the host key answering instead: the
@@ -515,7 +595,11 @@ def envelope_open(
 
     `interactive=False` never touches the device and never asks anyone: a hardware recipient
     then returns needs_operator_key at once, and a code recipient does too unless `code` is
-    given. `interactive=True` talks to the security key (PIN and touch at the terminal)."""
+    given. `interactive=True` talks to the security key (PIN and touch at the terminal).
+    `prf` is the 32-byte WebAuthn PRF output for this recipient's credential and salt, evaluated
+    by a CALLER that held the key (the console's browser); it stands in for the device. It is
+    the same secret the device would have produced, so it is handled like the key: never logged,
+    stored or returned."""
     recovery_path = recovery_file_path(path=path)
     if not recovery_path.exists():
         return OpenResult(STATUS_FAILED, recipient_id, f"no envelope at {recovery_path}")
@@ -546,6 +630,14 @@ def envelope_open(
         return OpenResult(STATUS_OK, recipient_id, None, raw)
     if kind != KIND_HARDWARE:
         return OpenResult(STATUS_FAILED, recipient_id, f"unknown recipient kind {kind!r}")
+    if prf is not None:
+        from src.ingest import soul_crypto
+
+        try:
+            raw = soul_crypto._hkdf_wrap_key(prf).decrypt(token)
+        except InvalidToken:
+            return OpenResult(STATUS_FAILED, recipient_id, ERR_WRONG_KEY)
+        return OpenResult(STATUS_OK, recipient_id, None, raw)
     if not interactive:
         return OpenResult(STATUS_NEEDS_OPERATOR, recipient_id,
                           "the security key's touch and PIN are needed")
@@ -576,6 +668,7 @@ def envelope_open(
 def envelope_verify(
     recipient_id: str, *, path: str | None = None, interactive: bool = True,
     code: str | None = None, on_key: Callable[[bytes], bool] | None = None,
+    prf: bytes | None = None,
 ) -> dict[str, Any]:
     """Proves that one recipient, by itself, opens the key: opens it, compares the key's
     fingerprint with the one the envelope records, and (when `on_key` is given) hands the key to
@@ -590,7 +683,8 @@ def envelope_verify(
     out: dict[str, Any] = {"ok": False, "status": STATUS_FAILED, "needs_operator_key": False,
                            "fingerprint_matches": None, "artifact_ok": None,
                            "recipient": recipient_id, "error": None}
-    with envelope_open(recipient_id, path=path, interactive=interactive, code=code) as opened:
+    with envelope_open(recipient_id, path=path, interactive=interactive, code=code,
+                       prf=prf) as opened:
         out["status"] = opened.status
         out["needs_operator_key"] = opened.status == STATUS_NEEDS_OPERATOR
         if opened.status != STATUS_OK:
