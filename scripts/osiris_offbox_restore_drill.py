@@ -149,8 +149,31 @@ def run_drill(repo_url: str, *, scratch: Path | None = None) -> str | None:
 
 # --- THE BOUNDED DRILL ------------------------------------------------------------------------
 
-DRILL_BUDGET_SECONDS = 600       # the whole bounded drill, every step included
-READ_DATA_SUBSET = "2%"          # share of the pack data `restic check` reads and re-hashes
+# A FIXED AMOUNT of data is re-hashed, never a share of the repository: "2%" of a 959 GB repository
+# is 19 GB, which over Wi-Fi outran any budget (the drill timed out at 600 s). restic picks the
+# packs at random, so successive weekly drills cover different data.
+READ_DATA_SUBSET = "2G"
+READ_DATA_BYTES = 2 * 1024 ** 3
+# The budget scales with what the check actually reads: the slowest link it is sized for, and the
+# time everything else (index load, the listing, the dump header, the sample restore) needs.
+MIN_READ_BYTES_PER_SEC = 4 * 1024 ** 2
+BASE_BUDGET_SECONDS = 420.0
+CHECK_OVERHEAD_SECONDS = 180.0   # the check's own index load and structure pass, before the data
+
+
+def drill_budget_seconds(read_bytes: int = READ_DATA_BYTES) -> float:
+    """The whole bounded drill's budget: the fixed steps plus the time to read `read_bytes` at the
+    slowest link it is sized for."""
+    return BASE_BUDGET_SECONDS + read_bytes / MIN_READ_BYTES_PER_SEC
+
+
+def check_timeout_seconds(read_bytes: int = READ_DATA_BYTES) -> float:
+    """The repository check's own limit, so a slow check cannot take the time the sample restores
+    (the real proof) need."""
+    return CHECK_OVERHEAD_SECONDS + read_bytes / MIN_READ_BYTES_PER_SEC
+
+
+DRILL_BUDGET_SECONDS = drill_budget_seconds()  # the whole bounded drill, every step included
 SAMPLE_FILES = 3                 # small files restored and verified, beside the two named ones
 SAMPLE_MAX_BYTES = 1 << 20       # only files this small are sampled (the drill must stay cheap)
 LS_NODE_CAP = 2_000_000          # never read an unbounded snapshot listing
@@ -176,11 +199,42 @@ class _Budget:
         return self.left()
 
 
+class _Steps:
+    """How long each step of one drill took, in the order they ran: parked as a note on the
+    drill's receipt, pass or fail, so a slow or timed-out drill names the step that was slow."""
+
+    def __init__(self) -> None:
+        self.seconds: dict[str, float] = {}
+
+    @contextlib.contextmanager
+    def time(self, name: str) -> Any:
+        began = time.monotonic()
+        try:
+            yield
+        finally:
+            self.seconds[name] = self.seconds.get(name, 0.0) + time.monotonic() - began
+
+    def summary(self) -> str:
+        if not self.seconds:
+            return ""
+        return "drill steps: " + ", ".join(f"{k} {v:.0f} s" for k, v in self.seconds.items())
+
+
 def _restic(args: list[str], env: dict[str, str], budget: _Budget, step: str,
-            ) -> subprocess.CompletedProcess[str]:
+            *, limit: float | None = None) -> subprocess.CompletedProcess[str]:
+    """One restic call under the drill's budget (and `limit`, a step's own cap). A call that does
+    not finish says WHICH step it was, not just that something timed out."""
     from src.orchestrator import restic_locks
 
-    return restic_locks.run_restic(args, env, timeout=budget.timeout(step))
+    allowed = budget.timeout(step)
+    if limit is not None:
+        allowed = min(allowed, limit)
+    try:
+        return restic_locks.run_restic(args, env, timeout=allowed)
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(
+            f"the drill's step did not finish: {step} (stopped after {allowed:.0f} s, of a "
+            f"{budget.seconds:.0f} s budget)") from exc
 
 
 def _stop(proc: subprocess.Popen[Any]) -> None:
@@ -336,16 +390,17 @@ def _dump_header_failure(path: str, env: dict[str, str], budget: _Budget) -> str
 
 def run_bounded_drill(
     repo_url: str, *, scratch: Path | None = None, budget_secs: float = DRILL_BUDGET_SECONDS,
-    rng: random.Random | None = None,
+    rng: random.Random | None = None, read_bytes: int = READ_DATA_BYTES,
 ) -> str | None:
     """Returns a failure string, or None on success, the same convention as `run_drill`.
-    Steps, all inside one time budget: (1) `restic check --read-data-subset` (repository
-    structure plus a re-hash of a share of the stored data); (2) the newest database dump's
-    header is streamed out and checked; (3) the recovery file and a few small sample files
-    are restored into a scratch directory with `--verify` (every restored file re-hashed
-    against the repository) and checked for the recorded size; the recovery file must also
-    parse and carry its wrapped key. A repository with no snapshots, or nothing to sample,
-    fails: a clean check alone proves nothing. Cleans up its scratch in every case."""
+    Steps, all inside one time budget (sized for what is read, see `drill_budget_seconds`) and
+    each timed on its own into a note on the receipt: (1) `restic check --read-data-subset=<a
+    fixed amount>` (repository structure plus a re-hash of that much stored data); (2) the
+    newest database dump's header is streamed out and checked; (3) the recovery file and a few
+    small sample files are restored into a scratch directory with `--verify` (every restored
+    file re-hashed against the repository) and checked for the recorded size; the recovery
+    file must also parse and carry its wrapped key. A repository with no snapshots, or nothing
+    to sample, fails: a clean check alone proves nothing. Cleans up its scratch in every case."""
     from src.orchestrator.restic_credential import ResticPasswordMissing, get_restic_password
 
     try:
@@ -356,20 +411,31 @@ def run_bounded_drill(
     env = {**os.environ, "RESTIC_REPOSITORY": repo_url, "RESTIC_PASSWORD": password.decode()}
     budget = _Budget(budget_secs)
     rng = rng or random.Random()
+    steps = _Steps()
+    subset = READ_DATA_SUBSET if read_bytes == READ_DATA_BYTES else f"{max(1, read_bytes)}B"
+    check_limit = check_timeout_seconds(read_bytes)
     try:
-        busy = _check_clear_of_locks(repo_url, env)
+        with steps.time("lock check"):
+            busy = _check_clear_of_locks(repo_url, env)
         if busy:
             return busy
-        check, locked = _check_retrying_on_a_lock(
-            repo_url, env,
-            lambda: _restic(["check", f"--read-data-subset={READ_DATA_SUBSET}"], env, budget,
-                            "the repository check finished"))
+        with steps.time("repository check"):
+            check, locked = _check_retrying_on_a_lock(
+                repo_url, env,
+                lambda: _restic(["check", f"--read-data-subset={subset}"], env, budget,
+                                "the repository check finished", limit=check_limit))
         if locked:
             return locked
         if check.returncode != 0:
+            if "repository having size 0" in f"{check.stdout}\n{check.stderr}":
+                # a fixed-size read has nothing to read in an empty repository (a percentage of
+                # nothing used to pass): say what that means
+                return ("the repository holds no data, so there are no files to sample; a "
+                        "check-clean repository is NOT proof of a restorable backup")
             return f"restic check failed:\n{check.stdout}\n{check.stderr}"
         try:
-            recovery, dump, samples = _pick_samples(env, budget, rng)
+            with steps.time("file listing"):
+                recovery, dump, samples = _pick_samples(env, budget, rng)
         except _ListingFailed as exc:
             if "no snapshot found" in str(exc):
                 return ("the repository has no snapshots, so there are no files to sample; a "
@@ -387,14 +453,16 @@ def run_bounded_drill(
             return ("the latest snapshot is missing " + " and ".join(missing)
                     + "; a snapshot without them is not a backup of the house")
         if dump:
-            failure = _dump_header_failure(dump, env, budget)
+            with steps.time("dump header"):
+                failure = _dump_header_failure(dump, env, budget)
             if failure:
                 return failure
         if wanted:
             args = ["restore", "latest", "--target", str(scratch), "--verify"]
             for p in wanted:
                 args += ["--include", _glob_escape(p)]
-            restore = _restic(args, env, budget, "the sample restore finished")
+            with steps.time("sample restore"):
+                restore = _restic(args, env, budget, "the sample restore finished")
             if restore.returncode != 0:
                 return f"restic restore failed:\n{restore.stdout}\n{restore.stderr}"
             sizes = dict(samples)
@@ -420,6 +488,11 @@ def run_bounded_drill(
     except OSError as exc:
         return f"off-box restore drill failed: {type(exc).__name__}: {exc}"
     finally:
+        summary = steps.summary()
+        if summary:
+            from src.orchestrator import restic_locks
+
+            restic_locks.add_note(repo_url, summary)
         shutil.rmtree(scratch, ignore_errors=True)
 
 

@@ -79,9 +79,9 @@ def test_it_restores_only_a_small_verified_sample_never_the_whole_snapshot(
     calls: list[list[str]] = []
     real = drill._restic
 
-    def _spy(args: list[str], env: dict[str, str], budget: Any, step: str) -> Any:
+    def _spy(args: list[str], env: dict[str, str], budget: Any, step: str, **kw: Any) -> Any:
         calls.append(args)
-        return real(args, env, budget, step)
+        return real(args, env, budget, step, **kw)
 
     monkeypatch.setattr(drill, "_restic", _spy)
 
@@ -197,3 +197,75 @@ def test_the_script_runs_bounded_by_default_and_full_on_request(
     assert drill.main(["somewhere"]) == 0
     assert drill.main(["somewhere", "--full"]) == 0
     assert seen == ["bounded", "full"]
+
+
+# --- a big repository: a fixed amount read, a budget that scales, steps timed and named -------
+
+def test_the_check_reads_a_fixed_amount_never_a_percentage() -> None:
+    assert "%" not in drill.READ_DATA_SUBSET and drill.READ_DATA_SUBSET.endswith("G")
+    assert drill.READ_DATA_BYTES == 2 * 1024 ** 3
+
+
+def test_the_budget_scales_with_what_the_check_reads_and_exceeds_the_old_fixed_600() -> None:
+    small = drill.drill_budget_seconds(1024 ** 3)
+    big = drill.drill_budget_seconds(8 * 1024 ** 3)
+    assert big > small > drill.BASE_BUDGET_SECONDS
+    assert drill.DRILL_BUDGET_SECONDS == drill.drill_budget_seconds(drill.READ_DATA_BYTES)
+    assert drill.DRILL_BUDGET_SECONDS > 600
+    # the check's own cap leaves the fixed steps their time
+    assert drill.check_timeout_seconds() < drill.DRILL_BUDGET_SECONDS
+
+
+def test_every_step_is_timed_and_parked_as_a_note_on_the_receipt(tmp_path: Path) -> None:
+    from src.orchestrator import restic_locks
+
+    repo, _ = _backed_up(tmp_path)
+    restic_locks.pop_notes(repo)
+
+    assert drill.run_bounded_drill(repo) is None
+
+    [note] = [n for n in restic_locks.pop_notes(repo) if n.startswith("drill steps:")]
+    for step in ("lock check", "repository check", "file listing", "dump header",
+                 "sample restore"):
+        assert f"{step} " in note
+
+
+def test_a_check_that_outruns_its_limit_names_its_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import restic_locks
+
+    repo, _ = _backed_up(tmp_path)
+    real = restic_locks.run_restic
+
+    def _slow_check(args: list[str], env: dict[str, str], **kw: Any) -> Any:
+        if args and args[0] == "check":
+            raise subprocess.TimeoutExpired(["restic", *args], kw["timeout"])
+        return real(args, env, **kw)
+
+    monkeypatch.setattr(restic_locks, "run_restic", _slow_check)
+    restic_locks.pop_notes(repo)
+
+    out = drill.run_bounded_drill(repo)
+
+    assert out is not None and "the repository check finished" in out
+    assert "did not finish" in out and "budget" in out
+    # the steps that did run are still on the receipt, so the slow one is visible
+    assert any("repository check" in n for n in restic_locks.pop_notes(repo))
+
+
+def test_a_small_read_budget_is_passed_to_restic_as_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, _ = _backed_up(tmp_path)
+    calls: list[list[str]] = []
+    real = drill._restic
+
+    def _spy(args: list[str], env: dict[str, str], budget: Any, step: str, **kw: Any) -> Any:
+        calls.append(args)
+        return real(args, env, budget, step, **kw)
+
+    monkeypatch.setattr(drill, "_restic", _spy)
+
+    assert drill.run_bounded_drill(repo, read_bytes=4096) is None
+    assert any(a[0] == "check" and "--read-data-subset=4096B" in a for a in calls)
