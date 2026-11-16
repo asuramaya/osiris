@@ -94,7 +94,10 @@ async function athomeStream(path, onLine, payload) {
   if (!res.ok || !res.body) {
     var body = null;
     try { body = await res.json(); } catch (e) { body = null; }
-    onLine({ done: true, ok: false, text: athomeErrorText(body, 'This could not be started (error ' + res.status + ').') });
+    onLine({ done: true, ok: false, text: res.status === 404
+      ? 'This is not available yet on this machine.'
+      : (res.status === 403 ? 'These controls only answer on the computer that runs the console. Open the console on that computer.'
+         : athomeErrorText(body, 'This could not be started (error ' + res.status + ').')) });
     return;
   }
   var reader = res.body.getReader();
