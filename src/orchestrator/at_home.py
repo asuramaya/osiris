@@ -154,6 +154,14 @@ def _gb(n: object) -> str:
 
 
 def plaintext_item(src: Sources, nas: dict[str, Any]) -> dict[str, Any]:
+    """The item, with the operator's recorded choice (None when none) for the panel's buttons."""
+    from src.orchestrator.plaintext_copy import read_choice
+
+    chosen = read_choice()
+    return {**_plaintext_item(src, nas), "choice": chosen.get("choice") if chosen else None}
+
+
+def _plaintext_item(src: Sources, nas: dict[str, Any]) -> dict[str, Any]:
     title = "Remove the old plaintext NAS copy"
     still_open = src.plaintext_thread_open()
     if still_open is False:

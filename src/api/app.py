@@ -1579,6 +1579,98 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         receipt = restore_drill_receipts().get(str((target or {}).get("path_or_url") or "")) or {}
         return restore_test_summary(target, receipt)
 
+    # THE AT HOME PANEL's plaintext-copy routes (src/orchestrator/plaintext_copy.py has the design):
+    # the operator's choice, the encrypted backup of the old NAS copy as a stream of lines, and its
+    # removal after a second confirm. Loopback-only like the key routes (`_envelope_guard`): one of
+    # them removes 280 GB. There is deliberately NO route for the rebuild probe: it writes into
+    # ~/.claude/projects and spends a model call, so it stays a command at a terminal.
+    async def _plaintext_target(p: asyncpg.Pool) -> tuple[dict[str, Any] | None, bytes | None, str]:
+        from src.orchestrator.backup_settings import get_backup_settings
+        from src.orchestrator.nas_first_offload import pick_target
+        from src.orchestrator.restic_credential import ResticPasswordMissing, get_restic_password
+
+        settings = await get_backup_settings(p)
+        target, why = pick_target(settings.get("offload_targets") or [], None)
+        if target is None:
+            return None, None, f"{why}."
+        try:
+            return target, get_restic_password(), ""
+        except ResticPasswordMissing:
+            return None, None, "the backup repository's password could not be read."
+
+    @app.get("/at-home/plaintext-copy")
+    async def at_home_plaintext_state_route(request: Request) -> JSONResponse:
+        """The recorded choice, the last proof that the backup holds everything, and the phrases
+        removal asks for. Read-only."""
+        from src.orchestrator import at_home, plaintext_copy
+
+        if (denied := _envelope_guard(request)) is not None:
+            return denied
+        return _envelope_reply({
+            "choice": plaintext_copy.read_choice(), "coverage": at_home.read_coverage(),
+            "confirm": {"encrypt_then_remove": plaintext_copy.CONFIRM_REMOVE,
+                        "delete": plaintext_copy.CONFIRM_DELETE}})
+
+    @app.post("/at-home/plaintext-copy/choice")
+    async def at_home_plaintext_choice_route(
+        request: Request, p: asyncpg.Pool = Depends(get_pool),
+    ) -> JSONResponse:
+        """Record the operator's choice (`{choice: keep | encrypt_then_remove | delete}`) as an
+        operator-authorized decision, and answer with the refreshed checklist."""
+        from src.orchestrator import at_home, plaintext_copy
+
+        if (denied := _envelope_guard(request)) is not None:
+            return denied
+        body = await _envelope_body(request)
+        out = await plaintext_copy.record_choice(p, body.get("choice"))
+        if "error" in out:
+            return _envelope_reply(out)
+        return _envelope_reply({**out, "at_home": at_home.checklist(await at_home.real_sources(p))})
+
+    async def _plaintext_stream(p: asyncpg.Pool, which: str, confirm: object = None) -> Any:
+        from src.orchestrator import plaintext_copy
+        from src.orchestrator.at_home_nas import stream_nas
+
+        async def runner(say: Any) -> int:
+            target, password, why = await _plaintext_target(p)
+            if target is None or password is None:
+                say(f"STOPPED: {why}")
+                return 1
+            deps = plaintext_copy.real_deps()
+            if which == "encrypt":
+                return await plaintext_copy.encrypt(target, password, deps, say=say)
+            rc = await plaintext_copy.remove(target, password, deps, confirm=confirm, say=say)
+            if rc == 0:
+                await plaintext_copy.close_thread(p)
+            return rc
+
+        return StreamingResponse(stream_nas(runner), media_type="application/x-ndjson",
+                                 headers={"Cache-Control": "no-store"})
+
+    @app.post("/at-home/plaintext-copy/encrypt")
+    async def at_home_plaintext_encrypt_route(
+        request: Request, p: asyncpg.Pool = Depends(get_pool),
+    ) -> Any:
+        """Back the old plaintext NAS copy up into the restic repository (on the NAS, over ssh,
+        home LAN only) and prove it holds every file; streams one JSON line per step and about
+        every 15 seconds of progress. Needs the recorded choice `encrypt_then_remove`. Run it
+        again after a stop: it resumes."""
+        if (denied := _envelope_guard(request)) is not None:
+            return denied
+        return await _plaintext_stream(p, "encrypt")
+
+    @app.post("/at-home/plaintext-copy/remove")
+    async def at_home_plaintext_remove_route(
+        request: Request, p: asyncpg.Pool = Depends(get_pool),
+    ) -> Any:
+        """Remove the old plaintext NAS copy: `{confirm}` must be the phrase for the recorded
+        choice (see GET /at-home/plaintext-copy). Under `encrypt_then_remove` it re-proves, just
+        now, that nothing is only in the copy; under `delete` it needs the typed phrase."""
+        if (denied := _envelope_guard(request)) is not None:
+            return denied
+        body = await _envelope_body(request)
+        return await _plaintext_stream(p, "remove", body.get("confirm"))
+
     @app.get("/soul-key/status")
     async def soul_key_status_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
         """Return the status of the encryption key that protects the data
