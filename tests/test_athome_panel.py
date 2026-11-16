@@ -134,3 +134,78 @@ def test_a_403_names_the_wrong_computer_and_nothing_is_cached() -> None:
     assert "only answer on the computer that runs the console" in _JS
     assert "cache: 'no-store'" in _JS
     assert "Nothing was tested." in _JS  # needs_operator_key is not a failed proof
+
+
+# --- the panel does the work: an action per item, the command only as a detail ----------------
+
+def _items(*pairs: tuple[str, str]) -> str:
+    rows = ",".join(f"{{key:'{k}',order:1,title:'T',status:'{s}',why:'w',command:'osiris x'}}"
+                    for k, s in pairs)
+    return f"a.athomeChecklistHtml({{items:[{rows}]}})"
+
+
+def test_each_open_item_has_a_button_that_does_it_and_the_command_is_a_small_detail() -> None:
+    html = str(_node(_items(("envelope_drill", "waiting"), ("envelope_code", "waiting"),
+                            ("envelope_key", "waiting"), ("nas_offload", "waiting"),
+                            ("plaintext_copy", "blocked"))))
+    for label in ("Prove a key now", "Add a recovery code", "Add a second key", "Check",
+                  "Make the first copy"):
+        assert label in html, label
+    assert 'id="athome-plain"' in html
+    assert html.count("or run in a terminal") == 5
+    assert html.count("<details") == 5  # the command is never the primary control
+
+
+def test_the_rebuild_probe_stays_a_terminal_command_and_says_why() -> None:
+    html = str(_node(_items(("rebuild_probe", "optional"))))
+    assert "runs from a terminal because it uses a model call" in html and "osiris x" in html
+    assert "Run the probe" not in html and "<details" not in html
+
+
+def test_a_finished_item_has_no_button() -> None:
+    html = str(_node(_items(("nas_offload", "done"), ("envelope_code", "done"))))
+    for label in ("Check", "Make the first copy", "Add a recovery code"):
+        assert label not in html, label  # only the small Copy button remains
+
+
+def test_the_old_plaintext_copy_offers_three_choices_before_one_is_made() -> None:
+    html = str(_node("a.athomePlainHtml({choice:null,coverage:{only_files:4,only_bytes:3e9},"
+                     "confirm:{encrypt_then_remove:'remove',"
+                     "delete:'delete the old plaintext copy'}},"
+                     "{why:'The old copy holds about 280 GB.'})"))
+    assert "Keep it" in html and "Back it up, then remove the plaintext" in html
+    assert "Delete it" in html and "The old copy holds about 280 GB." in html
+    assert "4 file(s) (3.0 GB) are only in the old copy" in html
+    # the typed box appears only after Delete it is pressed
+    assert "athome-plain-del-btn" not in html
+
+
+def test_after_choosing_to_back_it_up_the_removal_needs_the_word_remove_typed() -> None:
+    html = str(_node("a.athomePlainHtml({choice:{choice:'encrypt_then_remove'},"
+                     "confirm:{encrypt_then_remove:'remove',delete:'x'}},null)"))
+    assert "Back it up now" in html and "press it again to carry on" in html
+    assert 'data-phrase="remove"' in html
+    assert 'id="athome-plain-remove-btn" disabled' in html
+    assert "Keep it" not in html  # no second choice while the copy is being made
+
+
+def test_a_kept_copy_says_so() -> None:
+    html = str(_node("a.athomePlainHtml({choice:{choice:'keep'},confirm:{}},null)"))
+    assert "Your choice so far: keep it." in html
+
+
+def test_nothing_starts_by_itself_and_the_destructive_ones_are_confirmed() -> None:
+    for fn in ("async function athomeLoadAll", "async function renderAtHomePanel",
+               "async function athomePlainLoad"):
+        body = _JS.split(fn)[1].split("\n}\n")[0]
+        assert "'POST'" not in body and "athomeStream(" not in body, fn
+    for fn in ("async function athomePlainDelete", "async function athomePlainRemove"):
+        body = _JS.split(fn)[1].split("\n}\n")[0]
+        assert "box.value.trim() !== box.getAttribute('data-phrase')" in body, fn
+    assert "'/at-home/plaintext-copy/remove', { confirm:" in _JS
+    assert "athomeGB(" in _JS  # the size shown is the server's, in plain gigabytes
+
+
+def test_the_closing_line_does_not_repeat_the_last_step_sentence() -> None:
+    assert "function athomeClosing(list, line)" in _JS
+    assert _JS.count("athomeClosing(list, line)") >= 3  # the helper's own call sites
