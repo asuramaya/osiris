@@ -2175,7 +2175,6 @@ const POWER_TOOLS = [
   { label: 'Go to Mailbox', hint: 'Messages', cat: 'Navigation', run: () => switchSurface('mailbox') },
   { label: 'Author composition…', hint: 'Save a new lens', cat: 'Compositions', run: () => authorComposition() },
   { label: 'Repairs…', hint: 'The eight backfill repair verbs', cat: 'Admin', run: () => renderRepairsPanel() },
-  { label: 'At home…', hint: 'What waits on you: vault keys, a recovery code, the first offload, the restore test', cat: 'Admin', run: () => renderAtHomePanel() },
   // THE SETTINGS PANE consolidates the three formerly-separate "Key…"/"Offload
   // Targets…"/"Settings…" palette entries into ONE destination: Ctrl+K used to reach
   // Key…, Offload Targets… and Settings… as separate panels, now built as one console
@@ -2184,6 +2183,7 @@ const POWER_TOOLS = [
   // just no longer surfaced as its own separate palette row; the pane below embeds each
   // one's shared fetch+render (renderKeyInto/renderOffloadInto/renderSettingsInto) instead.
   { label: 'Settings', hint: 'Encryption key, backup, readiness, configuration, and the operator desk', cat: 'Admin', run: () => renderSettingsPane() },
+  { label: 'At home…', hint: 'What waits on you: vault keys, a recovery code, the first offload, the restore test', cat: 'Admin', run: () => renderAtHomePanel() },
 ];
 
 // THE COMPOSER SHELL: "run" used to mean "POST /compositions/{name}/run and dump the raw
