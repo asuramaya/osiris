@@ -1545,6 +1545,40 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     # the shape this whole endpoint exists to refuse; see soul_crypto.py's own module
     # docstring). `/soul-key/init` alone never touches Postgres (`soul_key_init` is
     # pool-free by design).
+    # THE AT HOME PANEL's two NAS routes (src/orchestrator/at_home_nas.py): the first offload as a
+    # stream of lines, and the restore-test result. Operator-only like the key routes above.
+    @app.post("/at-home/nas/{which}")
+    async def at_home_nas_route(which: str, p: asyncpg.Pool = Depends(get_pool)) -> Any:
+        """Run the NAS first offload (`which` = run) or only its read-only check (`check`),
+        streaming one JSON line per step."""
+        from fastapi import HTTPException
+
+        from src.orchestrator import nas_first_offload
+        from src.orchestrator.at_home_nas import stream_nas
+
+        if which not in ("check", "run"):
+            raise HTTPException(status_code=404, detail="Use check or run.")
+
+        async def runner(say: Any) -> int:
+            return await nas_first_offload.command(
+                pool=p, check_only=which == "check", say=say)
+
+        return StreamingResponse(stream_nas(runner), media_type="application/x-ndjson",
+                                 headers={"Cache-Control": "no-store"})
+
+    @app.get("/at-home/restore-test")
+    async def at_home_restore_test_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        """The restore test's last result against the NAS target."""
+        from src.orchestrator.at_home_nas import restore_test_summary
+        from src.orchestrator.backup_settings import get_backup_settings
+        from src.orchestrator.nas_first_offload import pick_target
+        from src.orchestrator.soul_key import restore_drill_receipts
+
+        settings = await get_backup_settings(p)
+        target, _why = pick_target(settings.get("offload_targets") or [], None)
+        receipt = restore_drill_receipts().get(str((target or {}).get("path_or_url") or "")) or {}
+        return restore_test_summary(target, receipt)
+
     @app.get("/soul-key/status")
     async def soul_key_status_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
         """Return the status of the encryption key that protects the data

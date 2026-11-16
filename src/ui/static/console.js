@@ -25,6 +25,7 @@ function showPanel() { $('stage').classList.add('panel'); }
 // ── Surface Switching ────────────────────────────────────────────────────────
 async function switchSurface(surface) {
   if (surface !== 'pane') closePaneStream();  // never leak an open SSE connection off-pane
+  if (typeof athomeClearCode === 'function') athomeClearCode();  // a recovery code never outlives its screen
   ACTIVE_SURFACE = surface; postConsole({ surface });
   document.querySelectorAll('.lens-item').forEach(el => el.classList.toggle('sel', el.dataset.surface === surface));
   $('page-title').textContent = surface.charAt(0).toUpperCase() + surface.slice(1);
@@ -2182,6 +2183,7 @@ const POWER_TOOLS = [
   // just no longer surfaced as its own separate palette row; the pane below embeds each
   // one's shared fetch+render (renderKeyInto/renderOffloadInto/renderSettingsInto) instead.
   { label: 'Settings', hint: 'Encryption key, backup, readiness, configuration, and the operator desk', cat: 'Admin', run: () => renderSettingsPane() },
+  { label: 'At home…', hint: 'What waits on you: vault keys, a recovery code, the first offload, the restore test', cat: 'Admin', run: () => renderAtHomePanel() },
 ];
 
 // THE COMPOSER SHELL: "run" used to mean "POST /compositions/{name}/run and dump the raw
