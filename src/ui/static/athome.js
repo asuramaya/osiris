@@ -113,20 +113,24 @@ async function athomeStream(path, onLine) {
 }
 
 // ── rendering ────────────────────────────────────────────────────────────────────────
+// The console's tables cut long text off with an ellipsis; a checklist is read in full, so the
+// lists here are plain blocks that wrap.
+var ATHOME_WRAP = 'white-space:normal;overflow-wrap:anywhere;';
 function athomeChecklistHtml(data) {
   var items = (data && data.items) || [];
   if (!items.length) return '<div class="o-empty">Nothing is waiting on you.</div>';
-  return '<table class="ee-table"><tbody>' + items.map(function (it) {
+  return items.map(function (it) {
     var cmd = it.command
-      ? '<div style="margin-top:4px"><code>' + athomeText(it.command) + '</code> ' +
+      ? '<div style="margin-top:4px"><code style="' + ATHOME_WRAP + '">' + athomeText(it.command) + '</code> ' +
         '<button class="iconbtn" data-copy="' + athomeAttr(it.command) + '" onclick="athomeCopy(this)">Copy</button></div>'
       : '';
-    var then = it.then ? '<div class="o-faint" style="margin-top:4px">Then: ' + athomeText(it.then) + '</div>' : '';
-    return '<tr><td style="vertical-align:top;width:28px">' + athomeText(it.order) + '</td>' +
-      '<td style="vertical-align:top"><strong>' + athomeText(it.title) + '</strong> ' +
+    var then = it.then ? '<div class="o-faint" style="margin-top:4px;' + ATHOME_WRAP + '">Then: ' + athomeText(it.then) + '</div>' : '';
+    return '<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border,#222)">' +
+      '<div style="width:20px;flex:none" class="o-faint">' + athomeText(it.order) + '</div>' +
+      '<div style="min-width:0;flex:1;' + ATHOME_WRAP + '"><strong>' + athomeText(it.title) + '</strong> ' +
       '<span class="o-faint">' + athomeText(athomeStatusLabel(it.status)) + '</span>' +
-      '<div class="o-faint" style="margin-top:2px">' + athomeText(it.why) + '</div>' + cmd + then + '</td></tr>';
-  }).join('') + '</tbody></table>';
+      '<div class="o-faint" style="margin-top:2px;' + ATHOME_WRAP + '">' + athomeText(it.why) + '</div>' + cmd + then + '</div></div>';
+  }).join('');
 }
 
 function athomeKindLabel(kind) {
@@ -144,6 +148,7 @@ function athomeKeysHtml(env) {
   if (!recipients.length) {
     return '<div class="o-empty">No key is set up yet. Add a recovery code or a security key below.</div>';
   }
+  var ids = recipients.map(function (r) { return String(r.id); });
   var rows = recipients.map(function (r) {
     var isKey = r.kind === 'fido2-prf';
     var verdict = athomeVerdictLabel(r.verdict);
@@ -151,18 +156,24 @@ function athomeKeysHtml(env) {
       ? '<button class="iconbtn" data-id="' + athomeAttr(r.id) + '" data-rp="' + athomeAttr(r.rp_id || '') +
         '" onclick="athomeProveKey(this)">Prove this key</button>'
       : '<button class="iconbtn" data-id="' + athomeAttr(r.id) + '" onclick="athomeShowCodeProof(this)">Prove this code</button>';
-    return '<tr><td>' + athomeText(athomeKindLabel(r.kind)) + '</td>' +
-      '<td>' + athomeText(r.label || '') + '</td>' +
-      '<td>' + athomeText(athomeWhen(r.last_proved_at)) + (verdict ? '<div class="o-faint">' + athomeText(verdict) + '</div>' : '') + '</td>' +
-      '<td>' + athomeText(athomeWhen(r.last_opened_at)) + '</td>' +
-      '<td>' + button + '<div id="athome-proof-' + athomeAttr(r.id) + '" style="margin-top:4px"></div></td></tr>';
+    var opensAt = isKey && r.rp_id
+      ? '<div class="o-faint">Opens only when the console is at <code>' + athomeText(r.rp_id) + '</code></div>' : '';
+    return '<div style="padding:8px 0;border-bottom:1px solid var(--border,#222);' + ATHOME_WRAP + '">' +
+      '<div><strong>' + athomeText(athomeKindLabel(r.kind)) + '</strong> ' + athomeText(r.label || '') +
+      ' <span class="o-faint">(' + athomeText(r.id) + ')</span></div>' +
+      '<div class="o-faint">Last proved: ' + athomeText(athomeWhen(r.last_proved_at)) +
+      (verdict ? ' (' + athomeText(verdict) + ')' : '') + '. Last opened: ' + athomeText(athomeWhen(r.last_opened_at)) + '.</div>' +
+      opensAt + '<div style="margin-top:6px">' + button + '</div>' +
+      '<div id="athome-proof-' + athomeAttr(r.id) + '" class="o-faint" style="margin-top:4px"></div></div>';
   }).join('');
   var check = (env && env.check) || {};
-  var notes = [].concat(check.problems || [], check.warnings || []).map(function (w) {
-    return '<div style="margin:6px 0">' + athomeText(w) + '</div>';
+  // a note that names one key repeats that key's own row above: keep only the ones about the whole set
+  var notes = [].concat(check.problems || [], check.warnings || []).filter(function (w) {
+    return !ids.some(function (id) { return String(w).indexOf(id) !== -1; });
+  }).map(function (w) {
+    return '<div style="margin:6px 0;' + ATHOME_WRAP + '">' + athomeText(w) + '</div>';
   }).join('');
-  return notes + '<table class="ee-table"><thead><tr><th>Kind</th><th>Name</th><th>Last proved</th>' +
-    '<th>Last opened</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+  return notes + rows;
 }
 
 function athomeRestoreHtml(r) {

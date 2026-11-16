@@ -84,6 +84,20 @@ def test_stream_lines_arrive_in_chunks_and_the_tail_waits_for_the_next() -> None
     assert whole == {"lines": [{"n": 2, "text": "b"}], "rest": ""}
 
 
+def test_the_lists_wrap_instead_of_being_cut_off_by_the_console_tables() -> None:
+    assert "ee-table" not in _CODE and "<table" not in _CODE
+    assert "overflow-wrap:anywhere" in _JS
+
+
+def test_a_note_about_one_key_is_not_repeated_above_that_keys_own_row() -> None:
+    html = _node("a.athomeKeysHtml({recipients: [{id:'r0',kind:'fido2-prf',label:'Key',"
+                 "rp_id:'localhost',verdict:'unproven'}], check:{problems:[],"
+                 "warnings:[\"r0: never proved to open the envelope\","
+                 " 'Only one hardware key.']}})")
+    assert isinstance(html, str)
+    assert "r0: never proved" not in html and "Only one hardware key." in html
+
+
 def test_the_checklist_keeps_the_cli_order_and_escapes_what_it_shows() -> None:
     html = _node("a.athomeChecklistHtml({items: [{key:'k',order:2,title:'<b>Second</b>',"
                  "status:'waiting',why:'w',command:'run \"x\"',then:null},"
@@ -105,6 +119,7 @@ def test_keys_show_proof_dates_and_the_right_button_for_each_kind() -> None:
     assert html.count("Prove this key") == 1 and html.count("Prove this code") == 1
     assert "Not proved in a while" in html and "Never proved" in html
     assert "One key was never proved." in html
+    assert "Opens only when the console is at <code>localhost</code>" in html
 
 
 def test_an_unreadable_envelope_and_a_never_run_restore_test_say_so() -> None:
