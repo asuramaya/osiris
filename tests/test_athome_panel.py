@@ -189,3 +189,8 @@ def test_nothing_starts_by_itself_and_the_destructive_ones_are_confirmed() -> No
     choose = _JS.split("async function athomePlainChoose")[1].split("\n}\n")[0]
     assert "payload.confirm" in choose and "athome-plain-home" in choose
     assert "athomeGB(" in _JS  # the size shown is the server's, in plain gigabytes
+
+
+def test_the_closing_line_does_not_repeat_the_last_step_sentence() -> None:
+    assert "function athomeClosing(list, line)" in _JS
+    assert _JS.count("athomeClosing(list, line)") >= 3  # the helper's own call sites

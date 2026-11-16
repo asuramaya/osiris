@@ -530,7 +530,7 @@ async function athomeNas(which) {
     if (line.done) {
       finished = true;
       var li = document.createElement('li');
-      li.innerHTML = '<strong>' + (line.ok ? 'Finished.' : 'Stopped.') + '</strong> ' + athomeText(line.text || '');
+      li.innerHTML = '<strong>' + (line.ok ? 'Finished.' : 'Stopped.') + '</strong> ' + athomeClosing(list, line);
       list.appendChild(li);
       return;
     }
@@ -554,6 +554,12 @@ async function athomeNas(which) {
 // ── one stream runner for every long job ────────────────────────────────────────────────
 // Lines arrive one by one; a job that reports file counts also gets a progress line. Nothing
 // here starts by itself: each runner is called from a button.
+// The closing line often repeats the last sentence a step already said: say it only once.
+function athomeClosing(list, line) {
+  var last = list.lastChild ? list.lastChild.textContent : '';
+  var text = String(line.text || '');
+  return text && last.indexOf(text) !== -1 ? '' : athomeText(text);
+}
 function athomeLineHtml(line) {
   var count = (line.total_files != null && line.done_files != null)
     ? ' <span class="o-faint">(' + athomeText(line.done_files) + ' of ' + athomeText(line.total_files) + ' files)</span>' : '';
@@ -570,7 +576,7 @@ async function athomeRunInto(path, listId, doneNote) {
     var li = document.createElement('li');
     if (line.done) {
       finished = true; ok = !!line.ok;
-      li.innerHTML = '<strong>' + (line.ok ? 'Finished.' : 'Stopped.') + '</strong> ' + athomeText(line.text || '');
+      li.innerHTML = '<strong>' + (line.ok ? 'Finished.' : 'Stopped.') + '</strong> ' + athomeClosing(list, line);
     } else {
       li.innerHTML = athomeLineHtml(line);
     }
