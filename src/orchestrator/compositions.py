@@ -5466,6 +5466,18 @@ async def _fn_backup_status(
     except Exception as exc:  # noqa: BLE001 - one section never blanks the panel
         at_home_out = {"error": f"at-home list unavailable: {type(exc).__name__}"}
 
+    # BACKUP FILES THE LOCAL PRUNE IS KEEPING BECAUSE THE NAS HAS NOT CONFIRMED THEM (read-only)
+    try:
+        from src.orchestrator import offload_confirm
+
+        held_state = offload_confirm.read_held()
+        prune_hold: dict[str, Any] = {
+            "waiting": bool(held_state and held_state.get("files")),
+            "text": offload_confirm.describe_held(held_state) or
+                    "nothing is being kept back for the NAS", "state": held_state}
+    except Exception as exc:  # noqa: BLE001 - one section never blanks the panel
+        prune_hold = {"error": f"prune hold unavailable: {type(exc).__name__}"}
+
     # THE DISK/WAL BRAKE: whether the bulk-rewrite jobs are paused right now, and why
     try:
         from src.orchestrator.disk_brake import brake_state
@@ -5496,6 +5508,7 @@ async def _fn_backup_status(
         "missed_runs": missed_out,
         "envelope": envelope_out,
         "at_home": at_home_out,
+        "prune_hold": prune_hold,
         "offbox": offbox_section,
     }
 

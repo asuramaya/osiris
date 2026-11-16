@@ -13,6 +13,7 @@ from the real sources, and the exact command to run for it, the cheapest and saf
   6. the stopped database rollback container (needs your say-so)
   7. scratch folders left by an agent (need your say-so)
   8. the optional Claude rebuild probe (only if you want it)
+  9. backup files the local prune is keeping for the NAS (only when over the limit)
 
 Read-only: it opens nothing, uploads nothing and changes nothing. Each source is a function passed
 in, so the tests run it against fakes; a source that cannot be read says so and never hides the
@@ -62,6 +63,8 @@ class Sources:
     probe_thread_open: Callable[[], bool | None] = lambda: None
     # the last recorded check of the plaintext copy against restic, or None when never checked
     plaintext_coverage: Callable[[], dict[str, Any] | None] = lambda: None
+    # what the local prune is keeping back for the NAS (offload_confirm.read_held), or None
+    prune_hold: Callable[[], dict[str, Any] | None] = lambda: None
 
 
 def _item(key: str, order: int, title: str, status: str, why: str,
@@ -265,6 +268,20 @@ def probe_item(src: Sources) -> dict[str, Any]:
                  "throwaway folder.", PROBE_COMMAND)
 
 
+def prune_hold_item(src: Sources) -> dict[str, Any]:
+    from src.orchestrator.offload_confirm import describe_held
+
+    title = "Backup files waiting for the NAS"
+    state = src.prune_hold()
+    if state and state.get("over_ceiling"):
+        return _item("prune_hold", 9, title, WAITING, describe_held(state) or "",
+                     "connect to the home network; the offload then runs by itself "
+                     "(or: osiris nas-first-offload --name nas)")
+    note = describe_held(state)
+    return _item("prune_hold", 9, title, DONE,
+                 note or "the local prune is keeping nothing back for the NAS.")
+
+
 def _when(value: object) -> datetime | None:
     from src.orchestrator.offload_staleness import _parse
 
@@ -296,7 +313,8 @@ def checklist(src: Sources, *, now: datetime | None = None) -> dict[str, Any]:
     for fn, key, order, title in (
             (rollback_item, "rollback_container", 6, ROLLBACK_TITLE),
             (scratch_item, "scratch_dirs", 7, "Remove the scratch folders an agent left"),
-            (probe_item, "rebuild_probe", 8, "The Claude rebuild probe (optional)")):
+            (probe_item, "rebuild_probe", 8, "The Claude rebuild probe (optional)"),
+            (prune_hold_item, "prune_hold", 9, "Backup files waiting for the NAS")):
         try:
             items.append(fn(src))
         except Exception as exc:  # noqa: BLE001
@@ -455,6 +473,7 @@ async def real_sources(pool: Any, *, now: datetime | None = None) -> Sources:
     import asyncio
 
     from src.orchestrator import at_home_readers as readers
+    from src.orchestrator import offload_confirm
 
     box, scratch = await asyncio.gather(
         _captured(readers.read_rollback_container), _captured(readers.read_scratch))
@@ -471,4 +490,5 @@ async def real_sources(pool: Any, *, now: datetime | None = None) -> Sources:
         plaintext_thread_open=lambda: (None if status is None else status == "open"),
         stale_days=stale_days,
         rollback_container=lambda: box(), scratch=lambda: scratch(),
-        probe_thread_open=lambda: None, plaintext_coverage=read_coverage)
+        probe_thread_open=lambda: None, plaintext_coverage=read_coverage,
+        prune_hold=offload_confirm.read_held)
