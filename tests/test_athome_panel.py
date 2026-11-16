@@ -209,3 +209,9 @@ def test_nothing_starts_by_itself_and_the_destructive_ones_are_confirmed() -> No
 def test_the_closing_line_does_not_repeat_the_last_step_sentence() -> None:
     assert "function athomeClosing(list, line)" in _JS
     assert _JS.count("athomeClosing(list, line)") >= 3  # the helper's own call sites
+
+
+def test_a_stream_that_has_no_route_yet_says_so_and_a_403_names_the_wrong_computer() -> None:
+    stream = _JS.split("async function athomeStream")[1].split("\n}\n")[0]
+    assert "res.status === 404" in stream and "not available yet on this machine" in stream
+    assert "res.status === 403" in stream and "runs the console" in stream
