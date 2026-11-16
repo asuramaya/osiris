@@ -25,6 +25,7 @@ function showPanel() { $('stage').classList.add('panel'); }
 // ── Surface Switching ────────────────────────────────────────────────────────
 async function switchSurface(surface) {
   if (surface !== 'pane') closePaneStream();  // never leak an open SSE connection off-pane
+  if (typeof athomeClearCode === 'function') athomeClearCode();  // a recovery code never outlives its screen
   ACTIVE_SURFACE = surface; postConsole({ surface });
   document.querySelectorAll('.lens-item').forEach(el => el.classList.toggle('sel', el.dataset.surface === surface));
   $('page-title').textContent = surface.charAt(0).toUpperCase() + surface.slice(1);
@@ -2174,6 +2175,7 @@ const POWER_TOOLS = [
   { label: 'Go to Mailbox', hint: 'Messages', cat: 'Navigation', run: () => switchSurface('mailbox') },
   { label: 'Author composition…', hint: 'Save a new lens', cat: 'Compositions', run: () => authorComposition() },
   { label: 'Repairs…', hint: 'The eight backfill repair verbs', cat: 'Admin', run: () => renderRepairsPanel() },
+  { label: 'At home…', hint: 'What waits on you: vault keys, a recovery code, the first offload, the restore test', cat: 'Admin', run: () => renderAtHomePanel() },
   // THE SETTINGS PANE consolidates the three formerly-separate "Key…"/"Offload
   // Targets…"/"Settings…" palette entries into ONE destination: Ctrl+K used to reach
   // Key…, Offload Targets… and Settings… as separate panels, now built as one console
