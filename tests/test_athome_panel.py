@@ -31,14 +31,22 @@ def test_the_panel_is_loaded_after_the_console_and_reachable_from_the_palette() 
     assert "label: 'At home…'" in _CONSOLE and "renderAtHomePanel()" in _CONSOLE
 
 
-def test_it_talks_only_to_the_at_home_routes() -> None:
-    for path in ("'/at-home'", "'/at-home/envelope'", "'/at-home/restore-test'",
-                 "'/at-home/envelope/prove'", "'/at-home/envelope/prove-browser'",
-                 "'/at-home/envelope/add-code'", "'/at-home/envelope/confirm-code'",
-                 "'/at-home/envelope/cancel-code'", "'/at-home/envelope/add-key'",
+def test_it_talks_to_the_key_and_at_home_routes() -> None:
+    for path in ("'/soul-key/at-home'", "'/soul-key/envelope'", "'/at-home/restore-test'",
+                 "'/soul-key/envelope/add-code'", "'/soul-key/envelope/remove'",
+                 "'/soul-key/envelope/add-key/begin'", "'/soul-key/envelope/add-key/finish'",
                  "'/at-home/nas/' + which"):
         assert path in _JS, path
-    assert "/at-home/envelope/challenge?recipient_id=" in _JS
+    assert "'/soul-key/envelope/' + encodeURIComponent(id) + '/challenge'" in _JS
+    assert "'/soul-key/envelope/' + encodeURIComponent(id) + '/drill'" in _JS
+
+
+def test_a_key_is_used_only_from_its_own_address_with_user_verification_required() -> None:
+    assert "athomeHostOk(rpId)" in _JS and "Open the console at" in _JS
+    assert _JS.count("userVerification: 'required'") >= 3  # prove, create, and the second ask
+    # the secret a key returns is dropped right after its one request
+    assert "prfBytes.fill(0)" in _JS and "body.prf = null" in _JS
+    assert "console.log" not in _CODE
 
 
 def test_a_recovery_code_is_never_stored_and_never_outlives_its_screen() -> None:
@@ -46,9 +54,8 @@ def test_a_recovery_code_is_never_stored_and_never_outlives_its_screen() -> None
     assert "ATHOME_CODE_SHOWN" in _JS and "beforeunload" in _JS
     # leaving the surface clears it, and both buttons clear it
     assert "athomeClearCode()" in _CONSOLE.split("async function switchSurface")[1][:400]
-    for fn in ("athomeConfirmCode", "athomeCancelCode"):
-        body = _JS.split(f"async function {fn}")[1].split("\n}\n")[0]
-        assert "athomeClearCode()" in body, fn
+    assert "athomeClearCode()" in _JS.split("function athomeConfirmCode")[1].split("\n}\n")[0]
+    assert "athomeClearCode()" in _JS.split("async function athomeCancelCode")[1].split("\n}\n")[0]
     # removing a code is behind a tick box, adding a key too, and the first copy
     assert "athome-cancel-confirm" in _JS and "athome-addkey-confirm" in _JS
     assert "athome-nas-confirm" in _JS and 'id="athome-nas-run" disabled' in _JS
@@ -86,15 +93,17 @@ def test_the_checklist_keeps_the_cli_order_and_escapes_what_it_shows() -> None:
     assert "&quot;x&quot;" in html  # the copy button's attribute is quoted safely
 
 
-def test_keys_show_proof_dates_and_a_prove_button_only_where_it_can_run() -> None:
+def test_keys_show_proof_dates_and_the_right_button_for_each_kind() -> None:
     html = _node("a.athomeKeysHtml({recipients: [{id:'r1',kind:'fido2-prf',label:'Blue key',"
-                 "proved_at:'2026-11-01T00:00:00Z',opened_at:null,can_prove:'server-touch'},"
-                 "{id:'r2',kind:'recovery-code',label:'Paper',proved_at:null,opened_at:null,"
-                 "can_prove:'no',hint:'Type it at the terminal'}],"
-                 " warnings:['One key was never proved.']})")
+                 "rp_id:'localhost',last_proved_at:'2026-11-01T00:00:00Z',last_opened_at:null,"
+                 "verdict:'stale'},"
+                 "{id:'r2',kind:'recovery-code',label:'Paper',last_proved_at:null,"
+                 "last_opened_at:null,verdict:'unproven'}],"
+                 " check:{problems:[],warnings:['One key was never proved.']}})")
     assert isinstance(html, str)
     assert "Security key" in html and "Recovery code" in html and "never" in html
-    assert html.count("Prove this key") == 1 and "Type it at the terminal" in html
+    assert html.count("Prove this key") == 1 and html.count("Prove this code") == 1
+    assert "Not proved in a while" in html and "Never proved" in html
     assert "One key was never proved." in html
 
 

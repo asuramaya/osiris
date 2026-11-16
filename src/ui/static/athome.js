@@ -3,7 +3,7 @@
 // order and words as `osiris at-home`), the keys that open the vault with their proof dates, a
 // recovery code shown once, a second security key, the first offload to the home storage with
 // its six step lines, and the result of the restore test. It reads and acts through the
-// /at-home/* routes and keeps nothing: a recovery code lives in the page only while it is on
+// /soul-key/* and /at-home/* routes and keeps nothing: a recovery code lives in the page only while it is on
 // screen (never in a variable that outlives it, never in localStorage or sessionStorage).
 //
 // Loaded after console.js, which provides $, esc, showPanel, setStatus and the base64url
@@ -131,6 +131,10 @@ function athomeKindLabel(kind) {
   if (kind === 'recovery-code') return 'Recovery code';
   return String(kind || 'Key');
 }
+var ATHOME_VERDICT_WORDS = {
+  proved: 'Proved', unproven: 'Never proved', stale: 'Not proved in a while', failed: 'Last test failed',
+};
+function athomeVerdictLabel(v) { return ATHOME_VERDICT_WORDS[v] || (v ? String(v) : ''); }
 function athomeKeysHtml(env) {
   if (env && env.error) return '<div class="o-empty">The vault keys could not be read: ' + athomeText(env.error) + '</div>';
   var recipients = (env && env.recipients) || [];
@@ -138,21 +142,23 @@ function athomeKeysHtml(env) {
     return '<div class="o-empty">No key is set up yet. Add a recovery code or a security key below.</div>';
   }
   var rows = recipients.map(function (r) {
-    var stale = r.stale ? ' <span class="o-faint">(not tested in a while)</span>' : '';
-    var prove = r.can_prove === 'no' || !r.can_prove
-      ? '<span class="o-faint" title="' + athomeAttr(r.hint || '') + '">' + athomeText(r.hint || 'Test it from the terminal') + '</span>'
-      : '<button class="iconbtn" data-id="' + athomeAttr(r.id) + '" data-mode="' + athomeAttr(r.can_prove) +
-        '" onclick="athomeProve(this)">Prove this key</button>';
+    var isKey = r.kind === 'fido2-prf';
+    var verdict = athomeVerdictLabel(r.verdict);
+    var button = isKey
+      ? '<button class="iconbtn" data-id="' + athomeAttr(r.id) + '" data-rp="' + athomeAttr(r.rp_id || '') +
+        '" onclick="athomeProveKey(this)">Prove this key</button>'
+      : '<button class="iconbtn" data-id="' + athomeAttr(r.id) + '" onclick="athomeShowCodeProof(this)">Prove this code</button>';
     return '<tr><td>' + athomeText(athomeKindLabel(r.kind)) + '</td>' +
       '<td>' + athomeText(r.label || '') + '</td>' +
-      '<td>' + athomeText(athomeWhen(r.proved_at)) + stale + '</td>' +
-      '<td>' + athomeText(athomeWhen(r.opened_at)) + '</td>' +
-      '<td>' + prove + '</td></tr>';
+      '<td>' + athomeText(athomeWhen(r.last_proved_at)) + (verdict ? ' <span class="o-faint">(' + athomeText(verdict) + ')</span>' : '') + '</td>' +
+      '<td>' + athomeText(athomeWhen(r.last_opened_at)) + '</td>' +
+      '<td>' + button + '<div id="athome-proof-' + athomeAttr(r.id) + '" style="margin-top:4px"></div></td></tr>';
   }).join('');
-  var warnings = ((env && env.warnings) || []).map(function (w) {
+  var check = (env && env.check) || {};
+  var notes = [].concat(check.problems || [], check.warnings || []).map(function (w) {
     return '<div style="margin:6px 0">' + athomeText(w) + '</div>';
   }).join('');
-  return warnings + '<table class="ee-table"><thead><tr><th>Kind</th><th>Name</th><th>Last proved</th>' +
+  return notes + '<table class="ee-table"><thead><tr><th>Kind</th><th>Name</th><th>Last proved</th>' +
     '<th>Last opened</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
@@ -207,7 +213,7 @@ async function renderAtHomePanel() {
 
 async function athomeLoadAll() {
   var results = await Promise.all([
-    athomeCall('/at-home'), athomeCall('/at-home/envelope'), athomeCall('/at-home/restore-test'),
+    athomeCall('/soul-key/at-home'), athomeCall('/soul-key/envelope'), athomeCall('/at-home/restore-test'),
   ]);
   var unavailable = '<div class="o-empty">This is not available yet on this machine.</div>';
   var list = $('athome-list'), keys = $('athome-keys'), restore = $('athome-restore');
@@ -230,66 +236,99 @@ function athomeCopy(btn) {
 }
 function athomeMsg(text) { var el = $('athome-key-msg'); if (el) el.textContent = text || ''; }
 
-// ── prove a key ──────────────────────────────────────────────────────────────────────
-async function athomeProve(btn) {
-  var id = btn.getAttribute('data-id'), mode = btn.getAttribute('data-mode');
-  btn.disabled = true;
-  var done = function (r) {
-    btn.disabled = false;
-    if (r.status >= 400 || (r.body && r.body.error)) {
-      athomeMsg(athomeErrorText(r.body, 'That did not work (error ' + r.status + ').'));
-      return;
-    }
-    athomeMsg('Proved. It opened the vault just now.');
-    athomeReloadKeys();
-  };
-  if (mode === 'browser') {
-    athomeMsg('Touch your security key when it blinks.');
-    var proof = await athomeBrowserProof(id);
-    if (proof.error) { btn.disabled = false; athomeMsg(proof.error); return; }
-    done(await athomeCall('/at-home/envelope/prove-browser', 'POST', { recipient_id: id, credential: proof.credential }));
-    return;
+// ── prove a key or a code ────────────────────────────────────────────────────────────
+// A key only works from a page whose address matches the key's own site name; say so plainly
+// instead of letting the browser fail with a generic error. The secret the key returns is used
+// for one request and dropped: it is never logged, never put in an address, never kept.
+function athomeHostOk(rpId) {
+  var host = (typeof document !== 'undefined' && document.location) ? document.location.hostname : '';
+  return !!rpId && (host === rpId || host.endsWith('.' + rpId));
+}
+function athomeWrongHost(rpId) {
+  return 'Open the console at ' + rpId + ' to use this key. The browser will not use a security key from a different address.';
+}
+function athomeProofMsg(id, text) {
+  var el = $('athome-proof-' + id);
+  if (el) el.textContent = text || '';
+  else athomeMsg(text);
+}
+function athomeDrillText(r) {
+  var b = r.body || {};
+  if (r.status >= 400 || b.error) return { ok: false, text: athomeErrorText(b, 'That did not work (error ' + r.status + ').') };
+  if (b.status === 'proved' || b.ok) return { ok: true, text: 'Proved. It opened the vault just now.' };
+  if (b.status === 'needs_operator_key') return { ok: false, text: b.reason || 'This needs the operator key first.' };
+  return { ok: false, text: b.reason || 'The test failed.' };
+}
+async function athomeProveKey(btn) {
+  var id = btn.getAttribute('data-id'), rpId = btn.getAttribute('data-rp');
+  if (!(window.PublicKeyCredential && navigator.credentials)) {
+    athomeProofMsg(id, 'This browser cannot talk to a security key.'); return;
   }
-  athomeMsg('Touch your security key now. This waits up to a minute.');
-  done(await athomeCall('/at-home/envelope/prove', 'POST', { recipient_id: id }));
+  if (!athomeHostOk(rpId)) { athomeProofMsg(id, athomeWrongHost(rpId)); return; }
+  btn.disabled = true;
+  athomeProofMsg(id, 'Touch your security key when it blinks.');
+  var ch = await athomeCall('/soul-key/envelope/' + encodeURIComponent(id) + '/challenge');
+  if (ch.status >= 400 || !ch.body.salt) {
+    btn.disabled = false;
+    athomeProofMsg(id, athomeErrorText(ch.body, 'The test could not be started.')); return;
+  }
+  var c = ch.body, prfBytes = null, assertion;
+  try {
+    assertion = await navigator.credentials.get({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: c.rp_id || rpId,
+      allowCredentials: [{ type: 'public-key', id: b64urlDecodeToBytes(c.credential_id) }],
+      userVerification: 'required',
+      extensions: { prf: { eval: { first: b64urlDecodeToBytes(c.salt) } } },
+    } });
+  } catch (e) {
+    btn.disabled = false;
+    athomeProofMsg(id, 'The key was not touched in time, or the browser refused it.'); return;
+  }
+  var results = assertion.getClientExtensionResults().prf;
+  if (!results || !results.results || !results.results.first) {
+    btn.disabled = false;
+    athomeProofMsg(id, 'This key did not return the secret the vault needs. It may not support this feature.'); return;
+  }
+  prfBytes = new Uint8Array(results.results.first);
+  var body = { nonce: c.nonce, prf: b64urlEncodeBytes(prfBytes) };
+  prfBytes.fill(0);
+  var r = await athomeCall('/soul-key/envelope/' + encodeURIComponent(id) + '/drill', 'POST', body);
+  body.prf = null;
+  btn.disabled = false;
+  var out = athomeDrillText(r);
+  athomeProofMsg(id, out.text);
+  if (out.ok) athomeReloadKeys();
+}
+function athomeShowCodeProof(btn) {
+  var id = btn.getAttribute('data-id'), el = $('athome-proof-' + id);
+  if (!el) return;
+  el.innerHTML = '<input type="password" autocomplete="off" id="athome-code-input-' + athomeAttr(id) +
+    '" class="filter" style="width:220px;margin:0" placeholder="Type the recovery code" /> ' +
+    '<button class="iconbtn" data-id="' + athomeAttr(id) + '" onclick="athomeProveCode(this)">Test it</button>' +
+    '<div class="o-faint" id="athome-code-msg-' + athomeAttr(id) + '"></div>';
+}
+async function athomeProveCode(btn) {
+  var id = btn.getAttribute('data-id');
+  var input = $('athome-code-input-' + id), msg = $('athome-code-msg-' + id);
+  var typed = input ? input.value.replace(/\s+/g, '') : '';
+  if (!typed) { if (msg) msg.textContent = 'Type the code first.'; return; }
+  btn.disabled = true;
+  var ch = await athomeCall('/soul-key/envelope/' + encodeURIComponent(id) + '/challenge');
+  if (ch.status >= 400 || !ch.body.nonce) {
+    btn.disabled = false;
+    if (msg) msg.textContent = athomeErrorText(ch.body, 'The test could not be started.'); return;
+  }
+  var r = await athomeCall('/soul-key/envelope/' + encodeURIComponent(id) + '/drill', 'POST', { nonce: ch.body.nonce, code: typed });
+  if (input) input.value = '';
+  btn.disabled = false;
+  var out = athomeDrillText(r);
+  if (msg) msg.textContent = out.text;
+  if (out.ok) athomeReloadKeys();
 }
 async function athomeReloadKeys() {
-  var r = await athomeCall('/at-home/envelope');
+  var r = await athomeCall('/soul-key/envelope');
   var keys = $('athome-keys');
   if (keys && r.status < 400) keys.innerHTML = athomeKeysHtml(r.body);
-}
-async function athomeBrowserProof(id) {
-  if (!(window.PublicKeyCredential && navigator.credentials)) {
-    return { error: 'This browser cannot talk to a security key. Use the terminal instead.' };
-  }
-  var ch = await athomeCall('/at-home/envelope/challenge?recipient_id=' + encodeURIComponent(id));
-  if (ch.status >= 400 || !ch.body.publicKey) {
-    return { error: athomeErrorText(ch.body, 'The browser check could not be started.') };
-  }
-  var pk = ch.body.publicKey;
-  var options = {
-    challenge: b64urlDecodeToBytes(pk.challenge),
-    rpId: pk.rpId, timeout: pk.timeout || 60000, userVerification: pk.userVerification || 'discouraged',
-    allowCredentials: (pk.allowCredentials || []).map(function (c) { return { type: 'public-key', id: b64urlDecodeToBytes(c.id) }; }),
-    extensions: pk.prfEval ? { prf: { eval: { first: b64urlDecodeToBytes(pk.prfEval) } } } : {},
-  };
-  var cred;
-  try {
-    cred = await navigator.credentials.get({ publicKey: options });
-  } catch (e) {
-    return { error: 'The key was not touched in time, or the browser refused it.' };
-  }
-  var ext = cred.getClientExtensionResults ? cred.getClientExtensionResults() : {};
-  var prf = ext && ext.prf && ext.prf.results && ext.prf.results.first;
-  return { credential: {
-    id: cred.id, rawId: b64urlEncodeBytes(new Uint8Array(cred.rawId)),
-    response: {
-      clientDataJSON: b64urlEncodeBytes(new Uint8Array(cred.response.clientDataJSON)),
-      authenticatorData: b64urlEncodeBytes(new Uint8Array(cred.response.authenticatorData)),
-      signature: b64urlEncodeBytes(new Uint8Array(cred.response.signature)),
-    },
-    prf: prf ? b64urlEncodeBytes(new Uint8Array(prf)) : null,
-  } };
 }
 
 // ── a recovery code, shown once ──────────────────────────────────────────────────────
@@ -304,7 +343,7 @@ function athomeWarnLeave(e) { e.preventDefault(); e.returnValue = ''; }
 async function athomeAddCode() {
   if (ATHOME_CODE_SHOWN) { athomeMsg('Finish the code on screen first.'); return; }
   athomeMsg('Making a recovery code…');
-  var r = await athomeCall('/at-home/envelope/add-code', 'POST', {});
+  var r = await athomeCall('/soul-key/envelope/add-code', 'POST', { label: 'Recovery code ' + new Date().toISOString().slice(0, 10) });
   if (r.status >= 400 || !r.body.code) {
     athomeMsg(athomeErrorText(r.body, 'A recovery code could not be made (error ' + r.status + ').'));
     return;
@@ -312,27 +351,21 @@ async function athomeAddCode() {
   athomeMsg('');
   ATHOME_CODE_SHOWN = true;
   window.addEventListener('beforeunload', athomeWarnLeave);
-  var id = r.body.recipient_id;
+  var id = r.body.id;
   var el = $('athome-code');
   if (!el) return;
   el.innerHTML = '<div style="border:1px solid var(--border2);border-radius:8px;padding:16px;margin:0 0 14px">' +
     '<div style="margin-bottom:8px"><strong>Write this code down now.</strong> It is shown once and cannot be shown again.</div>' +
-    '<div id="athome-code-value" style="font-family:var(--mono,monospace);font-size:26px;letter-spacing:2px;line-height:1.5;user-select:all;word-break:break-all">' +
+    '<div id="athome-code-value" style="font-family:var(--mono,monospace);font-size:26px;letter-spacing:2px;line-height:1.5;word-break:break-all">' +
     athomeText(athomeGroupCode(r.body.code)) + '</div>' +
     '<div class="o-faint" style="margin:8px 0">Keep it somewhere safe, away from this computer. Anyone with this code and the vault files can open the vault.</div>' +
-    '<button class="iconbtn" data-id="' + athomeAttr(id) + '" onclick="athomeConfirmCode(this)">I wrote it down</button> ' +
+    '<button class="iconbtn" onclick="athomeConfirmCode()">I wrote it down</button> ' +
     '<span style="margin-left:12px"><label style="font-size:11px"><input type="checkbox" id="athome-cancel-confirm" /> ' +
     'I do not want this code</label> ' +
     '<button class="iconbtn" data-id="' + athomeAttr(id) + '" onclick="athomeCancelCode(this)">Remove this code</button></span></div>';
 }
-async function athomeConfirmCode(btn) {
-  btn.disabled = true;
-  var r = await athomeCall('/at-home/envelope/confirm-code', 'POST', { recipient_id: btn.getAttribute('data-id') });
-  if (r.status >= 400 || (r.body && r.body.error)) {
-    btn.disabled = false;
-    athomeMsg(athomeErrorText(r.body, 'The code could not be saved as confirmed. It is still on screen.'));
-    return;
-  }
+function athomeConfirmCode() {
+  // the server already holds the recipient; the only thing left is to make the code disappear
   athomeClearCode();
   athomeMsg('Recovery code added. It is gone from this page.');
   athomeReloadKeys();
@@ -341,7 +374,7 @@ async function athomeCancelCode(btn) {
   var box = $('athome-cancel-confirm');
   if (!box || !box.checked) { athomeMsg('Tick "I do not want this code" first.'); return; }
   btn.disabled = true;
-  var r = await athomeCall('/at-home/envelope/cancel-code', 'POST', { recipient_id: btn.getAttribute('data-id') });
+  var r = await athomeCall('/soul-key/envelope/remove', 'POST', { recipient: btn.getAttribute('data-id') });
   if (r.status >= 400 || (r.body && r.body.error)) {
     btn.disabled = false;
     athomeMsg(athomeErrorText(r.body, 'The code could not be removed. It is still on screen.'));
@@ -358,16 +391,59 @@ function athomeShowAddKey() {
   if (!el) return;
   el.innerHTML = '<label style="font-size:11px"><input type="checkbox" id="athome-addkey-confirm" /> ' +
     'I have the second security key in my hand</label> ' +
+    '<input id="athome-addkey-label" class="filter" style="width:180px;margin:0 6px" placeholder="A name for it" /> ' +
     '<button class="iconbtn" onclick="athomeAddKey()">Add it</button>';
 }
 async function athomeAddKey() {
   var box = $('athome-addkey-confirm');
   if (!box || !box.checked) { athomeMsg('Tick that you have the second key first.'); return; }
-  athomeMsg('Touch the new key, then touch it again when it blinks. This waits up to a minute.');
-  var r = await athomeCall('/at-home/envelope/add-key', 'POST', {});
-  if (r.status >= 400 || (r.body && r.body.error)) {
-    athomeMsg(athomeErrorText(r.body, 'The key could not be added (error ' + r.status + ').'));
-    return;
+  if (!(window.PublicKeyCredential && navigator.credentials)) { athomeMsg('This browser cannot talk to a security key.'); return; }
+  var labelEl = $('athome-addkey-label');
+  var label = (labelEl && labelEl.value.trim()) || 'Second security key';
+  athomeMsg('Starting…');
+  var begin = await athomeCall('/soul-key/envelope/add-key/begin', 'POST', { label: label });
+  if (begin.status >= 400 || !begin.body.token) {
+    athomeMsg(athomeErrorText(begin.body, 'Adding a key could not be started.')); return;
+  }
+  var b = begin.body;
+  if (!athomeHostOk(b.rp_id)) { athomeMsg(athomeWrongHost(b.rp_id)); return; }
+  athomeMsg('Touch the new key when it blinks.');
+  var salt = b64urlDecodeToBytes(b.salt), created, prfBytes = null;
+  try {
+    created = await navigator.credentials.create({ publicKey: {
+      rp: { id: b.rp_id, name: b.rp_name }, user: { id: b64urlDecodeToBytes(b.user.id), name: b.user.name, displayName: b.user.displayName },
+      challenge: b64urlDecodeToBytes(b.challenge), pubKeyCredParams: b.pub_key_cred_params, timeout: b.timeout,
+      authenticatorSelection: { userVerification: 'required' },
+      extensions: { prf: { eval: { first: salt } } },
+    } });
+  } catch (e) {
+    athomeMsg('The key was not touched in time, or the browser refused it.'); return;
+  }
+  var ext = created.getClientExtensionResults().prf;
+  if (ext && ext.results && ext.results.first) {
+    prfBytes = new Uint8Array(ext.results.first);
+  } else {
+    // some keys only produce the secret when asked, not when made: ask once with the same salt
+    athomeMsg('Touch the key once more.');
+    try {
+      var asked = await navigator.credentials.get({ publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: b.rp_id,
+        allowCredentials: [{ type: 'public-key', id: new Uint8Array(created.rawId) }],
+        userVerification: 'required', extensions: { prf: { eval: { first: salt } } },
+      } });
+      var again = asked.getClientExtensionResults().prf;
+      if (again && again.results && again.results.first) prfBytes = new Uint8Array(again.results.first);
+    } catch (e) { prfBytes = null; }
+  }
+  if (!prfBytes) {
+    athomeMsg('This key did not return the secret the vault needs. It may not support this feature, so it was not added.'); return;
+  }
+  var body = { token: b.token, credential_id: b64urlEncodeBytes(new Uint8Array(created.rawId)), prf: b64urlEncodeBytes(prfBytes) };
+  prfBytes.fill(0);
+  var fin = await athomeCall('/soul-key/envelope/add-key/finish', 'POST', body);
+  body.prf = null;
+  if (fin.status >= 400 || (fin.body && fin.body.error)) {
+    athomeMsg(athomeErrorText(fin.body, 'The key could not be added (error ' + fin.status + ').')); return;
   }
   athomeMsg('Second key added.');
   var el = $('athome-addkey'); if (el) el.innerHTML = '';
@@ -416,6 +492,6 @@ async function athomeNas(which) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { athomeStatusLabel, athomeDays, athomeGroupCode, athomeParseLines, athomeErrorText,
-                     athomeChecklistHtml, athomeKeysHtml, athomeRestoreHtml, athomeStepHtml,
+                     athomeChecklistHtml, athomeKeysHtml, athomeRestoreHtml, athomeStepHtml, athomeVerdictLabel,
                      athomeText, athomeAttr, athomeKindLabel };
 }
