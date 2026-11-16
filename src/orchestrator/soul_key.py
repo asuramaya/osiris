@@ -268,12 +268,19 @@ async def soul_key_restore_drill(
     if not urls:
         return {"error": "no offbox repository configured (backup.offbox_repositories "
                          "is empty) and no --repo-url given"}
+    from src.orchestrator.offload_runner import hold_tick_lock
+
     results = []
-    for url in urls:
-        fail = await asyncio.to_thread(drill, url)
-        ok = fail is None
-        results.append({"repo_url": url, "ok": ok, "error": fail})
-        _write_restore_drill_receipt(url, ok=ok, error=fail)
+    # the offload tick and the scheduled drill share this lock so they never meet in a repository
+    with hold_tick_lock() as held:
+        if not held:
+            return {"error": "an offload or restore test is running right now; try again in a "
+                             "few minutes"}
+        for url in urls:
+            fail = await asyncio.to_thread(drill, url)
+            ok = fail is None
+            results.append({"repo_url": url, "ok": ok, "error": fail})
+            _write_restore_drill_receipt(url, ok=ok, error=fail)
     all_ok = all(r["ok"] for r in results)
     out: dict[str, Any] = {
         "drills": results, "all_ok": all_ok, "mode": "full" if full else "bounded"}

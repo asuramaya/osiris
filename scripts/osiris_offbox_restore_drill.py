@@ -203,16 +203,23 @@ class _Steps:
     """How long each step of one drill took, in the order they ran: parked as a note on the
     drill's receipt, pass or fail, so a slow or timed-out drill names the step that was slow."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_step: Callable[[str, float | None], None] | None = None) -> None:
         self.seconds: dict[str, float] = {}
+        # told (name, None) as a step starts and (name, seconds) when it ends
+        self.on_step = on_step
 
     @contextlib.contextmanager
     def time(self, name: str) -> Any:
         began = time.monotonic()
+        if self.on_step:
+            self.on_step(name, None)
         try:
             yield
         finally:
-            self.seconds[name] = self.seconds.get(name, 0.0) + time.monotonic() - began
+            took = time.monotonic() - began
+            self.seconds[name] = self.seconds.get(name, 0.0) + took
+            if self.on_step:
+                self.on_step(name, took)
 
     def summary(self) -> str:
         if not self.seconds:
@@ -391,8 +398,10 @@ def _dump_header_failure(path: str, env: dict[str, str], budget: _Budget) -> str
 def run_bounded_drill(
     repo_url: str, *, scratch: Path | None = None, budget_secs: float = DRILL_BUDGET_SECONDS,
     rng: random.Random | None = None, read_bytes: int = READ_DATA_BYTES,
+    on_step: Callable[[str, float | None], None] | None = None,
 ) -> str | None:
     """Returns a failure string, or None on success, the same convention as `run_drill`.
+    `on_step(name, seconds)` is told as each step starts (seconds None) and ends (the console).
     Steps, all inside one time budget (sized for what is read, see `drill_budget_seconds`) and
     each timed on its own into a note on the receipt: (1) `restic check --read-data-subset=<a
     fixed amount>` (repository structure plus a re-hash of that much stored data); (2) the
@@ -411,7 +420,7 @@ def run_bounded_drill(
     env = {**os.environ, "RESTIC_REPOSITORY": repo_url, "RESTIC_PASSWORD": password.decode()}
     budget = _Budget(budget_secs)
     rng = rng or random.Random()
-    steps = _Steps()
+    steps = _Steps(on_step)
     subset = READ_DATA_SUBSET if read_bytes == READ_DATA_BYTES else f"{max(1, read_bytes)}B"
     check_limit = check_timeout_seconds(read_bytes)
     try:

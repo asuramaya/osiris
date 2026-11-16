@@ -1579,6 +1579,26 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         receipt = restore_drill_receipts().get(str((target or {}).get("path_or_url") or "")) or {}
         return restore_test_summary(target, receipt)
 
+    @app.post("/at-home/restore-test/run")
+    async def at_home_restore_test_run_route(
+        request: Request, p: asyncpg.Pool = Depends(get_pool),
+    ) -> Any:
+        """Run the bounded restore test against the NAS now (the panel's button), ignoring the
+        six hour wait after a failed attempt. Loopback only, home-network proof first, holds the
+        offload lock; streams one JSON line per step and saves the result the panel and
+        `osiris at-home` read."""
+        from src.orchestrator import restore_test_run
+        from src.orchestrator.at_home_nas import stream_nas
+
+        if (denied := _envelope_guard(request)) is not None:
+            return denied
+
+        async def runner(say: Any) -> int:
+            return await restore_test_run.command(pool=p, say=say)
+
+        return StreamingResponse(stream_nas(runner), media_type="application/x-ndjson",
+                                 headers={"Cache-Control": "no-store"})
+
     # THE AT HOME PANEL's plaintext-copy routes (src/orchestrator/plaintext_copy.py has the design):
     # the operator's choice, the encrypted backup of the old NAS copy as a stream of lines, and its
     # removal after a second confirm. Loopback-only like the key routes (`_envelope_guard`): one of
