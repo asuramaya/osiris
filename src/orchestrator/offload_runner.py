@@ -534,7 +534,9 @@ async def _run_offload_tick_locked(
             _log_attempt(name, "ok_with_note" if notes else "ok", now, duration_s=took,
                          exit_code=code, detail=notes[0] if notes else None)
             _write_receipt(name, {"last_successful_offload": now, "last_attempt_at": now,
-                                  "last_backup_start": now, "last_error": None,
+                                  "last_backup_start": now,
+                                  "last_backup_end": datetime.now(UTC).isoformat(),
+                                  "last_error": None,
                                   "last_skip_reason": None, "skipped_since": None,
                                   "stale_notified_clock": None,
                                   "last_note": notes[0] if notes else None})

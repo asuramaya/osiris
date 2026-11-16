@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 from src.actions.core import Actions
@@ -108,6 +109,34 @@ async def test_run_offload_tick_records_a_success_receipt(
     receipt = offload_runner.offload_receipts()["nas"]
     assert receipt["last_successful_offload"] is not None
     assert receipt["last_error"] is None
+
+
+async def test_the_backup_start_is_taken_before_the_backup_and_the_end_after_it(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A file written while the upload runs is NOT in the snapshot, so `last_backup_start` (what
+    the prune ladder trusts) must precede the backup, and `last_backup_end` must follow it."""
+    import time
+    from datetime import UTC, datetime
+
+    seen: dict[str, datetime] = {}
+
+    def slow_backup(**kw: Any) -> None:
+        seen["called"] = datetime.now(UTC)
+        time.sleep(0.05)
+
+    monkeypatch.setattr(offload_runner, "_run_restic_backup", slow_backup)
+    await write_backup_settings(
+        actions.pool, actor="operator", because="x",
+        offload_targets=[{"name": "nas", "kind": "restic", "path_or_url": "sftp://nas/repo",
+                          "schedule": "*-*-* 03:00:00", "enabled": True}])
+    await offload_runner.run_offload_tick(actions.pool)
+    receipt = offload_runner.offload_receipts()["nas"]
+
+    start = datetime.fromisoformat(receipt["last_backup_start"])
+    end = datetime.fromisoformat(receipt["last_backup_end"])
+    assert start <= seen["called"] < end
+    assert (end - start).total_seconds() >= 0.05
 
 
 async def test_run_offload_tick_records_a_failure_receipt_never_raises(
