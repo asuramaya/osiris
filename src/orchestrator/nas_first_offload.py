@@ -141,7 +141,7 @@ def _record_offload(name: str, now: str, note: str | None, *, started: str | Non
 
     _log_attempt(name, "ok_with_note" if note else "ok", now, duration_s=0.0, detail=note)
     _write_receipt(name, {"last_successful_offload": now, "last_attempt_at": now,
-                          "last_backup_start": started or now,
+                          "last_backup_start": started or now, "last_backup_end": now,
                           "last_error": None, "last_skip_reason": None, "skipped_since": None,
                           "stale_notified_clock": None, "last_note": note})
 
