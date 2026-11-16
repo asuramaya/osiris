@@ -8,7 +8,8 @@ from the real sources, and the exact command to run for it, the cheapest and saf
   2. a recovery code for the envelope (typed at a hidden prompt)
   3. a second hardware key for the envelope
   4. the NAS first offload (needs the home LAN; the first step is a read-only check)
-  5. the old plaintext NAS copy's removal (needs your say-so, after step 4)
+  5. the old plaintext NAS copy's removal (your choice, and never while it holds history the
+     restic backup does not have)
   6. the stopped database rollback container (needs your say-so)
   7. scratch folders left by an agent (need your say-so)
   8. the optional Claude rebuild probe (only if you want it)
@@ -38,6 +39,8 @@ PROBE_COMMAND = ("cd ~/code/zzprobe-rebuild && "
                  "python3 ~/.claude/jobs/aa0277bc/tmp/probe_rebuild.py A")
 # the open obligation that holds the old plaintext copy's removal, and the S4 job before it
 PLAINTEXT_COPY_THREAD = "thread:5dc7ea2b"
+_COVERAGE_ENV = "OSIRIS_AT_HOME_COVERAGE_FILE"
+_DEFAULT_COVERAGE = "~/.local/state/osiris/plaintext_coverage.json"
 _STATE_ENV = "OSIRIS_AT_HOME_STATE_FILE"
 _DEFAULT_STATE = "~/.local/state/osiris/at_home.json"
 RETELL_DAYS = 7
@@ -57,6 +60,8 @@ class Sources:
     rollback_container: Callable[[], dict[str, Any] | None] = lambda: None
     scratch: Callable[[], list[dict[str, Any]]] = lambda: []
     probe_thread_open: Callable[[], bool | None] = lambda: None
+    # the last recorded check of the plaintext copy against restic, or None when never checked
+    plaintext_coverage: Callable[[], dict[str, Any] | None] = lambda: None
 
 
 def _item(key: str, order: int, title: str, status: str, why: str,
@@ -138,18 +143,74 @@ def nas_item(src: Sources, now: datetime) -> dict[str, Any]:
                       "repository, run first if you want a safe look)")
 
 
+def _gb(n: object) -> str:
+    try:
+        return f"about {max(10, round(float(n) / 1e10) * 10)} GB"  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "an unknown amount"
+
+
 def plaintext_item(src: Sources, nas: dict[str, Any]) -> dict[str, Any]:
+    title = "Remove the old plaintext NAS copy"
     still_open = src.plaintext_thread_open()
     if still_open is False:
-        return _item("plaintext_copy", 5, "Remove the old plaintext NAS copy", DONE,
-                     "the removal is recorded as done.")
+        return _item("plaintext_copy", 5, title, DONE, "the removal is recorded as done.")
+    cover = src.plaintext_coverage()
+    if cover is None:
+        return _item("plaintext_copy", 5, title, BLOCKED,
+                     "nobody has checked yet whether the backup repository holds everything in "
+                     "this copy. Until that check is recorded it is not safe to remove.")
+    only_files = int(cover.get("only_files") or 0)
+    if only_files > 0:
+        span = ""
+        if cover.get("oldest") and cover.get("newest"):
+            span = f" ({cover['oldest']} to {cover['newest']})"
+        return _item("plaintext_copy", 5, title, BLOCKED,
+                     f"the plaintext copy holds {_gb(cover.get('only_bytes'))} that the restic "
+                     f"backup does NOT have{span}: {cover.get('what') or 'dumps and log files'}. "
+                     "Deleting it loses that history. It needs your choice: keep it, move it into "
+                     "the backup first, or delete it knowing that history is lost. "
+                     f"(checked {cover.get('checked_at', 'at an unknown time')}; this clears only "
+                     "when a later check finds nothing left that is only in the copy.)")
     if nas["status"] != DONE:
-        return _item("plaintext_copy", 5, "Remove the old plaintext NAS copy", BLOCKED,
+        return _item("plaintext_copy", 5, title, BLOCKED,
                      "waits for the NAS offload and its restore test (item 4) to pass first.")
-    return _item("plaintext_copy", 5, "Remove the old plaintext NAS copy", WAITING,
-                 "the NAS now holds a restorable backup, so the old plaintext copy (about "
-                 "162 GB) can go. This needs your word; nothing deletes it by itself.",
+    return _item("plaintext_copy", 5, title, WAITING,
+                 "the last check found everything in this copy also in the restic backup, and "
+                 "the NAS now holds a restorable one, so the copy can go. This needs your word; "
+                 "nothing deletes it by itself.",
                  "reply on the operator desk: delete the old plaintext NAS copy")
+
+
+def coverage_path() -> Path:
+    return Path(os.environ.get(_COVERAGE_ENV) or _DEFAULT_COVERAGE).expanduser()
+
+
+def read_coverage() -> dict[str, Any] | None:
+    """The recorded check of the plaintext copy against restic, or None when there is none (or it
+    cannot be read: that must never read as "covered")."""
+    try:
+        body = json.loads(coverage_path().read_text())
+    except (OSError, ValueError):
+        return None
+    return body if isinstance(body, dict) and "only_files" in body else None
+
+
+def write_coverage(*, only_files: int, only_bytes: int, oldest: str, newest: str, what: str,
+                   checked_at: str, method: str) -> Path:
+    """Record a check: how many files (and bytes) are only in the plaintext copy. Written
+    atomically; a later check overwrites it, and only a zero `only_files` clears the block."""
+    path = coverage_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps({
+            "only_files": only_files, "only_bytes": only_bytes, "oldest": oldest,
+            "newest": newest, "what": what, "checked_at": checked_at, "method": method}))
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return path
 
 
 def _size(n: object) -> str:
@@ -410,4 +471,4 @@ async def real_sources(pool: Any, *, now: datetime | None = None) -> Sources:
         plaintext_thread_open=lambda: (None if status is None else status == "open"),
         stale_days=stale_days,
         rollback_container=lambda: box(), scratch=lambda: scratch(),
-        probe_thread_open=lambda: None)
+        probe_thread_open=lambda: None, plaintext_coverage=read_coverage)
