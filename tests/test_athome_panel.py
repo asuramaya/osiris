@@ -112,3 +112,10 @@ def test_an_unreadable_envelope_and_a_never_run_restore_test_say_so() -> None:
     assert "not been run yet" in str(_node("a.athomeRestoreHtml({ok:null})"))
     passed = _node("a.athomeRestoreHtml({ok:true,when:'2026-11-02T00:00:00Z',files_checked:3})")
     assert "Passed" in str(passed)
+
+
+def test_a_403_names_the_wrong_computer_and_nothing_is_cached() -> None:
+    assert "res.status === 403" in _JS
+    assert "only answer on the computer that runs the console" in _JS
+    assert "cache: 'no-store'" in _JS
+    assert "Nothing was tested." in _JS  # needs_operator_key is not a failed proof

@@ -70,7 +70,7 @@ function athomeErrorText(body, fallback) {
 }
 
 async function athomeCall(path, method, payload) {
-  var opts = { method: method || 'GET', headers: {} };
+  var opts = { method: method || 'GET', headers: {}, cache: 'no-store' };
   if (payload !== undefined) {
     opts.headers['content-type'] = 'application/json';
     opts.body = JSON.stringify(payload);
@@ -83,6 +83,9 @@ async function athomeCall(path, method, payload) {
   }
   var body = null;
   try { body = await res.json(); } catch (e) { body = null; }
+  if (res.status === 403) {
+    body = { error: 'These controls only answer on the computer that runs the console. Open the console on that computer.' };
+  }
   return { status: res.status, body: body || {} };
 }
 
@@ -150,7 +153,7 @@ function athomeKeysHtml(env) {
       : '<button class="iconbtn" data-id="' + athomeAttr(r.id) + '" onclick="athomeShowCodeProof(this)">Prove this code</button>';
     return '<tr><td>' + athomeText(athomeKindLabel(r.kind)) + '</td>' +
       '<td>' + athomeText(r.label || '') + '</td>' +
-      '<td>' + athomeText(athomeWhen(r.last_proved_at)) + (verdict ? ' <span class="o-faint">(' + athomeText(verdict) + ')</span>' : '') + '</td>' +
+      '<td>' + athomeText(athomeWhen(r.last_proved_at)) + (verdict ? '<div class="o-faint">' + athomeText(verdict) + '</div>' : '') + '</td>' +
       '<td>' + athomeText(athomeWhen(r.last_opened_at)) + '</td>' +
       '<td>' + button + '<div id="athome-proof-' + athomeAttr(r.id) + '" style="margin-top:4px"></div></td></tr>';
   }).join('');
@@ -204,7 +207,7 @@ async function renderAtHomePanel() {
     athomeSection('First copy to the home storage', 'Check is read-only. Run makes the first copy and then tests that it can be restored.', 'athome-nas',
       '<div><button class="iconbtn" onclick="athomeNas(\'check\')">Check</button> ' +
       '<label style="font-size:11px;margin-left:8px"><input type="checkbox" id="athome-nas-confirm" onchange="athomeNasButton()" /> I am on the home network</label> ' +
-      '<button class="iconbtn" id="athome-nas-run" disabled onclick="athomeNas(\'run\')">Run</button></div>' +
+      '<button class="iconbtn" id="athome-nas-run" disabled style="opacity:0.45" onclick="athomeNas(\'run\')">Run</button></div>' +
       '<ol id="athome-nas-steps" style="margin:8px 0 0 18px"></ol>') +
     athomeSection('Restore test', 'The last time a copy was restored and checked.', 'athome-restore', '<div class="o-empty">Loading…</div>') +
     '</div>';
@@ -256,7 +259,9 @@ function athomeDrillText(r) {
   var b = r.body || {};
   if (r.status >= 400 || b.error) return { ok: false, text: athomeErrorText(b, 'That did not work (error ' + r.status + ').') };
   if (b.status === 'proved' || b.ok) return { ok: true, text: 'Proved. It opened the vault just now.' };
-  if (b.status === 'needs_operator_key') return { ok: false, text: b.reason || 'This needs the operator key first.' };
+  if (b.status === 'needs_operator_key') {
+    return { ok: false, text: 'Nothing was tested. ' + (b.reason || 'This needs the operator key first.') };
+  }
   return { ok: false, text: b.reason || 'The test failed.' };
 }
 async function athomeProveKey(btn) {
@@ -453,7 +458,7 @@ async function athomeAddKey() {
 // ── the first copy to the home storage ───────────────────────────────────────────────
 function athomeNasButton() {
   var box = $('athome-nas-confirm'), btn = $('athome-nas-run');
-  if (btn) btn.disabled = !(box && box.checked);
+  if (btn) { btn.disabled = !(box && box.checked); btn.style.opacity = btn.disabled ? '0.45' : '1'; }
 }
 function athomeStepHtml(line) {
   var mark = ATHOME_STEP_MARK[line.status] || '';
