@@ -116,20 +116,46 @@ async function athomeStream(path, onLine) {
 // The console's tables cut long text off with an ellipsis; a checklist is read in full, so the
 // lists here are plain blocks that wrap.
 var ATHOME_WRAP = 'white-space:normal;overflow-wrap:anywhere;';
+var ATHOME_RECIPIENTS = [];
+
+// What each item lets you do from here. The page does the work; the terminal command is only a
+// small detail underneath for someone who prefers it.
+function athomeActionHtml(it) {
+  var k = it.key, open = it.status !== 'done';
+  if (!open) return '';
+  var btn = function (label, fn) { return '<button class="iconbtn" onclick="' + fn + '">' + athomeText(label) + '</button> '; };
+  if (k === 'envelope_drill') return btn('Prove a key now', 'athomeActProve()');
+  if (k === 'envelope_code') return btn('Add a recovery code', 'athomeActCode()');
+  if (k === 'envelope_key') return btn('Add a second key', 'athomeActKey()');
+  if (k === 'nas_offload') {
+    return btn('Check', "athomeNas('check')") +
+      '<label style="font-size:11px;margin:0 6px"><input type="checkbox" id="athome-nas-confirm" onchange="athomeNasButton()" /> I am on the home network</label>' +
+      '<button class="iconbtn" id="athome-nas-run" disabled style="opacity:0.45" onclick="athomeNas(\'run\')">Make the first copy</button>' +
+      '<ol id="athome-nas-steps" style="margin:8px 0 0 18px"></ol>';
+  }
+  if (k === 'plaintext_copy') return '<div id="athome-plain" class="o-faint">Loading…</div>';
+  if (k === 'rebuild_probe') {
+    return btn('Run the probe', 'athomeProbe()') + '<ol id="athome-probe-steps" style="margin:8px 0 0 18px"></ol>';
+  }
+  return '';
+}
 function athomeChecklistHtml(data) {
   var items = (data && data.items) || [];
   if (!items.length) return '<div class="o-empty">Nothing is waiting on you.</div>';
   return items.map(function (it) {
     var cmd = it.command
-      ? '<div style="margin-top:4px"><code style="' + ATHOME_WRAP + '">' + athomeText(it.command) + '</code> ' +
-        '<button class="iconbtn" data-copy="' + athomeAttr(it.command) + '" onclick="athomeCopy(this)">Copy</button></div>'
+      ? '<details style="margin-top:6px"><summary class="o-faint" style="cursor:pointer">or run in a terminal</summary>' +
+        '<code style="' + ATHOME_WRAP + '">' + athomeText(it.command) + '</code> ' +
+        '<button class="iconbtn" data-copy="' + athomeAttr(it.command) + '" onclick="athomeCopy(this)">Copy</button></details>'
       : '';
     var then = it.then ? '<div class="o-faint" style="margin-top:4px;' + ATHOME_WRAP + '">Then: ' + athomeText(it.then) + '</div>' : '';
+    var act = athomeActionHtml(it);
     return '<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border,#222)">' +
       '<div style="width:20px;flex:none" class="o-faint">' + athomeText(it.order) + '</div>' +
       '<div style="min-width:0;flex:1;' + ATHOME_WRAP + '"><strong>' + athomeText(it.title) + '</strong> ' +
       '<span class="o-faint">' + athomeText(athomeStatusLabel(it.status)) + '</span>' +
-      '<div class="o-faint" style="margin-top:2px;' + ATHOME_WRAP + '">' + athomeText(it.why) + '</div>' + cmd + then + '</div></div>';
+      '<div class="o-faint" style="margin-top:2px;' + ATHOME_WRAP + '">' + athomeText(it.why) + '</div>' +
+      (act ? '<div style="margin-top:8px">' + act + '</div>' : '') + then + cmd + '</div></div>';
   }).join('');
 }
 
@@ -215,12 +241,9 @@ async function renderAtHomePanel() {
       '<button class="iconbtn" onclick="athomeAddCode()">Add a recovery code</button> ' +
       '<button class="iconbtn" onclick="athomeShowAddKey()">Add a second key</button>' +
       '<div id="athome-addkey" style="margin-top:8px"></div></div>' +
-    athomeSection('First copy to the home storage', 'Check is read-only. Run makes the first copy and then tests that it can be restored.', 'athome-nas',
-      '<div><button class="iconbtn" onclick="athomeNas(\'check\')">Check</button> ' +
-      '<label style="font-size:11px;margin-left:8px"><input type="checkbox" id="athome-nas-confirm" onchange="athomeNasButton()" /> I am on the home network</label> ' +
-      '<button class="iconbtn" id="athome-nas-run" disabled style="opacity:0.45" onclick="athomeNas(\'run\')">Run</button></div>' +
-      '<ol id="athome-nas-steps" style="margin:8px 0 0 18px"></ol>') +
     athomeSection('Restore test', 'The last time a copy was restored and checked.', 'athome-restore', '<div class="o-empty">Loading…</div>') +
+    '<div style="margin:-14px 0 22px"><button class="iconbtn" onclick="athomeRestoreRun()">Run the restore test now</button>' +
+    '<ol id="athome-restore-steps" style="margin:8px 0 0 18px"></ol></div>' +
     '</div>';
   athomeLoadAll();
 }
@@ -234,6 +257,8 @@ async function athomeLoadAll() {
   if (list) list.innerHTML = results[0].status === 404 ? unavailable
     : (results[0].status >= 400 ? '<div class="o-empty">' + athomeText(athomeErrorText(results[0].body, 'The list could not be read.')) + '</div>'
        : athomeChecklistHtml(results[0].body));
+  if ($('athome-plain')) athomePlainLoad();
+  ATHOME_RECIPIENTS = (results[1].body && results[1].body.recipients) || [];
   if (keys) keys.innerHTML = results[1].status === 404 ? unavailable
     : (results[1].status >= 400 ? '<div class="o-empty">' + athomeText(athomeErrorText(results[1].body, 'The keys could not be read.')) + '</div>'
        : athomeKeysHtml(results[1].body));
@@ -275,8 +300,11 @@ function athomeDrillText(r) {
   }
   return { ok: false, text: b.reason || 'The test failed.' };
 }
-async function athomeProveKey(btn) {
-  var id = btn.getAttribute('data-id'), rpId = btn.getAttribute('data-rp');
+function athomeProveKey(btn) {
+  return athomeProveKeyFor(btn.getAttribute('data-id'), btn.getAttribute('data-rp'), btn);
+}
+async function athomeProveKeyFor(id, rpId, btn) {
+  btn = btn || { disabled: false };
   if (!(window.PublicKeyCredential && navigator.credentials)) {
     athomeProofMsg(id, 'This browser cannot talk to a security key.'); return;
   }
@@ -344,8 +372,24 @@ async function athomeProveCode(btn) {
 async function athomeReloadKeys() {
   var r = await athomeCall('/soul-key/envelope');
   var keys = $('athome-keys');
-  if (keys && r.status < 400) keys.innerHTML = athomeKeysHtml(r.body);
+  if (keys && r.status < 400) {
+    ATHOME_RECIPIENTS = r.body.recipients || [];
+    keys.innerHTML = athomeKeysHtml(r.body);
+  }
 }
+function athomeJump(id) {
+  var el = $(id);
+  if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+function athomeActProve() {
+  var keys = ATHOME_RECIPIENTS.filter(function (r) { return r.kind === 'fido2-prf'; });
+  var next = keys.find(function (r) { return !r.last_proved_at; }) || keys[0];
+  athomeJump('athome-keys');
+  if (!next) { athomeMsg('There is no security key to prove.'); return; }
+  athomeProveKeyFor(next.id, next.rp_id, null);
+}
+function athomeActCode() { athomeJump('athome-code'); athomeAddCode(); }
+function athomeActKey() { athomeShowAddKey(); athomeJump('athome-addkey'); }
 
 // ── a recovery code, shown once ──────────────────────────────────────────────────────
 function athomeClearCode() {
@@ -503,11 +547,132 @@ async function athomeNas(which) {
     tail.textContent = 'The connection ended before it said it was done. Run Check again to see where it stands.';
     list.appendChild(tail);
   }
-  athomeLoadAll();
+  // the checklist is not redrawn here: its rows hold these lines. Refresh shows the new status.
+}
+
+
+// ── one stream runner for every long job ────────────────────────────────────────────────
+// Lines arrive one by one; a job that reports file counts also gets a progress line. Nothing
+// here starts by itself: each runner is called from a button.
+function athomeLineHtml(line) {
+  var count = (line.total_files != null && line.done_files != null)
+    ? ' <span class="o-faint">(' + athomeText(line.done_files) + ' of ' + athomeText(line.total_files) + ' files)</span>' : '';
+  return athomeStepHtml(line) + count;
+}
+async function athomeRunInto(path, listId, doneNote) {
+  var list = $(listId);
+  if (!list) return false;
+  list.innerHTML = '<li class="o-faint">Starting…</li>';
+  var finished = false, ok = false;
+  await athomeStream(path, function (line) {
+    var first = list.firstChild;
+    if (first && first.className === 'o-faint') list.removeChild(first);
+    var li = document.createElement('li');
+    if (line.done) {
+      finished = true; ok = !!line.ok;
+      li.innerHTML = '<strong>' + (line.ok ? 'Finished.' : 'Stopped.') + '</strong> ' + athomeText(line.text || '');
+    } else {
+      li.innerHTML = athomeLineHtml(line);
+    }
+    list.appendChild(li);
+  });
+  if (!finished) {
+    var tail = document.createElement('li');
+    tail.className = 'o-faint';
+    tail.textContent = 'The connection ended before it said it was done. Look again in a moment: it may still be running.';
+    list.appendChild(tail);
+  }
+  return ok;
+}
+
+// ── the rebuild probe and the restore test: one button each ─────────────────────────────
+async function athomeProbe() {
+  await athomeRunInto('/at-home/probe/run', 'athome-probe-steps');
+}
+async function athomeRestoreRun() {
+  await athomeRunInto('/at-home/restore-test/run', 'athome-restore-steps');
+  var r = await athomeCall('/at-home/restore-test');
+  var el = $('athome-restore');
+  if (el && r.status < 400) el.innerHTML = athomeRestoreHtml(r.body);
+}
+
+// ── the old plaintext copy: explain, offer three choices, do what is chosen ─────────────
+// Keep and encrypt only record the choice (encrypt also starts the job, which refuses off the
+// home network and deletes the plaintext only after every file is proved to be in the backup).
+// Delete loses history: it needs the exact sentence the server defines, typed by hand.
+function athomeGB(bytes) { return bytes == null ? '?' : (bytes / 1e9).toFixed(bytes >= 1e11 ? 0 : 1); }
+function athomePlainHtml(d) {
+  if (!d || !d.exists) {
+    return '<div>' + athomeText((d && d.text) || 'No plaintext copy is left.') + '</div>';
+  }
+  var size = athomeGB(d.size_bytes) + ' GB';
+  var head = '<div style="margin-bottom:6px">' + athomeText(d.text || ('The old unencrypted copy holds about ' + size +
+    '. It is not in the encrypted backup yet.')) + '</div>';
+  if (d.encrypt_state === 'running' || d.encrypt_state === 'stopped') {
+    return head + '<div class="o-faint">' + athomeText(d.encrypt_state === 'running'
+        ? 'Moving it into the backup now.' : 'The move stopped part way. It carries on from where it stopped.') +
+      (d.total_files ? ' ' + athomeText(d.covered_files || 0) + ' of ' + athomeText(d.total_files) + ' files are in the backup.' : '') + '</div>' +
+      '<button class="iconbtn" onclick="athomePlainEncrypt()">' + (d.encrypt_state === 'running' ? 'Follow it' : 'Carry on') + '</button>' +
+      '<ol id="athome-plain-steps" style="margin:8px 0 0 18px"></ol>';
+  }
+  var chosen = d.choice ? '<div class="o-faint" style="margin-bottom:6px">Your choice so far: ' +
+    athomeText({ keep: 'keep it', encrypt: 'move it into the backup', delete: 'delete it' }[d.choice] || d.choice) + '.</div>' : '';
+  var phrase = d.delete_phrase || ('delete ' + athomeGB(d.size_bytes) + ' GB of history');
+  return head + chosen +
+    '<div style="display:flex;flex-direction:column;gap:10px">' +
+    '<div><button class="iconbtn" onclick="athomePlainChoose(\'keep\')">Keep it</button> ' +
+      '<span class="o-faint">Nothing changes. This stays on the list.</span></div>' +
+    '<div><button class="iconbtn" onclick="athomePlainChoose(\'encrypt\')">Encrypt it into the backup, then remove the plaintext</button> ' +
+      '<label style="font-size:11px"><input type="checkbox" id="athome-plain-home" /> I am on the home network</label>' +
+      '<div class="o-faint">Home network only. It can be stopped and picked up again. The plaintext is removed only after every file is shown to be in the backup.</div></div>' +
+    '<div><div class="o-faint" style="margin-bottom:4px">Delete it and lose that history. To confirm, type: <code>' + athomeText(phrase) + '</code></div>' +
+      '<input id="athome-plain-phrase" class="filter" autocomplete="off" style="width:260px;margin:0 6px 0 0" oninput="athomePlainPhrase(this)" data-phrase="' + athomeAttr(phrase) + '" /> ' +
+      '<button class="iconbtn" id="athome-plain-delete" disabled style="opacity:0.45" onclick="athomePlainChoose(\'delete\')">Delete it</button></div>' +
+    '</div><div id="athome-plain-msg" class="o-faint" style="margin-top:6px"></div>' +
+    '<ol id="athome-plain-steps" style="margin:8px 0 0 18px"></ol>';
+}
+function athomePlainPhrase(input) {
+  var btn = $('athome-plain-delete');
+  if (!btn) return;
+  var ok = input.value.trim() === input.getAttribute('data-phrase');
+  btn.disabled = !ok; btn.style.opacity = ok ? '1' : '0.45';
+}
+async function athomePlainLoad() {
+  var el = $('athome-plain');
+  if (!el) return;
+  var r = await athomeCall('/at-home/plaintext');
+  if (r.status === 404) { el.textContent = 'Choosing what to do with it is not available yet on this machine.'; return; }
+  if (r.status >= 400) { el.textContent = athomeErrorText(r.body, 'Its state could not be read.'); return; }
+  el.innerHTML = athomePlainHtml(r.body);
+}
+function athomePlainMsg(t) { var el = $('athome-plain-msg'); if (el) el.textContent = t || ''; }
+async function athomePlainChoose(choice) {
+  var payload = { choice: choice };
+  if (choice === 'delete') {
+    var box = $('athome-plain-phrase');
+    if (!box) return;
+    payload.confirm = box.value.trim();
+  }
+  if (choice === 'encrypt') {
+    var home = $('athome-plain-home');
+    if (!home || !home.checked) { athomePlainMsg('Tick that you are on the home network first.'); return; }
+  }
+  athomePlainMsg('Saving your choice…');
+  var r = await athomeCall('/at-home/plaintext/choose', 'POST', payload);
+  if (r.status >= 400 || (r.body && r.body.error)) {
+    athomePlainMsg(athomeErrorText(r.body, 'That was not saved (error ' + r.status + ').')); return;
+  }
+  athomePlainMsg(r.body.text || 'Saved.');
+  if (choice === 'encrypt') { athomePlainEncrypt(); return; }
+  athomePlainLoad();
+}
+async function athomePlainEncrypt() {
+  await athomeRunInto('/at-home/plaintext/encrypt', 'athome-plain-steps');
+  athomePlainLoad();
 }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { athomeStatusLabel, athomeDays, athomeGroupCode, athomeParseLines, athomeErrorText,
                      athomeChecklistHtml, athomeKeysHtml, athomeRestoreHtml, athomeStepHtml, athomeVerdictLabel,
-                     athomeText, athomeAttr, athomeKindLabel };
+                     athomeText, athomeAttr, athomeKindLabel, athomePlainHtml, athomeActionHtml, athomeGB };
 }

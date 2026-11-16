@@ -134,3 +134,58 @@ def test_a_403_names_the_wrong_computer_and_nothing_is_cached() -> None:
     assert "only answer on the computer that runs the console" in _JS
     assert "cache: 'no-store'" in _JS
     assert "Nothing was tested." in _JS  # needs_operator_key is not a failed proof
+
+
+# --- the panel does the work: an action per item, the command only as a detail ----------------
+
+def _items(*pairs: tuple[str, str]) -> str:
+    rows = ",".join(f"{{key:'{k}',order:1,title:'T',status:'{s}',why:'w',command:'osiris x'}}"
+                    for k, s in pairs)
+    return f"a.athomeChecklistHtml({{items:[{rows}]}})"
+
+
+def test_each_open_item_has_a_button_that_does_it_and_the_command_is_a_small_detail() -> None:
+    html = str(_node(_items(("envelope_drill", "waiting"), ("envelope_code", "waiting"),
+                            ("envelope_key", "waiting"), ("nas_offload", "waiting"),
+                            ("rebuild_probe", "optional"), ("plaintext_copy", "blocked"))))
+    for label in ("Prove a key now", "Add a recovery code", "Add a second key", "Check",
+                  "Make the first copy", "Run the probe"):
+        assert label in html, label
+    assert 'id="athome-plain"' in html
+    assert html.count("or run in a terminal") == 6
+    assert html.count("<details") == 6  # the command is never the primary control
+
+
+def test_a_finished_item_has_no_button() -> None:
+    html = str(_node(_items(("nas_offload", "done"), ("envelope_code", "done"))))
+    for label in ("Check", "Make the first copy", "Add a recovery code"):
+        assert label not in html, label  # only the small Copy button remains
+
+
+def test_the_old_plaintext_copy_offers_three_choices_and_delete_needs_the_typed_phrase() -> None:
+    html = str(_node("a.athomePlainHtml({exists:true,size_bytes:280e9,choice:null,"
+                     "delete_phrase:'delete 280 GB of history',encrypt_state:null})"))
+    assert "Keep it" in html
+    assert "Encrypt it into the backup, then remove the plaintext" in html
+    assert "Delete it" in html and "delete 280 GB of history" in html
+    assert 'id="athome-plain-delete" disabled' in html  # off until the phrase is typed
+    assert "I am on the home network" in html
+
+
+def test_a_move_in_progress_can_be_followed_after_a_reload_and_a_stopped_one_carried_on() -> None:
+    running = str(_node("a.athomePlainHtml({exists:true,size_bytes:1e9,encrypt_state:'running',"
+                        "covered_files:3,total_files:10})"))
+    assert "Follow it" in running and "3 of 10 files" in running
+    assert "Delete it" not in running  # no second action while it runs
+    stopped = str(_node("a.athomePlainHtml({exists:true,size_bytes:1e9,encrypt_state:'stopped'})"))
+    assert "Carry on" in stopped
+
+
+def test_nothing_starts_by_itself_and_the_destructive_ones_are_confirmed() -> None:
+    for fn in ("async function athomeLoadAll", "async function renderAtHomePanel",
+               "async function athomePlainLoad"):
+        body = _JS.split(fn)[1].split("\n}\n")[0]
+        assert "'POST'" not in body and "athomeStream(" not in body, fn
+    choose = _JS.split("async function athomePlainChoose")[1].split("\n}\n")[0]
+    assert "payload.confirm" in choose and "athome-plain-home" in choose
+    assert "athomeGB(" in _JS  # the size shown is the server's, in plain gigabytes
