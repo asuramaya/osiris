@@ -1564,7 +1564,11 @@ async def db_compaction_heartbeat(ctx: dict[str, Any]) -> int:
     rewritten or a rewrite failed. Returns the bytes given back."""
     import os
 
-    from src.orchestrator.db_compaction import compact_tonight, night_seconds_left
+    from src.orchestrator.db_compaction import (
+        compact_tonight,
+        compaction_receipts_summary,
+        night_seconds_left,
+    )
     from src.orchestrator.mailbox import send_message
     from src.orchestrator.settings_service import settings_with_overlay
 
@@ -1582,17 +1586,64 @@ async def db_compaction_heartbeat(ctx: dict[str, Any]) -> int:
     receipts = await compact_tonight(
         pool, window_secs=min(_COMPACTION_WINDOW_SECS, left),
         dsn=os.environ.get("DATABASE_URL"))
-    done = [r for r in receipts.values() if r.get("action") == "rewritten"]
-    failed = [r for r in receipts.values() if r.get("action") == "failed"]
-    freed = int(sum(max(0, r["before_bytes"] - r["after_bytes"]) for r in done))
-    if done or failed:
-        parts = [f"{r['table']} {r['before_bytes'] / 1024 ** 3:.1f} GB to "
-                 f"{r['after_bytes'] / 1024 ** 3:.1f} GB" for r in done]
-        parts += [f"{r['table']} failed ({r['reason']})" for r in failed]
+    freed, body = compaction_receipts_summary(receipts)
+    if body:
         with contextlib.suppress(Exception):
             await send_message(
                 pool, from_agent="cron:db_compaction_heartbeat", from_project="osiris",
-                to_project="operator", body="database compaction: " + "; ".join(parts),
+                to_project="operator", body="database compaction: " + body,
+                desk_kind="fyi", dedup_window_secs=3600)
+    return freed
+
+
+_FALLBACK_STALE_TICK_SECS = 120.0  # a tick this late waited out a sleep or a stall: not a quiet box
+
+
+async def compaction_fallback_heartbeat(ctx: dict[str, Any]) -> int:
+    """THE DAYTIME COMPACTION FALLBACK, from a light cron (operator ruling 2026-11-15): a box
+    that is shut overnight never reaches the 03:00 window, so after two missed nights ONE daytime
+    run is allowed, pg_repack only, when the box is quiet (see `maybe_compact_by_day`). Every 15
+    minutes it asks the cheap question first and returns at once nearly always. Never from the
+    fire of a slept-through slot at wake: a tick more than two minutes late does nothing, and the
+    night job itself stays a no-op outside its window. One run at a time (a session lock), a desk
+    line when it rewrote or failed. Returns the bytes given back."""
+    import os
+
+    from src.orchestrator.daily_catchup import exclusive
+    from src.orchestrator.db_compaction import (
+        FALLBACK_KIND,
+        compaction_receipts_summary,
+        maybe_compact_by_day,
+    )
+    from src.orchestrator.mailbox import send_message
+    from src.orchestrator.settings_service import settings_with_overlay
+
+    score = ctx.get("score")
+    if isinstance(score, (int, float)) and time.time() - score / 1000.0 > _FALLBACK_STALE_TICK_SECS:
+        return 0
+    actions: Actions = ctx["cascade"].actions
+    pool = actions.pool
+    st = await settings_with_overlay(pool)
+    if not st.osiris_retention_heartbeat_enabled:
+        return 0
+    async with exclusive(pool, "compaction_fallback") as got:
+        if not got:
+            return 0
+        out = await maybe_compact_by_day(
+            pool, enabled=st.osiris_compaction_fallback_enabled,
+            max_load=st.osiris_compaction_fallback_max_load,
+            window_secs=_COMPACTION_WINDOW_SECS, dsn=os.environ.get("DATABASE_URL"))
+    if not out["ran"]:
+        _log.debug("compaction fallback: not now (%s)", out["why"])
+        return 0
+    freed, body = compaction_receipts_summary(out["receipts"])
+    if body:
+        with contextlib.suppress(Exception):
+            await send_message(
+                pool, from_agent="cron:compaction_fallback_heartbeat", from_project="osiris",
+                to_project="operator",
+                body=f"database compaction ({FALLBACK_KIND.replace('_', ' ')}, the box missed "
+                     f"its nights): {body}",
                 desk_kind="fyi", dedup_window_secs=3600)
     return freed
 
@@ -2200,6 +2251,10 @@ class WorkerSettings:
         # hard-stops itself before 05:00. Not run_at_startup (hours-long rewrites).
         cron(watched(db_compaction_heartbeat, every=86400), hour={3}, minute={0},
              second={0}, timeout=7200),
+        # THE DAYTIME COMPACTION FALLBACK: after two missed nights, one pg_repack run by day when
+        # the box is quiet. A light check every 15 minutes; see compaction_fallback_heartbeat.
+        cron(watched(compaction_fallback_heartbeat, every=900), minute={5, 20, 35, 50},
+             second={10}, timeout=7200),
         # CATCH-UP for the housekeeping, retention and cold-tier jobs above when the box slept
         # through their slot (never compaction): see daily_catchup_heartbeat. Offset from every
         # other 15-minute job's seconds.
