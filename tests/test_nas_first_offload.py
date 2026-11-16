@@ -53,7 +53,8 @@ class World:
             drill=lambda r: mark("drill", self.drill_fail),
             copy_recovery=lambda t: mark("copy", self.copy),
             ever_offloaded=lambda n: self.offloaded_before,
-            record_offload=lambda n, now, note: self.recorded.append(("offload", note)),
+            record_offload=lambda n, now, note, started=None: (
+                self.recorded.append(("offload", note))),
             record_drill=lambda u, fail, note: self.recorded.append(("drill", fail)),
             hold_lock=lock, now=lambda: NOW)
 

@@ -53,7 +53,7 @@ class Deps:
     drill: Callable[[str], str | None]
     copy_recovery: Callable[[dict[str, Any]], dict[str, Any] | None]
     ever_offloaded: Callable[[str], bool]
-    record_offload: Callable[[str, str, str | None], None]
+    record_offload: Callable[..., None]
     record_drill: Callable[[str, str | None, str | None], None]
     hold_lock: Callable[[], Any]
     now: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
@@ -136,11 +136,12 @@ def _ever_offloaded(name: str) -> bool:
     return untrusted or bool((receipts.get(name) or {}).get("last_successful_offload"))
 
 
-def _record_offload(name: str, now: str, note: str | None) -> None:
+def _record_offload(name: str, now: str, note: str | None, *, started: str | None = None) -> None:
     from src.orchestrator.offload_runner import _log_attempt, _write_receipt
 
     _log_attempt(name, "ok_with_note" if note else "ok", now, duration_s=0.0, detail=note)
     _write_receipt(name, {"last_successful_offload": now, "last_attempt_at": now,
+                          "last_backup_start": started or now,
                           "last_error": None, "last_skip_reason": None, "skipped_since": None,
                           "stale_notified_clock": None, "last_note": note})
 
@@ -254,11 +255,12 @@ async def run(
         # 3. THE OFFLOAD
         step(3, f"offloading {vault} (WAL, base backups, dumps); the first run can take a long "
                 "time, and restic skips what the NAS already holds.")
+        began = deps.now().isoformat()
         fail, note = await asyncio.to_thread(deps.offload, repo, password, vault)
         if fail:
             return stop(3, f"the offload did not finish ({fail}).",
                         "run this again: restic resumes from what it already copied.")
-        deps.record_offload(name, deps.now().isoformat(), note)
+        deps.record_offload(name, deps.now().isoformat(), note, started=began)
         step(3, "the offload finished" + (f" ({note})." if note else "."))
 
         # 4. A FRESH SNAPSHOT

@@ -534,8 +534,9 @@ async def _run_offload_tick_locked(
             _log_attempt(name, "ok_with_note" if notes else "ok", now, duration_s=took,
                          exit_code=code, detail=notes[0] if notes else None)
             _write_receipt(name, {"last_successful_offload": now, "last_attempt_at": now,
-                                  "last_error": None, "last_skip_reason": None,
-                                  "skipped_since": None, "stale_notified_clock": None,
+                                  "last_backup_start": now, "last_error": None,
+                                  "last_skip_reason": None, "skipped_since": None,
+                                  "stale_notified_clock": None,
                                   "last_note": notes[0] if notes else None})
             results.append({"name": name, "ok": True, **({"note": notes[0]} if notes else {})})
         elif restic_locks.is_busy(fail):

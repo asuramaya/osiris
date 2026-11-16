@@ -158,9 +158,9 @@ def test_items_are_ordered_cheapest_and_safest_first() -> None:
 
     assert [i["key"] for i in result["items"]] == [
         "envelope_drill", "envelope_code", "envelope_key", "nas_offload", "plaintext_copy",
-        "rollback_container", "scratch_dirs", "rebuild_probe"]
+        "rollback_container", "scratch_dirs", "rebuild_probe", "prune_hold"]
     assert result["next"]["key"] == "envelope_drill"  # the first thing to do
-    assert result["pending"] == 5 and result["done"] == 2
+    assert result["pending"] == 5 and result["done"] == 3
 
 
 def test_the_terminal_text_names_each_command_and_marks_blocked_items() -> None:
@@ -292,12 +292,13 @@ async def test_the_real_sources_read_the_live_shapes(
     monkeypatch.setattr(at_home_readers, "read_rollback_container", lambda: None)
     monkeypatch.setattr(at_home_readers, "read_scratch", lambda: [])
     monkeypatch.setenv("OSIRIS_AT_HOME_COVERAGE_FILE", str(tmp_path / "none.json"))
+    monkeypatch.setenv("OSIRIS_PRUNE_HELD_FILE", str(tmp_path / "held.json"))
     src = await at_home.real_sources(actions.pool, now=NOW)
     result = at_home.checklist(src, now=NOW)
 
     assert src.plaintext_thread_open() is True  # the thread is open
-    assert [i["key"] for i in result["items"]][-4] == "plaintext_copy"
-    assert result["items"][-4]["status"] in ("blocked", "waiting")
+    assert [i["key"] for i in result["items"]][-5] == "plaintext_copy"
+    assert result["items"][-5]["status"] in ("blocked", "waiting")
 
 
 BOX = {"status": "exited", "image": "postgres:16", "size": 28672}
@@ -438,3 +439,18 @@ def test_the_recorded_check_round_trips_and_an_unreadable_one_never_reads_as_cov
     assert at_home.read_coverage() is None
     (tmp_path / "sub" / "c.json").write_text('{"checked_at": "x"}')
     assert at_home.read_coverage() is None  # no verdict inside: not "covered"
+
+
+def test_the_prune_hold_waits_only_past_its_ceiling() -> None:
+    held = {"files": 120, "bytes": 90_000_000_000, "oldest_file_at": "2026-11-05T12:00:00+00:00",
+            "ceiling_bytes": 150_000_000_000, "over_ceiling": False}
+    under = by_key(at_home.checklist(sources(prune_hold=lambda: dict(held)), now=NOW))
+    over = by_key(at_home.checklist(
+        sources(prune_hold=lambda: {**held, "bytes": 200_000_000_000, "over_ceiling": True}),
+        now=NOW))
+
+    assert under["prune_hold"]["status"] == at_home.DONE
+    assert "120 backup file(s)" in under["prune_hold"]["why"]
+    assert over["prune_hold"]["status"] == at_home.WAITING
+    assert "over the 150 GB limit" in over["prune_hold"]["why"]
+    assert "home network" in over["prune_hold"]["command"]

@@ -72,6 +72,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 if TYPE_CHECKING:
     from scripts.osiris_transcript_cache_prune import SessionRow
 
+from src.orchestrator import offload_confirm  # noqa: E402
+
+# Set by `--allow-unconfirmed` (the operator's explicit override): delete without asking the NAS.
+_ALLOW_UNCONFIRMED = False
+# What the last `_compute_plans` left alone because the NAS has not confirmed it.
+last_held = offload_confirm.Held()
+
 _NAME_RE = re.compile(r"^osiris-(\d{8})-(\d{6})\.(?:dump|sql)$")
 _BASEBACKUP_RE = re.compile(r"^osiris-basebackup-(\d{8})-(\d{6})\.tar\.gz$")
 
@@ -701,6 +708,52 @@ def _verified_start_segments(verified: DumpFile | None) -> list[str] | None:
     return None if seg is None else [seg]
 
 
+def _current_horizon() -> offload_confirm.Horizon:
+    return offload_confirm.OPEN if _ALLOW_UNCONFIRMED else offload_confirm.load_horizon()
+
+
+def _mtime(path: str) -> float | None:
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return None
+
+
+def _hold_unconfirmed(
+    plans: dict[str, dict[str, list[DumpFile]]],
+    chain_plan: dict[str, list[TranscriptChain]],
+    wal_plan: dict[str, list[WalSegment]],
+    legacy_plan: dict[str, list[DumpFile]],
+    horizon: offload_confirm.Horizon,
+) -> offload_confirm.Held:
+    """Move every vault file the NAS has not confirmed from `remove` to `keep`, so a plan never
+    lists one for deletion. `backups/` (a cache of files the vault also holds) is not a vault copy
+    and is left to its own rule. A transcript chain is held whole if any of its files is."""
+    held = offload_confirm.Held()
+    if not horizon.tracked:
+        return held
+
+    def split(plan: dict[str, list[Any]], paths: Callable[[Any], list[str]], kind: str) -> None:
+        removable, waiting = [], []
+        for item in plan["remove"]:
+            times = [t for t in (_mtime(p) for p in paths(item)) if t is not None]
+            if any(not horizon.confirms(t) for t in times):
+                held.add(kind, getattr(item, "size_bytes", 0) or 0, min(times))
+                waiting.append(item)
+            else:
+                removable.append(item)
+        plan["keep"] = plan["keep"] + waiting
+        plan["remove"] = removable
+
+    for label, plan in plans.items():
+        if label != "backups/":
+            split(plan, lambda f: [f.path], "base backup" if "basebackups" in label else "dump")
+    split(chain_plan, lambda c: list(c.files), "transcript chain")
+    split(wal_plan, lambda w: [w.path], "WAL segment")
+    split(legacy_plan, lambda f: [f.path], "legacy transcript tarball")
+    return held
+
+
 def _compute_plans(
     backups: Path, vault: Path,
 ) -> tuple[dict[str, dict[str, list[DumpFile]]], dict[str, list[TranscriptChain]],
@@ -727,6 +780,11 @@ def _compute_plans(
         _scan_wal(vault / "wal_archive"),
         kept_start_segments=_verified_start_segments(verified))
     legacy_plan = plan_prune_legacy_tarballs(_scan_legacy_tarballs(vault))
+    # the NAS must have confirmed a vault file before any plan lists it for removal
+    horizon = _current_horizon()
+    global last_held
+    last_held = _hold_unconfirmed(plans, chain_plan, wal_plan, legacy_plan, horizon)
+    offload_confirm.write_held(last_held, horizon)
     return plans, chain_plan, wal_plan, legacy_plan
 
 
@@ -847,23 +905,49 @@ def _apply(
     wal_plan: dict[str, list[WalSegment]] | None = None,
     legacy_plan: dict[str, list[DumpFile]] | None = None,
     session_plan: list[SessionRow] | None = None,
-) -> None:
-    for plan in plans.values():
+    horizon: offload_confirm.Horizon | None = None,
+) -> int:
+    """Delete what the plans list. THE LAST LINE: whatever a caller passes in, a vault file the NAS
+    has not confirmed is never unlinked here (a plan built elsewhere, or edited, cannot bypass it).
+    Returns how many vault files were refused."""
+    horizon = horizon or _current_horizon()
+    refused = 0
+
+    def unlink_vault(path: str) -> bool:
+        nonlocal refused
+        t = _mtime(path)
+        if t is not None and not horizon.confirms(t):
+            refused += 1
+            return False
+        Path(path).unlink(missing_ok=True)
+        return True
+
+    for label, plan in plans.items():
         for f in plan["remove"]:
-            Path(f.path).unlink(missing_ok=True)
-            verified_marker_path(f.path).unlink(missing_ok=True)
+            if label == "backups/":
+                Path(f.path).unlink(missing_ok=True)  # a cache copy of a file the vault holds
+                verified_marker_path(f.path).unlink(missing_ok=True)
+            elif unlink_vault(f.path):
+                verified_marker_path(f.path).unlink(missing_ok=True)
     for c in chain_plan["remove"]:
-        for path in c.files:
-            Path(path).unlink(missing_ok=True)
+        times = [t for t in (_mtime(p) for p in c.files) if t is not None]
+        if all(horizon.confirms(t) for t in times):
+            for path in c.files:
+                Path(path).unlink(missing_ok=True)
+        else:
+            refused += len(c.files)  # a chain goes whole or not at all
     if wal_plan is not None:
         for s in wal_plan["remove"]:
-            Path(s.path).unlink(missing_ok=True)
+            unlink_vault(s.path)
     if legacy_plan is not None:
         for f in legacy_plan["remove"]:
-            Path(f.path).unlink(missing_ok=True)
+            unlink_vault(f.path)
     if session_plan is not None:
         for sess in session_plan:
             Path(sess.source_path).unlink(missing_ok=True)
+    if refused:
+        print(f"kept {refused} vault file(s) the NAS has not confirmed ({horizon.reason}).")
+    return refused
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -886,6 +970,10 @@ def main(argv: list[str] | None = None) -> int:
                              "sent is at least 20h old and has not been dimmed; "
                              "refuses with a named reason otherwise. Deletes nothing "
                              "when refusing.")
+    parser.add_argument("--allow-unconfirmed", action="store_true",
+                        help="THE OPERATOR'S OVERRIDE: delete vault files the NAS has not "
+                             "confirmed. Never set by any timer; deleting what the NAS has not "
+                             "got can lose backup history for good.")
     parser.add_argument("--seat-root", type=Path, default=None,
                         help="Root directory holding every seat's own scaffolded "
                              "identity directory, for the dormant-seat-transcript "
@@ -896,6 +984,10 @@ def main(argv: list[str] | None = None) -> int:
                              "rollup (default: ~/.claude/projects). A test override, "
                              "never set in production.")
     args = parser.parse_args(argv)
+    global _ALLOW_UNCONFIRMED
+    _ALLOW_UNCONFIRMED = bool(args.allow_unconfirmed)
+    if _ALLOW_UNCONFIRMED:
+        print("--allow-unconfirmed: the NAS is NOT being asked; unconfirmed files may be deleted.")
 
     def _office_root() -> Path:
         if args.seat_root is not None:
