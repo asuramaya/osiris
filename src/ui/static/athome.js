@@ -89,8 +89,8 @@ async function athomeCall(path, method, payload) {
   return { status: res.status, body: body || {} };
 }
 
-async function athomeStream(path, onLine) {
-  var res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+async function athomeStream(path, onLine, payload) {
+  var res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload || {}) });
   if (!res.ok || !res.body) {
     var body = null;
     try { body = await res.json(); } catch (e) { body = null; }
@@ -134,16 +134,17 @@ function athomeActionHtml(it) {
       '<ol id="athome-nas-steps" style="margin:8px 0 0 18px"></ol>';
   }
   if (k === 'plaintext_copy') return '<div id="athome-plain" class="o-faint">Loading…</div>';
-  if (k === 'rebuild_probe') {
-    return btn('Run the probe', 'athomeProbe()') + '<ol id="athome-probe-steps" style="margin:8px 0 0 18px"></ol>';
-  }
   return '';
 }
 function athomeChecklistHtml(data) {
   var items = (data && data.items) || [];
   if (!items.length) return '<div class="o-empty">Nothing is waiting on you.</div>';
   return items.map(function (it) {
-    var cmd = it.command
+    var cmd = it.command && it.key === 'rebuild_probe'
+      ? '<div class="o-faint" style="margin-top:6px">This one runs from a terminal because it uses a model call. Run: ' +
+        '<code style="' + ATHOME_WRAP + '">' + athomeText(it.command) + '</code> ' +
+        '<button class="iconbtn" data-copy="' + athomeAttr(it.command) + '" onclick="athomeCopy(this)">Copy</button></div>'
+      : it.command
       ? '<details style="margin-top:6px"><summary class="o-faint" style="cursor:pointer">or run in a terminal</summary>' +
         '<code style="' + ATHOME_WRAP + '">' + athomeText(it.command) + '</code> ' +
         '<button class="iconbtn" data-copy="' + athomeAttr(it.command) + '" onclick="athomeCopy(this)">Copy</button></details>'
@@ -257,6 +258,8 @@ async function athomeLoadAll() {
   if (list) list.innerHTML = results[0].status === 404 ? unavailable
     : (results[0].status >= 400 ? '<div class="o-empty">' + athomeText(athomeErrorText(results[0].body, 'The list could not be read.')) + '</div>'
        : athomeChecklistHtml(results[0].body));
+  var plainItem = ((results[0].body && results[0].body.items) || []).find(function (i) { return i.key === 'plaintext_copy'; });
+  ATHOME_PLAIN.item = plainItem || null;
   if ($('athome-plain')) athomePlainLoad();
   ATHOME_RECIPIENTS = (results[1].body && results[1].body.recipients) || [];
   if (keys) keys.innerHTML = results[1].status === 404 ? unavailable
@@ -565,7 +568,8 @@ function athomeLineHtml(line) {
     ? ' <span class="o-faint">(' + athomeText(line.done_files) + ' of ' + athomeText(line.total_files) + ' files)</span>' : '';
   return athomeStepHtml(line) + count;
 }
-async function athomeRunInto(path, listId, doneNote) {
+async function athomeRunPost(path, payload, listId) { return athomeRunInto(path, listId, payload); }
+async function athomeRunInto(path, listId, payload) {
   var list = $(listId);
   if (!list) return false;
   list.innerHTML = '<li class="o-faint">Starting…</li>';
@@ -581,7 +585,7 @@ async function athomeRunInto(path, listId, doneNote) {
       li.innerHTML = athomeLineHtml(line);
     }
     list.appendChild(li);
-  });
+  }, payload);
   if (!finished) {
     var tail = document.createElement('li');
     tail.className = 'o-faint';
@@ -592,9 +596,6 @@ async function athomeRunInto(path, listId, doneNote) {
 }
 
 // ── the rebuild probe and the restore test: one button each ─────────────────────────────
-async function athomeProbe() {
-  await athomeRunInto('/at-home/probe/run', 'athome-probe-steps');
-}
 async function athomeRestoreRun() {
   await athomeRunInto('/at-home/restore-test/run', 'athome-restore-steps');
   var r = await athomeCall('/at-home/restore-test');
@@ -603,78 +604,94 @@ async function athomeRestoreRun() {
 }
 
 // ── the old plaintext copy: explain, offer three choices, do what is chosen ─────────────
-// Keep and encrypt only record the choice (encrypt also starts the job, which refuses off the
-// home network and deletes the plaintext only after every file is proved to be in the backup).
-// Delete loses history: it needs the exact sentence the server defines, typed by hand.
+// Keep records the choice only. Back it up starts the copy into the encrypted backup (home network
+// only, can be stopped and pressed again) and only afterwards offers to remove the plaintext, which
+// needs the word "remove" typed. Delete loses history: it needs the exact sentence the server
+// defines, typed by hand, before anything is recorded or removed.
 function athomeGB(bytes) { return bytes == null ? '?' : (bytes / 1e9).toFixed(bytes >= 1e11 ? 0 : 1); }
-function athomePlainHtml(d) {
-  if (!d || !d.exists) {
-    return '<div>' + athomeText((d && d.text) || 'No plaintext copy is left.') + '</div>';
-  }
-  var size = athomeGB(d.size_bytes) + ' GB';
-  var head = '<div style="margin-bottom:6px">' + athomeText(d.text || ('The old unencrypted copy holds about ' + size +
-    '. It is not in the encrypted backup yet.')) + '</div>';
-  if (d.encrypt_state === 'running' || d.encrypt_state === 'stopped') {
-    return head + '<div class="o-faint">' + athomeText(d.encrypt_state === 'running'
-        ? 'Moving it into the backup now.' : 'The move stopped part way. It carries on from where it stopped.') +
-      (d.total_files ? ' ' + athomeText(d.covered_files || 0) + ' of ' + athomeText(d.total_files) + ' files are in the backup.' : '') + '</div>' +
-      '<button class="iconbtn" onclick="athomePlainEncrypt()">' + (d.encrypt_state === 'running' ? 'Follow it' : 'Carry on') + '</button>' +
-      '<ol id="athome-plain-steps" style="margin:8px 0 0 18px"></ol>';
-  }
-  var chosen = d.choice ? '<div class="o-faint" style="margin-bottom:6px">Your choice so far: ' +
-    athomeText({ keep: 'keep it', encrypt: 'move it into the backup', delete: 'delete it' }[d.choice] || d.choice) + '.</div>' : '';
-  var phrase = d.delete_phrase || ('delete ' + athomeGB(d.size_bytes) + ' GB of history');
-  return head + chosen +
-    '<div style="display:flex;flex-direction:column;gap:10px">' +
+var ATHOME_CHOICE_WORDS = { keep: 'keep it', encrypt_then_remove: 'back it up, then remove it', delete: 'delete it' };
+function athomeTypedBox(id, phrase, label, fn) {
+  return '<div style="margin-top:6px"><div class="o-faint" style="margin-bottom:4px">To confirm, type: <code>' + athomeText(phrase) + '</code></div>' +
+    '<input id="' + id + '" class="filter" autocomplete="off" style="width:260px;margin:0 6px 0 0" data-phrase="' + athomeAttr(phrase) +
+    '" oninput="athomePlainPhrase(this, \'' + id + '-btn\')" /> ' +
+    '<button class="iconbtn" id="' + id + '-btn" disabled style="opacity:0.45" onclick="' + fn + '">' + athomeText(label) + '</button></div>';
+}
+function athomePlainHtml(d, item) {
+  d = d || {};
+  var cov = d.coverage;
+  var head = '<div style="margin-bottom:6px">' + athomeText((item && item.why) || 'The old unencrypted copy is still on the NAS.') + '</div>' +
+    (cov && cov.only_files != null ? '<div class="o-faint" style="margin-bottom:6px">' + athomeText(cov.only_files) +
+      ' file(s) (' + athomeText(athomeGB(cov.only_bytes)) + ' GB) are only in the old copy and not yet in the backup.</div>' : '');
+  var choice = d.choice && d.choice.choice;
+  var confirm = d.confirm || {};
+  var chosen = choice ? '<div class="o-faint" style="margin-bottom:6px">Your choice so far: ' +
+    athomeText(ATHOME_CHOICE_WORDS[choice] || choice) + '.</div>' : '';
+  var buttons =
     '<div><button class="iconbtn" onclick="athomePlainChoose(\'keep\')">Keep it</button> ' +
-      '<span class="o-faint">Nothing changes. This stays on the list.</span></div>' +
-    '<div><button class="iconbtn" onclick="athomePlainChoose(\'encrypt\')">Encrypt it into the backup, then remove the plaintext</button> ' +
-      '<label style="font-size:11px"><input type="checkbox" id="athome-plain-home" /> I am on the home network</label>' +
-      '<div class="o-faint">Home network only. It can be stopped and picked up again. The plaintext is removed only after every file is shown to be in the backup.</div></div>' +
-    '<div><div class="o-faint" style="margin-bottom:4px">Delete it and lose that history. To confirm, type: <code>' + athomeText(phrase) + '</code></div>' +
-      '<input id="athome-plain-phrase" class="filter" autocomplete="off" style="width:260px;margin:0 6px 0 0" oninput="athomePlainPhrase(this)" data-phrase="' + athomeAttr(phrase) + '" /> ' +
-      '<button class="iconbtn" id="athome-plain-delete" disabled style="opacity:0.45" onclick="athomePlainChoose(\'delete\')">Delete it</button></div>' +
-    '</div><div id="athome-plain-msg" class="o-faint" style="margin-top:6px"></div>' +
+      '<span class="o-faint">Nothing changes. It stays on the list.</span></div>' +
+    '<div><button class="iconbtn" onclick="athomePlainChoose(\'encrypt_then_remove\')">Back it up, then remove the plaintext</button>' +
+      '<div class="o-faint">Home network only. It can be stopped and started again. Nothing is removed until every file is shown to be in the backup.</div></div>' +
+    '<div><button class="iconbtn" onclick="athomePlainDeleteStart()">Delete it</button> ' +
+      '<span class="o-faint">Loses that history. Asks you to type a sentence first.</span><div id="athome-plain-delete"></div></div>';
+  var after = '';
+  if (choice === 'encrypt_then_remove') {
+    after = '<div style="margin:8px 0"><button class="iconbtn" onclick="athomePlainEncrypt()">Back it up now</button> ' +
+      '<span class="o-faint">If it stops, press it again to carry on.</span></div>' +
+      athomeTypedBox('athome-plain-remove', confirm.encrypt_then_remove || 'remove', 'Remove the plaintext copy', 'athomePlainRemove()') +
+      '<div class="o-faint">Removing first checks again that nothing is only in the old copy.</div>';
+  }
+  return head + chosen + (choice === 'encrypt_then_remove' ? '' : '<div style="display:flex;flex-direction:column;gap:10px">' + buttons + '</div>') + after +
+    '<div id="athome-plain-msg" class="o-faint" style="margin-top:6px"></div>' +
     '<ol id="athome-plain-steps" style="margin:8px 0 0 18px"></ol>';
 }
-function athomePlainPhrase(input) {
-  var btn = $('athome-plain-delete');
+function athomePlainPhrase(input, btnId) {
+  var btn = $(btnId);
   if (!btn) return;
   var ok = input.value.trim() === input.getAttribute('data-phrase');
   btn.disabled = !ok; btn.style.opacity = ok ? '1' : '0.45';
 }
+var ATHOME_PLAIN = { item: null, data: null };
 async function athomePlainLoad() {
   var el = $('athome-plain');
   if (!el) return;
-  var r = await athomeCall('/at-home/plaintext');
+  var r = await athomeCall('/at-home/plaintext-copy');
   if (r.status === 404) { el.textContent = 'Choosing what to do with it is not available yet on this machine.'; return; }
   if (r.status >= 400) { el.textContent = athomeErrorText(r.body, 'Its state could not be read.'); return; }
-  el.innerHTML = athomePlainHtml(r.body);
+  ATHOME_PLAIN.data = r.body;
+  el.innerHTML = athomePlainHtml(r.body, ATHOME_PLAIN.item);
 }
 function athomePlainMsg(t) { var el = $('athome-plain-msg'); if (el) el.textContent = t || ''; }
 async function athomePlainChoose(choice) {
-  var payload = { choice: choice };
-  if (choice === 'delete') {
-    var box = $('athome-plain-phrase');
-    if (!box) return;
-    payload.confirm = box.value.trim();
-  }
-  if (choice === 'encrypt') {
-    var home = $('athome-plain-home');
-    if (!home || !home.checked) { athomePlainMsg('Tick that you are on the home network first.'); return; }
-  }
   athomePlainMsg('Saving your choice…');
-  var r = await athomeCall('/at-home/plaintext/choose', 'POST', payload);
+  var r = await athomeCall('/at-home/plaintext-copy/choice', 'POST', { choice: choice });
   if (r.status >= 400 || (r.body && r.body.error)) {
-    athomePlainMsg(athomeErrorText(r.body, 'That was not saved (error ' + r.status + ').')); return;
+    athomePlainMsg(athomeErrorText(r.body, 'That was not saved (error ' + r.status + ').')); return false;
   }
-  athomePlainMsg(r.body.text || 'Saved.');
-  if (choice === 'encrypt') { athomePlainEncrypt(); return; }
-  athomePlainLoad();
+  await athomePlainLoad();
+  athomePlainMsg('Saved: ' + (ATHOME_CHOICE_WORDS[choice] || choice) + '.');
+  if (choice === 'encrypt_then_remove') athomePlainEncrypt();
+  return true;
+}
+function athomePlainDeleteStart() {
+  var el = $('athome-plain-delete');
+  if (!el) return;
+  var phrase = (ATHOME_PLAIN.data && ATHOME_PLAIN.data.confirm && ATHOME_PLAIN.data.confirm.delete) || 'delete the old plaintext copy';
+  el.innerHTML = athomeTypedBox('athome-plain-del', phrase, 'Delete it for good', 'athomePlainDelete()');
+}
+async function athomePlainDelete() {
+  var box = $('athome-plain-del');
+  if (!box || box.value.trim() !== box.getAttribute('data-phrase')) return;
+  var phrase = box.value.trim();
+  if (!(await athomePlainChoose('delete'))) return;
+  await athomeRunPost('/at-home/plaintext-copy/remove', { confirm: phrase }, 'athome-plain-steps');
 }
 async function athomePlainEncrypt() {
-  await athomeRunInto('/at-home/plaintext/encrypt', 'athome-plain-steps');
-  athomePlainLoad();
+  await athomeRunPost('/at-home/plaintext-copy/encrypt', {}, 'athome-plain-steps');
+}
+async function athomePlainRemove() {
+  var box = $('athome-plain-remove');
+  if (!box || box.value.trim() !== box.getAttribute('data-phrase')) return;
+  await athomeRunPost('/at-home/plaintext-copy/remove', { confirm: box.value.trim() }, 'athome-plain-steps');
 }
 
 if (typeof module !== 'undefined' && module.exports) {
