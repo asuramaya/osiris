@@ -29,7 +29,7 @@ import asyncpg
 from arq import create_pool as create_arq_pool
 from arq.connections import RedisSettings
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1674,6 +1674,124 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return recover_from_browser(
             raw_key_b64=body.raw_key, key_fingerprint=body.key_fingerprint,
             resolved_path=body.resolved_path, backend=body.backend)
+
+    # THE ENVELOPE PANEL'S ROUTES (src/orchestrator/envelope_console.py has the design and
+    # where each secret lives): who the soul key is sealed to, the per-recipient drill, adding
+    # and removing a
+    # recipient, and the at-home checklist. Same OPERATOR-ONLY AUTHORITY LAW as every /soul-key*
+    # route, plus a loopback check, because these answer with a recovery code or change who can
+    # open the key. A security key's touch happens in the browser; the PRF output it makes (the
+    # recipient's wrapping secret) and a typed recovery code arrive in the BODY and are parsed by
+    # hand: FastAPI's own validation errors echo the request body, which here is a secret. Every
+    # response is `Cache-Control: no-store`, an error is `{"error": "<sentence>"}`.
+    def _envelope_reply(payload: dict[str, Any], status: int = 200) -> JSONResponse:
+        if "error" in payload and status == 200:
+            status = 404 if str(payload["error"]).startswith("no recipient") else 400
+        return JSONResponse(payload, status_code=status, headers={"Cache-Control": "no-store"})
+
+    def _envelope_guard(request: Request) -> JSONResponse | None:
+        host = request.client.host if request.client else ""
+        if host in ("127.0.0.1", "::1", "localhost", "testclient"):
+            return None
+        return _envelope_reply(
+            {"error": "the key panel only answers on the machine it runs on"}, 403)
+
+    async def _envelope_body(request: Request) -> dict[str, Any]:
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 - a malformed body is a plain sentence, never its text
+            return {}
+        return body if isinstance(body, dict) else {}
+
+    @app.get("/soul-key/envelope")
+    async def soul_key_envelope_route(request: Request) -> JSONResponse:
+        """Who the soul key is sealed to, when each last proved it opens the key and the
+        envelope's own structural check. Read-only: nothing is opened."""
+        from src.orchestrator import envelope_console
+
+        return _envelope_guard(request) or _envelope_reply(envelope_console.state())
+
+    @app.get("/soul-key/envelope/{recipient_id}/challenge")
+    async def soul_key_envelope_challenge_route(
+        recipient_id: str, request: Request,
+    ) -> JSONResponse:
+        """What the browser needs to evaluate one recipient's key, with a single-use token."""
+        from src.orchestrator import envelope_console
+
+        return _envelope_guard(request) or _envelope_reply(
+            envelope_console.challenge(recipient_id))
+
+    @app.post("/soul-key/envelope/{recipient_id}/drill")
+    async def soul_key_envelope_drill_route(
+        recipient_id: str, request: Request, p: asyncpg.Pool = Depends(get_pool),
+    ) -> JSONResponse:
+        """Prove one recipient opens the key, with the answer the person gave in the body
+        (`{nonce, prf}` for a security key, `{nonce, code}` for a recovery code)."""
+        from src.orchestrator import envelope_console
+
+        if (denied := _envelope_guard(request)) is not None:
+            return denied
+        body = await _envelope_body(request)
+        return _envelope_reply(await envelope_console.drill(
+            p, recipient_id, nonce=body.get("nonce"), prf=body.get("prf"),
+            code=body.get("code")))
+
+    @app.post("/soul-key/envelope/add-code")
+    async def soul_key_envelope_add_code_route(request: Request) -> JSONResponse:
+        """Seal the key to a new recovery code. The code is in this response ONCE and stored
+        nowhere."""
+        from src.orchestrator import envelope_console
+
+        if (denied := _envelope_guard(request)) is not None:
+            return denied
+        body = await _envelope_body(request)
+        return _envelope_reply(await envelope_console.add_code(body.get("label")))
+
+    @app.post("/soul-key/envelope/add-key/begin")
+    async def soul_key_envelope_add_key_begin_route(request: Request) -> JSONResponse:
+        """Options for the browser to create a new credential with the PRF extension, and a
+        single-use token."""
+        from src.orchestrator import envelope_console
+
+        if (denied := _envelope_guard(request)) is not None:
+            return denied
+        body = await _envelope_body(request)
+        return _envelope_reply(envelope_console.add_key_begin(body.get("label")))
+
+    @app.post("/soul-key/envelope/add-key/finish")
+    async def soul_key_envelope_add_key_finish_route(request: Request) -> JSONResponse:
+        """Seal the key to the credential the browser created: `{token, credential_id, prf}`."""
+        from src.orchestrator import envelope_console
+
+        if (denied := _envelope_guard(request)) is not None:
+            return denied
+        body = await _envelope_body(request)
+        return _envelope_reply(await envelope_console.add_key_finish(
+            body.get("token"), body.get("credential_id"), body.get("prf")))
+
+    @app.post("/soul-key/envelope/remove")
+    async def soul_key_envelope_remove_route(request: Request) -> JSONResponse:
+        """Remove one recipient (never the last, never the last security key unless told).
+        Removing does not revoke a copy already taken: only rotating the key does."""
+        from src.orchestrator import envelope_console
+
+        if (denied := _envelope_guard(request)) is not None:
+            return denied
+        body = await _envelope_body(request)
+        return _envelope_reply(await envelope_console.remove(
+            body.get("recipient"), allow_no_hardware=body.get("allow_no_hardware") is True))
+
+    @app.get("/soul-key/at-home")
+    async def soul_key_at_home_route(
+        request: Request, p: asyncpg.Pool = Depends(get_pool),
+    ) -> JSONResponse:
+        """What waits only on the operator being there: the same checklist `osiris at-home
+        --json` prints. Read-only."""
+        from src.orchestrator import at_home
+
+        if (denied := _envelope_guard(request)) is not None:
+            return denied
+        return _envelope_reply(at_home.checklist(await at_home.real_sources(p)))
 
     # THE RESTIC-KEY STATUS ROUTE (the Settings pane's own Readiness section): a
     # genuinely thin endpoint. No REST route existed at all for `osiris

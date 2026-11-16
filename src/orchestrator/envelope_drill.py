@@ -205,7 +205,7 @@ def envelope_section(
     warnings = [f"{rid}: never proved to open the envelope" for rid in unproven]
     return {"configured": True, "ok": bool(checked.get("ok")),
             "problems": list(checked.get("problems") or []),
-            "by_recipient": dict(checked.get("by_recipient") or {}),
+            "by_recipient": dict(checked.get("by_recipient") or {}), "unproven": unproven,
             "hardware": checked.get("hardware"), "recipients": view, "warnings": warnings,
             "stale": [v["id"] for v in view if str(v["verdict"]).startswith("stale")]}
 
@@ -246,6 +246,23 @@ def prove_one(
     return PROVED, None
 
 
+def record_result(
+    rid: str, label: Any, kind: Any, status: str, reason: str | None, stamp: str,
+) -> None:
+    """Write one recipient's drill result to the record (under the lock): the attempt, and the
+    proof date only when it was proved. A failed attempt never erases an earlier full proof. The
+    proof above can take minutes, so only this write is locked."""
+    with _locked_record():
+        record = read_record()
+        entry = record.get(rid, {})
+        entry.update({"label": label, "kind": kind, "last_attempt_at": stamp, "status": status,
+                      "reason": reason})
+        if status == PROVED:
+            entry["last_proved_at"] = stamp
+        record[rid] = entry
+        _write_record(record)
+
+
 def run_drill(
     recipients: Recipients, verify: Verify, *, sample: Sample | None, only: str | None = None,
     now: datetime | None = None,
@@ -259,15 +276,7 @@ def run_drill(
         if only is not None and rid != only:
             continue
         status, reason = prove_one(verify, rid, sample=sample)
-        with _locked_record():  # the proof above can take minutes; only the write is locked
-            record = read_record()
-            entry = record.get(rid, {})
-            entry.update({"label": r.get("label"), "kind": r.get("kind"),
-                          "last_attempt_at": stamp, "status": status, "reason": reason})
-            if status == PROVED:
-                entry["last_proved_at"] = stamp
-            record[rid] = entry
-            _write_record(record)
+        record_result(rid, r.get("label"), r.get("kind"), status, reason, stamp)
         results.append({"id": rid, "label": r.get("label"), "kind": r.get("kind"),
                         "status": status, "reason": reason})
     return results

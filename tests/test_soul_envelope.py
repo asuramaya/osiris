@@ -81,9 +81,12 @@ def test_the_listing_never_carries_a_secret(keyfile: str) -> None:
     assert [r["id"] for r in recs] == ["k1", "c1"]
     for r in recs:
         assert set(r) == {"id", "kind", "label", "added_at", "enrolled_at", "last_opened_at",
-                          "unattended", "needs_touch", "needs_human"}
+                          "unattended", "needs_touch", "needs_human", "rp_id"}
         assert r["unattended"] is False and r["needs_human"] is True
     assert [r["needs_touch"] for r in recs] == [True, False]
+    # the web origin a key is bound to is not a secret (a console needs it to know which page can
+    # open the key); only a security key has one
+    assert [r["rp_id"] for r in recs] == [blob["recipients"][0].get("rp_id"), None]
     dumped = json.dumps(recs)
     for secret in (blob["recipients"][0]["wrapped_key"], blob["recipients"][0]["salt"],
                    blob["recipients"][0]["credential_id"], blob["recipients"][1]["wrapped_key"]):
