@@ -18,6 +18,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+# the compaction's own run marker (db_compaction.RUN_KEY; a test keeps the two equal)
+COMPACTION_RUN_KEY = "compaction:run"
+
 # How long after its slot a job may start before it counts as late (a timer's own jitter, a busy
 # box). A run later than this is reported; a slot still empty after this is reported as missed.
 GRACE = timedelta(minutes=30)
@@ -156,13 +159,23 @@ async def section(pool: Any, timers: list[dict[str, Any]], *, now: datetime) -> 
     try:
         rows = await pool.fetch(
             "SELECT key, cursor FROM watermarks WHERE key = ANY($1::text[])",
-            [f"job:{name}" for name, _, _ in WORKER_DAILY_JOBS])
-        seen = {r["key"][4:]: json.loads(r["cursor"] or "{}") for r in rows}
+            [f"job:{name}" for name, _, _ in WORKER_DAILY_JOBS] + [COMPACTION_RUN_KEY])
+        seen = {r["key"][4:]: json.loads(r["cursor"] or "{}")
+                for r in rows if r["key"].startswith("job:")}
+        run_marker: dict[str, Any] = next(
+            (json.loads(r["cursor"] or "{}") for r in rows if r["key"] == COMPACTION_RUN_KEY), {})
         for name, label, slot in WORKER_DAILY_JOBS:
             blob = seen.get(name) or {}
             raw = blob.get("last_run")
-            jobs.append((label, slot, datetime.fromisoformat(raw).astimezone(now.tzinfo)
-                         if raw else None, bool(blob.get("catchup"))))
+            last_at = datetime.fromisoformat(raw).astimezone(now.tzinfo) if raw else None
+            caught_up = bool(blob.get("catchup"))
+            if name == "db_compaction_heartbeat" and run_marker.get("at"):
+                # the job record's last_run moves whenever the cron fires, including the no-op
+                # fire of a slept-through slot at wake; the compaction's own run marker moves only
+                # when a run really happened (and says if it was the daytime fallback)
+                last_at = datetime.fromisoformat(run_marker["at"]).astimezone(now.tzinfo)
+                caught_up = run_marker.get("kind") == "daytime_fallback"
+            jobs.append((label, slot, last_at, caught_up))
     except Exception:  # noqa: BLE001
         unread.append("the worker's job record")
     problems = recent_problems(jobs, now)

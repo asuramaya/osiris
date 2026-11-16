@@ -474,6 +474,11 @@ class Settings(BaseSettings):
     # live before this ran: hundreds of megabytes each in the outbox and audit_log
     # tables, neither ever pruned before this.
     osiris_retention_heartbeat_enabled: bool = True
+    # The daytime compaction fallback (operator ruling 2026-11-15): after two missed nights, one
+    # pg_repack run by day when the box is quiet. `max_load` is the 1-minute load average it must
+    # be under (this box has 20 cores); the switch turns the fallback off.
+    osiris_compaction_fallback_enabled: bool = True
+    osiris_compaction_fallback_max_load: float = 6.0
     # The session-memory store's cold tier switch: memory gets tiers, not deletion. A
     # daily tick folds up to a bounded batch of sessions untouched for 30+ days into one
     # compressed cold-tier row each, deleting their per-line hot-tier rows; the read

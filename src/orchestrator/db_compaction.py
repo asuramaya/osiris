@@ -20,7 +20,15 @@ holding the table. A table is skipped, with the reason recorded, when
     re-encode record it), because compacting a table that is still being emptied wastes the
     rewrite.
 The before and after sizes of every attempt are kept in the watermarks table and shown in
-backup-status."""
+backup-status.
+
+A DAYTIME FALLBACK (operator ruling, 2026-11-15): a box that is shut overnight never reaches the
+window. When two or more nights' slots have passed with no completed run since, ONE daytime run is
+allowed (`decide_fallback`), under conditions: pg_repack only (never VACUUM FULL by day), a quiet
+box (1-minute load under a setting, no gate chain running, the disk/WAL brake clear), the same
+per-table floors and time budget. It is recorded as a daytime fallback in the receipt and in
+backup-status `missed_runs`. It is checked from a light cron, never from arq's fire of the missed
+03:00 slot at wake (that stays a no-op outside the window)."""
 from __future__ import annotations
 
 import asyncio
@@ -63,6 +71,13 @@ RECEIPT_KEY = "compaction:last"
 # middle of the day (a lid-open at 10:54 started a 12-minute run that rewrote audit_log).
 NIGHT_START_HOUR = 3
 NIGHT_END_HOUR = 5
+# The daytime fallback: how many missed nights, and the hours of the day a run may start in.
+RUN_KEY = "compaction:run"
+FALLBACK_MISSED_NIGHTS = 2
+FALLBACK_START_HOUR = 6
+FALLBACK_END_HOUR = 22
+FALLBACK_KIND = "daytime_fallback"
+NIGHT_KIND = "night"
 
 
 def night_seconds_left(now: datetime | None = None) -> float:
@@ -438,10 +453,14 @@ async def compact_tonight(
     pool: asyncpg.Pool, *, window_secs: float, tables: tuple[str, ...] | None = None,
     dsn: str | None = None, clock: Callable[[], float] = time.monotonic,
     brake: Callable[[asyncpg.Pool], Awaitable[dict[str, Any]]] | None = None,
+    run_kind: str = NIGHT_KIND, repack_only: bool = False,
+    exec_fn: ExecFn | None = None,
 ) -> dict[str, Any]:
     """Look at every big table, biggest reclaimable space first, and rewrite the ones worth it
     until the window's hard stop. Returns {table: receipt}; every receipt says what was done
-    or why not (and the sizes before and after a rewrite)."""
+    or why not (and the sizes before and after a rewrite). `run_kind` ("night", or
+    "daytime_fallback") goes on every receipt and into the run marker; `repack_only` (the
+    daytime fallback) refuses to rewrite with VACUUM FULL: a table is skipped instead."""
     from src.orchestrator import disk_brake
     from src.orchestrator.monitor import set_cursor
 
@@ -484,17 +503,182 @@ async def compact_tonight(
                                              f"leave less than the {floor / GB:.0f} GB floor"}
             else:
                 try:
-                    engine = await rewrite_table(pool, table, seconds_left=left, dsn=dsn)
+                    if repack_only and not await repack_ready(pool, exec_fn):
+                        raise RewriteSkipped(table)
+                    engine = await rewrite_table(
+                        pool, table, seconds_left=left, dsn=dsn, exec_fn=exec_fn)
                     after = (await table_sizes(pool, table))["total_bytes"]
                     receipts[table] = {**base, "action": "rewritten", "engine": engine,
                                        "after_bytes": after}
                 except RewriteSkipped as exc:
-                    receipts[table] = {**base, "action": "skipped", "reason": exc.reason}
+                    receipts[table] = {**base, "action": "skipped", "reason": getattr(
+                        exc, "reason", "pg_repack is not ready, and a daytime run never "
+                        "rewrites with VACUUM FULL; nothing was changed")}
                 except Exception as exc:  # noqa: BLE001 - window cancel, repack error
                     receipts[table] = {**base, "action": "failed", "reason": repr(exc)}
         _log.info("db compaction %s: %s", table, receipts[table].get("action"))
+    for receipt in receipts.values():
+        receipt.setdefault("run_kind", run_kind)
     await set_cursor(pool, RECEIPT_KEY, json.dumps(receipts))
+    await set_cursor(pool, RUN_KEY, json.dumps(
+        {"at": datetime.now(UTC).isoformat(), "kind": run_kind}))
     return receipts
+
+
+def compaction_receipts_summary(receipts: dict[str, Any]) -> tuple[int, str]:
+    """(bytes given back, the desk line's text), "" when nothing was rewritten or failed."""
+    done = [r for r in receipts.values() if r.get("action") == "rewritten"]
+    failed = [r for r in receipts.values() if r.get("action") == "failed"]
+    freed = int(sum(max(0, r["before_bytes"] - r["after_bytes"]) for r in done))
+    if not (done or failed):
+        return freed, ""
+    parts = [f"{r['table']} {r['before_bytes'] / GB:.1f} GB to {r['after_bytes'] / GB:.1f} GB"
+             for r in done]
+    parts += [f"{r['table']} failed ({r['reason']})" for r in failed]
+    return freed, "; ".join(parts)
+
+
+# --- the daytime fallback --------------------------------------------------------------------
+
+async def last_completed_run(pool: asyncpg.Pool) -> tuple[datetime, str] | None:
+    """When compaction last ran to the end (a run that skipped every table because none was
+    worth it counts: it looked) and of what kind, or None when nothing is on record. A call that
+    the night gate turned away at wake never reaches the marker. A box that has only the receipts
+    from before the marker existed reads their newest `at`."""
+    from src.orchestrator.monitor import get_cursor
+
+    raw = await get_cursor(pool, RUN_KEY)
+    try:
+        marker = json.loads(raw) if raw else None
+    except ValueError:
+        marker = None
+    if isinstance(marker, dict) and marker.get("at"):
+        try:
+            return datetime.fromisoformat(str(marker["at"])), str(marker.get("kind") or NIGHT_KIND)
+        except ValueError:
+            pass
+    stamps = []
+    for receipt in (await last_receipts(pool)).values():
+        with contextlib.suppress(ValueError, TypeError, AttributeError):
+            stamps.append(datetime.fromisoformat(str(receipt["at"])))
+    return (max(stamps), NIGHT_KIND) if stamps else None
+
+
+def missed_nights(last_run: datetime | None, now: datetime) -> int:
+    """How many nightly slots (03:00 local, window to 05:00) have come and gone, window and all,
+    since `last_run` without a run: each one a slot whose start is after the last completed run
+    and whose window has closed. 0 when nothing is on record (no history to judge from)."""
+    if last_run is None:
+        return 0
+    local_now = now.astimezone()
+    day = last_run.astimezone().replace(hour=NIGHT_START_HOUR, minute=0, second=0, microsecond=0)
+    missed = 0
+    while day <= local_now:
+        window_end = day.replace(hour=NIGHT_END_HOUR)
+        if day > last_run and window_end <= local_now:
+            missed += 1
+        day += timedelta(days=1)
+    return missed
+
+
+def decide_fallback(
+    *, enabled: bool, now: datetime, last_run: datetime | None, load: float | None,
+    max_load: float, chain_running: bool | None, brake_reason: str | None,
+    repack_ready_now: bool | None,
+) -> tuple[bool, str]:
+    """(run now, why or why not), pure. Cheapest checks first; `None` for a reading that could not
+    be taken (load, the chain units, pg_repack) fails closed: no run on a guess."""
+    if not enabled:
+        return False, "the daytime fallback is switched off"
+    hour = now.astimezone().hour
+    if not FALLBACK_START_HOUR <= hour < FALLBACK_END_HOUR:
+        return False, f"outside the daytime hours ({FALLBACK_START_HOUR:02d}:00 to " \
+                      f"{FALLBACK_END_HOUR:02d}:00)"
+    n = missed_nights(last_run, now)
+    if n < FALLBACK_MISSED_NIGHTS:
+        return False, f"{n} night(s) missed since the last run, {FALLBACK_MISSED_NIGHTS} needed"
+    if brake_reason:
+        return False, f"the disk/WAL brake is engaged ({brake_reason})"
+    if chain_running is None:
+        return False, "could not tell whether a gate chain is running"
+    if chain_running:
+        return False, "a gate chain is running (osiris-chain-*)"
+    if load is None:
+        return False, "could not read the load average"
+    if load >= max_load:
+        return False, f"the box is busy (1-minute load {load:.1f}, limit {max_load:.1f})"
+    if not repack_ready_now:
+        return False, "pg_repack is not ready, and a daytime run never uses VACUUM FULL"
+    return True, ""
+
+
+def read_load() -> float | None:
+    import os
+
+    try:
+        return float(os.getloadavg()[0])
+    except OSError:
+        return None
+
+
+async def gate_chain_running() -> bool | None:
+    """Whether any `osiris-chain-*` systemd unit is active (a gate or deploy chain is running),
+    or None when systemd could not be asked: the caller treats that as busy."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl", "--user", "list-units", "--no-legend", "--plain",
+            "--state=active,activating,reloading", "osiris-chain-*",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    except OSError:
+        return None
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+    except TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        return None
+    if proc.returncode != 0:
+        return None
+    return any(line.strip() for line in out.decode(errors="replace").splitlines())
+
+
+async def maybe_compact_by_day(
+    pool: asyncpg.Pool, *, enabled: bool, max_load: float, window_secs: float,
+    dsn: str | None = None, now: datetime | None = None,
+    load_fn: Callable[[], float | None] = read_load,
+    chain_fn: Callable[[], Awaitable[bool | None]] = gate_chain_running,
+    brake_fn: Callable[[asyncpg.Pool], Awaitable[str | None]] | None = None,
+    exec_fn: ExecFn | None = None,
+) -> dict[str, Any]:
+    """The daytime fallback, from a light cron: {"ran": bool, "why": str, "receipts": ...}. Runs
+    `compact_tonight` once, as a daytime fallback with pg_repack only, when `decide_fallback` says
+    so; the run marker it writes ends the condition, so a second call finds nothing missed."""
+    from src.orchestrator import disk_brake
+
+    moment = now or datetime.now().astimezone()
+    last = await last_completed_run(pool)
+    last_at = last[0] if last else None
+    if not enabled or missed_nights(last_at, moment) < FALLBACK_MISSED_NIGHTS:
+        # the two cheapest answers need no reading of the box
+        _ok, why = decide_fallback(
+            enabled=enabled, now=moment, last_run=last_at, load=None, max_load=max_load,
+            chain_running=False, brake_reason=None, repack_ready_now=False)
+        return {"ran": False, "why": why}
+    if brake_fn is not None:
+        brake_reason = await brake_fn(pool)
+    else:
+        brake_reason = await disk_brake.pause_reason(pool, "compaction_fallback")
+    chain = await chain_fn()
+    ready = await repack_ready(pool, exec_fn)
+    ok, why = decide_fallback(
+        enabled=enabled, now=moment, last_run=last_at, load=load_fn(), max_load=max_load,
+        chain_running=chain, brake_reason=brake_reason, repack_ready_now=ready)
+    if not ok:
+        return {"ran": False, "why": why}
+    receipts = await compact_tonight(
+        pool, window_secs=window_secs, dsn=dsn, run_kind=FALLBACK_KIND, repack_only=True,
+        exec_fn=exec_fn)
+    return {"ran": True, "why": "", "receipts": receipts}
 
 
 async def last_receipts(pool: asyncpg.Pool) -> dict[str, Any]:
