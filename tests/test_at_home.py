@@ -22,6 +22,11 @@ def _recipient(rid: str, kind: str, proved: str | None) -> dict[str, Any]:
             "verdict": "current: ok" if proved else "never proved: needs the operator's key"}
 
 
+CLEAN = {"only_files": 0, "only_bytes": 0, "checked_at": "2026-11-16"}
+ONLY = {"only_files": 2615, "only_bytes": 283_276_939_223, "oldest": "2026-08-25",
+        "newest": "2026-09-21", "what": "dumps, log files and a basebackup",
+        "checked_at": "2026-11-16"}
+
 GOOD_ENVELOPE = {"configured": True, "ok": True, "recipients": [
     _recipient("k1", "fido2-prf", _days(2)), _recipient("k2", "fido2-prf", _days(3)),
     _recipient("c1", "recovery-code", _days(4))]}
@@ -34,7 +39,8 @@ def sources(**over: Any) -> at_home.Sources:
                                    "first_successful_offload": _days(30)},
         drill_receipt=lambda u: {"last_passed_at": _days(1)},
         presence=lambda t: {"present": True, "reason": None, "dev": "enp0s31f6"},
-        plaintext_thread_open=lambda: True, stale_days=7)
+        plaintext_thread_open=lambda: True, stale_days=7,
+        plaintext_coverage=lambda: dict(CLEAN))
     base.update(over)
     return at_home.Sources(**base)
 
@@ -274,7 +280,7 @@ async def test_the_thread_status_query_reads_open_resolved_and_missing(actions: 
 
 
 async def test_the_real_sources_read_the_live_shapes(
-    actions: Any, monkeypatch: pytest.MonkeyPatch,
+    actions: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     from src.orchestrator.capture import open_thread
 
@@ -285,6 +291,7 @@ async def test_the_real_sources_read_the_live_shapes(
 
     monkeypatch.setattr(at_home_readers, "read_rollback_container", lambda: None)
     monkeypatch.setattr(at_home_readers, "read_scratch", lambda: [])
+    monkeypatch.setenv("OSIRIS_AT_HOME_COVERAGE_FILE", str(tmp_path / "none.json"))
     src = await at_home.real_sources(actions.pool, now=NOW)
     result = at_home.checklist(src, now=NOW)
 
@@ -394,3 +401,40 @@ def test_the_header_counts_waiting_and_blocked_apart() -> None:
                                now=NOW)
 
     assert at_home.render(result)[0] == "3 waiting, 1 blocked on you, cheapest and safest first:"
+
+
+def test_the_plaintext_copy_stays_blocked_while_it_holds_history_restic_lacks() -> None:
+    held = by_key(at_home.checklist(sources(plaintext_coverage=lambda: dict(ONLY)), now=NOW))
+    item = held["plaintext_copy"]
+
+    assert item["status"] == at_home.BLOCKED  # even though the NAS offload and its test passed
+    assert "about 280 GB" in item["why"] and "does NOT have" in item["why"]
+    assert "2026-08-25 to 2026-09-21" in item["why"]
+    assert "keep it, move it into the backup first, or delete it knowing that history is lost" in (
+        item["why"])
+    assert item["command"] is None
+
+
+def test_it_is_blocked_when_it_was_never_checked_and_waits_only_on_an_empty_result() -> None:
+    never = by_key(at_home.checklist(sources(plaintext_coverage=lambda: None), now=NOW))
+    clear = by_key(at_home.checklist(sources(), now=NOW))
+
+    assert never["plaintext_copy"]["status"] == at_home.BLOCKED
+    assert "nobody has checked" in never["plaintext_copy"]["why"]
+    assert clear["plaintext_copy"]["status"] == at_home.WAITING
+    assert "this copy also in the restic backup" in clear["plaintext_copy"]["why"]
+
+
+def test_the_recorded_check_round_trips_and_an_unreadable_one_never_reads_as_covered(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("OSIRIS_AT_HOME_COVERAGE_FILE", str(tmp_path / "sub" / "c.json"))
+    assert at_home.read_coverage() is None
+
+    at_home.write_coverage(only_files=49, only_bytes=240_000_000_000, oldest="2026-08-25",
+                           newest="2026-09-21", what="dumps", checked_at="2026-11-16",
+                           method="path and size against every snapshot")
+    assert at_home.read_coverage()["only_files"] == 49  # type: ignore[index]
+    (tmp_path / "sub" / "c.json").write_text("{not json")
+    assert at_home.read_coverage() is None
+    (tmp_path / "sub" / "c.json").write_text('{"checked_at": "x"}')
+    assert at_home.read_coverage() is None  # no verdict inside: not "covered"

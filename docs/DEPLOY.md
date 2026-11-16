@@ -27,8 +27,10 @@ a week if nothing moves); a timer checks every morning at 09:40. Today it shows:
 4. `osiris nas-first-offload --name nas`: the first full backup to the NAS. It needs the home
    network; `osiris nas-first-offload --check` first is a safe, read-only look. It never touches the
    old plaintext copy on the NAS.
-5. The old plaintext NAS copy (about 162 GB) can go once item 4 and its restore test pass. Waits for
-   your word; nothing deletes it by itself.
+5. The old plaintext NAS copy (about 280 GB). Do not remove it yet: it holds dumps, log files and a
+   basebackup from Aug 25 to Sep 21 that the restic backup does not have, so deleting it loses that
+   history. The list shows this as blocked until a later check finds nothing left only in the copy.
+   Your choice: keep it, move it into the backup first, or delete it knowing that history is lost.
 6. The stopped database container `osiris-pg-pre-repack` (kept as a way back from the 11-12 swap).
    Remove only the container (`docker rm osiris-pg-pre-repack`, without `-v`), never the volume:
    it points at the live database's data.
