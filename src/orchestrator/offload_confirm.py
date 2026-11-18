@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -153,3 +153,44 @@ def describe_held(state: dict[str, Any] | None) -> str | None:
     return (f"{state['files']} backup file(s) ({gb:.1f} GB) are being kept past their normal "
             f"retention because the NAS has not confirmed them" +
             (f" (oldest from {since})" if since else "") + f".{over}")
+
+
+# ---- fewer dumps while away ----------------------------------------------------------------------
+
+AWAY_AFTER = timedelta(hours=24)
+
+
+def last_offload_end(path: Path | None = None) -> datetime | None:
+    """When the newest successful offload finished, or None when that cannot be told (no record, an
+    unreadable one, or none recorded): the caller then behaves as if the NAS were up to date."""
+    try:
+        body = json.loads((path or receipts_path()).read_text())
+    except (OSError, ValueError):
+        return None
+    ends: list[datetime] = []
+    for entry in body.values() if isinstance(body, dict) else []:
+        value = (entry.get("last_backup_end") or entry.get("last_successful_offload")) \
+            if isinstance(entry, dict) else None
+        try:
+            parsed = datetime.fromisoformat(str(value)) if value else None
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            ends.append(parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC))
+    return max(ends) if ends else None
+
+
+def take_dump(last_end: datetime | None, newest_dump: datetime | None, now: datetime,
+              ) -> tuple[bool, str]:
+    """Whether the backup run should take a database dump now. While the NAS is more than 24 hours
+    behind, at most one dump a day (an uncompressed dump is about 7.7 GB and every one is held
+    locally until the NAS confirms it). WAL and base backups are not affected by this. Anything
+    that cannot be told (no offload record, no dump yet) takes the dump: never toward skipping."""
+    if last_end is None:
+        return True, "no offload record, taking the dump"
+    if now - last_end <= AWAY_AFTER:
+        return True, "the NAS is up to date"
+    if newest_dump is None or now - newest_dump >= AWAY_AFTER:
+        return True, "away from the NAS, and no dump in the last 24 hours"
+    return False, ("the NAS is more than 24 hours behind and a dump was taken in the last 24 "
+                   "hours: skipping this one")
