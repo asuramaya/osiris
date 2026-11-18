@@ -87,8 +87,9 @@ def test_backups_open_with_one_history_line_and_hold_a_slot_for_past_moments() -
     assert body.index('id="settings-backup-line"') < body.index('id="settings-restic-credential"')
     assert 'id="settings-past-moment"' in body and "Browse a past moment" in body
     text = _CONSOLE_JS.split("function backupHistoryText(h) {", 1)[1][:900]
-    for field in ("last_backup_at", "oldest_restorable_at", "gaps"):
+    for field in ("h.last_backup", "h.oldest_restorable", "h.gaps", "h.known"):
         assert field in text
+    assert "status.restore_points" in _CONSOLE_JS
     waiting = _CONSOLE_JS.split("function renderBackupHistory(h) {", 1)[1][:900]
     assert "h.overdue" in waiting and "settings-waiting-backup" in waiting
 

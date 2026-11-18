@@ -1692,19 +1692,23 @@ async function renderBackupStatusSection() {
   }
   if (status.error) { out.textContent = status.error; renderBackupHistory(null); return; }
   out.innerHTML = renderBackupStatusHtml(status);
-  renderBackupHistory(status.history || null);
+  renderBackupHistory(status.restore_points || null);
 }
 // One plain line of backup history: last backup, oldest point that can be restored, any gaps.
-// It reads status.history when the backup status carries it and says nothing when it does not.
+// It reads status.restore_points (the same object GET /backup/restore-points returns) and says
+// nothing when it is absent. Before the restore map has ever been built (known false) only the
+// last backup is shown.
 function backupHistoryText(h) {
   if (!h) return '';
   var parts = [];
-  parts.push('Last backup: ' + (h.last_backup_at ? fmtWhen(h.last_backup_at) : 'never') + '.');
-  parts.push('Oldest point you can restore: ' + (h.oldest_restorable_at ? fmtWhen(h.oldest_restorable_at) : 'none yet') + '.');
+  parts.push('Last backup: ' + (h.last_backup ? fmtWhen(h.last_backup) : 'never') + '.');
+  if (h.known === false) return parts.join(' ') + (h.text ? ' ' + h.text : '');
+  parts.push('Oldest point you can restore: ' + (h.oldest_restorable ? fmtWhen(h.oldest_restorable) : 'none yet') + '.');
   var gaps = h.gaps || [];
   parts.push(gaps.length
     ? 'Gaps: ' + gaps.map(function(g) { return fmtWhen(g.from) + ' to ' + fmtWhen(g.to); }).join('; ') + '.'
     : 'No gaps.');
+  if (h.stale) parts.push('This list is more than a week old.');
   return parts.join(' ');
 }
 function renderBackupHistory(h) {
