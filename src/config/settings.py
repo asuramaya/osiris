@@ -579,6 +579,10 @@ class Settings(BaseSettings):
     osiris_offload_stale_days: int = 7
     # gigabytes of WAL older than the newest verified base backup before readiness flags it
     osiris_wal_backlog_gb: int = 50
+    # how many weeks of weekly snapshots the NAS repository keeps beyond the daily ones, and the
+    # size (GB) past which that is halved (0 = no size limit)
+    osiris_thin_weeks: int = 26
+    osiris_thin_size_ceiling_gb: int = 0
     # Layout knobs (product convention: every action is configurable): the heartbeat's own per-tick
     # batch size and cron cadence, both previously bare module constants. batch_size takes
     # effect on the next tick and is genuinely table-driven (the layout batch job reads it

@@ -123,6 +123,9 @@ NO_MCP_EQUIVALENT = {
     "at-home": "a read-only checklist of jobs that wait on the operator being physically present "
         "or giving their word; its desk line is what reaches an agent, and it is not an "
         "agent-callable verb.",
+    "repo-thin": "an operator act on the real NAS repository (forget and prune are not undoable) "
+        "that waits for the home network, a passed restore test and a reviewed plan id; its "
+        "result reaches agents through backup-status, and it is not an agent-callable verb.",
     "nas-first-offload": "an operator act that uploads the vault to real infrastructure over "
         "the home LAN and runs a real restore test: same devops class as offload-runner, meant "
         "for the operator at home, never an agent-callable verb.",

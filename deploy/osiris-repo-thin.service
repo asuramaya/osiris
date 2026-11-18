@@ -1,0 +1,11 @@
+[Unit]
+Description=Osiris repo thinning (Time Machine style; waits for a hand-applied first plan, home network only)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/osiris
+Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris?application_name=osiris-repo-thin
+Environment=REDIS_URL=redis://127.0.0.1:6396/0
+# forget then prune, at most 20 GB repacked per run; runs again next week if there is more
+TimeoutStartSec=6h
+ExecStart=%h/code/osiris/.venv/bin/python -m src.cli repo-thin --scheduled

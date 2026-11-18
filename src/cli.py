@@ -21,6 +21,10 @@ rather than re-deriving it:
                                      target, meant as osiris-offload.timer's own ExecStart
   osiris at-home [--json]            what is waiting only on you being there, cheapest and
                                      safest first, with the exact command for each
+  osiris repo-thin [--apply ID]      Time Machine style thinning of the NAS repository: shows
+                                     what would be forgotten and how much it frees; --apply
+                                     does one reviewed plan. --refresh-points rebuilds the
+                                     restore map that backup-status shows
   osiris nas-first-offload [--check]  the NAS's first offload for the day you are home on the
                                      LAN: route, repository, offload, snapshot, restore test,
                                      recovery file; one plain line per step
@@ -1374,6 +1378,44 @@ async def cmd_at_home(
         for line in at_home.render(result):
             print(line)
     return 0
+
+
+async def cmd_repo_thin(
+    *, apply_id: str | None = None, scheduled: bool = False, refresh_points: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris repo-thin: Time Machine style thinning of the NAS backup repository. With no flag it
+    only looks: it prints what the policy would forget and about how much space that frees, and
+    changes nothing. `--apply ID` removes exactly the snapshots of that reviewed plan, then prunes.
+    `--scheduled` is the weekly timer's run (it does nothing until a plan has been applied by
+    hand). `--refresh-points` rebuilds the saved restore map. Home network only."""
+    from src.orchestrator import repo_thinning
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=2,
+                                     application_name="osiris-cli:repo-thin")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris repo-thin: could not reach postgres: {exc}", file=sys.stderr)
+            return 1
+    try:
+        return await repo_thinning.command(
+            pool=pool, apply_id=apply_id, scheduled=scheduled, refresh_only=refresh_points)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        from src.orchestrator import restic_locks
+
+        restic_locks.stop_all_running(grace=90)
+        raise
+    finally:
+        if owns_pool:
+            await pool.close()
 
 
 async def cmd_nas_first_offload(
@@ -8500,7 +8542,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         declare-machine-identity, correct-agent-house (deprecated alias
                         for correct-agent-project, one release only)
   operate               deploy, migrate, seed, soul-key, restic-key, offload-runner,
-                        nas-first-offload, envelope-drill, at-home, bootstrap, retention,
+                        nas-first-offload, envelope-drill, at-home, repo-thin, bootstrap, retention,
                         rematerialize, rebuild-transcript, fleet-reconcile, fleet-prune,
                         backfill, graph-migrate, layout
 
@@ -8847,6 +8889,24 @@ def _build_parser() -> argparse.ArgumentParser:
                                 "(told once per state; what the daily timer runs)")
     p_at_home.add_argument("--json", action="store_true", dest="as_json",
                            help="machine-readable: one compact JSON line")
+
+    p_repo_thin = sub.add_parser("repo-thin", description=_d(
+        "Time Machine style thinning of the NAS backup repository: every snapshot for a day, "
+        "one an hour for the next day, one a day for 30 days, one a week after that (the "
+        "weeks are a setting). With no flag it only looks: it shows what would be forgotten "
+        "and about how much space that frees. Needs the home network, a passed restore test "
+        "and a recent good offload."),
+        epilog="example: osiris repo-thin\n"
+               "example: osiris repo-thin --apply 1a2b3c4d5e6f")
+    p_repo_thin.add_argument("--apply", default=None, dest="apply_id", metavar="PLAN",
+                             help="forget exactly the snapshots of this reviewed plan, then "
+                                  "prune (at most 20 GB repacked per run; run again to continue)")
+    p_repo_thin.add_argument("--scheduled", action="store_true",
+                             help="the weekly timer's run: does nothing until a plan has been "
+                                  "applied by hand once")
+    p_repo_thin.add_argument("--refresh-points", action="store_true", dest="refresh_points",
+                             help="rebuild the saved restore map (what can be restored, from "
+                                  "when, and the gaps) that backup-status shows")
 
     p_nas_first = sub.add_parser("nas-first-offload", description=_d(
         "The NAS's first offload, as one command for the day you are home on the LAN: the "
@@ -10464,6 +10524,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "at-home":
         return asyncio.run(cmd_at_home(  # unbounded-wait-ok: asyncio.run of a CLI command
             as_json=args.as_json, notify=args.notify))
+    if args.command == "repo-thin":
+        return asyncio.run(cmd_repo_thin(  # unbounded-wait-ok: asyncio.run of a CLI command
+            apply_id=args.apply_id, scheduled=args.scheduled,
+            refresh_points=args.refresh_points))
     if args.command == "nas-first-offload":
         return asyncio.run(cmd_nas_first_offload(  # unbounded-wait-ok: asyncio.run of a CLI command
             name=args.name, check_only=args.check_only))

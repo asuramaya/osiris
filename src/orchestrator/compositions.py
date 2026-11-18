@@ -5466,6 +5466,14 @@ async def _fn_backup_status(
     except Exception as exc:  # noqa: BLE001 - one section never blanks the panel
         at_home_out = {"error": f"at-home list unavailable: {type(exc).__name__}"}
 
+    # WHAT CAN BE RESTORED, AND FROM WHEN (osiris repo-thin has the map; this never touches the NAS)
+    try:
+        from src.orchestrator import restore_points
+
+        points_out: dict[str, Any] = await restore_points.live_status(pool, now=now)
+    except Exception as exc:  # noqa: BLE001 - one section never blanks the panel
+        points_out = {"error": f"restore points unavailable: {type(exc).__name__}"}
+
     # BACKUP FILES THE LOCAL PRUNE IS KEEPING BECAUSE THE NAS HAS NOT CONFIRMED THEM (read-only)
     try:
         from src.orchestrator import offload_confirm
@@ -5509,6 +5517,7 @@ async def _fn_backup_status(
         "envelope": envelope_out,
         "at_home": at_home_out,
         "prune_hold": prune_hold,
+        "restore_points": points_out,
         "offbox": offbox_section,
     }
 

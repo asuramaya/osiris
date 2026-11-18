@@ -291,6 +291,15 @@ _BACKUP_SETTINGS: tuple[SettingSpec, ...] = (
     SettingSpec("backup.wal_backlog_gb", "int", 50, effect="next_tick",
                consequence="low", requires_because=False,
                env_field="osiris_wal_backlog_gb"),
+    # How many weeks of weekly snapshots the NAS repository keeps beyond the daily ones (the
+    # Time Machine style thinning, `osiris repo-thin`), and the size in GB past which that count is
+    # halved; 0 turns the size limit off.
+    SettingSpec("backup.thin_weeks", "int", 26, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_thin_weeks"),
+    SettingSpec("backup.thin_size_ceiling_gb", "int", 0, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_thin_size_ceiling_gb"),
     SettingSpec("backup.vault_path", "path", None, effect="next_deploy",
                authority="operator_or_ruling", requires_because=True,
                consequence="high", write_name="backup_settings"),
