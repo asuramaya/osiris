@@ -32,6 +32,7 @@ def _client(actions: Actions, host: str = "127.0.0.1") -> httpx.AsyncClient:
 async def client(actions: Actions, tmp_path: Path,
                  monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[httpx.AsyncClient]:
     monkeypatch.setenv("OSIRIS_TIME_MACHINE_STATE", str(tmp_path / "rec.json"))
+    monkeypatch.setenv("OSIRIS_RESTORE_POINTS_FILE", str(tmp_path / "no-restore-points.json"))
     monkeypatch.setattr(tm, "VAULT_DIR", tmp_path / "vault")
     async with _client(actions) as c:
         yield c

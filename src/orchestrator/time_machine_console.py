@@ -51,13 +51,23 @@ async def _browse_pool() -> tuple[asyncpg.Pool | None, dict[str, Any] | None]:
 
 
 def _moment_dict(m: tm.Moment) -> dict[str, Any]:
-    return {"id": m.id, "kind": m.kind, "label": m.label, "when": m.when,
-            "size_bytes": m.size_bytes}
+    out: dict[str, Any] = {"id": m.id, "kind": m.kind, "label": m.label, "when": m.when,
+                           "size_bytes": m.size_bytes}
+    if m.at:
+        out["at"] = m.at
+    return out
 
 
 async def moments() -> dict[str, Any]:
+    from src.orchestrator import time_machine_pitr as pitr
+
     found = await asyncio.to_thread(tm.list_moments)
-    return {"moments": [_moment_dict(m) for m in found]}
+    from src.orchestrator import time_machine_restic as restic
+
+    windows = await asyncio.to_thread(pitr.pitr_moments)
+    nas = await asyncio.to_thread(restic.restic_moments)
+    items = [{**_moment_dict(m), "available": True} for m in found] + windows + nas
+    return {"moments": sorted(items, key=lambda i: str(i["when"]), reverse=True)}
 
 
 async def status() -> dict[str, Any]:
@@ -67,22 +77,34 @@ async def status() -> dict[str, Any]:
     return {"throwaway": st}
 
 
-async def start(moment_id: object) -> dict[str, Any]:
+async def start(moment_id: object, at: object = None) -> dict[str, Any]:
     """Begin opening a moment. Checks what can be checked now (the id, one at a time, disk),
     then hands the two-minute restore to a detached process; the console polls `status`."""
     if not isinstance(moment_id, str) or not moment_id.strip():
         return {"error": "Say which moment to open."}
     try:
-        moment = await asyncio.to_thread(tm.find_moment, moment_id.strip())
+        if at is not None and not isinstance(at, str):
+            return {"error": "The time to open must be text such as 2026-11-17T09:30:00Z."}
+        moment = await asyncio.to_thread(
+            lambda: tm.find_moment(moment_id.strip(), at=at or None))
+        if moment.kind == "restic":
+            from src.orchestrator import time_machine_restic as restic
+
+            item = next((i for i in await asyncio.to_thread(restic.restic_moments)
+                         if i["id"] == moment.id), None)
+            if item is not None and not item["available"]:
+                return {"error": f"{item['reason']} That backup is only on the NAS, so it can "
+                                 "only be opened at home."}
         rec = await asyncio.to_thread(tm.read_record)
         if rec is not None and rec.state != "failed":
             return {"error": f"A past moment is already {rec.state}. Tear it down first."}
         problem = tm.disk_problem(
             moment.size_bytes, await asyncio.to_thread(
-                lambda: tm.free_bytes(tm.docker_root())))
+                lambda: tm.free_bytes(tm.docker_root())),
+            factor={"pitr": tm.PITR_DISK_FACTOR, "restic": 4.0}.get(moment.kind))
         if problem:
             return {"error": problem[0].upper() + problem[1:] + "."}
-        pid = await asyncio.to_thread(tm.spawn_run, moment.id)
+        pid = await asyncio.to_thread(lambda: tm.spawn_run(moment.id, at=moment.at))
     except tm.TimeMachineError as exc:
         return {"error": str(exc)}
     return {"started": True, "moment": _moment_dict(moment), "pid": pid}

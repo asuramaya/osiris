@@ -1342,14 +1342,44 @@ async def cmd_restic_key(
 
 # --- offload-runner ------------------------------------------------------------------------
 
-def cmd_time_machine(action: str, moment: str | None) -> int:
+async def cmd_time_machine_refresh() -> int:
+    """osiris time-machine refresh: rebuild the saved list of dumps held on the NAS."""
+    from src.config.dev_env import apply_dev_fallback
+    from src.config.settings import get_settings
+    from src.db.pool import create_pool
+    from src.orchestrator import time_machine_restic as restic
+
+    apply_dev_fallback()
+    try:
+        pool = await create_pool(get_settings().database_url, min_size=1, max_size=2,
+                                 application_name="osiris-cli:time-machine")
+    except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+        print(f"osiris time-machine: could not reach postgres: {exc}", file=sys.stderr)
+        return 1
+    try:
+        return await restic.refresh_command(pool=pool)
+    finally:
+        await pool.close()
+
+
+def cmd_time_machine(action: str, moment: str | None, at: str | None = None) -> int:
     """osiris time-machine <moments|status|teardown|run>: the command behind the console's past-
     moment panel. No database needed: it works on the throwaway's own record and containers."""
     from src.orchestrator import time_machine as tm
 
     if action == "moments":
+        from src.orchestrator import time_machine_pitr as pitr
+
         for m in tm.list_moments():
             print(f"{m.id}  {m.label}  {m.size_bytes / 2**30:.1f} GiB")
+        from src.orchestrator import time_machine_restic as restic
+
+        for item in pitr.pitr_moments():
+            note = "" if item["available"] else f"  (not available: {item['reason']})"
+            print(f"{item['id']}  {item['label']}  pick a time with --at{note}")
+        for item in restic.restic_moments():
+            note = "" if item["available"] else f"  (not available: {item['reason']})"
+            print(f"{item['id']}  {item['label']}  {item['size_bytes'] / 2**30:.1f} GiB{note}")
         return 0
     if action == "status":
         st = tm.status()
@@ -1363,7 +1393,7 @@ def cmd_time_machine(action: str, moment: str | None) -> int:
     if not moment:
         print("osiris time-machine run: say which moment (see `osiris time-machine moments`)")
         return 2
-    return tm.run_detached(moment)
+    return tm.run_detached(moment, at=at)
 
 
 async def cmd_at_home(
@@ -8907,12 +8937,17 @@ def _build_parser() -> argparse.ArgumentParser:
     p_time_machine = sub.add_parser("time-machine", description=_d(
         "Open a past moment (a vault dump) in a throwaway database, so the console can browse it "
         "and restore one item. `moments` lists what can be opened, `status` shows what is open, "
-        "`teardown` removes it, `run <moment id>` opens one (the console starts this for you)."),
+        "`teardown` removes it, `run <moment id>` opens one (the console starts this for you), "
+        "`refresh` rebuilds the list of backups held on the NAS (home network only)."),
         epilog="example: osiris time-machine moments\n"
                "example: osiris time-machine run osiris-20261115-201856")
-    p_time_machine.add_argument("action", choices=["moments", "status", "teardown", "run"])
+    p_time_machine.add_argument(
+        "action", choices=["moments", "status", "teardown", "run", "refresh"])
     p_time_machine.add_argument("moment", nargs="?", default=None,
                                 help="run only: a moment id from `moments`")
+    p_time_machine.add_argument("--at", default=None,
+                                help="run only, for a point-in-time moment: the time to open, "
+                                     "e.g. 2026-11-17T09:30:00Z")
     p_at_home = sub.add_parser("at-home", description=_d(
         "What is waiting only on you being there (on the home network, a security key in "
         "hand, or your word), cheapest and safest first, each with its live status and the "
@@ -10558,7 +10593,9 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_restic_key(
             args.action, path=args.path, backend=args.backend, as_json=args.as_json))
     if args.command == "time-machine":
-        return cmd_time_machine(args.action, args.moment)
+        if args.action == "refresh":
+            return asyncio.run(cmd_time_machine_refresh())  # unbounded-wait-ok: CLI command
+        return cmd_time_machine(args.action, args.moment, args.at)
     if args.command == "at-home":
         return asyncio.run(cmd_at_home(  # unbounded-wait-ok: asyncio.run of a CLI command
             as_json=args.as_json, notify=args.notify))
