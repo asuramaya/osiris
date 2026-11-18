@@ -1,26 +1,32 @@
-"""Time Machine style thinning of the NAS backup repository.
+"""Time Machine style thinning of the NAS backup repository, under the operator's rules.
 
-Every offload makes one restic snapshot of the vault, about every 15 minutes while the box is
-home, and nothing ever removed one: 358 snapshots and 959 GB. This keeps what a person wants from
-a backup history and lets the rest go:
+THE RULES (operator decision, 2026-11-18): WAL and the base backups a rewind window needs are NEVER
+thinned, so any moment of the recorded history can still be rewound to. Only database DUMPS thin:
+one per day (the newest of each day) for 30 days, one per week after that, kept for ever unless
+`backup.thin_weeks` caps it. Snapshots tagged `history-import` are kept for ever.
 
-  - every snapshot for the last 24 hours
-  - one per hour for the 24 hours after that
-  - one per day for 30 days
-  - one per week beyond that, for a number of weeks you set (`backup.thin_weeks`, default 26), and
-    fewer weeks when the repository is over its size limit (`backup.thin_size_ceiling_gb`)
-  (the windows are calendar time back from the newest snapshot, not "the last N days that have a
-  backup", which would be the whole history for a laptop that is mostly away)
-  - the 3 newest snapshots always, and every snapshot tagged `history-import` forever
+Every offload makes a snapshot of the whole vault, so a snapshot carries WAL, base backups and
+dumps together, and restic can only forget whole snapshots. Two things follow:
 
-Each snapshot holds the whole vault as it was, so a snapshot that is kept still holds the newest
-verified base backup and the WAL after it: the newest snapshot is always kept, and the check
-refuses a plan that would not keep it.
+  - DUMPS are thinned inside the snapshots by `restic rewrite --exclude-file`, naming exact dump
+    files (each must look like osiris-YYYYMMDD-HHMMSS.dump or .sql and be a dump of the live
+    vault; a pattern, WAL or a base backup is refused). Old mixed snapshots need no re-split.
+  - SNAPSHOT COUNT is thinned by forgetting whole snapshots, but only behind a COVERAGE guard: a
+    snapshot goes only if every WAL segment, base backup and kept dump still lives in at least one
+    kept snapshot (read from each file's first and last snapshot). The plan keeps the tier snapshots
+    (all for 24 hours, hourly for 24 hours after, daily for 30 days, weekly beyond) plus just enough
+    more to cover everything, so a plain tier forget (which would lose WAL that only the forgotten
+    snapshots hold) can never be applied.
+
+The tier windows are calendar time back from the newest snapshot, not "the last N days that have a
+backup", which would be the whole history for a laptop that is mostly away.
+
+Then `prune` gives back what nothing refers to (this includes the packs left behind by interrupted
+uploads, which are most of the unused space).
 
 Nothing is removed by surprise:
-  - `plan` only looks (restic's own dry run) and reports what would go and about how much space it
-    frees, measured by restic from the blobs the kept snapshots still need.
-  - `apply` removes exactly the snapshots of one reviewed plan (by its id), then runs prune.
+  - `plan` only looks (restic's own dry runs) and reports what would go and about how much it frees.
+  - `apply` does exactly one reviewed plan (by its id): forget, rewrite, prune.
   - the scheduled run does nothing until one plan has been applied by hand.
   - every run needs the home network (never Tailscale), a passed restore test, a recent good
     offload, and the offload lock, so it never meets a backup in the repository.
@@ -29,9 +35,12 @@ Nothing is removed by surprise:
 Never raises to the caller: every refusal is a plain reason."""
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 import os
+import re
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -40,13 +49,13 @@ from typing import Any
 
 KEEP_TAGS = ("history-import",)
 KEEP_LAST = 3
-# CALENDAR windows, measured back from the newest snapshot: `--keep-daily 30` would mean the last
-# 30 days that HAVE a snapshot, which is the whole history for a laptop that is mostly away
+# CALENDAR windows, measured back from the newest snapshot
 KEEP_WITHIN = "24h"
 KEEP_HOURLY_WITHIN = "48h"      # one an hour for the 24 hours after the first 24
 KEEP_DAILY_WITHIN = "30d"
-DEFAULT_WEEKS = 26
-MIN_WEEKS = 4
+KEEP_WEEKLY_WITHIN = "36500d"   # weekly snapshots are kept for ever
+DUMP_DAILY_DAYS = 30
+DUMP_SHARE_FREED = 0.86         # consecutive dumps share 13-15% of their chunks (measured)
 MAX_REPACK = "20G"
 MAX_UNUSED = "5%"
 PLAN_MAX_AGE = timedelta(hours=24)
@@ -55,33 +64,21 @@ OFFLOAD_MAX_AGE = timedelta(days=3)
 MAX_REMOVE_SHARE = 0.9          # never remove more than this share of all snapshots in one plan
 STATE_ENV = "OSIRIS_REPO_THINNING_FILE"
 _DEFAULT_STATE = "~/.local/state/osiris/repo_thinning.json"
+_DUMP_NAME = re.compile(r"^osiris-\d{8}-\d{6}\.(dump|sql)$")
 
 
 @dataclass(frozen=True)
 class Policy:
-    weeks: int = DEFAULT_WEEKS
     keep_tags: tuple[str, ...] = KEEP_TAGS
 
     def args(self) -> list[str]:
         out = ["--keep-last", str(KEEP_LAST), "--keep-within", KEEP_WITHIN,
                "--keep-within-hourly", KEEP_HOURLY_WITHIN,
                "--keep-within-daily", KEEP_DAILY_WITHIN,
-               "--keep-within-weekly", f"{self.weeks * 7}d"]
+               "--keep-within-weekly", KEEP_WEEKLY_WITHIN]
         for tag in self.keep_tags:
             out += ["--keep-tag", tag]
         return out
-
-
-def weeks_for(weeks: int, repo_bytes: int | None, ceiling_gb: int) -> tuple[int, str | None]:
-    """The weekly count to use: the setting, or half of it (never under `MIN_WEEKS`) when the
-    repository is over its size limit. Returns (weeks, why it was cut or None)."""
-    weeks = max(MIN_WEEKS, int(weeks))
-    if ceiling_gb and repo_bytes and repo_bytes > ceiling_gb * 10**9:
-        cut = max(MIN_WEEKS, weeks // 2)
-        if cut < weeks:
-            return cut, (f"the repository is {repo_bytes / 1e9:.0f} GB, over its {ceiling_gb} GB "
-                         f"limit, so weekly snapshots are kept for {cut} weeks instead of {weeks}")
-    return weeks, None
 
 
 @dataclass
@@ -94,17 +91,23 @@ class Plan:
     total: int
     oldest_keep: str | None
     newest_removed: str | None
-    freed_bytes: int | None = None
+    drop_dumps: list[str] = field(default_factory=list)       # exact dump file names to drop
+    drop_paths: list[str] = field(default_factory=list)       # their paths inside the snapshots
+    rewrite: list[str] = field(default_factory=list)          # kept snapshots that hold them
+    dump_bytes: int = 0                                       # logical size of the dropped dumps
+    freed_bytes: int | None = None                            # estimate for the dump thinning
+    prune_freed_bytes: int | None = None                      # estimate for the prune
     repo_bytes: int | None = None
-    weeks_note: str | None = None
+    uncovered: int = 0
     problems: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
 
 
-def fingerprint(remove_ids: list[str], policy_args: list[str]) -> str:
-    raw = json.dumps([sorted(remove_ids), policy_args])
+def fingerprint(remove_ids: list[str], policy_args: list[str],
+                drop: list[str] | None = None) -> str:
+    raw = json.dumps([sorted(remove_ids), policy_args, sorted(drop or [])])
     return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
 
@@ -120,37 +123,152 @@ def parse_forget(stdout: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]
     return kept, removed
 
 
-def safety_problems(snapshots: list[dict[str, Any]], kept: list[dict[str, Any]],
-                    removed: list[dict[str, Any]]) -> list[str]:
+# ---- what each file's life looks like, and the coverage guard ------------------------------------
+
+
+@dataclass
+class Life:
+    kind: str
+    size: int
+    mtime: str
+    first: str     # time of the oldest snapshot holding it
+    last: str      # time of the newest
+    path: str
+
+
+def file_lifetimes(run: Callable[..., Any], snapshots: list[dict[str, Any]], *,
+                   chunk: int = 20) -> dict[str, Life]:
+    """For every restore-relevant file (WAL, base backup and its marker, live-vault dump): its size
+    and which snapshots hold it (first and last), read a few snapshots at a time."""
+    from src.orchestrator import restore_points
+
+    when = {str(s["id"]): str(s.get("time")) for s in snapshots}
+    lives: dict[str, Life] = {}
+    ids = list(when)
+    for i in range(0, len(ids), chunk):
+        args = ["find", "--json", "--no-lock"]
+        for sid in ids[i:i + chunk]:
+            args += ["--snapshot", sid]
+        proc = run([*args, "*"], timeout=1800)
+        if proc.returncode != 0:
+            raise RuntimeError("restic find failed: "
+                               + ((proc.stderr or "").strip().splitlines()[-1:] or [""])[0][:300])
+        for snap in json.loads(proc.stdout or "[]"):
+            at = when.get(str(snap.get("snapshot")), "")
+            for m in snap.get("matches") or []:
+                if m.get("type") != "file":
+                    continue
+                got = restore_points.classify(str(m.get("path")))
+                if not got:
+                    continue
+                kind, name = got
+                cur = lives.get(name)
+                if cur is None:
+                    lives[name] = Life(kind, int(m.get("size") or 0), str(m.get("mtime")), at, at,
+                                       str(m.get("path")))
+                else:
+                    cur.first, cur.last = min(cur.first, at), max(cur.last, at)
+    return lives
+
+
+def dump_drop_list(lives: dict[str, Life], *, now: datetime,
+                   weeks: int = 0) -> list[str]:
+    """The dump files the policy lets go: of each calendar day within 30 days all but the newest,
+    and beyond that all but the newest of each week (and, when `weeks` is set, every dump older
+    than that many weeks). Only real dump names ever appear here. Pure."""
+    def when(life: Life) -> datetime:
+        parsed = datetime.fromisoformat(life.mtime)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+    dumps = sorted((when(v), n) for n, v in lives.items() if v.kind == "dump"
+                   and _DUMP_NAME.match(n))
+    keep: dict[Any, str] = {}
+    for t, name in dumps:
+        age = now - t
+        if weeks and age > timedelta(weeks=weeks):
+            continue
+        key: Any = ("d", t.astimezone().date()) if age <= timedelta(days=DUMP_DAILY_DAYS) \
+            else ("w", t.isocalendar()[:2])
+        keep[key] = name       # sorted ascending, so the newest of the day or week wins
+    kept = set(keep.values())
+    return [n for _, n in dumps if n not in kept]
+
+
+def cover_snapshots(snapshots: list[dict[str, Any]], kept_ids: set[str],
+                    intervals: list[tuple[str, str]]) -> tuple[set[str], int]:
+    """Add to `kept_ids` just enough snapshots that every (first, last) interval contains the time
+    of a kept snapshot. Returns (the new kept ids, how many intervals could not be covered)."""
+    by_time = sorted((str(s.get("time")), str(s["id"])) for s in snapshots)
+    times = [t for t, _ in by_time]
+    kept = set(kept_ids)
+    kept_times = sorted(t for t, i in by_time if i in kept)
+    lost = 0
+    for first, last in sorted(intervals, key=lambda x: x[1]):
+        j = bisect.bisect_left(kept_times, first)
+        if j < len(kept_times) and kept_times[j] <= last:
+            continue
+        k = bisect.bisect_right(times, last) - 1
+        if k < 0 or times[k] < first:
+            lost += 1
+            continue
+        kept.add(by_time[k][1])
+        bisect.insort(kept_times, times[k])
+    return kept, lost
+
+
+def safety_problems(snapshots: list[dict[str, Any]], kept_ids: set[str],
+                    removed: list[dict[str, Any]], drop: list[str], uncovered: int) -> list[str]:
     """Reasons this plan must not run. Pure."""
     out: list[str] = []
     if not snapshots:
         return ["the repository has no snapshots"]
     newest = max(snapshots, key=lambda s: str(s.get("time")))
-    if newest["id"] not in {s["id"] for s in kept}:
+    if newest["id"] not in kept_ids:
         out.append("the newest snapshot would not be kept")
-    if len(kept) < KEEP_LAST and len(snapshots) >= KEEP_LAST:
+    if len(kept_ids) < KEEP_LAST and len(snapshots) >= KEEP_LAST:
         out.append(f"fewer than {KEEP_LAST} snapshots would be kept")
     if removed and len(removed) > MAX_REMOVE_SHARE * len(snapshots):
         out.append(f"{len(removed)} of {len(snapshots)} snapshots would go, which is too many "
                    "for one run")
-    tagged = [s for s in removed if set(s.get("tags") or []) & set(KEEP_TAGS)]
-    if tagged:
+    if [s for s in removed if set(s.get("tags") or []) & set(KEEP_TAGS)]:
         out.append("a snapshot tagged for keeping would be removed")
+    if uncovered:
+        out.append(f"{uncovered} WAL, base backup or dump file(s) would not be in any kept "
+                   "snapshot")
+    bad = [n for n in drop if not _DUMP_NAME.match(n)]
+    if bad:
+        out.append("the dump list holds something that is not a dump file name")
     return out
 
 
-def build_plan(snapshots: list[dict[str, Any]], kept: list[dict[str, Any]],
-               removed: list[dict[str, Any]], policy_args: list[str], *,
-               now: datetime | None = None) -> Plan:
+def build_plan(snapshots: list[dict[str, Any]], policy_keep: list[dict[str, Any]],
+               lives: dict[str, Life], policy_args: list[str], *, now: datetime,
+               weeks: int = 0) -> Plan:
+    """The plan: tier snapshots plus the tagged ones plus the coverage cover are kept, the rest go;
+    the dump files the policy lets go are dropped from the kept snapshots that hold them."""
+    drop = dump_drop_list(lives, now=now, weeks=weeks)
+    drop_set = set(drop)
+    tagged = {str(s["id"]) for s in snapshots if set(s.get("tags") or []) & set(KEEP_TAGS)}
+    intervals = [(v.first, v.last) for n, v in lives.items()
+                 if v.kind in ("wal", "base", "verified")
+                 or (v.kind == "dump" and n not in drop_set)]
+    kept_ids, uncovered = cover_snapshots(
+        snapshots, {str(s["id"]) for s in policy_keep} | tagged, intervals)
+    removed = [s for s in snapshots if str(s["id"]) not in kept_ids]
+    kept = [s for s in snapshots if str(s["id"]) in kept_ids]
+    # kept, untagged snapshots that hold a dropped dump get rewritten without it
+    spans = [(lives[n].first, lives[n].last) for n in drop]
+    rewrite = [str(s["id"]) for s in kept if str(s["id"]) not in tagged
+               and any(a <= str(s.get("time")) <= b for a, b in spans)]
     ids = [str(s["id"]) for s in removed]
     return Plan(
-        id=fingerprint(ids, policy_args), at=(now or datetime.now(UTC)).isoformat(),
-        policy_args=policy_args, keep=[str(s["id"]) for s in kept], remove=ids,
-        total=len(snapshots),
+        id=fingerprint(ids + rewrite, policy_args, drop), at=now.isoformat(),
+        policy_args=policy_args, keep=sorted(kept_ids), remove=ids, total=len(snapshots),
         oldest_keep=min((str(s.get("time")) for s in kept), default=None),
         newest_removed=max((str(s.get("time")) for s in removed), default=None),
-        problems=safety_problems(snapshots, kept, removed))
+        drop_dumps=drop, drop_paths=[lives[n].path for n in drop], rewrite=rewrite,
+        dump_bytes=sum(lives[n].size for n in drop), uncovered=uncovered,
+        problems=safety_problems(snapshots, kept_ids, removed, drop, uncovered))
 
 
 # ---- the state file ---------------------------------------------------------------------------
@@ -200,7 +318,7 @@ def preconditions(*, presence: dict[str, Any], drill: dict[str, Any], offload: d
     return None
 
 
-# ---- the real restic calls --------------------------------------------------------------------
+# ---- the restic calls -------------------------------------------------------------------------
 
 
 Runner = Callable[..., Any]   # (args, *, timeout, text=...) -> CompletedProcess
@@ -225,45 +343,53 @@ def _ok(proc: Any, what: str) -> str:
     return str(proc.stdout or "")
 
 
-def _stats_bytes(deps: Deps, ids: list[str] | None) -> int | None:
-    args = ["stats", "--mode", "raw-data", "--json", "--no-lock"] + (ids or [])
-    try:
-        body = json.loads(_ok(deps.run(args, timeout=3600), "restic stats"))
-    except (RuntimeError, ValueError):
+_REMAINING = re.compile(r"^remaining:\s+\d+ blobs / ([\d.]+) (B|KiB|MiB|GiB|TiB)", re.M)
+_UNIT = {"B": 1, "KiB": 1024, "MiB": 1024 ** 2, "GiB": 1024 ** 3, "TiB": 1024 ** 4}
+
+
+def prune_estimate(deps: Deps, repo_bytes: int | None) -> int | None:
+    """About how much a prune would give back right now (restic's own dry run): the repository's
+    size on disk minus what would remain. None when it cannot be told."""
+    if not repo_bytes:
         return None
-    size = body.get("total_size") if isinstance(body, dict) else None
-    return int(size) if isinstance(size, int | float) else None
+    proc = deps.run(["prune", "--dry-run", "--no-lock"], timeout=3600)
+    if proc.returncode != 0:
+        return None
+    m = _REMAINING.search(proc.stdout or "")
+    if not m:
+        return None
+    return max(0, repo_bytes - int(float(m.group(1)) * _UNIT[m.group(2)]))
 
 
-def make_plan(target: dict[str, Any], deps: Deps, *, weeks: int, ceiling_gb: int = 0,
-              measure: bool = True) -> Plan:
-    """Ask restic what the policy would forget (a dry run: nothing is changed) and, when
-    `measure`, how much space that frees. Raises RuntimeError with a plain reason."""
+def make_plan(target: dict[str, Any], deps: Deps, *, weeks: int = 0, measure: bool = True) -> Plan:
+    """Ask restic what the tiers would keep (a dry run: nothing is changed), read every file's life,
+    and build the plan. Raises RuntimeError with a plain reason."""
     snaps = json.loads(_ok(deps.run(["snapshots", "--json", "--no-lock"], timeout=600),
                            "restic snapshots") or "[]")
-    repo_bytes = deps.repo_bytes(target)
-    use_weeks, why = weeks_for(weeks, repo_bytes, ceiling_gb)
-    policy = Policy(weeks=use_weeks)
+    policy = Policy()
     out = _ok(deps.run(["forget", "--dry-run", "--json", "--no-lock", "--group-by",
                         "host,paths", *policy.args()], timeout=600), "restic forget (dry run)")
-    kept, removed = parse_forget(out)
-    plan = build_plan(snaps, kept, removed, policy.args(), now=deps.now())
-    plan.repo_bytes, plan.weeks_note = repo_bytes, why
-    if measure and plan.remove and not plan.problems:
-        kept_bytes = _stats_bytes(deps, plan.keep)
-        total_bytes = _stats_bytes(deps, None)
-        if kept_bytes is not None and total_bytes is not None:
-            plan.freed_bytes = max(0, total_bytes - kept_bytes)
+    kept, _removed = parse_forget(out)
+    lives = file_lifetimes(deps.run, snaps)
+    plan = build_plan(snaps, kept, lives, policy.args(), now=deps.now(), weeks=weeks)
+    plan.repo_bytes = deps.repo_bytes(target)
+    if measure and not plan.problems:
+        plan.freed_bytes = int(plan.dump_bytes * DUMP_SHARE_FREED)
+        plan.prune_freed_bytes = prune_estimate(deps, plan.repo_bytes)
     return plan
 
 
 def apply_plan(target: dict[str, Any], deps: Deps, plan: Plan, *,
                say: Callable[[str], None] = print) -> str | None:
-    """Remove exactly `plan.remove`, then prune (at most MAX_REPACK per run). Returns a failure
-    reason, or None. Checks everything again first: a plan is only as good as the repository it
-    was made against."""
+    """Do exactly this plan: forget its snapshots, drop its dump files from the kept snapshots
+    that hold them, then prune (at most MAX_REPACK per run). A failure reason, or None. Everything
+    is checked again first: a plan is only as good as the repository it was made against."""
     if plan.problems:
         return "; ".join(plan.problems)
+    if plan.uncovered:
+        return "the plan would leave files uncovered"
+    if any(not _DUMP_NAME.match(n) for n in plan.drop_dumps):
+        return "the dump list holds something that is not a dump file name"
     url = str(target.get("path_or_url") or "")
     reason = preconditions(
         presence=deps.presence(target), drill=deps.drill_receipt(url),
@@ -276,8 +402,7 @@ def apply_plan(target: dict[str, Any], deps: Deps, plan: Plan, *,
         snaps = json.loads(_ok(deps.run(["snapshots", "--json", "--no-lock"], timeout=600),
                                "restic snapshots") or "[]")
         present = {str(s["id"]) for s in snaps}
-        missing = [i for i in plan.remove if i not in present]
-        if len(missing) == len(plan.remove) and plan.remove:
+        if plan.remove and not any(i in present for i in plan.remove) and not plan.rewrite:
             return "none of the snapshots in this plan are in the repository any more"
         newest = max(snaps, key=lambda s: str(s.get("time")))["id"] if snaps else None
         if newest in plan.remove:
@@ -286,6 +411,16 @@ def apply_plan(target: dict[str, Any], deps: Deps, plan: Plan, *,
         if todo:
             say(f"forgetting {len(todo)} snapshot(s)")
             _ok(deps.run(["forget", *todo], timeout=1800), "restic forget")
+        rewrite = [i for i in plan.rewrite if i in present]
+        if plan.drop_paths and rewrite:
+            say(f"dropping {len(plan.drop_dumps)} thinned dump(s) from {len(rewrite)} snapshot(s)")
+            with tempfile.NamedTemporaryFile("w", suffix=".exclude", delete=False) as handle:
+                handle.write("\n".join(plan.drop_paths) + "\n")
+            try:
+                _ok(deps.run(["rewrite", "--forget", "--exclude-file", handle.name, *rewrite],
+                             timeout=4 * 3600), "restic rewrite")
+            finally:
+                Path(handle.name).unlink(missing_ok=True)
         say(f"pruning (at most {MAX_REPACK} repacked this run)")
         _ok(deps.run(["prune", "--max-repack-size", MAX_REPACK, "--max-unused", MAX_UNUSED],
                      timeout=4 * 3600), "restic prune")
@@ -295,21 +430,25 @@ def apply_plan(target: dict[str, Any], deps: Deps, plan: Plan, *,
 def describe(plan: Plan) -> list[str]:
     """Plain lines for the terminal."""
     lines = [f"{len(plan.remove)} of {plan.total} snapshot(s) would be forgotten, "
-             f"{len(plan.keep)} kept."]
+             f"{len(plan.keep)} kept (every WAL segment, base backup and kept dump stays in a kept "
+             "snapshot, so every rewind window stays)."]
     if plan.oldest_keep:
         lines.append(f"The oldest snapshot kept is from {plan.oldest_keep[:10]}.")
-    if plan.freed_bytes is not None:
-        lines.append(f"That frees about {plan.freed_bytes / 1e9:.0f} GB"
-                     + (f" of {plan.repo_bytes / 1e9:.0f} GB" if plan.repo_bytes else "")
-                     + " (measured from what the kept snapshots still need).")
-    if plan.weeks_note:
-        lines.append(plan.weeks_note + ".")
+    if plan.drop_dumps:
+        lines.append(f"{len(plan.drop_dumps)} thinned dump(s) ({plan.dump_bytes / 1e9:.0f} GB) "
+                     f"would be dropped from {len(plan.rewrite)} snapshot(s)"
+                     + (f", freeing about {plan.freed_bytes / 1e9:.0f} GB"
+                        if plan.freed_bytes is not None else "") + ".")
+    if plan.prune_freed_bytes is not None:
+        lines.append(f"Pruning what nothing refers to would give back about "
+                     f"{plan.prune_freed_bytes / 1e9:.0f} GB"
+                     + (f" of {plan.repo_bytes / 1e9:.0f} GB" if plan.repo_bytes else "") + ".")
     if plan.problems:
         lines.append("It will NOT run: " + "; ".join(plan.problems) + ".")
-    elif plan.remove:
+    elif plan.remove or plan.drop_dumps or plan.prune_freed_bytes:
         lines.append(f"To do it: osiris repo-thin --apply {plan.id}")
     else:
-        lines.append("Nothing to forget.")
+        lines.append("Nothing to do.")
     return lines
 
 
@@ -373,6 +512,17 @@ def refresh_points(target: dict[str, Any], deps: Deps) -> str | None:
     return None
 
 
+def refresh_time_machine(target: dict[str, Any], deps: Deps) -> str | None:
+    """Keep the Time Machine's list of NAS-only dump moments fresh from this run's own restic
+    runner (one NAS reader, not two). Read only; a failure is reported and never stops the run."""
+    from src.orchestrator import time_machine_restic
+
+    try:
+        return time_machine_restic.refresh_map(target, deps.run, presence=deps.presence)
+    except Exception as exc:  # noqa: BLE001 - never fail the thinning run for a listing
+        return f"{type(exc).__name__}: {exc}"
+
+
 async def command(*, pool: Any, apply_id: str | None = None, scheduled: bool = False,
                   refresh_only: bool = False, say: Callable[[str], None] = print,
                   deps: Deps | None = None) -> int:
@@ -407,8 +557,7 @@ async def command(*, pool: Any, apply_id: str | None = None, scheduled: bool = F
         overlay = await settings_with_overlay(pool)
     except Exception:  # noqa: BLE001 - the settings are tuning, never a reason to stop
         overlay = get_settings()
-    weeks = int(getattr(overlay, "osiris_thin_weeks", DEFAULT_WEEKS) or DEFAULT_WEEKS)
-    ceiling = int(getattr(overlay, "osiris_thin_size_ceiling_gb", 0) or 0)
+    weeks = int(getattr(overlay, "osiris_thin_weeks", 0) or 0)   # 0 = weekly dumps for ever
     deps = deps or real_deps(target, password)
     now = deps.now().isoformat()
 
@@ -422,6 +571,10 @@ async def command(*, pool: Any, apply_id: str | None = None, scheduled: bool = F
         failure = await asyncio.to_thread(refresh_points, target, deps)
         say(f"repo-thin: the restore map could not be built: {failure}." if failure
             else "repo-thin: the restore map is up to date (osiris backup-status shows it).")
+        tm_note = await asyncio.to_thread(refresh_time_machine, target, deps)
+        if tm_note:
+            say(f"repo-thin: the Time Machine's NAS moment list could not be refreshed: "
+                f"{tm_note}.")
         return 1 if failure else 0
     try:
         if apply_id is not None:
@@ -434,7 +587,7 @@ async def command(*, pool: Any, apply_id: str | None = None, scheduled: bool = F
             plan = Plan(**saved)
         else:
             plan = await asyncio.to_thread(
-                make_plan, target, deps, weeks=weeks, ceiling_gb=ceiling, measure=not scheduled)
+                make_plan, target, deps, weeks=weeks, measure=not scheduled)
             if not scheduled:
                 write_state({**state, "last_plan": plan.as_dict()})
                 for line in describe(plan):
@@ -461,4 +614,7 @@ async def command(*, pool: Any, apply_id: str | None = None, scheduled: bool = F
     note = await asyncio.to_thread(refresh_points, target, deps)
     if note:
         say(f"repo-thin: the restore map could not be rebuilt afterwards: {note}.")
+    tm_note = await asyncio.to_thread(refresh_time_machine, target, deps)
+    if tm_note:
+        say(f"repo-thin: the Time Machine's NAS moment list could not be refreshed: {tm_note}.")
     return 0

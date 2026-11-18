@@ -37,6 +37,10 @@ if ! "$REPO/.venv/bin/python" "$REPO/scripts/osiris_disk_guard.py" "$VAULT"; the
     "DISK GUARD: refusing to write a new full pg_dump into $VAULT — not enough free space " \
 "for another dump the size of the last one plus margin. Run scripts/osiris_prune_ladder.py " \
 "for a dry-run of what could be pruned; nothing is deleted automatically." || true
+elif ! "$REPO/.venv/bin/python" "$REPO/scripts/osiris_dump_gate.py" "$VAULT"; then
+  # away from the NAS (more than 24 h behind) the vault holds every dump until the NAS confirms
+  # it: at most one a day then. WAL and base backups carry on below, so rewind is unaffected.
+  echo "osiris_backup: skipping this dump (away from the NAS, one dump a day)" >&2
 else
   # THE VAULT IS CANONICAL, backups/ IS A THIN LOCAL CACHE: backups/ keeps one day, the
   # vault owns retention. One write, straight to the vault: no more dump-then-rsync-mirror
@@ -44,7 +48,9 @@ else
   # with osiris_prune_ladder.py's own retention plan (now on its own weekly timer, part 1).
   # The vault's retention is that plan's job alone from here on.
   NEW_DUMP="$VAULT/osiris-$(date +%Y%m%d-%H%M%S).dump"
-  if ! docker exec osiris-pg pg_dump -U osiris -d osiris -Fc > "$NEW_DUMP"; then
+  # -Z0: the custom format UNCOMPRESSED (restic compresses it, and consecutive dumps then dedup:
+  # about 45 MB added by a second dump against about 2.8 GB for a gzip one; measured 2026-11-17)
+  if ! docker exec osiris-pg pg_dump -U osiris -d osiris -Fc -Z0 > "$NEW_DUMP"; then
     echo "osiris_backup: pg_dump failed — removing the partial dump, continuing with the rest of this run" >&2
     rm -f "$NEW_DUMP"
     NEW_DUMP=""
