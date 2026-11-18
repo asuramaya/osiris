@@ -434,6 +434,9 @@ export async function initSpace(container) {
   // something actually changed (camera move, data, focus, label pick); the loop stops
   // scheduling itself entirely once idle rather than polling at 20fps forever.
   let dirty = true, running = true, rafPending = false;
+  // declared here, with the render state, because a frame can fire at any await during setup and
+  // positionFocusRing runs in it: a const further down is not yet initialised at that point
+  let focusRingEl = null;
   // positionLabels' own declutter state used to sit right next to positionLabels itself, far
   // below markDirty/renderIfDirty/forceRender, all of which can reach positionLabels
   // (forceRender directly; markDirty via its requestAnimationFrame(renderIfDirty) chain).
@@ -3143,12 +3146,13 @@ export async function initSpace(container) {
   // THE UNMISTAKABLE FOCUS: a ring or halo around the clicked object itself; a plain HTML
   // overlay (same pattern as hoverEl above), sized off the focused node's own
   // aRadiusPx-equivalent screen size, never the WebGL scene.
-  const focusRingEl = document.createElement("div");
+  focusRingEl = document.createElement("div");
   focusRingEl.className = "focus-ring";
   focusRingEl.hidden = true;
   wrap.appendChild(focusRingEl);
   function positionFocusRing() {
     const nd = pathFocusId ? idById.get(pathFocusId) : null;
+    if (!focusRingEl) return;
     if (!nd) { focusRingEl.hidden = true; return; }
     _screenV.set(nd.x || 0, nd.y || 0, 0).project(camera);
     const x = (_screenV.x * 0.5 + 0.5) * wrap.clientWidth;
