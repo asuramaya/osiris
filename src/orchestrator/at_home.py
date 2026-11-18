@@ -65,6 +65,8 @@ class Sources:
     plaintext_coverage: Callable[[], dict[str, Any] | None] = lambda: None
     # what the local prune is keeping back for the NAS (offload_confirm.read_held), or None
     prune_hold: Callable[[], dict[str, Any] | None] = lambda: None
+    # the monthly Time Machine drill's receipt (time_machine_drill.read_receipt)
+    time_machine_drill: Callable[[], dict[str, Any]] = lambda: {}
 
 
 def _item(key: str, order: int, title: str, status: str, why: str,
@@ -290,6 +292,21 @@ def prune_hold_item(src: Sources) -> dict[str, Any]:
                  note or "the local prune is keeping nothing back for the NAS.")
 
 
+def time_machine_item(src: Sources, now: datetime) -> dict[str, Any]:
+    """The monthly check that old history can still be opened: it runs by itself at home, so it
+    only waits on you when it failed or has not passed in a long time."""
+    from src.orchestrator import time_machine_drill
+
+    title = "The monthly Time Machine check"
+    line = time_machine_drill.status_line(src.time_machine_drill(), now=now)
+    command = "osiris time-machine drill --force"
+    if line["state"] in ("failed", "overdue"):
+        return _item("time_machine_drill", 10, title, WAITING, line["text"], command)
+    if line["state"] == "never":
+        return _item("time_machine_drill", 10, title, OPTIONAL, line["text"])
+    return _item("time_machine_drill", 10, title, DONE, line["text"])
+
+
 def _when(value: object) -> datetime | None:
     from src.orchestrator.offload_staleness import _parse
 
@@ -322,7 +339,9 @@ def checklist(src: Sources, *, now: datetime | None = None) -> dict[str, Any]:
             (rollback_item, "rollback_container", 6, ROLLBACK_TITLE),
             (scratch_item, "scratch_dirs", 7, "Remove the scratch folders an agent left"),
             (probe_item, "rebuild_probe", 8, "The Claude rebuild probe (optional)"),
-            (prune_hold_item, "prune_hold", 9, "Backup files waiting for the NAS")):
+            (prune_hold_item, "prune_hold", 9, "Backup files waiting for the NAS"),
+            (lambda s: time_machine_item(s, now), "time_machine_drill", 10,
+             "The monthly Time Machine check")):
         try:
             items.append(fn(src))
         except Exception as exc:  # noqa: BLE001
@@ -481,7 +500,7 @@ async def real_sources(pool: Any, *, now: datetime | None = None) -> Sources:
     import asyncio
 
     from src.orchestrator import at_home_readers as readers
-    from src.orchestrator import offload_confirm
+    from src.orchestrator import offload_confirm, time_machine_drill
 
     box, scratch = await asyncio.gather(
         _captured(readers.read_rollback_container), _captured(readers.read_scratch))
@@ -499,4 +518,5 @@ async def real_sources(pool: Any, *, now: datetime | None = None) -> Sources:
         stale_days=stale_days,
         rollback_container=lambda: box(), scratch=lambda: scratch(),
         probe_thread_open=lambda: None, plaintext_coverage=read_coverage,
-        prune_hold=offload_confirm.read_held)
+        prune_hold=offload_confirm.read_held,
+        time_machine_drill=time_machine_drill.read_receipt)

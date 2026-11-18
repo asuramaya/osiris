@@ -1,0 +1,22 @@
+# THE MONTHLY TIME MACHINE DRILL: opens an OLD moment held only on the NAS (alternating a dump and
+# a point in time in the oldest window) in a throwaway database, browses it, makes one restore
+# plan, and removes it. Reads only; never applies a restore. It does nothing away from home, while
+# a backup to the NAS is running, or when it is not due (it passes about once a month), so the
+# daily timer is only how often it asks. DEPLOY-MANAGED (scripts/install_prune_timers.sh).
+[Unit]
+Description=Osiris monthly Time Machine drill (reads the NAS only, home network only, never applies a restore)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/osiris
+Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris?application_name=osiris-time-machine-drill
+Environment=REDIS_URL=redis://127.0.0.1:6396/0
+# the scratch server it starts carries its own memory cap; the file cache of a base backup and
+# its log is charged here, so throttle it and keep it out of the daemons' way
+MemoryHigh=8G
+MemoryMax=10G
+Nice=15
+IOSchedulingClass=idle
+# a NAS point in time takes 10-15 minutes; this is the hard stop far above that
+TimeoutStartSec=3h
+ExecStart=%h/code/osiris/.venv/bin/python -m src.cli time-machine drill
