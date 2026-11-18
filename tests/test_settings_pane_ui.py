@@ -395,3 +395,8 @@ def test_thinning_approval_is_one_click_on_the_plan_and_never_on_load() -> None:
     assert "'/backup/thinning/apply', { plan_id: id }" in apply
     fresh = _CONSOLE_JS.split("async function thinningFreshPlan() {", 1)[1].split("\n}\n", 1)[0]
     assert "'/backup/thinning/plan'" in fresh
+
+
+def test_a_plan_the_last_run_already_applied_is_not_offered_again() -> None:
+    html = _CONSOLE_JS.split("function thinningApprovalHtml(d, nowMs) {", 1)[1].split("\n}\n", 1)[0]
+    assert "last.plan_id === plan.id" in html and "plan = null;" in html

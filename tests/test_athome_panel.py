@@ -280,3 +280,10 @@ def test_the_pieces_the_settings_pane_embeds_carry_the_ids_the_loaders_fill() ->
         assert 'id="' + ident + '"' in keys
     restore = str(_node("a.athomeRestoreBlockHtml()"))
     assert 'id="athome-restore"' in restore and 'id="athome-restore-steps"' in restore
+
+
+def test_the_skipped_dumps_show_before_the_choice_is_made() -> None:
+    html = str(_node("a.athomePlainHtml({choice:null,coverage:{only_files:0,only_bytes:0,"
+                     "skipped:[{path:'vault/dumps/old-1.dump',size:4e9}],skipped_files:1,"
+                     "skipped_bytes:4e9},confirm:{}},null)"))
+    assert "vault/dumps/old-1.dump" in html and "left out of the backup on purpose" in html
