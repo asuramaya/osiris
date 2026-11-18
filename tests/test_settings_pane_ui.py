@@ -40,28 +40,57 @@ def test_old_panel_renderers_still_exist_nothing_deleted() -> None:
 
 # --- the shell: five sections, loaded in parallel, each degrading independently -------
 
-def test_pane_shell_builds_all_five_sections() -> None:
-    # Product voice, layout item 3: Readiness ("The Box"
-    # renamed) moved up to right after Backup & Offload, before Registry.
-    body = _CONSOLE_JS.split("async function renderSettingsPane() {", 1)[1][:950]
-    assert "settingsSectionShell('key', 'Key')" in body
-    assert "settingsSectionShell('offload', 'Backup &amp; Offload')" in body
-    assert "settingsSectionShell('box', 'Readiness')" in body
-    assert "settingsSectionShell('registry', 'Registry')" in body
-    assert "settingsSectionShell('desk', 'Operator Desk')" in body
-    offload_at = body.index("settingsSectionShell('offload'")
-    box_at = body.index("settingsSectionShell('box'")
-    registry_at = body.index("settingsSectionShell('registry'")
-    assert offload_at < box_at < registry_at
+def test_pane_shell_builds_all_seven_sections_in_order() -> None:
+    # one Settings pane: what waits on you first, then setup, vault keys, backups, the
+    # operator desk, appearance, and Advanced (registry and repairs) last
+    body = _CONSOLE_JS.split("async function renderSettingsPane(section) {", 1)[1][:2400]
+    names = ("settingsSectionShell('waiting', 'Waiting on you'",
+             "settingsSectionShell('setup', 'Setting up this computer', 'box')",
+             "settingsSectionShell('vault', 'Vault keys', 'key'",
+             "settingsSectionShell('backups', 'Backups', 'offload')",
+             "settingsSectionShell('desk', 'Operator desk', 'desk')",
+             "settingsSectionShell('appearance', 'Appearance', 'appearance')",
+             "settingsSectionShell('advanced', 'Advanced', 'advanced')")
+    at = [body.index(n) for n in names]
+    assert at == sorted(at)
 
 
 def test_pane_shell_loads_sections_independently_via_promise_all() -> None:
-    body = _CONSOLE_JS.split("async function renderSettingsPane() {", 1)[1][:1150]
+    body = _CONSOLE_JS.split("async function renderSettingsPane(section) {", 1)[1][:2400]
     assert "Promise.all([" in body
-    for fn in ("renderSettingsSectionKey()", "renderSettingsSectionOffload()",
-               "renderSettingsSectionRegistry()", "renderSettingsSectionDesk()",
-               "renderSettingsSectionBox()"):
+    for fn in ("renderSettingsSectionWaiting()", "renderSettingsSectionKey()",
+               "renderSettingsSectionOffload()", "renderSettingsSectionAdvanced()",
+               "renderSettingsSectionDesk()", "renderSettingsSectionBox()"):
         assert fn in body
+
+
+def test_sections_open_and_close_advanced_starts_closed_and_waiting_stays_in_view() -> None:
+    assert "var SETTINGS_CLOSED_BY_DEFAULT = { advanced: true };" in _CONSOLE_JS
+    shell = _CONSOLE_JS.split("function settingsSectionShell(", 1)[1][:1500]
+    assert "<details id=" in shell and "if (fixed) {" in shell
+
+
+def test_deep_links_open_the_section_and_the_palette_uses_them() -> None:
+    assert "function openSettings(section)" in _CONSOLE_JS
+    assert "function settingsRevealSection(section)" in _CONSOLE_JS
+    for label, section in (("At home…", "waiting"), ("Vault keys…", "vault"),
+                           ("Backups…", "backups"), ("Operator desk…", "desk"),
+                           ("Repairs…", "advanced")):
+        entry = _CONSOLE_JS.split("label: '" + label + "'", 1)[1].split("\n", 1)[0][:400]
+        assert "openSettings('" + section + "')" in entry, label
+    jump = _CONSOLE_JS.split("function readinessJump(targetId) {", 1)[1][:400]
+    assert "closest('details')" in jump and "group.open = true" in jump
+
+
+def test_backups_open_with_one_history_line_and_hold_a_slot_for_past_moments() -> None:
+    body = _CONSOLE_JS.split("async function renderSettingsSectionOffload() {", 1)[1][:1500]
+    assert body.index('id="settings-backup-line"') < body.index('id="settings-restic-credential"')
+    assert 'id="settings-past-moment"' in body and "Browse a past moment" in body
+    text = _CONSOLE_JS.split("function backupHistoryText(h) {", 1)[1][:900]
+    for field in ("last_backup_at", "oldest_restorable_at", "gaps"):
+        assert field in text
+    waiting = _CONSOLE_JS.split("function renderBackupHistory(h) {", 1)[1][:900]
+    assert "h.overdue" in waiting and "settings-waiting-backup" in waiting
 
 
 # --- section 1: KEY, embedded not re-implemented ---------------------------------------
@@ -77,7 +106,7 @@ def test_section_offload_embeds_the_editable_panel_and_reads_backup_status() -> 
     # GUI parity: split the backup-status fetch into its own
     # reusable renderBackupStatusSection() (the "Run offload now" button's own refresh
     # calls it too) -- the section's own body just kicks off both in parallel now.
-    body = _CONSOLE_JS.split("async function renderSettingsSectionOffload() {", 1)[1][:900]
+    body = _CONSOLE_JS.split("async function renderSettingsSectionOffload() {", 1)[1][:1800]
     assert "renderOffloadInto('settings-offload-targets')" in body
     assert "renderBackupStatusSection()" in body
     status_body = _CONSOLE_JS.split("async function renderBackupStatusSection() {", 1)[1][:700]
@@ -243,7 +272,7 @@ def test_tpm_step_copies_its_command_and_carries_the_full_sequence_in_a_tooltip(
 
 
 def test_settings_pane_titles_itself_and_clears_the_browse_highlight() -> None:
-    body = _CONSOLE_JS.split("async function renderSettingsPane() {", 1)[1][:600]
+    body = _CONSOLE_JS.split("async function renderSettingsPane(section) {", 1)[1][:600]
     assert "$('page-title').textContent = 'Settings'" in body
     assert "classList.remove('sel')" in body
 
@@ -259,7 +288,7 @@ def test_embedded_panels_drop_their_own_title_and_centring_wrapper() -> None:
 def test_panel_tables_wrap_instead_of_clipping_and_browse_keeps_its_one_line_rows() -> None:
     # .ee-table clips every cell to one line (right for Browse's object list); the panels that
     # show prose and form fields carry .ee-form so a setting name or a reason is never cut off.
-    assert _CONSOLE_JS.count('class="ee-table ee-form"') == 7
+    assert _CONSOLE_JS.count('class="ee-table ee-form"') == 4
     assert '<table class="ee-table"><thead><tr><th style="width:105px' in _CONSOLE_JS
     css = (Path(__file__).parent.parent / "src" / "ui" / "static" / "osiris.css").read_text()
     form = css.split(".ee-table.ee-form td {", 1)[1][:200]

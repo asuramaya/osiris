@@ -455,7 +455,7 @@ def test_settings_panel_saves_post_to_the_settings_route() -> None:
 
 def test_repairs_panel_has_a_palette_entry() -> None:
     assert "'Repairs…'" in _JS
-    assert "run: () => renderRepairsPanel()" in _JS
+    assert "run: () => openSettings('advanced')" in _JS
 
 
 def test_repairs_panel_lists_all_eleven_targets() -> None:

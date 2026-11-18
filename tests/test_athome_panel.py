@@ -28,7 +28,7 @@ def _node(expr: str) -> object:
 
 def test_the_panel_is_loaded_after_the_console_and_reachable_from_the_palette() -> None:
     assert _INDEX.index("/ui/console.js") < _INDEX.index("/ui/athome.js")
-    assert "label: 'At home…'" in _CONSOLE and "renderAtHomePanel()" in _CONSOLE
+    assert "label: 'At home…'" in _CONSOLE and "openSettings('waiting')" in _CONSOLE
 
 
 def test_it_talks_to_the_key_and_at_home_routes() -> None:
@@ -195,7 +195,7 @@ def test_a_kept_copy_says_so() -> None:
 
 
 def test_nothing_starts_by_itself_and_the_destructive_ones_are_confirmed() -> None:
-    for fn in ("async function athomeLoadAll", "async function renderAtHomePanel",
+    for fn in ("async function athomeLoadAll", "function renderAtHomePanel",
                "async function athomePlainLoad"):
         body = _JS.split(fn)[1].split("\n}\n")[0]
         assert "'POST'" not in body and "athomeStream(" not in body, fn
@@ -215,3 +215,20 @@ def test_a_stream_that_has_no_route_yet_says_so_and_a_403_names_the_wrong_comput
     stream = _JS.split("async function athomeStream")[1].split("\n}\n")[0]
     assert "res.status === 404" in stream and "not available yet on this machine" in stream
     assert "res.status === 403" in stream and "runs the console" in stream
+
+
+def test_the_waiting_list_folds_away_when_nothing_is_pending() -> None:
+    quiet = str(_node("a.athomeWaitingList({items:[{key:'x',label:'L',status:'done'}]})"))
+    assert quiet.startswith("<details>") and "Nothing is waiting on you right now" in quiet
+    busy = str(_node("a.athomeWaitingList({items:[{key:'x',label:'L',status:'waiting'}]})"))
+    assert "<details>" not in busy
+
+
+def test_the_pieces_the_settings_pane_embeds_carry_the_ids_the_loaders_fill() -> None:
+    assert 'id="athome-list"' in str(_node("a.athomeWaitingHtml()"))
+    keys = str(_node("a.athomeKeysBlockHtml()"))
+    for ident in ("athome-keys", "athome-key-msg", "athome-code", "athome-key-actions",
+                  "athome-addkey"):
+        assert 'id="' + ident + '"' in keys
+    restore = str(_node("a.athomeRestoreBlockHtml()"))
+    assert 'id="athome-restore"' in restore and 'id="athome-restore-steps"' in restore
