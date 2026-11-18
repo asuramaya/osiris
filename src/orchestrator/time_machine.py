@@ -45,6 +45,10 @@ VAULT_DIR = Path.home() / "osiris-vault"
 
 TTL_SECS = 2 * 3600
 MAX_EXTENSIONS = 1
+# A slow open (a pull from the NAS, unpacking, replaying the log) can take far longer than the
+# two hours a READY throwaway lives, so the clock starts when it becomes ready; until then it is
+# live for at most this long.
+OPENING_CAP_SECS = 6 * 3600
 FAILED_KEEP_SECS = 15 * 60       # a failed start's message stays readable this long
 DISK_FACTOR = 3.0
 # a base backup is compressed; the data directory it unpacks to is not
@@ -129,7 +133,9 @@ class Throwaway:
         d.pop("superuser_password", None)
         d.pop("reader_password", None)
         d.pop("scratch", None)
-        d["seconds_left"] = max(0, int(self.expires_at - time.time()))
+        left = (self.expires_at if self.state == "ready"
+                else self.started_at + OPENING_CAP_SECS) - time.time()
+        d["seconds_left"] = max(0, int(left))
         text = STATE_TEXT.get(self.state, self.state)
         d["state_text"] = f"{text} {self.progress}".strip() if self.progress else text
         return d
@@ -427,6 +433,10 @@ def start(
             what = "dump" if moment.kind == "dump" else "base backup"
             raise TimeMachineError(f"the {what} for this moment is gone: {source.name}")
     existing = read_record(record_path)
+    if existing is None and record_unreadable(record_path):
+        raise TimeMachineError(
+            "A record of an earlier throwaway is there but cannot be read, so it was not "
+            "overwritten. If nothing is open, clear it with `osiris time-machine teardown`.")
     if existing is not None and existing.state == "failed":
         _clear_record(record_path)          # a failed attempt only keeps its message
         existing = None
@@ -454,6 +464,8 @@ def start(
     def phase(state: str) -> None:
         rec.state = state
         rec.progress = ""
+        if state == "ready":
+            rec.expires_at = now() + TTL_SECS      # the two hours start when it can be used
         _write_record(rec, record_path)
         if on_phase:
             on_phase(rec)
@@ -477,6 +489,12 @@ def start(
                 phase("pulling")
                 base, wal_dir = (pull_pitr or restic.pull_pitr)(moment, scratch, progress)
                 moment = Moment(**{**asdict(moment), "path": str(base)})
+                # the pull took minutes: the disk the throwaway's own data needs is checked
+                # again, against the real size of the base backup
+                again = disk_problem(base.stat().st_size, free(docker_root(sh)),
+                                     factor=PITR_DISK_FACTOR)
+                if again:
+                    raise TimeMachineError(again)
             rec.progress = ""
             pitr.materialize(moment, rec, phase, sh=sh, now=now, sleep=sleep,
                              wal_dir=wal_dir, progress=progress)
@@ -532,6 +550,9 @@ def extend(*, record_path: Path | None = None, now: Callable[[], float] = time.t
     rec = read_record(record_path)
     if rec is None:
         raise TimeMachineError("no throwaway to extend")
+    if rec.state != "ready":
+        raise TimeMachineError("It is still being opened. Its two hours start when it is "
+                               "ready.")
     if rec.extensions >= MAX_EXTENSIONS:
         raise TimeMachineError("this throwaway was already extended once; start a new one")
     rec.extensions += 1
@@ -553,7 +574,8 @@ def reap(*, sh: Run = _default_run, record_path: Path | None = None,
         return []
     keep = rec is not None and (
         now() < rec.started_at + FAILED_KEEP_SECS if rec.state == "failed"
-        else now() < rec.expires_at)
+        else now() < rec.expires_at if rec.state == "ready"
+        else now() < rec.started_at + OPENING_CAP_SECS)
     if rec is not None and keep:
         owned = {rec.container, rec.volume}
         stray = [n for n in _labelled(sh, "container") + _labelled(sh, "volume")

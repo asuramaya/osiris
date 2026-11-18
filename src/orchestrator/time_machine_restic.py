@@ -409,8 +409,10 @@ def backup_label_start(base: Path) -> tuple[int, int]:
                               "needs cannot be worked out.")
 
 
-def segments_of(deps: Deps, snapshot: str) -> dict[int, SegRef]:
-    """The WAL segments one snapshot holds, by position (one `find`, read only)."""
+def segments_of(deps: Deps, snapshot: str, timeline: int) -> dict[int, SegRef]:
+    """The WAL segments of ONE timeline that a snapshot holds, by position (one `find`, read
+    only). Another timeline's segment with the same position is a different piece of history
+    and must never fill a hole in this one."""
     proc = deps.run(["find", "--json", "--no-lock", "--snapshot", snapshot, "0000000*"],
                     timeout=LIST_TIMEOUT_SECS)
     if proc.returncode != 0:
@@ -422,6 +424,8 @@ def segments_of(deps: Deps, snapshot: str) -> dict[int, SegRef]:
             key = seg_key(path.rsplit("/", 1)[-1])
             when = parse_time(m.get("mtime"))
             if m.get("type") != "file" or "/wal_archive/" not in path or not key or not when:
+                continue
+            if key[0] != timeline:
                 continue
             out[key[1]] = SegRef(key[1], path.rsplit("/", 1)[-1], path, when,
                                  int(m.get("size") or 0))
@@ -593,16 +597,21 @@ def pull_pitr(moment: tm.Moment, scratch: Path, progress: Callable[[str], None],
     at, window_from = parse_time(moment.at), parse_time(moment.window_from)
     if at is None or window_from is None:
         raise tm.TimeMachineError("that moment has no readable time")
-    proc = deps.run(["snapshots", "--json", "--no-lock"], timeout=LIST_TIMEOUT_SECS)
-    if proc.returncode != 0:
-        raise tm.TimeMachineError("Could not list the backup snapshots: " + _tail(proc.stderr))
-    snaps = [(t, str(s["id"])) for s in json.loads(proc.stdout or "[]")
-             if (t := parse_time(s.get("time")))]
     scratch.mkdir(parents=True, exist_ok=True)
+    # The tick lock is what keeps these `--no-lock` reads apart from a thinning run (which
+    # takes the repository's exclusive lock and forgets snapshots): the snapshot list is read
+    # INSIDE it, so a thin cannot land between the listing and the pull and leave us naming
+    # snapshots that are gone.
     with deps.hold_lock() as got:
         if not got:
             raise tm.TimeMachineError(
                 "A backup to the NAS is running right now. Try again in a few minutes.")
+        proc = deps.run(["snapshots", "--json", "--no-lock"], timeout=LIST_TIMEOUT_SECS)
+        if proc.returncode != 0:
+            raise tm.TimeMachineError("Could not list the backup snapshots: "
+                                      + _tail(proc.stderr))
+        snaps = [(t, str(s["id"])) for s in json.loads(proc.stdout or "[]")
+                 if (t := parse_time(s.get("time")))]
         base_snap, base_path, base_size = _find_base(deps, moment.repo_path, window_from, snaps)
         progress("working out which snapshots hold the log")
         base_dir = scratch / "base"
@@ -622,7 +631,7 @@ def pull_pitr(moment: tm.Moment, scratch: Path, progress: Callable[[str], None],
 
         def listing(sid: str) -> dict[int, SegRef]:
             if sid not in cache:
-                cache[sid] = segments_of(deps, sid)
+                cache[sid] = segments_of(deps, sid, tl)
             return cache[sid]
 
         cover = plan_wal_cover(snapshots=snaps, target=at, tl=tl, first_pos=first_pos,
