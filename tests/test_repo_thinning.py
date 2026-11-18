@@ -319,7 +319,7 @@ async def test_apply_needs_the_reviewed_plan_id_and_then_marks_the_first_run_app
 
     assert code == 0 and ["forget", "s4"] in fake.calls
     state = rt.read_state()
-    assert state["approved"]["plan_id"] == plan_id and state["last_run"]["failure"] is None
+    assert "approved" not in state and state["last_run"]["failure"] is None
     assert any(c[0] == "find" for c in fake.calls)  # the restore map is rebuilt afterwards
 
 
@@ -330,33 +330,58 @@ async def test_a_failed_apply_is_recorded_and_does_not_approve(home: Actions) ->
     code, said = await _run(home, Fake(drill={}), apply_id=plan_id)
 
     assert code == 1 and any("has not passed" in line for line in said)
-    assert not rt.read_state().get("approved")
     assert rt.read_state()["last_run"]["failure"]
 
 
-async def test_the_scheduled_run_only_refreshes_the_map_until_a_plan_was_applied_by_hand(
-        home: Actions) -> None:
+async def test_the_scheduled_run_only_plans_tells_the_desk_once_and_never_applies(
+        home: Actions, monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.orchestrator import mailbox
+
+    sent: list[dict[str, Any]] = []
+
+    async def fake_send(pool: Any, **kw: Any) -> None:
+        sent.append(kw)
+
+    monkeypatch.setattr(mailbox, "send_message", fake_send)
+    rt.write_state({"approved": {"at": "x", "plan_id": "y"}})   # an old arming changes nothing
     fake = Fake()
 
     code, said = await _run(home, fake, scheduled=True)
 
-    assert code == 0 and any("only the restore map is rebuilt" in line for line in said)
-    assert not any(c[0] in ("forget", "rewrite", "prune") for c in fake.calls)
+    assert code == 0 and any("on the operator's desk" in line for line in said)
+    assert not any(c[0] in ("forget", "rewrite", "prune") and "--dry-run" not in c
+                   for c in fake.calls)
+    assert len(sent) == 1 and sent[0]["to_project"] == "operator"
+    assert sent[0]["desk_kind"] == "decision"
+    plan_id = rt.read_state()["last_plan"]["id"]
+    assert f"osiris repo-thin --apply {plan_id}" in sent[0]["body"]
+    assert "files left uncovered" in sent[0]["body"] and "—" not in sent[0]["body"]
+    code, _ = await _run(home, Fake(), scheduled=True)
+    assert code == 0 and len(sent) == 1                           # the same plan is told once
 
 
-async def test_the_scheduled_run_does_the_work_once_approved_and_is_quiet_away_from_home(
-        home: Actions) -> None:
-    rt.write_state({"approved": {"at": "x", "plan_id": "y"}})
-    fake = Fake()
-
-    code, _ = await _run(home, fake, scheduled=True)
-
-    assert code == 0 and ["forget", "s4"] in fake.calls
+async def test_the_scheduled_run_is_quiet_away_from_home(home: Actions) -> None:
     away = Fake(presence={"present": False, "reason": "reachable only over tailscale0"})
+
     code, said = await _run(home, away, scheduled=True)
+
     assert code == 0 and not away.calls and any("not on the home network" in s for s in said)
     code, _ = await _run(home, Fake(presence={"present": False}))
     assert code == 1
+
+
+def test_the_desk_line_is_plain_and_absent_when_there_is_nothing_to_approve() -> None:
+    plan = rt.make_plan(TARGET, Fake().deps())
+
+    line = rt.desk_line(plan)
+
+    assert line and "ready for your approval" in line and "2026-10-01" in line
+    assert "rewind" in line and plan.id in line
+    empty = rt.Plan(id="a", at="x", policy_args=[], keep=[], remove=[], total=3, oldest_keep=None,
+                    newest_removed=None)
+    assert rt.desk_line(empty) is None
+    plan.problems = ["x"]
+    assert rt.desk_line(plan) is None
 
 
 async def test_the_weekly_run_also_refreshes_the_time_machine_list_and_survives_its_failure(
@@ -374,7 +399,7 @@ async def test_the_weekly_run_also_refreshes_the_time_machine_list_and_survives_
     code, said = await _run(home, Fake(), scheduled=True)
 
     assert code == 0 and calls == ["nas"]
-    assert any("Time Machine's NAS moment list could not be refreshed" in s for s in said)
+    assert any("a refresh could not be done: the list could not be read" in s for s in said)
 
     def boom(target: dict[str, Any], run: Any, *, presence: Any = None) -> str | None:
         raise RuntimeError("never reaches the run")

@@ -179,3 +179,45 @@ async def test_the_api_route_answers_from_the_saved_map_without_the_nas(
 
     assert resp.status_code == 200 and resp.headers["cache-control"] == "no-store"
     assert resp.json()["known"] is True and resp.json()["snapshots"] == 7
+
+
+async def test_the_thinning_routes_are_loopback_only_apply_a_reviewed_id_and_refuse_a_stale_one(
+        actions: Actions, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from src.orchestrator import repo_thinning
+    from src.orchestrator.manifests import load_manifests
+
+    monkeypatch.setenv(repo_thinning.STATE_ENV, str(tmp_path / "t.json"))
+    seen: list[str | None] = []
+
+    async def fake_command(*, pool: Any, apply_id: str | None = None, say: Any = print,
+                           **kw: Any) -> int:
+        seen.append(apply_id)
+        say("repo-thin: that plan is not the latest one or is more than a day old; run again.")
+        return 1
+
+    monkeypatch.setattr(repo_thinning, "command", fake_command)
+    app = create_app(actions.pool)
+    app.state.pool = actions.pool
+    app.state.manifests = load_manifests(Path(__file__).resolve().parent.parent / "helpers")
+
+    def client(host: str) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.ASGITransport(app=app, client=(host, 1)),
+                                 base_url="http://test")
+
+    async with client("192.168.1.50") as far:
+        assert (await far.post("/backup/thinning/apply", json={"plan_id": "a" * 12})
+                ).status_code == 403
+        assert (await far.get("/backup/thinning")).status_code == 403
+    async with client("127.0.0.1") as here:
+        bad = await here.post("/backup/thinning/apply", json={"plan_id": "not-an-id"})
+        unknown = await here.post("/backup/thinning/burn")
+        stale = await here.post("/backup/thinning/apply", json={"plan_id": "abcdef012345"})
+        plan = await here.post("/backup/thinning/plan")
+        state = await here.get("/backup/thinning")
+
+    assert bad.status_code == 400 and unknown.status_code == 404
+    assert stale.headers["cache-control"] == "no-store"
+    rows = [json.loads(x) for x in stale.text.splitlines()]
+    assert rows[-1]["ok"] is False and "not the latest one" in rows[-1]["text"]
+    assert seen == ["abcdef012345", None] and plan.status_code == 200
+    assert state.status_code == 200 and state.json()["plan"] is None

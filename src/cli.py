@@ -1443,8 +1443,9 @@ async def cmd_repo_thin(
     """osiris repo-thin: Time Machine style thinning of the NAS backup repository. With no flag it
     only looks: it prints what the policy would forget and about how much space that frees, and
     changes nothing. `--apply ID` removes exactly the snapshots of that reviewed plan, then prunes.
-    `--scheduled` is the weekly timer's run (it does nothing until a plan has been applied by
-    hand). `--refresh-points` rebuilds the saved restore map. Home network only."""
+    `--scheduled` is the weekly timer's run (it makes a plan, tells the desk and refreshes the
+    restore map; it never applies). `--refresh-points` rebuilds the saved restore map. Home
+    network only."""
     from src.orchestrator import repo_thinning
 
     owns_pool = pool is None
@@ -8973,8 +8974,8 @@ def _build_parser() -> argparse.ArgumentParser:
                              help="forget exactly the snapshots of this reviewed plan, then "
                                   "prune (at most 20 GB repacked per run; run again to continue)")
     p_repo_thin.add_argument("--scheduled", action="store_true",
-                             help="the weekly timer's run: does nothing until a plan has been "
-                                  "applied by hand once")
+                             help="the weekly timer's run: makes a plan and puts it on the "
+                                  "operator's desk, never applies it")
     p_repo_thin.add_argument("--refresh-points", action="store_true", dest="refresh_points",
                              help="rebuild the saved restore map (what can be restored, from "
                                   "when, and the gaps) that backup-status shows")

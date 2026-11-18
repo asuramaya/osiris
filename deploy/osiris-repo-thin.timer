@@ -1,5 +1,5 @@
 [Unit]
-Description=Osiris repo thinning (weekly, Sunday 04:10; does nothing away from home or before the first applied plan)
+Description=Osiris repo thinning plan (weekly, Sunday 04:10; a plan for the desk, nothing is applied)
 
 [Timer]
 OnCalendar=Sun *-*-* 04:10:00
