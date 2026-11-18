@@ -247,25 +247,25 @@ def plaintext_listing(deps: Deps, host: str) -> dict[str, int] | None:
 def snapshot_listing(deps: Deps, host: str, repo: str, password: bytes,
                      snapshots: str | list[str]) -> dict[str, int] | None:
     """The files the named snapshots hold under the two directories, as {relative path: size}
-    (the union, when several are named)."""
+    (the union, when several are named). `restic ls` takes ONE snapshot (any further argument is a
+    path filter), so each is listed on its own."""
     ids = [snapshots] if isinstance(snapshots, str) else list(snapshots)
-    if not ids:
-        return {}
-    lines, rc, _err = _drain(deps, host, _restic(repo, "ls", "--json", "--no-lock", *ids),
-                             password + b"\n")
-    if rc != 0:
-        return None
     prefix = SOURCE_ROOT + "/"
     out: dict[str, int] = {}
-    for line in lines:
-        try:
-            node = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(node, dict) and node.get("type") == "file":
-            path = str(node.get("path") or "")
-            if path.startswith(prefix):
-                out[path[len(prefix):]] = int(node.get("size") or 0)
+    for snap in ids:
+        lines, rc, _err = _drain(deps, host, _restic(repo, "ls", "--json", "--no-lock", snap),
+                                 password + b"\n")
+        if rc != 0:
+            return None
+        for line in lines:
+            try:
+                node = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(node, dict) and node.get("type") == "file":
+                path = str(node.get("path") or "")
+                if path.startswith(prefix):
+                    out[path[len(prefix):]] = int(node.get("size") or 0)
     return out
 
 

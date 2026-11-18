@@ -70,6 +70,7 @@ class FakeNas:
             yield json.dumps({"message_type": "summary", "snapshot_id": sid + "6789"})
         elif " ls " in command:
             ids = command.split("--no-lock ")[1].split()
+            assert len(ids) == 1, "restic ls takes one snapshot; more are path filters"
             for sid in ids:
                 for p, sz in self.snaps[sid].items():
                     if p not in self.drop:
