@@ -294,6 +294,21 @@ def select_import(files: dict[str, tuple[int, float]]) -> tuple[list[str], list[
     return sorted(imported), sorted(p for p in files if p not in chosen)
 
 
+WEEKLY, DAILY = "weekly", "daily"
+POLICIES = {
+    WEEKLY: "newest dump of each week, all WAL and base backups",
+    DAILY: "every file, each in a snapshot of its own day",
+}
+
+
+def select_files(files: dict[str, tuple[int, float]], policy: str) -> tuple[list[str], list[str]]:
+    """(paths to import, paths left out on purpose) under a history policy. `daily` imports every
+    file and leaves none out; `weekly` is `select_import`."""
+    if policy == DAILY:
+        return sorted(files), []
+    return select_import(files)
+
+
 def compare(plain: dict[str, int], held: Iterable[tuple[str, int]],
             accepted: Iterable[str] = ()) -> dict[str, Any]:
     """Which files exist only in the plaintext copy: a path whose size the backup does not hold.
@@ -331,6 +346,7 @@ async def _route_proof(deps: Deps, target: dict[str, Any], stop: Callable[[int, 
 
 async def encrypt(
     target: dict[str, Any], password: bytes, deps: Deps, *, say: Callable[[str], None],
+    policy: str = DAILY,
 ) -> int:
     """Turn the plaintext copy into backdated snapshots in the repository, so the history shows in
     `restic snapshots` on the days it was made, and prove they hold every file. 0 when they do,
@@ -364,37 +380,38 @@ async def encrypt(
                            "read faithfully).",
                         "check the NAS is on and reachable, then run this again.")
         plain = {p: sz for p, (sz, _t) in files.items()}
-        imported, left_out = select_import(files)
+        imported, left_out = select_files(files, policy)
         days = group_by_day({p: files[p] for p in imported})
         say(f"[2/{TOTAL}] the plaintext copy holds {len(plain)} files, "
-            f"{_fmt_gb(sum(plain.values()))}. By the history policy {len(imported)} are imported "
-            f"(the newest dump of each week, all the WAL and the base backups), from "
-            f"{len(days)} different days; {len(left_out)} older dumps "
-            f"({_fmt_gb(sum(plain[p] for p in left_out))}) are left out.")
+            f"{_fmt_gb(sum(plain.values()))}. " + (
+                f"All of them are imported, each on the day it was made ({len(days)} days)."
+                if not left_out else
+                f"By the history policy {len(imported)} are imported (the newest dump of each "
+                f"week, all the WAL and the base backups), from {len(days)} different days; "
+                f"{len(left_out)} older dumps ({_fmt_gb(sum(plain[p] for p in left_out))}) are "
+                "left out."))
         # 3. one snapshot per day, dated that day, on the NAS
-        say(f"[3/{TOTAL}] adding one snapshot per day, dated the day the files were made, on the "
-            "NAS itself (it reads local disk, so nothing crosses the network; days already "
-            "added are skipped, so a stop here can be run again).")
+        say(f"[3/{TOTAL}] adding the files each day is missing as a snapshot dated that day, on "
+            "the NAS itself (it reads local disk, so nothing crosses the network; what the "
+            "repository already holds for a day is skipped, so a stop here can be run again).")
         snaps, fail = await asyncio.to_thread(_import_history, deps, host, repo, password,
-                                              days, say)
+                                              days, files, say)
         if fail or snaps is None:
             return stop(3, f"the import did not finish ({fail or 'no snapshot was reported'}).",
                         "run this again: it resumes at the first day not yet added.")
         say(f"[3/{TOTAL}] the history is in the repository: {len(snaps)} snapshots, "
             f"{min(days)} to {max(days)}.")
         # 4. the proof
-        held = await asyncio.to_thread(snapshot_listing, deps, host, repo, password,
-                                       sorted(snaps.values()))
+        held = await asyncio.to_thread(snapshot_listing, deps, host, repo, password, snaps)
         if held is None:
             return stop(4, "the repository would not list the imported snapshots.",
                         "run this again; if it repeats, read `restic ls` on the NAS by hand.")
         verdict = compare(plain, held.items(), accepted=left_out)
-        newest = snaps[max(snaps)]
         record: dict[str, Any] = {
             "only_files": verdict["only_files"], "only_bytes": verdict["only_bytes"],
             "files_checked": verdict["files"], "bytes_checked": verdict["bytes"],
-            "snapshot": newest, "snapshots": sorted(snaps.values()), "days": len(snaps),
-            "tag": BACKUP_TAG, "policy": "newest dump of each week, all WAL and base backups",
+            "snapshot": snaps[-1], "snapshots": list(snaps), "days": len(days),
+            "tag": BACKUP_TAG, "policy_id": policy, "policy": POLICIES[policy],
             "skipped": verdict["skipped"], "skipped_files": verdict["skipped_files"],
             "skipped_bytes": verdict["skipped_bytes"], "checked_at": deps.now().isoformat(),
             "method": "plaintext listing on the NAS compared to the imported snapshots, "
@@ -405,9 +422,13 @@ async def encrypt(
                            f"the snapshots (first: {verdict['only'][0]}).",
                         "do not remove anything; run this again and read the first name.")
         kept = verdict["files"] - verdict["skipped_files"]
-        say(f"[4/{TOTAL}] proved: {kept} files are in the {len(snaps)} snapshots, path and size. "
-            f"The only files NOT in the backup are the {verdict['skipped_files']} older dumps "
-            f"left out on purpose ({_fmt_gb(verdict['skipped_bytes'])}):")
+        if not verdict["skipped_files"]:
+            say(f"[4/{TOTAL}] proved: all {kept} files ({_fmt_gb(verdict['bytes'])}) are in the "
+                f"{len(snaps)} snapshots, path and size. Nothing is only in the plaintext copy.")
+        else:
+            say(f"[4/{TOTAL}] proved: {kept} files are in the {len(snaps)} snapshots, path and "
+                f"size. The only files NOT in the backup are the {verdict['skipped_files']} older "
+                f"dumps left out on purpose ({_fmt_gb(verdict['skipped_bytes'])}):")
         for item in verdict["skipped"][:8]:
             say(f"        left out: {item['path']} ({_fmt_gb(item['size'])})")
         if verdict["skipped_files"] > 8:
@@ -449,9 +470,10 @@ def group_by_day(files: dict[str, tuple[int, float]]) -> dict[str, dict[str, Any
 
 
 def _existing_imports(deps: Deps, host: str, repo: str,
-                      password: bytes) -> tuple[dict[str, str], str] | None:
-    """The days already imported ({day: snapshot id}, from the per-day tag) and the host name the
-    real backups use, or None when the repository would not list."""
+                      password: bytes) -> tuple[list[tuple[str, str]], str] | None:
+    """The history-import snapshots already there as [(day, snapshot id)] (from the per-day tag; a
+    day may have several) and the host name the real backups use, or None when the repository
+    would not list."""
     lines, rc, _err = _drain(deps, host, _restic(repo, "snapshots", "--json", "--no-lock"),
                              password + b"\n")
     if rc != 0:
@@ -460,7 +482,7 @@ def _existing_imports(deps: Deps, host: str, repo: str,
         rows = json.loads("".join(lines) or "[]")
     except ValueError:
         return None
-    done: dict[str, str] = {}
+    done: list[tuple[str, str]] = []
     names: dict[str, int] = {}
     for row in rows if isinstance(rows, list) else []:
         tags = list(row.get("tags") or [])
@@ -468,7 +490,7 @@ def _existing_imports(deps: Deps, host: str, repo: str,
             for t in tags:
                 if t.startswith(DAY_TAG_PREFIX):
                     sid = str(row.get("short_id") or row.get("id", ""))[:8]
-                    done[t[len(DAY_TAG_PREFIX):]] = sid
+                    done.append((t[len(DAY_TAG_PREFIX):], sid))
         elif row.get("hostname"):
             names[row["hostname"]] = names.get(row["hostname"], 0) + 1
     name = max(names, key=lambda n: names[n]) if names else "osiris"
@@ -477,29 +499,45 @@ def _existing_imports(deps: Deps, host: str, repo: str,
 
 def _import_history(
     deps: Deps, host: str, repo: str, password: bytes, days: dict[str, dict[str, Any]],
-    say: Callable[[str], None],
-) -> tuple[dict[str, str] | None, str | None]:
-    """Add one snapshot per day (the day's files only, dated that day, tagged `history-import` and
+    files: dict[str, tuple[int, float]], say: Callable[[str], None],
+) -> tuple[list[str] | None, str | None]:
+    """Make sure each day's files are in a snapshot dated that day (tagged `history-import` and
     `import-day:<day>`, under the hostname the real backups use so it sits in their timeline).
-    Returns ({day: snapshot id} for every day, None) or (None, why). A day already in the
-    repository is skipped, which is what makes a stopped run resumable."""
+    What the day's existing history-import snapshots already hold (by path and size) is skipped, so
+    a day only gets a snapshot of what it is missing: a stopped run resumes where it stopped, and a
+    wider policy later adds just the extra files. Returns (every snapshot id for those days, None)
+    or (None, why)."""
     import shlex
     import time
 
     known = _existing_imports(deps, host, repo, password)
     if known is None:
         return None, "the repository would not list its snapshots"
-    snaps, hostname = dict(known[0]), known[1]
-    todo = [d for d in sorted(days) if d not in snaps]
+    rows, hostname = known
+    ids = [sid for day, sid in rows if day in days]
+    held: dict[str, set[tuple[str, int]]] = {}
+    for day, sid in rows:
+        if day not in days:
+            continue
+        listed = snapshot_listing(deps, host, repo, password, sid)
+        if listed is None:
+            return None, f"the repository would not list snapshot {sid}"
+        held.setdefault(day, set()).update(listed.items())
+    plan: list[tuple[str, list[str], str]] = []
+    for day in sorted(days):
+        missing = [p for p in days[day]["files"] if (p, files[p][0]) not in held.get(day, set())]
+        if missing:
+            when = group_by_day({p: files[p] for p in missing})
+            plan.append((day, missing, next(iter(when.values()))["at"]))
     last = 0.0
-    for n, day in enumerate(todo, 1):
-        listing = "".join(f"{SOURCE_ROOT}/{p}\n" for p in days[day]["files"]).encode()
+    for n, (day, paths, at) in enumerate(plan, 1):
+        listing = "".join(f"{SOURCE_ROOT}/{p}\n" for p in paths).encode()
         wrote = _drain(deps, host, f"umask 077 && cat > {LIST_FILE}", listing)
         if wrote[1] != 0:
             return None, f"could not write the file list on the NAS ({wrote[2] or 'no reason'})"
         command = ("TZ=UTC " + _restic(
             repo, "backup", "--json", "--tag", BACKUP_TAG, "--tag", DAY_TAG_PREFIX + day,
-            "--host", shlex.quote(hostname), "--time", shlex.quote(days[day]["at"]),
+            "--host", shlex.quote(hostname), "--time", shlex.quote(at),
             "--files-from-verbatim", LIST_FILE))
         result: dict[str, Any] = {}
         snap: str | None = None
@@ -516,7 +554,7 @@ def _import_history(
                   and time.monotonic() - last >= _PROGRESS_EVERY_SECONDS):
                 last = time.monotonic()
                 pct = float(msg.get("percent_done") or 0) * 100
-                say(f"        day {n} of {len(todo)} ({day}): {pct:.0f}% "
+                say(f"        day {n} of {len(plan)} ({day}): {pct:.0f}% "
                     f"({_fmt_gb(float(msg.get('bytes_done') or 0))} of "
                     f"{_fmt_gb(float(msg.get('total_bytes') or 0))})")
         rc = int(result.get("rc", 1))
@@ -526,10 +564,11 @@ def _import_history(
         if not snap:
             _drain(deps, host, f"rm -f {LIST_FILE}")
             return None, f"{day}: restic reported no snapshot"
-        snaps[day] = snap
-        say(f"        day {n} of {len(todo)} ({day}): added snapshot {snap}.")
+        ids.append(snap)
+        say(f"        day {n} of {len(plan)} ({day}): added snapshot {snap} "
+            f"({len(paths)} files).")
     _drain(deps, host, f"rm -f {LIST_FILE}")
-    return {d: snaps[d] for d in days}, None
+    return sorted(set(ids)), None
 
 
 # ---- removing --------------------------------------------------------------------------------
@@ -588,7 +627,7 @@ async def remove(
                 return stop("the NAS or the repository would not list the files to compare.",
                             "check the NAS is reachable and try again; nothing was removed.")
             plain = {p: sz for p, (sz, _t) in files.items()}
-            left_out = set(select_import(files)[1])
+            left_out = set(select_files(files, record["policy_id"])[1])
             agreed = {str(x.get("path")) for x in record["skipped"]}
             if left_out - agreed:
                 return stop(f"{len(left_out - agreed)} dump(s) are in the plaintext copy that the "
@@ -628,7 +667,9 @@ def _read_coverage() -> dict[str, Any] | None:
     snaps = cover.get("snapshots") or ([cover["snapshot"]] if cover.get("snapshot") else [])
     if not snaps:
         return None
+    policy = cover.get("policy_id")
     return {"snapshots": [str(x) for x in snaps], "read_back": cover.get("read_back"),
+            "policy_id": policy if policy in POLICIES else WEEKLY,
             "skipped": [x for x in cover.get("skipped") or [] if isinstance(x, dict)]}
 
 
