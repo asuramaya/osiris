@@ -13,6 +13,11 @@ is encrypted). Three choices, recorded as an operator-authorized decision:
   delete               remove it knowing the history that only it holds is lost; a typed
                        confirmation, and only after this choice was recorded.
 
+THE POLICY (the operator's): from each ISO week the newest database dump is imported, every older
+dump of that week is left out on purpose, and all the WAL and base backups are imported whole (so
+the exact-moment rewind window is kept). The proof lists the files left out by name and size, as
+the only files absent from the backup, so whoever confirms the removal sees what goes.
+
 CONVERTED, NOT JUST COPIED. The files are grouped by the day they were made (UTC) and each day
 becomes its own snapshot dated that day (`restic backup --time`, the day's files only, from a
 file list), under the hostname the real backups use and tagged `history-import` and
@@ -264,13 +269,45 @@ def snapshot_listing(deps: Deps, host: str, repo: str, password: bytes,
     return out
 
 
-def compare(plain: dict[str, int], held: Iterable[tuple[str, int]]) -> dict[str, Any]:
-    """Which files exist only in the plaintext copy: a path whose size the backup does not hold."""
+def is_dump(path: str) -> bool:
+    return path.endswith((".sql", ".dump"))
+
+
+def select_import(files: dict[str, tuple[int, float]]) -> tuple[list[str], list[str]]:
+    """The history policy: (paths to import, paths left out on purpose). From every ISO week
+    (UTC, by modified time) the NEWEST database dump is imported (with its twin: the same name
+    and size in the other folder); every older dump of that week is left out. Everything that is
+    not a dump (the WAL archive, the base backups, the bundles) is imported whole, so the
+    exact-moment rewind window those WAL files give is kept."""
+    newest: dict[tuple[int, int], tuple[float, str, int]] = {}
+    for path, (size, mtime) in files.items():
+        if is_dump(path):
+            week = datetime.fromtimestamp(mtime, UTC).isocalendar()[:2]
+            best = newest.get((week[0], week[1]))
+            name = path.rsplit("/", 1)[-1]
+            if best is None or (mtime, name) > (best[0], best[1]):
+                newest[(week[0], week[1])] = (mtime, name, size)
+    keep = {(name, size) for _t, name, size in newest.values()}
+    imported = [p for p, (sz, _t) in files.items()
+                if not is_dump(p) or (p.rsplit("/", 1)[-1], sz) in keep]
+    chosen = set(imported)
+    return sorted(imported), sorted(p for p in files if p not in chosen)
+
+
+def compare(plain: dict[str, int], held: Iterable[tuple[str, int]],
+            accepted: Iterable[str] = ()) -> dict[str, Any]:
+    """Which files exist only in the plaintext copy: a path whose size the backup does not hold.
+    A path in `accepted` was left out on purpose: it is not "only here" but it is listed (by
+    name and size) as `skipped`, so whoever confirms the removal sees exactly what goes."""
     have = set(held)
-    only = sorted(p for p, s in plain.items() if (p, s) not in have)
-    only_bytes = sum(plain[p] for p in only)
-    return {"only_files": len(only), "only_bytes": only_bytes, "only": only[:20],
-            "files": len(plain), "bytes": sum(plain.values())}
+    left_out = set(accepted)
+    missing = sorted(p for p, s in plain.items() if (p, s) not in have)
+    only = [p for p in missing if p not in left_out]
+    skipped = [p for p in missing if p in left_out]
+    return {"only_files": len(only), "only_bytes": sum(plain[p] for p in only), "only": only[:20],
+            "files": len(plain), "bytes": sum(plain.values()),
+            "skipped": [{"path": p, "size": plain[p]} for p in skipped],
+            "skipped_files": len(skipped), "skipped_bytes": sum(plain[p] for p in skipped)}
 
 
 def _fmt_gb(n: float) -> str:
@@ -327,9 +364,13 @@ async def encrypt(
                            "read faithfully).",
                         "check the NAS is on and reachable, then run this again.")
         plain = {p: sz for p, (sz, _t) in files.items()}
-        days = group_by_day(files)
+        imported, left_out = select_import(files)
+        days = group_by_day({p: files[p] for p in imported})
         say(f"[2/{TOTAL}] the plaintext copy holds {len(plain)} files, "
-            f"{_fmt_gb(sum(plain.values()))}, from {len(days)} different days.")
+            f"{_fmt_gb(sum(plain.values()))}. By the history policy {len(imported)} are imported "
+            f"(the newest dump of each week, all the WAL and the base backups), from "
+            f"{len(days)} different days; {len(left_out)} older dumps "
+            f"({_fmt_gb(sum(plain[p] for p in left_out))}) are left out.")
         # 3. one snapshot per day, dated that day, on the NAS
         say(f"[3/{TOTAL}] adding one snapshot per day, dated the day the files were made, on the "
             "NAS itself (it reads local disk, so nothing crosses the network; days already "
@@ -347,21 +388,30 @@ async def encrypt(
         if held is None:
             return stop(4, "the repository would not list the imported snapshots.",
                         "run this again; if it repeats, read `restic ls` on the NAS by hand.")
-        verdict = compare(plain, held.items())
+        verdict = compare(plain, held.items(), accepted=left_out)
         newest = snaps[max(snaps)]
         deps.write_coverage({
             "only_files": verdict["only_files"], "only_bytes": verdict["only_bytes"],
             "files_checked": verdict["files"], "bytes_checked": verdict["bytes"],
             "snapshot": newest, "snapshots": sorted(snaps.values()), "days": len(snaps),
-            "tag": BACKUP_TAG, "checked_at": deps.now().isoformat(),
+            "tag": BACKUP_TAG, "policy": "newest dump of each week, all WAL and base backups",
+            "skipped": verdict["skipped"], "skipped_files": verdict["skipped_files"],
+            "skipped_bytes": verdict["skipped_bytes"], "checked_at": deps.now().isoformat(),
             "method": "plaintext listing on the NAS compared to the imported snapshots, "
                       "path and size"})
         if verdict["only_files"]:
             return stop(4, f"{verdict['only_files']} file(s) are in the plaintext copy and not in "
                            f"the snapshots (first: {verdict['only'][0]}).",
                         "do not remove anything; run this again and read the first name.")
-        say(f"[4/{TOTAL}] proved: all {verdict['files']} files ({_fmt_gb(verdict['bytes'])}) are "
-            f"in the {len(snaps)} snapshots, path and size. Nothing is only in the plaintext copy.")
+        kept = verdict["files"] - verdict["skipped_files"]
+        say(f"[4/{TOTAL}] proved: {kept} files are in the {len(snaps)} snapshots, path and size. "
+            f"The only files NOT in the backup are the {verdict['skipped_files']} older dumps "
+            f"left out on purpose ({_fmt_gb(verdict['skipped_bytes'])}):")
+        for item in verdict["skipped"][:8]:
+            say(f"        left out: {item['path']} ({_fmt_gb(item['size'])})")
+        if verdict["skipped_files"] > 8:
+            say(f"        ... and {verdict['skipped_files'] - 8} more (the whole list is in the "
+                "proof record).")
         # 5. the repository still reads back
         say(f"[5/{TOTAL}] reading back a sample of the repository's data to check it is whole "
             "(a few minutes).")
@@ -517,22 +567,32 @@ async def remove(
             return stop("an offload or restore test is running right now.",
                         "wait a few minutes and try again.")
         if mode == ENCRYPT:
-            cover = _read_coverage_snapshots()
-            if cover is None:
+            record = _read_coverage()
+            if record is None:
                 return stop("no backup of this copy is recorded as proved.",
                             "run the backup first.")
-            plain = await asyncio.to_thread(plaintext_listing, deps, host)
+            cover = record["snapshots"]
+            files = await asyncio.to_thread(plaintext_files, deps, host)
             held = await asyncio.to_thread(snapshot_listing, deps, host, repo, password, cover)
-            if plain is None or held is None:
+            if files is None or held is None:
                 return stop("the NAS or the repository would not list the files to compare.",
                             "check the NAS is reachable and try again; nothing was removed.")
-            verdict = compare(plain, held.items())
+            plain = {p: sz for p, (sz, _t) in files.items()}
+            left_out = set(select_import(files)[1])
+            agreed = {str(x.get("path")) for x in record["skipped"]}
+            if left_out - agreed:
+                return stop(f"{len(left_out - agreed)} dump(s) are in the plaintext copy that the "
+                            "proof did not list as left out (first: "
+                            f"{sorted(left_out - agreed)[0]}).",
+                            "nothing was removed; run the backup again so the list is current.")
+            verdict = compare(plain, held.items(), accepted=agreed)
             if verdict["only_files"]:
                 return stop(f"{verdict['only_files']} file(s) are in the plaintext copy and not in "
                             f"the imported snapshots (first: {verdict['only'][0]}).",
                             "nothing was removed; run the backup again.")
-            say(f"checked just now: all {verdict['files']} files are in the {len(cover)} "
-                f"imported snapshots.")
+            say(f"checked just now: every file is in the {len(cover)} imported snapshots except "
+                f"the {verdict['skipped_files']} older dumps left out on purpose "
+                f"({_fmt_gb(verdict['skipped_bytes'])}).")
         say("removing the two directories on the NAS (nothing else is touched).")
         dirs = " ".join(SOURCE_DIRS)
         tests = " && ".join(f"test -d {d} && test ! -L {d}" for d in SOURCE_DIRS)
@@ -547,15 +607,19 @@ async def remove(
     return 0
 
 
-def _read_coverage_snapshots() -> list[str] | None:
-    """The snapshots the last proof named, only when that proof found nothing left over."""
+def _read_coverage() -> dict[str, Any] | None:
+    """The last proof as {"snapshots", "skipped"}, only when that proof found nothing unaccounted
+    for (the files left out on purpose are listed in it)."""
     from src.orchestrator import at_home
 
     cover = at_home.read_coverage()
     if cover is None or int(cover.get("only_files") or 0) != 0:
         return None
     snaps = cover.get("snapshots") or ([cover["snapshot"]] if cover.get("snapshot") else [])
-    return [str(x) for x in snaps] or None
+    if not snaps:
+        return None
+    return {"snapshots": [str(x) for x in snaps],
+            "skipped": [x for x in cover.get("skipped") or [] if isinstance(x, dict)]}
 
 
 async def close_thread(pool: Any) -> None:
