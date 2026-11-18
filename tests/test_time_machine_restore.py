@@ -295,3 +295,22 @@ async def test_only_the_chosen_links_are_added(moment: Actions, actions: Actions
     with pytest.raises(tr.RestoreError, match="no such planned link"):
         await tr.apply_restore(moment.pool, actions, "tm-k-a", expect_digest=fresh["digest"],
                                actor="operator", link_keys=["l:0"])
+
+
+@pytest.mark.asyncio
+async def test_an_item_merged_since_is_restored_onto_what_it_became_and_the_plan_says_so(
+        moment: Actions, actions: Actions) -> None:
+    await _put(moment, "Decision", "tm-merged-old",
+               {"summary": "the old duplicate", "rationale": "kept for the record"})
+    lold = await _put(actions, "Decision", "tm-merged-old", {"summary": "the old duplicate"})
+    head = await _put(actions, "Decision", "tm-merged-head", {"summary": "the survivor"})
+    await actions.merge_objects(head, lold, "same decision", "test")
+    plan = await tr.plan_restore(moment.pool, actions, "tm-merged-old")
+    obj = plan["object"]
+    assert obj["live_id"] == str(head) and obj["merged_into"]["canonical"] == "tm-merged-head"
+    assert "merged into tm-merged-head" in obj["note"]
+    assert plan["counts"]["copy"] == 1                 # added to the survivor, not the corpse
+    assert [c["name"] for c in plan["assertions"]["copy"]] == ["rationale"]
+    await _put(moment, "Thread", "tm-not-merged", {"summary": "x"})
+    other = await tr.plan_restore(moment.pool, actions, "tm-not-merged")
+    assert other["object"]["merged_into"] is None and other["object"]["note"] is None

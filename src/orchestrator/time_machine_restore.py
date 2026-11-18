@@ -12,6 +12,8 @@ through the normal find-or-create.
 
 THE PLAN COMES FIRST (`plan_restore`, writes nothing). Each assertion lands in one bucket:
   copy       no live value for that property from that source: it is simply added.
+             (An item merged into another since is restored onto the one it became, and the
+             plan says so in `object.merged_into` and `object.note`.)
   skip       live already holds the same value from that source.
   conflict   the operator picks (default: keep live). Two kinds:
                same_source_changed  live holds a DIFFERENT value from the same source;
@@ -70,6 +72,20 @@ async def _live_object_id(actions: Any, type_: str, canonical: str) -> uuid.UUID
     if row is None:
         return None
     return uuid.UUID(str(await actions.resolve_object_id(row)))
+
+
+async def _merged_into(actions: Any, type_: str, canonical: str,
+                       head: uuid.UUID | None) -> dict[str, str] | None:
+    """When the live object of that name was merged into another since, who it is now."""
+    if head is None:
+        return None
+    own = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type=$1 AND canonical=$2", type_, canonical)
+    if own is None or uuid.UUID(str(own)) == head:
+        return None
+    row = await actions.pool.fetchrow("SELECT type, canonical FROM objects WHERE id=$1", head)
+    return {"id": str(head), "type": row["type"] if row else "",
+            "canonical": row["canonical"] if row else ""}
 
 
 async def _moment_object(moment: Any, ref: str) -> Any:
@@ -204,6 +220,7 @@ async def _plan(moment: Any, actions: Any, ref: str, moment_label: str
                 ) -> tuple[dict[str, Any], dict[str, Any]]:
     mo = await _moment_object(moment, ref)
     live_id = await _live_object_id(actions, mo["type"], mo["canonical"])
+    merged = await _merged_into(actions, mo["type"], mo["canonical"], live_id)
     rows = await moment.fetch(
         "SELECT id, name, value::text AS vtext, source_id, confidence, observed_at, "
         "evidence_class, evidence_uri, evidence_sha256 FROM current_assertions "
@@ -226,7 +243,10 @@ async def _plan(moment: Any, actions: Any, ref: str, moment_label: str
         "object": {"type": mo["type"], "canonical": mo["canonical"],
                    "moment_id": str(mo["id"]), "moment_status": mo["status"],
                    "live_id": str(live_id) if live_id else None,
-                   "action": "add_to_existing" if live_id else "create"},
+                   "action": "add_to_existing" if live_id else "create",
+                   "merged_into": merged,
+                   "note": (f"That item was merged into {merged['canonical']} since then, so "
+                            "this adds to that item." if merged else None)},
         "assertions": {"copy": buckets["copy"], "skip": buckets["skip"],
                        "conflicts": buckets["conflicts"]},
         "links": {"copy": _public(links["copy"]), "skip": links["skip"],
