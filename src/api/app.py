@@ -1599,6 +1599,58 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return StreamingResponse(stream_nas(runner), media_type="application/x-ndjson",
                                  headers={"Cache-Control": "no-store"})
 
+    # THE WEEKLY TIDY-UP OF THE NAS HISTORY (osiris repo-thin): the plan the timer made, a fresh
+    # plan, and applying a REVIEWED plan by its id. Loopback only; it removes backup history.
+    @app.get("/backup/thinning")
+    async def backup_thinning_state_route(request: Request) -> JSONResponse:
+        """The latest plan in plain numbers (never the id lists) and the last run."""
+        from src.orchestrator import repo_thinning
+
+        if (denied := _envelope_guard(request)) is not None:
+            return denied
+        state = repo_thinning.read_state()
+        plan = state.get("last_plan") or {}
+        return _envelope_reply({
+            "plan": ({"id": plan.get("id"), "at": plan.get("at"), "snapshots": plan.get("total"),
+                      "to_forget": len(plan.get("remove") or []),
+                      "dumps_to_drop": len(plan.get("drop_dumps") or []),
+                      "freed_bytes": plan.get("freed_bytes"),
+                      "prune_freed_bytes": plan.get("prune_freed_bytes"),
+                      "uncovered": plan.get("uncovered"), "problems": plan.get("problems") or [],
+                      "text": repo_thinning.desk_line(repo_thinning.Plan(**plan))}
+                     if plan else None),
+            "last_run": state.get("last_run")})
+
+    @app.post("/backup/thinning/{which}")
+    async def backup_thinning_run_route(
+        which: str, request: Request, p: asyncpg.Pool = Depends(get_pool),
+    ) -> Any:
+        """`plan`: make a fresh plan (a dry run, about 4 minutes). `apply` with `{plan_id}`: apply
+        that reviewed plan (it refuses one that is not the latest or is over a day old). Streams one
+        JSON line per step like the other At home routes."""
+        import re as _re
+
+        from fastapi import HTTPException
+
+        from src.orchestrator import repo_thinning
+        from src.orchestrator.at_home_nas import stream_nas
+
+        if which not in ("plan", "apply"):
+            raise HTTPException(status_code=404, detail="Use plan or apply.")
+        if (denied := _envelope_guard(request)) is not None:
+            return denied
+        plan_id = None
+        if which == "apply":
+            plan_id = (await _envelope_body(request)).get("plan_id")
+            if not isinstance(plan_id, str) or not _re.fullmatch(r"[0-9a-f]{12}", plan_id):
+                return _envelope_reply({"error": "say which plan to apply"}, 400)
+
+        async def runner(say: Any) -> int:
+            return await repo_thinning.command(pool=p, apply_id=plan_id, say=say)
+
+        return StreamingResponse(stream_nas(runner), media_type="application/x-ndjson",
+                                 headers={"Cache-Control": "no-store"})
+
     @app.get("/backup/restore-points")
     async def backup_restore_points_route(p: asyncpg.Pool = Depends(get_pool)) -> JSONResponse:
         """The console's backup line: last backup, next expected, the oldest restorable point, the

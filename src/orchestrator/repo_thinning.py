@@ -27,7 +27,9 @@ uploads, which are most of the unused space).
 Nothing is removed by surprise:
   - `plan` only looks (restic's own dry runs) and reports what would go and about how much it frees.
   - `apply` does exactly one reviewed plan (by its id): forget, rewrite, prune.
-  - the scheduled run does nothing until one plan has been applied by hand.
+  - the scheduled run only PLANS: it puts the plan and its plain numbers on the operator's desk and
+    refreshes the restore map; nothing is ever applied without the operator's approval of that
+    plan (`--apply <id>`, or the console's Apply button, which does the same).
   - every run needs the home network (never Tailscale), a passed restore test, a recent good
     offload, and the offload lock, so it never meets a backup in the repository.
   - prune repacks at most `MAX_REPACK` per run; run it again to continue.
@@ -512,6 +514,53 @@ def refresh_points(target: dict[str, Any], deps: Deps) -> str | None:
     return None
 
 
+def _stamp_day(name: str) -> str:
+    m = re.match(r"osiris-(\d{4})(\d{2})(\d{2})-", name)
+    return f"{m[1]}-{m[2]}-{m[3]}" if m else ""
+
+
+def desk_line(plan: Plan) -> str | None:
+    """The plain sentence for the operator's desk, or None when nothing is to be approved. Pure."""
+    gone = len(plan.remove)
+    freed = (plan.freed_bytes or 0) + (plan.prune_freed_bytes or 0)
+    if plan.problems or not (gone or plan.drop_dumps or freed >= 10**9):
+        return None
+    days = sorted(d for d in (_stamp_day(n) for n in plan.drop_dumps) if d)
+    dumps = (f" and {len(plan.drop_dumps)} database dumps from {days[0]} to {days[-1]} dropped "
+             f"({plan.dump_bytes / 1e9:.0f} GB)" if days else "")
+    return (f"Backup history: this week's tidy-up is ready for your approval. {gone} of "
+            f"{plan.total} old snapshots would be forgotten{dumps}, giving back about "
+            f"{freed / 1e9:.0f} GB in all. Nothing that lets you rewind to a moment is touched "
+            f"({plan.uncovered} files left uncovered). To approve, press Apply in the console's "
+            f"Backups panel, or run: osiris repo-thin --apply {plan.id} . The plan is good for "
+            "24 hours.")
+
+
+async def tell_desk(pool: Any, plan: Plan, *, now: datetime) -> bool:
+    """Put the plan on the operator desk once (a plan already told is not told again). Never raises:
+    telling the desk must not fail the run."""
+    import logging
+
+    from src.orchestrator.mailbox import send_message
+
+    line = desk_line(plan)
+    if line is None:
+        return False
+    try:
+        state = read_state()
+        if state.get("told_plan") == plan.id:
+            return False
+        await send_message(pool, from_agent="cron:repo_thin", from_project="osiris",
+                           to_project="operator", body=line, desk_kind="decision",
+                           dedup_window_secs=3600)
+        write_state({**read_state(), "told_plan": plan.id, "told_at": now.isoformat()})
+        return True
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).warning("could not tell the desk about the plan",
+                                            exc_info=True)
+        return False
+
+
 def refresh_time_machine(target: dict[str, Any], deps: Deps) -> str | None:
     """Keep the Time Machine's list of NAS-only dump moments fresh from this run's own restic
     runner (one NAS reader, not two). Read only; a failure is reported and never stops the run."""
@@ -527,7 +576,8 @@ async def command(*, pool: Any, apply_id: str | None = None, scheduled: bool = F
                   refresh_only: bool = False, say: Callable[[str], None] = print,
                   deps: Deps | None = None) -> int:
     """The CLI body. Default: make and show a plan (changes nothing). `apply_id`: do that plan.
-    `scheduled`: the timer's run, which does nothing until a plan has been applied by hand."""
+    `scheduled`: the timer's run: it makes a plan, tells the desk (once per plan) and refreshes the
+    restore map, and never applies anything."""
     import asyncio
 
     from src.config.settings import get_settings
@@ -537,12 +587,6 @@ async def command(*, pool: Any, apply_id: str | None = None, scheduled: bool = F
     from src.orchestrator.settings_service import settings_with_overlay
 
     state = read_state()
-    if scheduled and not state.get("approved"):
-        # nothing is forgotten until a plan has been applied by hand; the weekly run still keeps
-        # the restore map fresh
-        say("repo-thin: no plan has been applied by hand yet (osiris repo-thin, then osiris "
-            "repo-thin --apply <id>); only the restore map is rebuilt.")
-        refresh_only = True
     settings = await get_backup_settings(pool)
     target, why = pick_target(settings.get("offload_targets") or [], None)
     if target is None:
@@ -586,27 +630,31 @@ async def command(*, pool: Any, apply_id: str | None = None, scheduled: bool = F
                 return 1
             plan = Plan(**saved)
         else:
-            plan = await asyncio.to_thread(
-                make_plan, target, deps, weeks=weeks, measure=not scheduled)
-            if not scheduled:
-                write_state({**state, "last_plan": plan.as_dict()})
-                for line in describe(plan):
-                    say(line)
-                reason = preconditions(
-                    presence=seen, drill=deps.drill_receipt(str(target.get("path_or_url"))),
-                    offload=deps.offload_receipt(str(target.get("name"))), now=deps.now(),
-                    parse=deps.parse)
-                if reason:
-                    say(f"It would not run now: {reason}.")
-                return 0 if not plan.problems else 1
+            plan = await asyncio.to_thread(make_plan, target, deps, weeks=weeks)
+            write_state({**state, "last_plan": plan.as_dict()})
+            for line in describe(plan):
+                say(line)
+            reason = preconditions(
+                presence=seen, drill=deps.drill_receipt(str(target.get("path_or_url"))),
+                offload=deps.offload_receipt(str(target.get("name"))), now=deps.now(),
+                parse=deps.parse)
+            if reason:
+                say(f"It would not run now: {reason}.")
+            if scheduled:
+                told = await tell_desk(pool, plan, now=deps.now())
+                if told:
+                    say("repo-thin: the plan is on the operator's desk for approval.")
+                for failure in (await asyncio.to_thread(refresh_points, target, deps),
+                                await asyncio.to_thread(refresh_time_machine, target, deps)):
+                    if failure:
+                        say(f"repo-thin: a refresh could not be done: {failure}.")
+                return 0
+            return 0 if not plan.problems else 1
         failure = await asyncio.to_thread(apply_plan, target, deps, plan, say=say)
     except (RuntimeError, ValueError) as exc:
         failure = str(exc)
     run = {"at": now, "plan_id": plan.id, "forgot": len(plan.remove), "failure": failure}
-    new = {**read_state(), "last_run": run}
-    if failure is None:
-        new["approved"] = {"at": now, "plan_id": plan.id}
-    write_state(new)
+    write_state({**read_state(), "last_run": run})
     if failure:
         say(f"repo-thin: stopped: {failure}.")
         return 1
