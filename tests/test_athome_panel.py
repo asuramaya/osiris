@@ -180,13 +180,58 @@ def test_the_old_plaintext_copy_offers_three_choices_before_one_is_made() -> Non
     assert "athome-plain-del-btn" not in html
 
 
-def test_after_choosing_to_back_it_up_the_removal_needs_the_word_remove_typed() -> None:
-    html = str(_node("a.athomePlainHtml({choice:{choice:'encrypt_then_remove'},"
-                     "confirm:{encrypt_then_remove:'remove',delete:'x'}},null)"))
+_RB = "read_back:{passed:true,subset:'1%',at:new Date().toISOString()},"
+_PROOF = ("{only_files:0,only_bytes:0,files_checked:812,bytes_checked:2.8e11,"
+          "snapshots:['a']," + _RB +
+          "skipped:[{path:'vault/dumps/old-1.dump',size:4e9},"
+          "{path:'vault/dumps/old-2.dump',size:3e9}],"
+          "skipped_files:2,skipped_bytes:7e9,checked_at:new Date(Date.now()-3600e3).toISOString()}")
+
+
+def _after_encrypt(cov: str) -> str:
+    return str(_node("a.athomePlainHtml({choice:{choice:'encrypt_then_remove'},coverage:" + cov +
+                     ",confirm:{encrypt_then_remove:'remove',delete:'x'}},null)"))
+
+
+def test_after_choosing_to_back_it_up_the_removal_is_one_click_once_the_proof_is_complete() -> None:
+    html = _after_encrypt(_PROOF)
     assert "Back it up now" in html and "press it again to carry on" in html
-    assert 'data-phrase="remove"' in html
-    assert 'id="athome-plain-remove-btn" disabled' in html
     assert "Keep it" not in html  # no second choice while the copy is being made
+    assert "data-phrase" not in html and "type:" not in html  # nothing to type
+    assert 'id="athome-plain-remove-btn"' in html
+    assert 'id="athome-plain-remove-btn" disabled' not in html
+    # it says exactly what goes: the folders, the checked totals, each skipped dump and its size
+    assert "<code>vault</code>" in html and "<code>checkout-backups</code>" in html
+    assert "812 files, 280 GB checked" in html
+    assert "vault/dumps/old-1.dump" in html and "4.0 GB" in html
+    assert "vault/dumps/old-2.dump" in html
+    assert "2 older dump(s) left out of the backup on purpose, 7.0 GB in all" in html
+
+
+def test_the_removal_stays_disabled_until_the_proof_is_complete_and_says_why() -> None:
+    now = "checked_at:new Date().toISOString()"
+    rb_ok = "read_back:{passed:true,at:new Date(Date.now()+1000).toISOString()},"
+    cases = {
+        "null": "There is no proof yet",
+        "{only_files:3,only_bytes:2e9,snapshots:['a']," + rb_ok + now + "}":
+            "3 file(s) (2.0 GB) are only in the old copy",
+        "{only_files:0,snapshots:['a']," + now + "}":
+            "The read-back test has not been recorded yet.",
+        "{only_files:0,read_back:{passed:false,at:new Date().toISOString()},snapshots:['a']," + now
+        + "}": "read-back of the backup did not pass",
+        "{only_files:0,snapshots:['a'],read_back:{passed:true,at:'2020-01-01T00:00:00Z'}," + now
+        + "}": "read-back test is older than the proof",
+        "{only_files:0,snapshots:['a']," + rb_ok.replace("Date.now()+1000", "Date.now()")
+        + "checked_at:new Date(Date.now()-9*864e5).toISOString()}": "more than 7 days old",
+        "{only_files:0,snapshots:['a']," + rb_ok + "x:1}": "The proof has no date",
+        "{only_files:0," + rb_ok + now + "}": "No backup of this copy is recorded",
+    }
+    for cov, reason in cases.items():
+        html = _after_encrypt(cov)
+        assert 'id="athome-plain-remove-btn" disabled' in html, cov
+        assert reason in html, cov
+    state = _node("a.athomeProofState(" + _PROOF + ", Date.now())")
+    assert isinstance(state, dict) and state["complete"] is True and state["problems"] == []
 
 
 def test_a_kept_copy_says_so() -> None:
@@ -199,9 +244,12 @@ def test_nothing_starts_by_itself_and_the_destructive_ones_are_confirmed() -> No
                "async function athomePlainLoad"):
         body = _JS.split(fn)[1].split("\n}\n")[0]
         assert "'POST'" not in body and "athomeStream(" not in body, fn
-    for fn in ("async function athomePlainDelete", "async function athomePlainRemove"):
-        body = _JS.split(fn)[1].split("\n}\n")[0]
-        assert "box.value.trim() !== box.getAttribute('data-phrase')" in body, fn
+    body = _JS.split("async function athomePlainDelete")[1].split("\n}\n")[0]
+    assert "box.value.trim() !== box.getAttribute('data-phrase')" in body
+    # the removal after a back-up is one click, but it will not even ask the server unless the
+    # recorded proof is complete (the server proves it again regardless)
+    body = _JS.split("async function athomePlainRemove")[1].split("\n}\n")[0]
+    assert "athomeProofState(data.coverage, Date.now()).complete" in body
     assert "'/at-home/plaintext-copy/remove', { confirm:" in _JS
     assert "athomeGB(" in _JS  # the size shown is the server's, in plain gigabytes
 
