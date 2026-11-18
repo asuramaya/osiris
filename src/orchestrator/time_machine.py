@@ -325,10 +325,82 @@ def _docker(sh: Run, cmd: list[str], timeout: float, what: str) -> str:
     return out.stdout or ""
 
 
+def _runner_pid_path(record_path: Path | None = None) -> Path:
+    return (record_path or state_path()).with_suffix(".pid")
+
+
+def _descendants(pid: int) -> list[int]:
+    """Every process below `pid` (children, their children...), read from /proc. A copy from
+    the NAS runs in a session of its own, so the runner's process group does not reach it."""
+    parents: dict[int, int] = {}
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return []
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            stat = Path(f"/proc/{name}/stat").read_text()
+            parents[int(name)] = int(stat.rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+    found: list[int] = []
+    frontier = [pid]
+    while frontier:
+        nxt = [c for c, p in parents.items() if p in frontier and c not in found]
+        found += nxt
+        frontier = nxt
+    return found
+
+
+def _is_our_runner(pid: int) -> bool:
+    """True only for a live process that is this module's detached runner: a pid left in the
+    file after the runner ended can belong to anything now."""
+    try:
+        args = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+    except OSError:
+        return False
+    return b"time-machine" in args and b"run" in args
+
+
+def stop_runner(record_path: Path | None = None, *, wait_secs: float = 5.0) -> bool:
+    """Stop the detached runner of an open (or opening) throwaway, and whatever it started, so
+    cancelling an open does not leave it working on something that is being removed. True when
+    a runner was stopped. Never touches a pid that is not our runner."""
+    import signal
+
+    p = _runner_pid_path(record_path)
+    try:
+        pid = int(p.read_text().strip())
+    except (OSError, ValueError):
+        return False
+    p.unlink(missing_ok=True)
+    if pid == os.getpid() or not _is_our_runner(pid):
+        # the runner itself clears up after a failed open through teardown(): it must never
+        # stop itself half way, so its own pid is left alone
+        return False
+    victims = [*_descendants(pid), pid]
+    for target in victims:
+        with contextlib.suppress(OSError):
+            os.kill(target, signal.SIGTERM)
+    deadline = time.monotonic() + wait_secs
+    while time.monotonic() < deadline and any(Path(f"/proc/{t}").exists() for t in victims):
+        time.sleep(0.1)
+    for target in victims:
+        if Path(f"/proc/{target}").exists():
+            with contextlib.suppress(OSError):
+                os.kill(target, signal.SIGKILL)
+    return True
+
+
 def teardown(*, sh: Run = _default_run, record_path: Path | None = None) -> list[str]:
     """Remove the recorded throwaway and anything else carrying our label. Safe to call
-    twice and when nothing exists. Returns what it removed, for the audit line."""
+    twice and when nothing exists. Stops the runner that is still opening it first. Returns
+    what it removed, for the audit line."""
     removed: list[str] = []
+    if stop_runner(record_path):
+        removed.append("the opening process")
     rec = read_record(record_path)
     names: set[str] = set()
     vols: set[str] = set()
@@ -663,4 +735,6 @@ def spawn_run(moment_id: str, *, at: str | None = None,
              *(["--at", at] if at else [])],
             cwd=str(root), stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
             start_new_session=True)
+    with contextlib.suppress(OSError):
+        _runner_pid_path().write_text(str(proc.pid))
     return int(proc.pid)
