@@ -19,16 +19,20 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import tempfile
+import re
+import shutil
+import tarfile
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from src.orchestrator import restore_points
 from src.orchestrator import time_machine as tm
+from src.orchestrator.instants import parse_time
 
 CACHE_ENV = "OSIRIS_TM_RESTIC_FILE"
 _DEFAULT_CACHE = "~/.local/state/osiris/time_machine_restic.json"
@@ -212,6 +216,25 @@ def restic_moments(vault_dir: Path | None = None, *,
     return out
 
 
+def nas_reason(presence: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+               cache: dict[str, Any] | None = None) -> str | None:
+    """None when something held only on the NAS can be opened right now; otherwise the sentence
+    that says why not (away from home, or the saved map not built yet)."""
+    cache = cache if cache is not None else read_cache()
+    if not cache or not (cache.get("target") or {}).get("path_or_url"):
+        return ("The list of NAS backups has not been built yet. Run `osiris time-machine "
+                "refresh` at home first.")
+    look = presence
+    if look is None:
+        from src.orchestrator.network_presence import lan_presence
+
+        look = lan_presence
+    try:
+        return _home(look(cache.get("target") or {}))
+    except Exception:  # noqa: BLE001 - a failed look at the network means "not now"
+        return "The home network could not be checked."
+
+
 def find_restic_moment(moment_id: str, cache: dict[str, Any] | None = None) -> tm.Moment:
     cache = cache if cache is not None else read_cache()
     name = moment_id.removeprefix("restic-") + ".dump"
@@ -229,8 +252,13 @@ def pull_budget_secs(size_bytes: int) -> float:
     return PULL_BASE_SECS + size_bytes / PULL_MIN_BYTES_PER_SEC
 
 
+SCRATCH_ENV = "OSIRIS_TM_SCRATCH"
+
+
 def scratch_root() -> Path:
-    return Path(os.environ.get("TMPDIR") or tempfile.gettempdir())
+    """Where copies from the NAS are staged: on disk, never the memory-backed /tmp (a base
+    backup and its log are several GB)."""
+    return Path(os.environ.get(SCRATCH_ENV) or "/var/tmp")
 
 
 def pull(moment: tm.Moment, scratch: Path, deps: Deps | None = None,
@@ -281,8 +309,6 @@ def remove_scratch(path: str | Path) -> None:
     p = Path(path)
     if p.name.startswith("osiris-tm-") and p.is_dir():
         with contextlib.suppress(OSError):
-            import shutil
-
             shutil.rmtree(p, ignore_errors=True)
 
 
@@ -314,3 +340,319 @@ async def refresh_command(*, pool: Any, say: Callable[[str], None] = print,
     say(f"time-machine: {len(body['dumps'])} dump(s) found across {body['snapshots']} "
         "snapshot(s); the list of backups you can open is up to date.")
     return 0
+
+
+# --- a point in time held only on the NAS --------------------------------------------------
+#
+# Opening a window the vault no longer has means pulling its base backup and the WAL from the
+# start of that base to the picked time. The catch: the vault thins WAL as it ages, so each
+# snapshot holds only a SLICE of the log (an older slice in older snapshots). The cover is
+# therefore worked out LIVE, at open time, by listing the segments each snapshot holds (one
+# `find` per snapshot, a second or two): never from a saved list, because the set of snapshots
+# changes whenever the repository is thinned. A hole anywhere in the run refuses the open.
+
+_SEG = re.compile(r"^([0-9A-F]{8})([0-9A-F]{8})([0-9A-F]{8})(\.zst)?$")
+_LABEL_FILE = re.compile(r"\(file ([0-9A-F]{24})\)")
+# The time a segment carries is when the vault COPIED it, not when it was archived, and the
+# copies come in batches (every 15 minutes lately, much less often in the past): the segments of
+# one copy run share a stamp to within seconds. So the first segment stamped after the picked
+# time can sit hours before the one that actually holds it. The log is therefore taken through
+# LOG_BATCHES_PAST further copy batches (a batch ends where the stamps jump by BATCH_GAP), and
+# read from a snapshot made TOP_MARGIN after the time so those batches are in it. Postgres stops
+# at the picked time; the extra segments are never replayed.
+BATCH_GAP = timedelta(seconds=120)
+LOG_BATCHES_PAST = 2
+TOP_MARGIN = timedelta(hours=12)
+BASE_CANDIDATES = 8          # snapshots tried when looking for one that holds the base backup
+MAX_PROBES = 60              # snapshots listed at most while building the cover
+
+
+@dataclass(frozen=True)
+class SegRef:
+    pos: int            # log * 256 + segment, within one timeline
+    name: str
+    path: str
+    mtime: datetime
+    size: int
+
+
+def seg_key(name: str) -> tuple[int, int] | None:
+    """(timeline, position) of a WAL segment file name, or None for anything else."""
+    m = _SEG.match(name)
+    if not m:
+        return None
+    return int(m[1], 16), int(m[2], 16) * 256 + int(m[3], 16)
+
+
+def seg_name(tl: int, pos: int, suffix: str = ".zst") -> str:
+    return f"{tl:08X}{pos // 256:08X}{pos % 256:08X}{suffix}"
+
+
+def backup_label_start(base: Path) -> tuple[int, int]:
+    """(timeline, position) of the first WAL segment a base backup needs, read from the
+    `backup_label` it carries (the first member of the archive, so only its start is read)."""
+    try:
+        with tarfile.open(base, "r|gz") as tf:
+            for member in tf:
+                if member.name.lstrip("./") != "backup_label":
+                    continue
+                f = tf.extractfile(member)
+                text = f.read().decode("utf-8", "replace") if f else ""
+                m = _LABEL_FILE.search(text)
+                key = seg_key(m[1]) if m else None
+                if key:
+                    return key
+                break
+    except (tarfile.TarError, OSError, EOFError):
+        pass
+    raise tm.TimeMachineError("The base backup's own label could not be read, so the WAL it "
+                              "needs cannot be worked out.")
+
+
+def segments_of(deps: Deps, snapshot: str) -> dict[int, SegRef]:
+    """The WAL segments one snapshot holds, by position (one `find`, read only)."""
+    proc = deps.run(["find", "--json", "--no-lock", "--snapshot", snapshot, "0000000*"],
+                    timeout=LIST_TIMEOUT_SECS)
+    if proc.returncode != 0:
+        raise tm.TimeMachineError("Could not list the log in a snapshot: " + _tail(proc.stderr))
+    out: dict[int, SegRef] = {}
+    for snap in json.loads(proc.stdout or "[]"):
+        for m in snap.get("matches") or []:
+            path = str(m.get("path") or "")
+            key = seg_key(path.rsplit("/", 1)[-1])
+            when = parse_time(m.get("mtime"))
+            if m.get("type") != "file" or "/wal_archive/" not in path or not key or not when:
+                continue
+            out[key[1]] = SegRef(key[1], path.rsplit("/", 1)[-1], path, when,
+                                 int(m.get("size") or 0))
+    return out
+
+
+@dataclass
+class WalCover:
+    first_pos: int
+    last_pos: int
+    chosen: list[tuple[str, list[SegRef]]]     # (snapshot id, the segments to take from it)
+
+    @property
+    def segments(self) -> int:
+        return sum(len(refs) for _sid, refs in self.chosen)
+
+    @property
+    def bytes(self) -> int:
+        return sum(r.size for _sid, refs in self.chosen for r in refs)
+
+
+def _last_needed(segs: dict[int, SegRef], first_stamped: int) -> int:
+    """The last segment to take: the end of the copy batch `first_stamped` belongs to, plus
+    LOG_BATCHES_PAST more batches (or as far as the snapshot goes)."""
+    positions = sorted(p for p in segs if p >= first_stamped)
+    batches_ended = 0
+    last = positions[0]
+    for prev, nxt in zip(positions, positions[1:], strict=False):
+        if segs[nxt].mtime - segs[prev].mtime > BATCH_GAP:
+            batches_ended += 1
+            if batches_ended > LOG_BATCHES_PAST:
+                break
+        last = nxt
+    return last
+
+
+def plan_wal_cover(*, snapshots: list[tuple[datetime, str]], target: datetime, tl: int,
+                   first_pos: int, segments_in: Callable[[str], dict[int, SegRef]],
+                   max_probes: int = MAX_PROBES) -> WalCover:
+    """Choose which snapshots to take WAL from so the run from `first_pos` to the segment that
+    holds `target` is complete. `snapshots` are (time, id), oldest first. Raises TimeMachineError
+    with a sentence when a segment is missing from every snapshot looked at."""
+    if not snapshots:
+        raise tm.TimeMachineError("The NAS holds no snapshots to read the log from.")
+    ordered = sorted(snapshots)
+    idx = next((i for i, (t, _s) in enumerate(ordered) if t >= target + TOP_MARGIN),
+               len(ordered) - 1)
+    probes = 0
+    last_pos: int | None = None
+    top: dict[int, SegRef] = {}
+    top_id = ""
+    for _t, sid in ordered[idx:idx + 5]:
+        probes += 1
+        segs = segments_in(sid)
+        later = [p for p, r in segs.items() if r.mtime >= target and p >= first_pos]
+        if later:
+            last_pos = _last_needed(segs, min(later))
+            top, top_id = segs, sid
+            break
+    if last_pos is None:
+        raise tm.TimeMachineError("No log was found on the NAS at or after that time, so it "
+                                  "cannot be replayed to.")
+    missing = set(range(first_pos, last_pos + 1))
+    chosen: list[tuple[str, list[SegRef]]] = []
+    seen = {top_id: top}
+
+    def take(sid: str, segs: dict[int, SegRef]) -> None:
+        got = sorted(missing & segs.keys())
+        if got:
+            chosen.append((sid, [segs[p] for p in got]))
+            missing.difference_update(got)
+
+    take(top_id, top)
+    while missing and probes < max_probes:
+        above = max(missing) + 1
+        ref = next((r for _s, refs in chosen for r in refs if r.pos == above), None)
+        est = ref.mtime if ref else target
+        later_c = [(t, s) for t, s in ordered if s not in seen and t >= est]
+        earlier_c = [(t, s) for t, s in reversed(ordered) if s not in seen and t < est]
+        pool = later_c + earlier_c
+        if not pool:
+            break
+        _t, sid = pool[0]
+        probes += 1
+        seen[sid] = segments_in(sid)
+        take(sid, seen[sid])
+    if missing:
+        lost = seg_name(tl, min(missing))
+        raise tm.TimeMachineError(
+            f"The NAS no longer holds a complete run of the log between that backup and that "
+            f"time (segment {lost} is missing from every snapshot looked at), so that time "
+            "cannot be opened. Pick a different time.")
+    return WalCover(first_pos, last_pos, chosen)
+
+
+def _dir_bytes(path: Path) -> int:
+    """Bytes actually written under `path`: restic reserves a file's full size when it starts
+    it, so the length would read "done" at once; the blocks in use grow as the data arrives."""
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            with contextlib.suppress(OSError):
+                total += (Path(root) / name).stat().st_blocks * 512
+    return total
+
+
+@contextlib.contextmanager
+def watch_size(path: Path, total: int, label: str, progress: Callable[[str], None],
+               every: float = 5.0) -> Iterator[None]:
+    """Report "<label> 2.1/3.8 GB" while a restic copy runs, by watching the target grow."""
+    stop = threading.Event()
+
+    def loop() -> None:
+        while not stop.wait(every):
+            done = _dir_bytes(path)
+            with contextlib.suppress(Exception):
+                progress(f"{label} {done / 1e9:.1f}/{total / 1e9:.1f} GB")
+
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        t.join(timeout=10)
+
+
+def _find_base(deps: Deps, base_name: str, window_from: datetime,
+               snaps: list[tuple[datetime, str]]) -> tuple[str, str, int]:
+    """(snapshot id, path, size) of a snapshot that holds the base backup: tried in time order
+    from the window's start, a few at most, since the base outlives only some snapshots."""
+    for _t, sid in [x for x in sorted(snaps) if x[0] >= window_from][:BASE_CANDIDATES]:
+        proc = deps.run(["find", "--json", "--no-lock", "--snapshot", sid, base_name],
+                        timeout=LIST_TIMEOUT_SECS)
+        if proc.returncode != 0:
+            continue
+        for snap in json.loads(proc.stdout or "[]"):
+            for m in snap.get("matches") or []:
+                if m.get("type") == "file" and str(m.get("path", "")).endswith(base_name):
+                    return sid, str(m["path"]), int(m.get("size") or 0)
+    raise tm.TimeMachineError(
+        "The NAS no longer holds the base backup for that window, so it cannot be opened.")
+
+
+def pull_pitr(moment: tm.Moment, scratch: Path, progress: Callable[[str], None],
+              deps: Deps | None = None, target: dict[str, Any] | None = None,
+              free: Callable[[str], int] = tm.free_bytes) -> tuple[Path, Path]:
+    """Copy a window's base backup and the log it needs up to `moment.at` out of the NAS into
+    `scratch`: returns (base backup file, directory of WAL segments). Home network only, the
+    offload tick lock held for the whole pull, reads only (`--no-lock`)."""
+    if not moment.repo_path or not moment.at or not moment.window_from:
+        raise tm.TimeMachineError("that moment does not say which backup it comes from")
+    if deps is None:
+        from src.orchestrator.restic_credential import ResticPasswordMissing, get_restic_password
+
+        target = (read_cache() or {}).get("target") or {}
+        if not target.get("path_or_url"):
+            raise tm.TimeMachineError("The list of NAS backups has not been built yet. Run "
+                                      "`osiris time-machine refresh` at home first.")
+        try:
+            deps = real_deps(target, get_restic_password())
+        except ResticPasswordMissing as exc:
+            raise tm.TimeMachineError(f"The backup repository's password could not be read: "
+                                      f"{exc}") from exc
+    away = _home(deps.presence(target or {}))
+    if away:
+        raise tm.TimeMachineError(away + " That time is only on the NAS, so it can only be "
+                                  "opened at home.")
+    at, window_from = parse_time(moment.at), parse_time(moment.window_from)
+    if at is None or window_from is None:
+        raise tm.TimeMachineError("that moment has no readable time")
+    proc = deps.run(["snapshots", "--json", "--no-lock"], timeout=LIST_TIMEOUT_SECS)
+    if proc.returncode != 0:
+        raise tm.TimeMachineError("Could not list the backup snapshots: " + _tail(proc.stderr))
+    snaps = [(t, str(s["id"])) for s in json.loads(proc.stdout or "[]")
+             if (t := parse_time(s.get("time")))]
+    scratch.mkdir(parents=True, exist_ok=True)
+    with deps.hold_lock() as got:
+        if not got:
+            raise tm.TimeMachineError(
+                "A backup to the NAS is running right now. Try again in a few minutes.")
+        base_snap, base_path, base_size = _find_base(deps, moment.repo_path, window_from, snaps)
+        progress("working out which snapshots hold the log")
+        base_dir = scratch / "base"
+        with watch_size(base_dir, base_size, "pulling base", progress):
+            r = deps.run(["restore", base_snap, "--no-lock", "--target", str(base_dir),
+                          "--include", base_path], timeout=pull_budget_secs(base_size))
+        if r.returncode != 0:
+            raise tm.TimeMachineError("Copying the base backup from the NAS failed: "
+                                      + _tail(r.stderr))
+        files = [p for p in base_dir.rglob(moment.repo_path) if p.is_file()]
+        if len(files) != 1 or (base_size and files[0].stat().st_size != base_size):
+            raise tm.TimeMachineError("The base backup copied from the NAS is not the size "
+                                      "the repository recorded; it was not used.")
+        base_file = files[0]
+        tl, first_pos = backup_label_start(base_file)
+        cache: dict[str, dict[int, SegRef]] = {}
+
+        def listing(sid: str) -> dict[int, SegRef]:
+            if sid not in cache:
+                cache[sid] = segments_of(deps, sid)
+            return cache[sid]
+
+        cover = plan_wal_cover(snapshots=snaps, target=at, tl=tl, first_pos=first_pos,
+                               segments_in=listing)
+        need = base_size * tm.PITR_DISK_FACTOR + cover.bytes
+        if free(str(scratch)) < need:
+            raise tm.TimeMachineError(
+                f"There is not enough disk to open that time: it needs about "
+                f"{int(need) // 2**30} GiB free, only {free(str(scratch)) // 2**30} GiB is free.")
+        wal_dir = scratch / "wal"
+        wal_dir.mkdir()
+        for n, (sid, refs) in enumerate(cover.chosen, start=1):
+            raw = scratch / f"walraw-{n}"
+            listfile = scratch / f"walraw-{n}.txt"
+            listfile.write_text("\n".join(r.path for r in refs) + "\n")
+            label = f"pulling log {n} of {len(cover.chosen)} snapshots"
+            with watch_size(raw, sum(r.size for r in refs), label, progress):
+                r = deps.run(["restore", sid, "--no-lock", "--target", str(raw),
+                              "--include-file", str(listfile)],
+                             timeout=pull_budget_secs(sum(x.size for x in refs)))
+            if r.returncode != 0:
+                raise tm.TimeMachineError("Copying the log from the NAS failed: "
+                                          + _tail(r.stderr))
+            for ref in refs:
+                src = next(raw.rglob(ref.name), None)
+                if src is None or (ref.size and src.stat().st_size != ref.size):
+                    raise tm.TimeMachineError(
+                        f"The log segment {ref.name} copied from the NAS is missing or the "
+                        "wrong size; it was not used.")
+                shutil.move(str(src), wal_dir / ref.name)
+            shutil.rmtree(raw, ignore_errors=True)
+            listfile.unlink(missing_ok=True)
+    return base_file, wal_dir

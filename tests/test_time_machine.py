@@ -315,3 +315,70 @@ def test_spawn_run_detaches_and_logs_to_a_file(tmp_path: Path) -> None:
     assert pid == 4242
     assert seen["cmd"][-3:] == ["time-machine", "run", "osiris-20261115-201856"]  # type: ignore[index]
     assert seen["kw"]["start_new_session"] is True                                # type: ignore[index]
+
+
+def test_an_unknown_key_in_the_record_is_ignored_not_fatal(
+        dump: tm.Moment, tmp_path: Path) -> None:
+    import json
+
+    p = tmp_path / "rec.json"
+    go(dump, FakeDocker(), tmp_path)
+    body = json.loads(p.read_text())
+    body["some_future_field"] = 1
+    p.write_text(json.dumps(body))
+    rec = tm.read_record(p)
+    assert rec is not None and rec.state == "ready"
+
+
+def test_progress_lives_in_its_own_file_so_an_older_reader_is_never_broken(
+        dump: tm.Moment, tmp_path: Path) -> None:
+    import json
+
+    p = tmp_path / "rec.json"
+    rec = go(dump, FakeDocker(), tmp_path)
+    tm._write_progress(rec, "pulling base 1.0/3.8 GB", p)
+    assert "progress" not in json.loads(p.read_text())          # the record itself is unchanged
+    st = tm.status(record_path=p)
+    assert st and "pulling base 1.0/3.8 GB" in st["state_text"]
+    tm._write_record(rec, p)                                    # a new phase clears it
+    rec.progress = ""
+    tm._write_record(rec, p)
+    st2 = tm.status(record_path=p)
+    assert st2 and "pulling base" not in st2["state_text"]
+
+
+def test_a_record_that_cannot_be_read_is_never_taken_for_no_throwaway(
+        dump: tm.Moment, tmp_path: Path) -> None:
+    d = FakeDocker()
+    d.containers.add("osiris-tm-live")
+    d.volumes.add("osiris-tm-vol-live")
+    p = tmp_path / "rec.json"
+    p.write_text("{ this is not json")
+    assert tm.record_unreadable(p)
+    assert tm.reap(sh=d, record_path=p, now=lambda: 10**12) == []
+    assert "osiris-tm-live" in d.containers and "osiris-tm-vol-live" in d.volumes
+    assert not tm.record_unreadable(tmp_path / "no-such.json")
+
+
+def test_the_reaper_clears_old_orphan_scratch_directories_only(
+        dump: tm.Moment, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os as _os
+    import time as _time
+
+    root = tmp_path / "scratch"
+    root.mkdir()
+    monkeypatch.setenv("OSIRIS_TM_SCRATCH", str(root))
+    old, young, owned, other = (root / "osiris-tm-old", root / "osiris-tm-young",
+                                root / "osiris-tm-owned", root / "keep-me")
+    for d in (old, young, owned, other):
+        d.mkdir()
+    ancient = _time.time() - (tm.TTL_SECS + 7200)
+    for d in (old, owned, other):
+        _os.utime(d, (ancient, ancient))
+    rec = go(dump, FakeDocker(), tmp_path)
+    rec.scratch = str(owned)
+    tm._write_record(rec, tmp_path / "rec.json")
+    removed = tm.reap(sh=FakeDocker(), record_path=tmp_path / "rec.json",
+                      now=lambda: rec.started_at + 5)
+    assert removed == ["scratch osiris-tm-old"]
+    assert not old.exists() and young.exists() and owned.exists() and other.exists()

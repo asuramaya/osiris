@@ -38,7 +38,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     (vault / B).write_bytes(b"second dump " * 100)
     _restic(env, "backup", str(vault))
     monkeypatch.setenv(tr.CACHE_ENV, str(tmp_path / "tm_restic.json"))
-    monkeypatch.setenv("TMPDIR", str(tmp_path / "scratch"))
+    monkeypatch.setenv("OSIRIS_TM_SCRATCH", str(tmp_path / "scratch"))
     (tmp_path / "scratch").mkdir()
     local_vault = tmp_path / "local-vault"
     local_vault.mkdir()

@@ -58,13 +58,14 @@ def test_windows_come_from_the_files_on_this_machine(vault: Path) -> None:
     assert m["available"] and m["pick_time"] and m["size_bytes"] == 3000
 
 
-def test_a_nas_only_window_is_listed_but_cannot_be_opened(vault: Path) -> None:
+def test_a_nas_only_window_is_listed_with_whether_it_can_be_opened_now(vault: Path) -> None:
     cache = {"windows": [{"from": "2026-10-19T02:01:38+00:00", "to": "2026-11-01T23:15:07+00:00",
                           "base": "osiris-basebackup-20261018-205720.tar.gz"}]}
-    items = pitr.pitr_moments(vault, cache)
-    old = next(i for i in items if i["id"].endswith("20261018-205720"))
-    assert old["available"] is False and "NAS" in old["reason"]
-    assert next(i for i in items if i["id"] == ID)["available"] is True
+    away = pitr.pitr_moments(vault, cache, presence=lambda _t: {"present": False,
+                                                              "reason": "reachable only over vpn"})
+    old = next(i for i in away if i["id"].endswith("20261018-205720"))
+    assert old["available"] is False and "built yet" in old["reason"]    # no NAS map saved yet
+    assert next(i for i in away if i["id"] == ID)["available"] is True
 
 
 def test_a_time_inside_the_window_gives_a_moment(vault: Path) -> None:
@@ -88,7 +89,7 @@ def test_a_time_outside_a_window_is_refused_with_the_nearest_times(
         assert "nearest restorable times are" in text
 
 
-def test_a_time_covered_only_by_the_nas_says_so(
+def test_a_time_inside_a_nas_only_window_gives_a_nas_moment(
         vault: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import json
 
@@ -97,8 +98,13 @@ def test_a_time_covered_only_by_the_nas_says_so(
         {"from": "2026-10-19T02:01:38+00:00", "to": "2026-11-01T23:15:07+00:00",
          "base": "osiris-basebackup-20261018-205720.tar.gz"}], "gaps": []}))
     monkeypatch.setenv("OSIRIS_RESTORE_POINTS_FILE", str(cache))
-    with pytest.raises(tm.TimeMachineError, match="only by the copy on the NAS"):
-        pitr.find_pitr_moment(ID, "2026-10-25T00:00:00Z", vault)
+    m = pitr.find_pitr_moment("pitr-osiris-basebackup-20261018-205720",
+                              "2026-10-25T00:00:00Z", vault)
+    assert m.kind == "pitr" and m.path == "" and m.repo_path.endswith("205720.tar.gz")  # type: ignore[union-attr]
+    assert m.at == "2026-10-25T00:00:00+00:00" and "NAS" in m.label
+    with pytest.raises(tm.TimeMachineError, match="outside that window"):
+        pitr.find_pitr_moment("pitr-osiris-basebackup-20261018-205720",
+                              "2026-11-16T12:00:00Z", vault)
 
 
 def test_missing_or_unreadable_time_and_unknown_window_are_sentences(vault: Path) -> None:
@@ -244,3 +250,33 @@ def test_a_container_that_vanishes_during_recovery_fails_fast(
         tm.start(_moment(vault), sh=d, record_path=tmp_path / "rec.json",
                  sleep=lambda _s: None, free=lambda _p: 10**12)
     assert not d.containers and not d.volumes
+
+
+def test_the_server_log_gist_keeps_the_lines_that_say_what_went_wrong() -> None:
+    fatal = "FATAL: recovery ended before configured recovery target was reached"
+    log = f"LOG: ok\nLOG: redo done\n{fatal}\nLOG: terminating"
+    assert pitr._log_gist(log) == fatal
+    assert pitr._log_gist("a\nb\nc\nd") == "b | c | d"
+
+
+def test_the_recovery_state_query_spells_the_flag_out_and_the_wait_reads_both_spellings(
+        vault: Path, tmp_path: Path) -> None:
+    assert "CASE WHEN pg_is_in_recovery() THEN 't' ELSE 'f' END" in pitr.RECOVERY_STATE_SQL
+
+    class Spelled(FakeDocker):
+        def __call__(self, cmd: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+            if "pg_is_in_recovery" in " ".join(cmd) and "COALESCE" in " ".join(cmd):
+                self.calls.append(cmd)
+                self.polls -= 1
+                word = "true" if self.polls > 0 else "false"       # what a boolean joined to
+                return subprocess.CompletedProcess(                  # text really prints
+                    cmd, 0, f"{word}|2026-10-22 11:59:57+00\n", "")
+            return super().__call__(cmd, timeout)
+
+    seen: list[str] = []
+    d = Spelled(recovery_polls=3)
+    rec = tm.start(_moment(vault), sh=d, record_path=tmp_path / "rec.json",
+                   sleep=lambda _s: None, free=lambda _p: 10**12,
+                   on_phase=lambda r: seen.append(r.progress))
+    assert rec.state == "ready"
+    assert any(t.startswith("replaying: reached Oct 22 11:59") for t in seen)

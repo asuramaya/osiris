@@ -24,6 +24,10 @@ from src.orchestrator import restore_points
 from src.orchestrator import time_machine as tm
 from src.orchestrator.instants import parse_time
 
+# "t|<time>" while replaying, "f|<time>" once open. (A boolean joined to text reads "true" or
+# "false", so the flag is spelled out here; the wait below accepts either spelling.)
+RECOVERY_STATE_SQL = ("SELECT CASE WHEN pg_is_in_recovery() THEN 't' ELSE 'f' END || '|' || "
+                      "COALESCE(pg_last_xact_replay_timestamp()::text, '')")
 RECOVERY_WAIT_SECS = 3600
 RECOVERY_POLL_SECS = 5
 EXTRACT_TIMEOUT_SECS = 1800
@@ -65,10 +69,17 @@ def _fmt(raw: str) -> str:
     return when.strftime("%Y-%m-%d %H:%M UTC") if when else raw
 
 
-def pitr_moments(vault_dir: Path | None = None,
-                 cache: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Point-in-time moments for the console list: one per window. Local windows can be opened;
-    windows the NAS map knows about that are not on this machine are listed as unavailable."""
+NAS_BASE_ESTIMATE = 5 * 2**30     # what the disk check assumes for a base backup not yet pulled
+
+
+def pitr_moments(vault_dir: Path | None = None, cache: dict[str, Any] | None = None, *,
+                 presence: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+                 ) -> list[dict[str, Any]]:
+    """Point-in-time moments for the console list: one per window. Local windows can always be
+    opened; a window only the NAS still has can be opened while on the home network (else it is
+    listed with the reason it cannot be)."""
+    from src.orchestrator import time_machine_restic as restic
+
     vault = _vault(vault_dir)
     out: list[dict[str, Any]] = []
     local_bases = set()
@@ -83,16 +94,19 @@ def pitr_moments(vault_dir: Path | None = None,
             "when": w["to"], "size_bytes": base.stat().st_size, "available": True,
             "pick_time": True, "window_from": w["from"], "window_to": w["to"],
             "base": w["base"]})
-    for w in ((cache if cache is not None else restore_points.read_cache()) or {}).get(
-            "windows") or []:
-        if w.get("base") in local_bases:
-            continue
-        out.append({
+    nas_windows = [w for w in ((cache if cache is not None else restore_points.read_cache())
+                               or {}).get("windows") or [] if w.get("base") not in local_bases]
+    why = restic.nas_reason(presence) if nas_windows else None
+    for w in nas_windows:
+        item = {
             "id": "pitr-" + str(w["base"]).removesuffix(".tar.gz"), "kind": "pitr",
-            "label": f"any time {_fmt(w['from'])} to {_fmt(w['to'])}",
-            "when": w["to"], "size_bytes": 0, "available": False, "pick_time": True,
-            "reason": "only the copy on the NAS has it; opening that is not built yet",
-            "window_from": w["from"], "window_to": w["to"], "base": w["base"]})
+            "label": f"any time {_fmt(w['from'])} to {_fmt(w['to'])} (NAS)",
+            "when": w["to"], "size_bytes": NAS_BASE_ESTIMATE, "available": why is None,
+            "pick_time": True, "window_from": w["from"], "window_to": w["to"],
+            "base": w["base"]}
+        if why:
+            item["reason"] = why
+        out.append(item)
     out.sort(key=lambda m: str(m["when"]), reverse=True)
     return out
 
@@ -108,15 +122,14 @@ def _spans(windows: list[dict[str, Any]]) -> list[tuple[datetime, datetime]]:
 
 def target_problem(at: datetime, local: dict[str, Any],
                    cache: dict[str, Any] | None) -> str | None:
-    """None when `at` is inside a local window; otherwise a sentence saying why not and what
-    the nearest restorable times are."""
+    """None when `at` is inside a window (local, or one only the NAS holds); otherwise a
+    sentence saying why not and what the nearest restorable times are."""
     lw = _spans(local.get("windows") or [])
     if any(a <= at <= b for a, b in lw):
         return None
     cw = _spans((cache or {}).get("windows") or [])
     if any(a <= at <= b for a, b in cw):
-        return (f"{_fmt(at.isoformat())} is covered, but only by the copy on the NAS, which "
-                "the time machine cannot open yet. Pick a time inside a window listed here.")
+        return None
     spans = sorted({*lw, *cw})
     if not spans:
         return "There is no point-in-time history on this machine to open."
@@ -153,7 +166,19 @@ def find_pitr_moment(moment_id: str, at: str | None,
     if problem:
         raise tm.TimeMachineError(problem)
     if match is None:
-        raise tm.TimeMachineError(f"no such moment: {moment_id!r}")
+        nas = next((w for w in (cache or {}).get("windows") or []
+                    if w.get("base") == base_name), None)
+        if nas is None:
+            raise tm.TimeMachineError(f"no such moment: {moment_id!r}")
+        na, nb = parse_time(nas["from"]), parse_time(nas["to"])
+        if not (na and nb and na <= when <= nb):
+            raise tm.TimeMachineError(
+                f"{_fmt(when.isoformat())} is outside that window ({_fmt(nas['from'])} to "
+                f"{_fmt(nas['to'])}). Pick a time inside it.")
+        return tm.Moment(
+            id=moment_id, kind="pitr", label=f"point in time {_fmt(when.isoformat())} (NAS)",
+            when=when.isoformat(), path="", size_bytes=NAS_BASE_ESTIMATE, at=when.isoformat(),
+            window_from=nas["from"], window_to=nas["to"], repo_path=base_name)
     a, b = parse_time(match["from"]), parse_time(match["to"])
     if not (a and b and a <= when <= b):
         raise tm.TimeMachineError(
@@ -183,12 +208,13 @@ def recovery_server_args() -> tuple[str, ...]:
 
 def materialize(moment: tm.Moment, rec: tm.Throwaway, phase: Callable[[str], None], *,
                 sh: tm.Run, now: Callable[[], float],
-                sleep: Callable[[float], None]) -> None:
+                sleep: Callable[[float], None], wal_dir: Path | None = None,
+                progress: Callable[[str], None] | None = None) -> None:
     """Unpack the base backup into the throwaway's volume, set up recovery to `moment.at`,
     start the server and wait for it to replay and open, then add the reader role."""
     if not moment.at:
         raise tm.TimeMachineError("a point-in-time moment needs the time to open")
-    wal_dir = _vault(None) / "wal_archive"
+    wal_dir = wal_dir or _vault(None) / "wal_archive"
     if not wal_dir.is_dir():
         raise tm.TimeMachineError("the WAL archive is not on this machine")
     image = tm.image_name(sh)
@@ -213,12 +239,31 @@ def materialize(moment: tm.Moment, rec: tm.Throwaway, phase: Callable[[str], Non
         "-p", f"127.0.0.1:{rec.port}:5432",
         "-v", f"{rec.volume}:/var/lib/postgresql/data", "-v", f"{wal_dir}:{wal_dir}:ro",
         image, *recovery_server_args()], 120, "starting the scratch database")
-    wait_until_open(sh, rec.container, now=now, sleep=sleep)
+    wait_until_open(sh, rec.container, now=now, sleep=sleep, progress=progress,
+                    target=moment.at)
     tm.finish_scratch(sh, rec)
 
 
+def replay_text(replayed: str, target: str | None) -> str:
+    """"replaying: reached Oct 30 11:02 of Oct 30 14:00" for the throwaway's status line."""
+    got, want = parse_time(replayed), parse_time(target) if target else None
+    if got is None:
+        return ""
+    text = f"replaying: reached {got:%b %d %H:%M}"
+    return text + (f" of {want:%b %d %H:%M}" if want else "") + " UTC"
+
+
+def _log_gist(text: str) -> str:
+    """The lines of a server log that say what went wrong (FATAL, PANIC, ERROR), else its end."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    hits = [ln for ln in lines if any(w in ln for w in ("FATAL", "PANIC", "ERROR"))]
+    return " | ".join((hits or lines)[-3:])[-500:]
+
+
 def wait_until_open(sh: tm.Run, container: str, *, now: Callable[[], float],
-                    sleep: Callable[[float], None]) -> None:
+                    sleep: Callable[[float], None],
+                    progress: Callable[[str], None] | None = None,
+                    target: str | None = None) -> None:
     """Block until archive recovery has reached the target and the server has opened.
     `pg_isready` is not that signal: a server replaying WAL already answers, long before it has
     reached the target time. Only `pg_is_in_recovery() = false` means it did."""
@@ -226,20 +271,23 @@ def wait_until_open(sh: tm.Run, container: str, *, now: Callable[[], float],
     last = ""
     while now() < deadline:
         r = sh(["docker", "exec", container, "psql", "-U", "osiris", "-d", "postgres", "-tAc",
-                "SELECT pg_is_in_recovery()"], 30)
+                RECOVERY_STATE_SQL], 30)
         out = (r.stdout or "").strip()
-        if r.returncode == 0 and out == "f":
+        flag, _, replayed = out.partition("|")
+        if r.returncode == 0 and flag in ("f", "false"):
             return
         if out:
             last = out
+        if progress and replayed:
+            progress(replay_text(replayed, target))
         state = sh(["docker", "inspect", "-f", "{{.State.Status}}", container], 10)
         status = (state.stdout or "").strip()
         if state.returncode != 0 or not status:
             raise tm.TimeMachineError(
                 "the scratch database is gone (it was removed while replaying to that time)")
         if status != "running":
-            logs = sh(["docker", "logs", "--tail", "20", container], 10)
-            tail = " ".join(((logs.stdout or "") + (logs.stderr or "")).split())[-300:]
+            logs = sh(["docker", "logs", "--tail", "60", container], 10)
+            tail = _log_gist((logs.stdout or "") + (logs.stderr or ""))
             raise tm.TimeMachineError(
                 "the scratch database stopped while replaying to that time"
                 + (f" ({tail})" if tail else "")
