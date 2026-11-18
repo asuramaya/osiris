@@ -141,6 +141,9 @@ async def test_the_history_becomes_one_dated_snapshot_per_day_proved_by_path_and
     # the policy: of the second week's two dumps only the newest (c.sql) is imported
     assert cover["skipped"] == [{"path": "vault/b.dump", "size": 200}]
     assert cover["skipped_files"] == 1 and cover["skipped_bytes"] == 200
+    assert cover["read_back"]["passed"] is True and cover["read_back"]["subset"] == "1%"
+    assert cover["read_back"]["snapshots"] == cover["snapshots"] and cover["read_back"]["at"]
+    assert any(" check --read-data-subset=1%" in c or " check " in c for c, _s in nas.commands)
     assert any("left out: vault/b.dump" in s for s in said)
     assert not any("vault/b.dump" in f for f in nas.listfile)  # it never went to the NAS's list
     assert at_home.read_coverage()["only_files"] == 0  # the checklist reads this very record
@@ -188,6 +191,25 @@ def test_the_policy_imports_the_newest_dump_of_each_week_and_everything_else() -
     assert left_out == ["vault/old-2.sql"]  # old-1 is the newest of the earlier week
     assert set(imported) == set(files) - {"vault/old-2.sql"}
     assert "checkout-backups/new.sql" in imported and "vault/new.sql" in imported
+
+
+async def test_a_failed_read_back_is_recorded_as_not_passed(tmp_path: Path) -> None:
+    nas = FakeNas(PLAIN)
+    nas.check_rc = 1
+
+    rc, _said, deps = await run_encrypt(nas, tmp_path, choice=plaintext_copy.ENCRYPT)
+
+    assert rc == 1
+    assert deps.written[-1]["read_back"]["passed"] is False  # the console sees that it did not
+
+
+async def test_a_new_proof_never_inherits_an_old_read_back(tmp_path: Path) -> None:
+    nas = FakeNas(PLAIN)
+    nas.drop = {"vault/a.sql"}  # the proof stops at step 4, before any read-back
+
+    rc, _said, deps = await run_encrypt(nas, tmp_path, choice=plaintext_copy.ENCRYPT)
+
+    assert rc == 1 and "read_back" not in deps.written[0] and len(deps.written) == 1
 
 
 def test_a_thinning_policy_keeps_every_history_import_snapshot() -> None:
@@ -261,10 +283,13 @@ async def run_remove(nas: FakeNas, tmp_path: Path, confirm: object, **kw: Any) -
     return rc, " ".join(said)
 
 
-def _proved(tmp_path: Path, only: int = 0) -> None:
+def _proved(tmp_path: Path, only: int = 0, read_back: dict[str, Any] | None = None) -> None:
     (tmp_path / "cover.json").write_text(json.dumps(
         {"only_files": only, "only_bytes": 0, "snapshot": "abcdef01",
          "snapshots": ["abcdef01"],
+         "read_back": read_back if read_back is not None else
+         {"passed": True, "subset": "1%", "at": "2026-11-18T09:00:00+00:00",
+          "snapshots": ["abcdef01"]},
          "skipped": [{"path": "vault/b.dump", "size": 200}]}))
 
 
@@ -299,6 +324,24 @@ async def test_removal_after_a_backup_proves_again_and_removes_only_the_two_dire
                        "&& test ! -e checkout-backups && echo removed")
     assert "test ! -L vault" in rm and "test ! -L checkout-backups" in rm  # a link is refused
     assert ROOT in rm and rm.count("rm -rf") == 1
+
+
+async def test_removal_needs_a_read_back_that_passed_for_these_snapshots(tmp_path: Path) -> None:
+    for bad in ({"passed": False, "subset": "1%", "snapshots": ["abcdef01"]},
+                {"passed": True, "subset": "1%", "snapshots": ["someother"]}, "yes", {}):
+        nas = FakeNas(PLAIN, PLAIN)
+        _proved(tmp_path, read_back=bad)  # type: ignore[arg-type]
+
+        rc, said = await run_remove(nas, tmp_path, "remove", choice=plaintext_copy.ENCRYPT)
+
+        assert rc == 1 and not nas.removed and "read-back" in said
+
+    nas = FakeNas(PLAIN, PLAIN)
+    (tmp_path / "cover.json").write_text(json.dumps(
+        {"only_files": 0, "snapshot": "abcdef01", "snapshots": ["abcdef01"],
+         "skipped": [{"path": "vault/b.dump", "size": 200}]}))  # no read_back field at all
+    rc, said = await run_remove(nas, tmp_path, "remove", choice=plaintext_copy.ENCRYPT)
+    assert rc == 1 and not nas.removed and "read-back" in said
 
 
 async def test_a_file_that_appeared_after_the_proof_stops_the_removal(tmp_path: Path) -> None:
