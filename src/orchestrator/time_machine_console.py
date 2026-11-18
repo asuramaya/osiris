@@ -95,6 +95,13 @@ async def start(moment_id: object, at: object = None) -> dict[str, Any]:
             if item is not None and not item["available"]:
                 return {"error": f"{item['reason']} That backup is only on the NAS, so it can "
                                  "only be opened at home."}
+        if moment.kind == "pitr" and not moment.path:
+            from src.orchestrator import time_machine_restic as restic
+
+            why = await asyncio.to_thread(restic.nas_reason)
+            if why:
+                return {"error": f"{why} That time is only on the NAS, so it can only be "
+                                 "opened at home."}
         rec = await asyncio.to_thread(tm.read_record)
         if rec is not None and rec.state != "failed":
             return {"error": f"A past moment is already {rec.state}. Tear it down first."}

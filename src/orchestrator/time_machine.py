@@ -19,6 +19,7 @@ Every docker call goes through an injectable runner, so the lifecycle is tested 
 daemon and the live run uses the same code path."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -29,7 +30,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -46,7 +47,9 @@ TTL_SECS = 2 * 3600
 MAX_EXTENSIONS = 1
 FAILED_KEEP_SECS = 15 * 60       # a failed start's message stays readable this long
 DISK_FACTOR = 3.0
-PITR_DISK_FACTOR = 8.0      # a base backup is compressed; the data directory it unpacks to is not
+# a base backup is compressed; the data directory it unpacks to is not
+PITR_DISK_FACTOR = 8.0
+NAS_PITR_DISK_FACTOR = 8.0
 SCRATCH_MEMORY = "6g"
 RESTORE_TIMEOUT_SECS = 1800
 READY_WAIT_SECS = 60
@@ -111,7 +114,8 @@ class Throwaway:
     extensions: int = 0
     state: str = "starting"     # starting | restoring | ready | failed
     error: str | None = None
-    scratch: str = ""               # a NAS dump's temporary copy, removed with the throwaway
+    scratch: str = ""               # a NAS copy's temporary files, removed with the throwaway
+    progress: str = ""              # what a long step is doing right now, in words
     superuser_password: str = field(default="", repr=False)
     reader_password: str = field(default="", repr=False)
 
@@ -126,7 +130,8 @@ class Throwaway:
         d.pop("reader_password", None)
         d.pop("scratch", None)
         d["seconds_left"] = max(0, int(self.expires_at - time.time()))
-        d["state_text"] = STATE_TEXT.get(self.state, self.state)
+        text = STATE_TEXT.get(self.state, self.state)
+        d["state_text"] = f"{text} {self.progress}".strip() if self.progress else text
         return d
 
 
@@ -183,27 +188,61 @@ def find_moment(moment_id: str, vault_dir: Path | None = None, *,
 
 # --- the one record ----------------------------------------------------------------------
 
+_RECORD_FIELDS = frozenset(f.name for f in fields(Throwaway))
+
+
+def _progress_path(p: Path) -> Path:
+    return p.with_suffix(".progress")
+
+
 def read_record(path: Path | None = None) -> Throwaway | None:
+    """The recorded throwaway, or None when there is none or it cannot be read. Keys this
+    version does not know are ignored (a newer writer may add some), and what a long step is
+    doing right now lives in a side file, so an older reader of the same record is never
+    broken by it."""
     p = path or state_path()
     try:
         raw = json.loads(p.read_text())
-        return Throwaway(**raw)
-    except (OSError, ValueError, TypeError):
+        rec = Throwaway(**{k: v for k, v in raw.items() if k in _RECORD_FIELDS})
+    except (OSError, ValueError, TypeError, AttributeError):
         return None
+    with contextlib.suppress(OSError):
+        rec.progress = _progress_path(p).read_text().strip()
+    return rec
+
+
+def record_unreadable(path: Path | None = None) -> bool:
+    """A record file is there but cannot be read: not the same as "no throwaway"."""
+    p = path or state_path()
+    return p.exists() and read_record(p) is None
 
 
 def _write_record(rec: Throwaway, path: Path | None = None) -> None:
     p = path or state_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
+    body = asdict(rec)
+    body.pop("progress", None)             # in its own file: see read_record
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
-        json.dump(asdict(rec), fh)
+        json.dump(body, fh)
     os.replace(tmp, p)
+    if not rec.progress:
+        _progress_path(p).unlink(missing_ok=True)
+
+
+def _write_progress(rec: Throwaway, text: str, path: Path | None = None) -> None:
+    p = path or state_path()
+    rec.progress = text
+    q = _progress_path(p)
+    q.parent.mkdir(parents=True, exist_ok=True)
+    q.write_text(text)
 
 
 def _clear_record(path: Path | None = None) -> None:
-    (path or state_path()).unlink(missing_ok=True)
+    p = path or state_path()
+    p.unlink(missing_ok=True)
+    _progress_path(p).unlink(missing_ok=True)
 
 
 # --- checks ------------------------------------------------------------------------------
@@ -374,6 +413,7 @@ def start(
     free: Callable[[str], int] = free_bytes,
     on_phase: Callable[[Throwaway], None] | None = None,
     pull: Callable[[Moment, Path], Path] | None = None,
+    pull_pitr: Callable[..., tuple[Path, Path]] | None = None,
 ) -> Throwaway:
     """Bring a throwaway up on `moment` and return it ready. Blocking (a restore takes
     minutes): a caller runs it in a worker and polls `status`. Any failure tears down
@@ -381,7 +421,7 @@ def start(
     (tests pass a fake)."""
     if moment.kind not in ("dump", "pitr", "restic"):
         raise TimeMachineError(f"moment kind {moment.kind!r} is not supported yet")
-    if moment.kind != "restic":
+    if moment.kind != "restic" and not (moment.kind == "pitr" and not moment.path):
         source = Path(moment.path)
         if not source.is_file():
             what = "dump" if moment.kind == "dump" else "base backup"
@@ -395,6 +435,8 @@ def start(
             f"a throwaway is already {existing.state} ({existing.container}); "
             "tear it down first")
     factor = {"pitr": PITR_DISK_FACTOR, "restic": 4.0}.get(moment.kind, DISK_FACTOR)
+    if moment.kind == "pitr" and not moment.path:
+        factor = NAS_PITR_DISK_FACTOR      # the size is an estimate of the pulled base backup
     problem = disk_problem(moment.size_bytes, free(docker_root(sh)), factor=factor)
     if problem:
         raise TimeMachineError(problem)
@@ -411,7 +453,13 @@ def start(
 
     def phase(state: str) -> None:
         rec.state = state
+        rec.progress = ""
         _write_record(rec, record_path)
+        if on_phase:
+            on_phase(rec)
+
+    def progress(text: str) -> None:
+        _write_progress(rec, text, record_path)
         if on_phase:
             on_phase(rec)
 
@@ -420,7 +468,23 @@ def start(
         if moment.kind == "pitr":
             from src.orchestrator import time_machine_pitr as pitr
 
-            pitr.materialize(moment, rec, phase, sh=sh, now=now, sleep=sleep)
+            wal_dir: Path | None = None
+            if not moment.path:                          # a window only the NAS still has
+                from src.orchestrator import time_machine_restic as restic
+
+                scratch = restic.scratch_root() / f"osiris-tm-{tid}"
+                rec.scratch = str(scratch)
+                phase("pulling")
+                base, wal_dir = (pull_pitr or restic.pull_pitr)(moment, scratch, progress)
+                moment = Moment(**{**asdict(moment), "path": str(base)})
+            rec.progress = ""
+            pitr.materialize(moment, rec, phase, sh=sh, now=now, sleep=sleep,
+                             wal_dir=wal_dir, progress=progress)
+            if rec.scratch:
+                from src.orchestrator import time_machine_restic as restic
+
+                restic.remove_scratch(rec.scratch)      # recovery is finished
+                rec.scratch = ""
         elif moment.kind == "restic":
             from src.orchestrator import time_machine_restic as restic
 
@@ -483,6 +547,10 @@ def reap(*, sh: Run = _default_run, record_path: Path | None = None,
     timer. A live, unexpired throwaway is left alone, and so is its own container and
     volume."""
     rec = read_record(record_path)
+    if rec is None and record_unreadable(record_path):
+        # something is there that this version cannot read (a newer writer, a half-written
+        # file): never take that for "no throwaway" and sweep a live one away
+        return []
     keep = rec is not None and (
         now() < rec.started_at + FAILED_KEEP_SECS if rec.state == "failed"
         else now() < rec.expires_at)
@@ -498,8 +566,32 @@ def reap(*, sh: Run = _default_run, record_path: Path | None = None,
             else:
                 sh(["docker", "rm", "-f", "-v", n], 60)
                 removed.append(f"container {n}")
-        return removed
-    return teardown(sh=sh, record_path=record_path)
+        return removed + _sweep_scratch(rec)
+    return teardown(sh=sh, record_path=record_path) + _sweep_scratch(None)
+
+
+def _sweep_scratch(rec: Throwaway | None, now: Callable[[], float] = time.time) -> list[str]:
+    """Remove NAS scratch directories left by a start that died without a record (older than a
+    throwaway can live), never the one a record owns."""
+    from src.orchestrator import time_machine_restic as restic
+
+    root = restic.scratch_root()
+    out: list[str] = []
+    try:
+        entries = list(root.glob("osiris-tm-*"))
+    except OSError:
+        return out
+    for d in entries:
+        if (rec is not None and str(d) == rec.scratch) or not d.is_dir():
+            continue
+        try:
+            age = now() - d.stat().st_mtime
+        except OSError:
+            continue
+        if age > TTL_SECS + 3600:
+            restic.remove_scratch(d)
+            out.append(f"scratch {d.name}")
+    return out
 
 
 def record_failure(moment: Moment, message: str, *, record_path: Path | None = None,

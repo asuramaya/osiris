@@ -577,6 +577,7 @@ def _time_machine_reads_nothing_of_this_machines(
     monkeypatch.setenv("OSIRIS_TIME_MACHINE_STATE", str(own / "time_machine.json"))
     monkeypatch.setenv("OSIRIS_RESTORE_POINTS_FILE", str(own / "restore_points.json"))
     monkeypatch.setenv("OSIRIS_TM_RESTIC_FILE", str(own / "time_machine_restic.json"))
+    monkeypatch.setenv("OSIRIS_TM_SCRATCH", str(own / "scratch"))
     if request.module.__name__.rsplit(".", 1)[-1].startswith("test_time_machine"):
         from src.orchestrator import time_machine
 
