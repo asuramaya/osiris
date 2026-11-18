@@ -232,6 +232,27 @@ class TestRealRepository:
                                   self._deps(repo), repo["target"], free=lambda _p: 10**12)
         assert sorted(p.name for p in wal.iterdir()) == [tr.seg_name(1, p) for p in range(3, 9)]
 
+    def test_the_snapshot_list_is_read_inside_the_tick_lock(self, repo: dict[str, Any],
+                                                            tmp_path: Path) -> None:
+        events: list[str] = []
+        inner = self._deps(repo)
+
+        @contextlib.contextmanager
+        def hold() -> Iterator[bool]:
+            events.append("lock")
+            yield True
+            events.append("unlock")
+
+        def run(args: list[str], *, timeout: float, text: bool = True) -> Any:
+            events.append(args[0])
+            return inner.run(args, timeout=timeout, text=text)
+
+        deps = tr.Deps(run=run, presence=lambda _t: HOME, hold_lock=hold)
+        tr.pull_pitr(self._moment(_ref(5).mtime - timedelta(minutes=1)), tmp_path / "s",
+                     lambda _t: None, deps, repo["target"], free=lambda _p: 10**12)
+        assert events.index("lock") < events.index("snapshots") < events.index("unlock")
+        assert events.count("snapshots") == 1
+
     def test_refusals_away_busy_hole_and_disk(self, repo: dict[str, Any],
                                               tmp_path: Path) -> None:
         at = _ref(9).mtime - timedelta(minutes=30)
@@ -254,6 +275,25 @@ class TestRealRepository:
         with pytest.raises(tm.TimeMachineError, match="no longer holds the base backup"):
             tr.pull_pitr(gone, tmp_path / "e", lambda _t: None, self._deps(repo),
                          repo["target"], free=lambda _p: 10**12)
+
+
+def test_the_log_cover_ignores_another_timeline() -> None:
+    import json as _json
+
+    def deps_for(names: list[str]) -> tr.Deps:
+        def run(args: list[str], *, timeout: float, text: bool = True) -> Any:
+            body = [{"snapshot": "s", "matches": [{
+                "type": "file", "path": f"/v/wal_archive/{n}", "size": 1000,
+                "mtime": "2026-10-19T00:00:00Z"} for n in names]}]
+            return subprocess.CompletedProcess(args, 0, _json.dumps(body), "")
+
+        return tr.Deps(run=run, presence=lambda _t: HOME,
+                       hold_lock=lambda: contextlib.nullcontext(True))
+
+    names = [tr.seg_name(1, 3), tr.seg_name(1, 5), tr.seg_name(2, 4)]    # TL2 has a "4"
+    got = tr.segments_of(deps_for(names), "s", 1)
+    assert sorted(got) == [3, 5]                  # the timeline-2 segment 4 does not fill the hole
+    assert sorted(tr.segments_of(deps_for(names), "s", 2)) == [4]
 
 
 def test_replay_progress_reads_in_words() -> None:
@@ -337,3 +377,23 @@ async def test_the_console_refuses_a_nas_window_away_from_home(
     listing = (await tmc.moments())["moments"]
     nas = [m for m in listing if m["kind"] == "pitr" and m["id"].endswith("205720")]
     assert nas and nas[0]["available"] is False and "vpn" in nas[0]["reason"]
+
+
+def test_the_disk_is_checked_again_after_a_long_nas_pull(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OSIRIS_TM_SCRATCH", str(tmp_path / "scratch"))
+    (tmp_path / "scratch").mkdir()
+
+    def pull(moment: tm.Moment, scratch: Path, progress: Any) -> tuple[Path, Path]:
+        (scratch / "wal").mkdir(parents=True)
+        base = scratch / "base.tar.gz"
+        base.write_bytes(b"b" * 1000)
+        return base, scratch / "wal"
+
+    seen = iter([10**12, 100])        # plenty before the pull, almost none after it
+    d = FakeDocker()
+    with pytest.raises(tm.TimeMachineError, match="not enough disk"):
+        tm.start(_nas_moment(), sh=d, record_path=tmp_path / "rec.json", sleep=lambda _s: None,
+                 free=lambda _p: next(seen), pull_pitr=pull)
+    assert not d.containers and not d.volumes
+    assert not list((tmp_path / "scratch").glob("osiris-tm-*"))

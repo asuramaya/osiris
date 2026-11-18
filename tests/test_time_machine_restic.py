@@ -192,7 +192,8 @@ def test_teardown_and_reap_remove_a_crashed_starts_scratch_copy(
                        port=1, moment={}, started_at=0.0, expires_at=1.0, state="restoring",
                        scratch=str(scratch))
     tm._write_record(rec, tmp_path / "rec.json")
-    tm.reap(sh=FakeDocker(), record_path=tmp_path / "rec.json", now=lambda: 10.0)
+    tm.reap(sh=FakeDocker(), record_path=tmp_path / "rec.json",
+            now=lambda: tm.OPENING_CAP_SECS + 10.0)
     assert not scratch.exists()
     # only a directory this module made is ever removed
     other = tmp_path / "scratch" / "keep-me"

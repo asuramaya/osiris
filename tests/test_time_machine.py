@@ -382,3 +382,68 @@ def test_the_reaper_clears_old_orphan_scratch_directories_only(
                       now=lambda: rec.started_at + 5)
     assert removed == ["scratch osiris-tm-old"]
     assert not old.exists() and young.exists() and owned.exists() and other.exists()
+
+
+def test_the_two_hours_start_when_it_is_ready_not_when_the_open_began(
+        dump: tm.Moment, tmp_path: Path) -> None:
+    clock = {"t": 1000.0}
+
+    def now() -> float:
+        clock["t"] += 100.0           # every look at the clock is a little later: a slow open
+        return clock["t"]
+
+    rec = tm.start(dump, sh=FakeDocker(), record_path=tmp_path / "rec.json",
+                   sleep=lambda _s: None, free=lambda _p: 10**12, now=now)
+    assert rec.state == "ready"
+    assert rec.expires_at > rec.started_at + tm.TTL_SECS          # counted from ready
+    assert rec.expires_at - clock["t"] <= tm.TTL_SECS
+
+
+def test_the_reaper_leaves_a_slow_open_alone_until_the_opening_cap(
+        dump: tm.Moment, tmp_path: Path) -> None:
+    d = FakeDocker()
+    rec = go(dump, d, tmp_path)
+    for state in ("starting", "pulling", "restoring"):
+        rec.state = state
+        tm._write_record(rec, tmp_path / "rec.json")
+        # three hours in: past the two a READY throwaway lives, still opening
+        assert tm.reap(sh=d, record_path=tmp_path / "rec.json",
+                       now=lambda: rec.started_at + 3 * 3600) == []
+        assert rec.container in d.containers
+    gone = tm.reap(sh=d, record_path=tmp_path / "rec.json",
+                   now=lambda: rec.started_at + tm.OPENING_CAP_SECS + 1)
+    assert f"container {rec.container}" in gone and not d.containers
+
+
+def test_a_ready_one_still_expires_after_its_two_hours(
+        dump: tm.Moment, tmp_path: Path) -> None:
+    d = FakeDocker()
+    rec = go(dump, d, tmp_path)
+    assert rec.state == "ready"
+    assert tm.reap(sh=d, record_path=tmp_path / "rec.json",
+                   now=lambda: rec.expires_at - 1) == []
+    assert tm.reap(sh=d, record_path=tmp_path / "rec.json", now=lambda: rec.expires_at + 1)
+
+
+def test_extending_before_it_is_ready_is_refused(dump: tm.Moment, tmp_path: Path) -> None:
+    rec = go(dump, FakeDocker(), tmp_path)
+    rec.state = "pulling"
+    tm._write_record(rec, tmp_path / "rec.json")
+    with pytest.raises(tm.TimeMachineError, match="still being opened"):
+        tm.extend(record_path=tmp_path / "rec.json")
+    st = tm.status(record_path=tmp_path / "rec.json")
+    assert st and 0 < st["seconds_left"] <= tm.OPENING_CAP_SECS     # the opening cap, not 2 h
+
+
+def test_start_refuses_an_unreadable_record_instead_of_overwriting_it(
+        dump: tm.Moment, tmp_path: Path) -> None:
+    p = tmp_path / "rec.json"
+    p.write_text("{ not json")
+    d = FakeDocker()
+    with pytest.raises(tm.TimeMachineError, match="cannot be read.*osiris time-machine teardown"):
+        tm.start(dump, sh=d, record_path=p, sleep=lambda _s: None, free=lambda _p: 10**12)
+    assert p.read_text() == "{ not json" and not d.containers and not d.volumes
+    tm.teardown(sh=d, record_path=p)                                  # the clearing it names
+    assert not p.exists()
+    assert tm.start(dump, sh=d, record_path=p, sleep=lambda _s: None,
+                    free=lambda _p: 10**12).state == "ready"
