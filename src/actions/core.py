@@ -965,6 +965,27 @@ class Actions:
                 {"object_id": str(object_id), "status": status},
             )
 
+    async def record_object_event(
+        self,
+        object_id: uuid.UUID,
+        event_type: str,
+        payload: Json,
+        actor: str,
+        case_id: uuid.UUID | None = None,
+    ) -> int:
+        """Append one object_event (the object's own append-only history) and its audit row.
+        For an act that changes an object through other verbs and wants one line saying so
+        (a restore from a past moment): it never changes the object itself."""
+        async with self._tx() as conn:
+            event_id = cast(int, await conn.fetchval(
+                "INSERT INTO object_events (event_type, object_id, payload, actor, case_id) "
+                "VALUES ($1,$2,$3,$4,$5) RETURNING id",
+                event_type, object_id, payload, actor, case_id))
+            await self._audit(
+                conn, event_type, actor, case_id,
+                {"object_id": str(object_id), "event_id": event_id})
+            return event_id
+
     # --- canonical migration (a rename moves the string, never the uuid) --
 
     async def change_canonical(
