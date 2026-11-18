@@ -85,7 +85,7 @@ def test_deep_links_open_the_section_and_the_palette_uses_them() -> None:
 def test_backups_open_with_one_history_line_and_hold_a_slot_for_past_moments() -> None:
     body = _CONSOLE_JS.split("async function renderSettingsSectionOffload() {", 1)[1][:1500]
     assert body.index('id="settings-backup-line"') < body.index('id="settings-restic-credential"')
-    assert 'id="settings-past-moment"' in body and "Browse a past moment" in body
+    assert "tmSlotHtml()" in body and "tmInit()" in body
     text = _CONSOLE_JS.split("function backupHistoryText(h) {", 1)[1][:900]
     for field in ("h.last_backup", "h.oldest_restorable", "h.gaps", "h.known"):
         assert field in text
@@ -375,3 +375,11 @@ def test_merge_candidates_and_desk_prose_are_captions_and_one_line_cards() -> No
     css = (Path(__file__).parent.parent / "src" / "ui" / "static" / "osiris.css").read_text()
     assert ".desk-body { white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" in css
     assert ".desk-body.open { white-space: pre-wrap; overflow: visible; }" in css
+
+
+def test_backups_show_a_thinning_line_from_the_restore_points() -> None:
+    body = _CONSOLE_JS.split("function thinningText(h, now) {", 1)[1][:1500]
+    assert "h.thinning" in body and "t.last_run" in body and "run.failure" in body
+    assert "t.plan && !t.approved" in body and "Next weekly run" in body
+    shell = _CONSOLE_JS.split("async function renderSettingsSectionOffload() {", 1)[1][:1200]
+    assert 'id="settings-thinning-line"' in shell

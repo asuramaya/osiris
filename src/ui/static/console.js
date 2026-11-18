@@ -1603,13 +1603,12 @@ async function renderSettingsSectionOffload() {
   if (!container) return;
   container.className = '';
   container.innerHTML =
-    '<div id="settings-backup-line" class="o-faint" style="margin-bottom:10px;overflow-wrap:anywhere">Loading backup history…</div>' +
+    '<div id="settings-backup-line" class="o-faint" style="margin-bottom:4px;overflow-wrap:anywhere">Loading backup history…</div>' +
+    '<div id="settings-thinning-line" class="o-faint" style="margin-bottom:10px;overflow-wrap:anywhere"></div>' +
     '<div id="settings-restic-credential" class="o-faint">Loading remote backup password…</div>' +
     '<div id="settings-offload-targets" style="margin-top:12px"></div>' +
     (typeof athomeRestoreBlockHtml === 'function' ? athomeRestoreBlockHtml() : '') +
-    '<div id="settings-past-moment" style="margin-top:14px"><button class="iconbtn" disabled ' +
-    'title="Not available yet">Browse a past moment</button> ' +
-    '<span class="o-faint">Not available yet.</span></div>' +
+    (typeof tmSlotHtml === 'function' ? tmSlotHtml() : '<div id="settings-past-moment"></div>') +
     '<details class="adv-section"><summary>Advanced</summary><div style="margin-top:8px">' +
     '<button class="iconbtn" onclick="runOffloadTick()">Run offload now</button></div></details>' +
     '<div id="settings-backup-status" class="o-faint" style="margin-top:12px">Loading backup status…</div>';
@@ -1617,6 +1616,7 @@ async function renderSettingsSectionOffload() {
     renderResticCredentialWidget(), renderOffloadInto('settings-offload-targets'),
     renderBackupStatusSection(),
   ]);
+  if (typeof tmInit === 'function') tmInit();  // reads only whether a past moment is already open
 }
 // Setting up the remote backup password used to have no route or button.
 async function renderResticCredentialWidget() {
@@ -1711,7 +1711,30 @@ function backupHistoryText(h) {
   if (h.stale) parts.push('This list is more than a week old.');
   return parts.join(' ');
 }
+// The Sunday after `from` (the weekly thinning run), as a short date.
+function nextSundayText(from) {
+  var d = new Date(from.getTime());
+  d.setDate(d.getDate() + ((7 - d.getDay()) % 7 || 7));
+  return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+}
+// One plain line about thinning (the removal of old backups by rule): the last run and the next.
+function thinningText(h, now) {
+  var t = h && h.thinning;
+  if (!t) return '';
+  var parts = [];
+  var run = t.last_run;
+  if (run && run.failure) parts.push('Thinning: the last run (' + fmtWhen(run.at) + ') did not finish: ' + run.failure + '.');
+  else if (run) parts.push('Thinning: last run ' + fmtWhen(run.at) + ', removed ' + (run.forgot == null ? 'some' : run.forgot) + ' old backup(s).');
+  else parts.push('Thinning: has not run yet.');
+  if (t.plan && !t.approved) {
+    parts.push('A plan is waiting for approval: it would free ' + (t.plan.freed_bytes == null ? 'space' : (t.plan.freed_bytes / 1e9).toFixed(1) + ' GB') + '.');
+  }
+  parts.push('Next weekly run: ' + nextSundayText(now || new Date()) + '.');
+  return parts.join(' ');
+}
 function renderBackupHistory(h) {
+  var thin = $('settings-thinning-line');
+  if (thin) thin.textContent = thinningText(h);
   var line = $('settings-backup-line');
   if (line) line.textContent = h ? backupHistoryText(h) : 'Backup history is not available yet.';
   var wait = $('settings-waiting-backup');
@@ -2290,6 +2313,7 @@ const POWER_TOOLS = [
   { label: 'Settings', hint: 'What waits on you, setup, vault keys, backups, the operator desk, appearance, advanced', cat: 'Admin', run: () => renderSettingsPane() },
   { label: 'Vault keys…', hint: 'Settings: the keys that open the vault, a recovery code, a second key', cat: 'Admin', run: () => openSettings('vault') },
   { label: 'Backups…', hint: 'Settings: last backup, offload targets, the restore test', cat: 'Admin', run: () => openSettings('backups') },
+  { label: 'Browse a past moment…', hint: 'Settings, Backups: open an earlier state of the database and bring one item back', cat: 'Admin', run: () => openSettings('backups') },
   { label: 'Operator desk…', hint: 'Settings: proposals, the desk and merge candidates', cat: 'Admin', run: () => openSettings('desk') },
   { label: 'At home…', hint: 'What waits on you: vault keys, a recovery code, the first offload, the restore test', cat: 'Admin', run: () => openSettings('waiting') },
 ];
