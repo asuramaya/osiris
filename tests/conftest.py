@@ -564,6 +564,26 @@ def _host_disk_is_not_a_test_input(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _time_machine_reads_nothing_of_this_machines(
+    request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The time machine's three saved files (the open throwaway's record, the NAS restore map and
+    the NAS dump map) and its vault live under this user's home, and a real `osiris
+    time-machine refresh` run on this box writes the dump map: a test that read it would pass or
+    fail by what the NAS held that day. Every test sees empty ones in its own directory, and the
+    time machine's tests also see an empty vault; a test that needs one sets its own, which
+    wins because it is set later."""
+    own = tmp_path / "time-machine-state"
+    monkeypatch.setenv("OSIRIS_TIME_MACHINE_STATE", str(own / "time_machine.json"))
+    monkeypatch.setenv("OSIRIS_RESTORE_POINTS_FILE", str(own / "restore_points.json"))
+    monkeypatch.setenv("OSIRIS_TM_RESTIC_FILE", str(own / "time_machine_restic.json"))
+    if request.module.__name__.rsplit(".", 1)[-1].startswith("test_time_machine"):
+        from src.orchestrator import time_machine
+
+        monkeypatch.setattr(time_machine, "VAULT_DIR", own / "vault")
+
+
+@pytest.fixture(autouse=True)
 def _network_targets_are_not_resolved(monkeypatch: pytest.MonkeyPatch) -> None:
     """A network offload target is checked for a tunnel route (at home or away) by resolving
     its host and asking the kernel; a test must not depend on this machine's DNS or routes.
