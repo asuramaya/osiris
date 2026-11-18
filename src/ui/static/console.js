@@ -1603,13 +1603,13 @@ async function renderSettingsSectionOffload() {
   if (!container) return;
   container.className = '';
   container.innerHTML =
-    '<div id="settings-backup-line" class="o-faint" style="margin-bottom:10px;overflow-wrap:anywhere">Loading backup history…</div>' +
+    '<div id="settings-backup-line" class="o-faint" style="margin-bottom:4px;overflow-wrap:anywhere">Loading backup history…</div>' +
+    '<div id="settings-thinning-line" class="o-faint" style="margin-bottom:6px;overflow-wrap:anywhere"></div>' +
+    '<div id="settings-thinning" style="margin-bottom:10px"></div>' +
     '<div id="settings-restic-credential" class="o-faint">Loading remote backup password…</div>' +
     '<div id="settings-offload-targets" style="margin-top:12px"></div>' +
     (typeof athomeRestoreBlockHtml === 'function' ? athomeRestoreBlockHtml() : '') +
-    '<div id="settings-past-moment" style="margin-top:14px"><button class="iconbtn" disabled ' +
-    'title="Not available yet">Browse a past moment</button> ' +
-    '<span class="o-faint">Not available yet.</span></div>' +
+    (typeof tmSlotHtml === 'function' ? tmSlotHtml() : '<div id="settings-past-moment"></div>') +
     '<details class="adv-section"><summary>Advanced</summary><div style="margin-top:8px">' +
     '<button class="iconbtn" onclick="runOffloadTick()">Run offload now</button></div></details>' +
     '<div id="settings-backup-status" class="o-faint" style="margin-top:12px">Loading backup status…</div>';
@@ -1617,6 +1617,8 @@ async function renderSettingsSectionOffload() {
     renderResticCredentialWidget(), renderOffloadInto('settings-offload-targets'),
     renderBackupStatusSection(),
   ]);
+  if (typeof tmInit === 'function') tmInit();  // reads only whether a past moment is already open
+  renderThinningApproval();
 }
 // Setting up the remote backup password used to have no route or button.
 async function renderResticCredentialWidget() {
@@ -1711,7 +1713,70 @@ function backupHistoryText(h) {
   if (h.stale) parts.push('This list is more than a week old.');
   return parts.join(' ');
 }
+// The Sunday after `from` (the weekly thinning run), as a short date.
+function nextSundayText(from) {
+  var d = new Date(from.getTime());
+  d.setDate(d.getDate() + ((7 - d.getDay()) % 7 || 7));
+  return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+}
+// One plain line about thinning (the removal of old backups by rule): the last run and the next.
+function thinningText(h, now) {
+  var t = h && h.thinning;
+  if (!t) return '';
+  var parts = [];
+  var run = t.last_run;
+  if (run && run.failure) parts.push('Thinning: the last run (' + fmtWhen(run.at) + ') did not finish: ' + run.failure + '.');
+  else if (run) parts.push('Thinning: last run ' + fmtWhen(run.at) + ', removed ' + (run.forgot == null ? 'some' : run.forgot) + ' old backup(s).');
+  else parts.push('Thinning: has not run yet.');
+  if (t.plan && !t.approved) {
+    parts.push('A plan is waiting for approval: it would free ' + (t.plan.freed_bytes == null ? 'space' : (t.plan.freed_bytes / 1e9).toFixed(1) + ' GB') + '.');
+  }
+  parts.push('Next weekly run: ' + nextSundayText(now || new Date()) + '.');
+  return parts.join(' ');
+}
+// The weekly tidy-up of old backups: the plan the Sunday run made (plan only), approved here with
+// one click. The routes answer on the console's own computer; before they exist the block says nothing.
+function thinningApprovalHtml(d, nowMs) {
+  var plan = d && d.plan;
+  var fresh = ' <button class="iconbtn" onclick="thinningFreshPlan()">Make a fresh plan</button> <span class="o-faint">Takes about 4 minutes.</span>';
+  if (!plan || !plan.text) {
+    return '<div class="o-faint">No tidy-up of old backups is waiting for approval.' + fresh + '</div>';
+  }
+  var age = nowMs - new Date(plan.at).getTime();
+  var old = isNaN(age) || age > 24 * 3600 * 1000;
+  var problems = (plan.problems || []);
+  var blocked = old || problems.length > 0;
+  var why = old ? 'This plan is more than a day old. Make a fresh one.'
+    : (problems.length ? 'It cannot be applied yet: ' + problems.map(esc).join(' ') : '');
+  return '<div style="overflow-wrap:anywhere"><strong>Waiting for your approval:</strong> ' + esc(plan.text) + '</div>' +
+    '<div class="o-faint">Made ' + esc(fmtWhen(plan.at)) + ', good for 24 hours. It only runs at home, and stops if anything changed.</div>' +
+    (why ? '<div style="overflow-wrap:anywhere">' + esc(why) + '</div>' : '') +
+    '<div style="margin:6px 0"><button class="iconbtn" id="thinning-apply" data-plan="' + esc(plan.id) + '"' +
+    (blocked ? ' disabled style="opacity:0.45"' : '') + ' onclick="thinningApply(this)">Approve and apply</button>' + fresh + '</div>';
+}
+async function renderThinningApproval() {
+  var el = $('settings-thinning');
+  if (!el) return;
+  var r = await athomeCall('/backup/thinning');
+  if (r.status === 404 || r.status === 403 || r.status === 0) { el.innerHTML = ''; return; }
+  if (r.status >= 400) { el.textContent = athomeErrorText(r.body, 'The tidy-up plan could not be read.'); return; }
+  el.innerHTML = thinningApprovalHtml(r.body, Date.now()) + '<ol id="settings-thinning-steps" style="margin:6px 0 0 18px"></ol>';
+}
+async function thinningApply(btn) {
+  var id = btn.getAttribute('data-plan');
+  if (!id) return;
+  btn.disabled = true;
+  await athomeRunPost('/backup/thinning/apply', { plan_id: id }, 'settings-thinning-steps');
+  renderThinningApproval();
+  renderBackupStatusSection();
+}
+async function thinningFreshPlan() {
+  await athomeRunPost('/backup/thinning/plan', {}, 'settings-thinning-steps');
+  renderThinningApproval();
+}
 function renderBackupHistory(h) {
+  var thin = $('settings-thinning-line');
+  if (thin) thin.textContent = thinningText(h);
   var line = $('settings-backup-line');
   if (line) line.textContent = h ? backupHistoryText(h) : 'Backup history is not available yet.';
   var wait = $('settings-waiting-backup');
@@ -2290,6 +2355,7 @@ const POWER_TOOLS = [
   { label: 'Settings', hint: 'What waits on you, setup, vault keys, backups, the operator desk, appearance, advanced', cat: 'Admin', run: () => renderSettingsPane() },
   { label: 'Vault keys…', hint: 'Settings: the keys that open the vault, a recovery code, a second key', cat: 'Admin', run: () => openSettings('vault') },
   { label: 'Backups…', hint: 'Settings: last backup, offload targets, the restore test', cat: 'Admin', run: () => openSettings('backups') },
+  { label: 'Browse a past moment…', hint: 'Settings, Backups: open an earlier state of the database and bring one item back', cat: 'Admin', run: () => openSettings('backups') },
   { label: 'Operator desk…', hint: 'Settings: proposals, the desk and merge candidates', cat: 'Admin', run: () => openSettings('desk') },
   { label: 'At home…', hint: 'What waits on you: vault keys, a recovery code, the first offload, the restore test', cat: 'Admin', run: () => openSettings('waiting') },
 ];
