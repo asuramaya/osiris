@@ -111,10 +111,12 @@ def _world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 PLAIN = {"vault/a.sql": 100, "vault/b.dump": 200, "checkout-backups/c.sql": 300}
 
 
-async def run_encrypt(nas: FakeNas, tmp_path: Path, **kw: Any) -> tuple[int, list[str], Any]:
+async def run_encrypt(
+    nas: FakeNas, tmp_path: Path, policy: str = plaintext_copy.WEEKLY, **kw: Any,
+) -> tuple[int, list[str], Any]:
     said: list[str] = []
     deps = _deps(nas, tmp_path, **kw)
-    rc = await plaintext_copy.encrypt(TARGET, PASSWORD, deps, say=said.append)
+    rc = await plaintext_copy.encrypt(TARGET, PASSWORD, deps, say=said.append, policy=policy)
     return rc, said, deps
 
 
@@ -210,6 +212,56 @@ async def test_a_new_proof_never_inherits_an_old_read_back(tmp_path: Path) -> No
     rc, _said, deps = await run_encrypt(nas, tmp_path, choice=plaintext_copy.ENCRYPT)
 
     assert rc == 1 and "read_back" not in deps.written[0] and len(deps.written) == 1
+
+
+async def test_the_daily_policy_adds_only_what_each_day_is_missing(tmp_path: Path) -> None:
+    nas = FakeNas(PLAIN)
+    await run_encrypt(nas, tmp_path, choice=plaintext_copy.ENCRYPT)  # the weekly import first
+    before = [c for c, _s in nas.commands if " backup " in c]
+
+    rc, said, deps = await run_encrypt(nas, tmp_path, policy=plaintext_copy.DAILY,
+                                       choice=plaintext_copy.ENCRYPT)
+
+    assert rc == 0
+    added = [c for c, _s in nas.commands if " backup " in c][len(before):]
+    assert len(added) == 1  # only the day that was missing a file: b.dump's day
+    assert "--tag import-day:2025-08-25" in added[0]
+    assert "--time '2025-08-25 05:33:20'" in added[0]  # b.dump's own time, not the day's newest
+    assert nas.listfile == [f"{ROOT}/vault/b.dump"]  # the top-up holds only the missing dump
+    cover = deps.written[-1]
+    assert cover["only_files"] == 0 and cover["skipped_files"] == 0 and cover["skipped"] == []
+    assert cover["policy_id"] == "daily" and cover["files_checked"] == 3
+    assert len(cover["snapshots"]) == 3 and cover["days"] == 2
+    assert cover["read_back"]["passed"] is True
+    assert any("proved: all 3 files" in s for s in said)
+
+
+async def test_the_daily_import_run_again_adds_nothing(tmp_path: Path) -> None:
+    nas = FakeNas(PLAIN)
+    await run_encrypt(nas, tmp_path, policy=plaintext_copy.DAILY, choice=plaintext_copy.ENCRYPT)
+    before = sum(" backup " in c for c, _s in nas.commands)
+
+    rc, _said, deps = await run_encrypt(nas, tmp_path, policy=plaintext_copy.DAILY,
+                                        choice=plaintext_copy.ENCRYPT)
+
+    assert rc == 0 and sum(" backup " in c for c, _s in nas.commands) == before
+    assert deps.written[-1]["skipped_files"] == 0 and len(deps.written[-1]["snapshots"]) == 2
+
+
+async def test_removal_follows_the_policy_the_proof_was_made_under(tmp_path: Path) -> None:
+    nas = FakeNas(PLAIN, PLAIN)
+    (tmp_path / "cover.json").write_text(json.dumps(
+        {"only_files": 0, "snapshot": "abcdef01", "snapshots": ["abcdef01"],
+         "policy_id": "daily", "skipped": [],
+         "read_back": {"passed": True, "subset": "1%", "at": "x", "snapshots": ["abcdef01"]}}))
+
+    rc, said = await run_remove(nas, tmp_path, "remove", choice=plaintext_copy.ENCRYPT)
+
+    assert rc == 0 and nas.removed
+    # the same record read under the daily policy refuses a file the snapshots do not hold
+    nas2 = FakeNas({**PLAIN, "vault/new.dump": 9}, PLAIN)
+    rc, said = await run_remove(nas2, tmp_path, "remove", choice=plaintext_copy.ENCRYPT)
+    assert rc == 1 and not nas2.removed and "vault/new.dump" in said
 
 
 def test_a_thinning_policy_keeps_every_history_import_snapshot() -> None:
