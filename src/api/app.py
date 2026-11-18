@@ -1599,6 +1599,17 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return StreamingResponse(stream_nas(runner), media_type="application/x-ndjson",
                                  headers={"Cache-Control": "no-store"})
 
+    @app.get("/backup/restore-points")
+    async def backup_restore_points_route(p: asyncpg.Pool = Depends(get_pool)) -> JSONResponse:
+        """The console's backup line: last backup, next expected, the oldest restorable point, the
+        stretches that can be rewound to any moment, the gaps between them, and the repository's
+        size. Read from the saved restore map and the local records, so it answers at once from
+        anywhere (the map itself is rebuilt on the home network by `osiris repo-thin`)."""
+        from src.orchestrator import restore_points
+
+        return JSONResponse(await restore_points.live_status(p),
+                            headers={"Cache-Control": "no-store"})
+
     # THE AT HOME PANEL's plaintext-copy routes (src/orchestrator/plaintext_copy.py has the design):
     # the operator's choice, the encrypted backup of the old NAS copy as a stream of lines, and its
     # removal after a second confirm. Loopback-only like the key routes (`_envelope_guard`): one of
