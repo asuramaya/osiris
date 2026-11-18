@@ -1604,7 +1604,8 @@ async function renderSettingsSectionOffload() {
   container.className = '';
   container.innerHTML =
     '<div id="settings-backup-line" class="o-faint" style="margin-bottom:4px;overflow-wrap:anywhere">Loading backup history…</div>' +
-    '<div id="settings-thinning-line" class="o-faint" style="margin-bottom:10px;overflow-wrap:anywhere"></div>' +
+    '<div id="settings-thinning-line" class="o-faint" style="margin-bottom:6px;overflow-wrap:anywhere"></div>' +
+    '<div id="settings-thinning" style="margin-bottom:10px"></div>' +
     '<div id="settings-restic-credential" class="o-faint">Loading remote backup password…</div>' +
     '<div id="settings-offload-targets" style="margin-top:12px"></div>' +
     (typeof athomeRestoreBlockHtml === 'function' ? athomeRestoreBlockHtml() : '') +
@@ -1617,6 +1618,7 @@ async function renderSettingsSectionOffload() {
     renderBackupStatusSection(),
   ]);
   if (typeof tmInit === 'function') tmInit();  // reads only whether a past moment is already open
+  renderThinningApproval();
 }
 // Setting up the remote backup password used to have no route or button.
 async function renderResticCredentialWidget() {
@@ -1731,6 +1733,46 @@ function thinningText(h, now) {
   }
   parts.push('Next weekly run: ' + nextSundayText(now || new Date()) + '.');
   return parts.join(' ');
+}
+// The weekly tidy-up of old backups: the plan the Sunday run made (plan only), approved here with
+// one click. The routes answer on the console's own computer; before they exist the block says nothing.
+function thinningApprovalHtml(d, nowMs) {
+  var plan = d && d.plan;
+  var fresh = ' <button class="iconbtn" onclick="thinningFreshPlan()">Make a fresh plan</button> <span class="o-faint">Takes about 4 minutes.</span>';
+  if (!plan || !plan.text) {
+    return '<div class="o-faint">No tidy-up of old backups is waiting for approval.' + fresh + '</div>';
+  }
+  var age = nowMs - new Date(plan.at).getTime();
+  var old = isNaN(age) || age > 24 * 3600 * 1000;
+  var problems = (plan.problems || []);
+  var blocked = old || problems.length > 0;
+  var why = old ? 'This plan is more than a day old. Make a fresh one.'
+    : (problems.length ? 'It cannot be applied yet: ' + problems.map(esc).join(' ') : '');
+  return '<div style="overflow-wrap:anywhere"><strong>Waiting for your approval:</strong> ' + esc(plan.text) + '</div>' +
+    '<div class="o-faint">Made ' + esc(fmtWhen(plan.at)) + ', good for 24 hours. It only runs at home, and stops if anything changed.</div>' +
+    (why ? '<div style="overflow-wrap:anywhere">' + esc(why) + '</div>' : '') +
+    '<div style="margin:6px 0"><button class="iconbtn" id="thinning-apply" data-plan="' + esc(plan.id) + '"' +
+    (blocked ? ' disabled style="opacity:0.45"' : '') + ' onclick="thinningApply(this)">Approve and apply</button>' + fresh + '</div>';
+}
+async function renderThinningApproval() {
+  var el = $('settings-thinning');
+  if (!el) return;
+  var r = await athomeCall('/backup/thinning');
+  if (r.status === 404 || r.status === 403 || r.status === 0) { el.innerHTML = ''; return; }
+  if (r.status >= 400) { el.textContent = athomeErrorText(r.body, 'The tidy-up plan could not be read.'); return; }
+  el.innerHTML = thinningApprovalHtml(r.body, Date.now()) + '<ol id="settings-thinning-steps" style="margin:6px 0 0 18px"></ol>';
+}
+async function thinningApply(btn) {
+  var id = btn.getAttribute('data-plan');
+  if (!id) return;
+  btn.disabled = true;
+  await athomeRunPost('/backup/thinning/apply', { plan_id: id }, 'settings-thinning-steps');
+  renderThinningApproval();
+  renderBackupStatusSection();
+}
+async function thinningFreshPlan() {
+  await athomeRunPost('/backup/thinning/plan', {}, 'settings-thinning-steps');
+  renderThinningApproval();
 }
 function renderBackupHistory(h) {
   var thin = $('settings-thinning-line');

@@ -383,3 +383,15 @@ def test_backups_show_a_thinning_line_from_the_restore_points() -> None:
     assert "t.plan && !t.approved" in body and "Next weekly run" in body
     shell = _CONSOLE_JS.split("async function renderSettingsSectionOffload() {", 1)[1][:1200]
     assert 'id="settings-thinning-line"' in shell
+
+
+def test_thinning_approval_is_one_click_on_the_plan_and_never_on_load() -> None:
+    html = _CONSOLE_JS.split("function thinningApprovalHtml(d, nowMs) {", 1)[1].split("\n}\n", 1)[0]
+    assert "plan.text" in html and "24 * 3600 * 1000" in html and "plan.problems" in html
+    assert 'data-plan="' in html and "Approve and apply" in html
+    load = _CONSOLE_JS.split("async function renderThinningApproval() {", 1)[1].split("\n}\n", 1)[0]
+    assert "'POST'" not in load and "athomeRunPost" not in load
+    apply = _CONSOLE_JS.split("async function thinningApply(btn) {", 1)[1].split("\n}\n", 1)[0]
+    assert "'/backup/thinning/apply', { plan_id: id }" in apply
+    fresh = _CONSOLE_JS.split("async function thinningFreshPlan() {", 1)[1].split("\n}\n", 1)[0]
+    assert "'/backup/thinning/plan'" in fresh
