@@ -390,7 +390,7 @@ async def encrypt(
                         "run this again; if it repeats, read `restic ls` on the NAS by hand.")
         verdict = compare(plain, held.items(), accepted=left_out)
         newest = snaps[max(snaps)]
-        deps.write_coverage({
+        record: dict[str, Any] = {
             "only_files": verdict["only_files"], "only_bytes": verdict["only_bytes"],
             "files_checked": verdict["files"], "bytes_checked": verdict["bytes"],
             "snapshot": newest, "snapshots": sorted(snaps.values()), "days": len(snaps),
@@ -398,7 +398,8 @@ async def encrypt(
             "skipped": verdict["skipped"], "skipped_files": verdict["skipped_files"],
             "skipped_bytes": verdict["skipped_bytes"], "checked_at": deps.now().isoformat(),
             "method": "plaintext listing on the NAS compared to the imported snapshots, "
-                      "path and size"})
+                      "path and size"}
+        deps.write_coverage(record)  # no read_back yet: a fresh proof never inherits an old one
         if verdict["only_files"]:
             return stop(4, f"{verdict['only_files']} file(s) are in the plaintext copy and not in "
                            f"the snapshots (first: {verdict['only'][0]}).",
@@ -418,6 +419,9 @@ async def encrypt(
         _lines, rc, err = await asyncio.to_thread(
             _drain, deps, host, _restic(repo, "check", f"--read-data-subset={_CHECK_SUBSET}"),
             password + b"\n")
+        record["read_back"] = {"passed": rc == 0, "subset": _CHECK_SUBSET,
+                               "at": deps.now().isoformat(), "snapshots": record["snapshots"]}
+        deps.write_coverage(record)
         if rc != 0:
             return stop(5, f"the repository check failed ({err or 'no reason given'}).",
                         "the backup is stored but NOT proved readable; do not remove the "
@@ -572,6 +576,12 @@ async def remove(
                 return stop("no backup of this copy is recorded as proved.",
                             "run the backup first.")
             cover = record["snapshots"]
+            read_back = record["read_back"]
+            if not (isinstance(read_back, dict) and read_back.get("passed") is True
+                    and sorted(read_back.get("snapshots") or []) == sorted(cover)):
+                return stop("the read-back check of the backup is not recorded as passed.",
+                            "run the backup step again; it reads a sample of the backup back "
+                            "and records the result.")
             files = await asyncio.to_thread(plaintext_files, deps, host)
             held = await asyncio.to_thread(snapshot_listing, deps, host, repo, password, cover)
             if files is None or held is None:
@@ -618,7 +628,7 @@ def _read_coverage() -> dict[str, Any] | None:
     snaps = cover.get("snapshots") or ([cover["snapshot"]] if cover.get("snapshot") else [])
     if not snaps:
         return None
-    return {"snapshots": [str(x) for x in snaps],
+    return {"snapshots": [str(x) for x in snaps], "read_back": cover.get("read_back"),
             "skipped": [x for x in cover.get("skipped") or [] if isinstance(x, dict)]}
 
 
