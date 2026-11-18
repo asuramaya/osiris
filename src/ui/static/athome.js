@@ -633,6 +633,57 @@ function athomeTypedBox(id, phrase, label, fn) {
     '" oninput="athomePlainPhrase(this, \'' + id + '-btn\')" /> ' +
     '<button class="iconbtn" id="' + id + '-btn" disabled style="opacity:0.45" onclick="' + fn + '">' + athomeText(label) + '</button></div>';
 }
+// ── the removal confirm ────────────────────────────────────────────────────────────────
+// The button is enabled only when the last proof is complete: nothing is only in the old copy,
+// the read-back test passed and is not older than the proof, and the proof is recent. The server checks
+// all of it again just before it deletes; this only keeps the button honest about what it knows.
+var ATHOME_PROOF_DAYS = 7;
+function athomeProofState(cov, nowMs) {
+  var problems = [];
+  if (!cov || cov.only_files == null) {
+    return { complete: false, problems: ['There is no proof yet that the backup holds everything. Press "Back it up now" first.'] };
+  }
+  if (Number(cov.only_files) !== 0) {
+    problems.push(athomeText(cov.only_files) + ' file(s) (' + athomeGB(cov.only_bytes) + ' GB) are only in the old copy.');
+  }
+  var rb = cov.read_back;
+  var rbAt = rb && rb.at ? new Date(rb.at).getTime() : NaN;
+  var checkedAt = cov.checked_at ? new Date(cov.checked_at).getTime() : NaN;
+  if (!rb) problems.push('The read-back test has not been recorded yet.');
+  else if (rb.passed !== true) problems.push('The read-back of the backup did not pass.');
+  else if (isNaN(rbAt) || isNaN(checkedAt) || rbAt < checkedAt) {
+    problems.push('The read-back test is older than the proof, so it has not been recorded for this proof yet.');
+  }
+  if (!(cov.snapshots && cov.snapshots.length) && !cov.snapshot) problems.push('No backup of this copy is recorded.');
+  var at = cov.checked_at ? new Date(cov.checked_at).getTime() : NaN;
+  if (isNaN(at)) problems.push('The proof has no date.');
+  else if (nowMs - at > ATHOME_PROOF_DAYS * 24 * 3600 * 1000) {
+    problems.push('The proof is more than ' + ATHOME_PROOF_DAYS + ' days old. Press "Back it up now" to renew it.');
+  }
+  return { complete: problems.length === 0, problems: problems };
+}
+function athomeSkippedHtml(cov) {
+  var skipped = (cov && cov.skipped) || [];
+  if (!skipped.length) return '';
+  var rows = skipped.map(function (x) {
+    return '<div style="padding:2px 0;' + ATHOME_WRAP + '"><code>' + athomeText(x.path) + '</code> <span class="o-faint">' +
+      athomeText(athomeGB(x.size)) + ' GB</span></div>';
+  }).join('');
+  return '<details open style="margin:6px 0"><summary>' + athomeText(cov.skipped_files != null ? cov.skipped_files : skipped.length) +
+    ' older dump(s) left out of the backup on purpose, ' + athomeText(athomeGB(cov.skipped_bytes)) + ' GB in all</summary>' + rows + '</details>';
+}
+function athomePlainRemoveBlock(cov, nowMs) {
+  var st = athomeProofState(cov, nowMs);
+  var what = '<div style="margin:8px 0;' + ATHOME_WRAP + '">Pressing the button deletes the folders <code>vault</code> and ' +
+    '<code>checkout-backups</code> of the old unencrypted copy on the NAS' +
+    (cov && cov.files_checked != null ? ' (' + athomeText(cov.files_checked) + ' files, ' + athomeText(athomeGB(cov.bytes_checked)) + ' GB checked)' : '') +
+    '. Everything in them is already in the backup, except the older dumps below, which will be gone for good. ' +
+    'It checks everything again just before it deletes, and stops if anything is only in the old copy.</div>';
+  var why = st.complete ? '' : '<div style="margin:6px 0;' + ATHOME_WRAP + '"><strong>Not yet.</strong> ' + st.problems.map(function (p) { return athomeText(p); }).join(' ') + '</div>';
+  return what + athomeSkippedHtml(cov) + why +
+    '<div style="margin:8px 0"><button class="iconbtn" id="athome-plain-remove-btn"' + (st.complete ? '' : ' disabled style="opacity:0.45"') +
+    ' onclick="athomePlainRemove()">Remove the old plaintext copy</button></div>';
+}
 function athomePlainHtml(d, item) {
   d = d || {};
   var cov = d.coverage;
@@ -654,8 +705,7 @@ function athomePlainHtml(d, item) {
   if (choice === 'encrypt_then_remove') {
     after = '<div style="margin:8px 0"><button class="iconbtn" onclick="athomePlainEncrypt()">Back it up now</button> ' +
       '<span class="o-faint">If it stops, press it again to carry on.</span></div>' +
-      athomeTypedBox('athome-plain-remove', confirm.encrypt_then_remove || 'remove', 'Remove the plaintext copy', 'athomePlainRemove()') +
-      '<div class="o-faint">Removing first checks again that nothing is only in the old copy.</div>';
+      athomePlainRemoveBlock(cov, Date.now());
   }
   return head + chosen + (choice === 'encrypt_then_remove' ? '' : '<div style="display:flex;flex-direction:column;gap:10px">' + buttons + '</div>') + after +
     '<div id="athome-plain-msg" class="o-faint" style="margin-top:6px"></div>' +
@@ -706,14 +756,16 @@ async function athomePlainEncrypt() {
   await athomeRunPost('/at-home/plaintext-copy/encrypt', {}, 'athome-plain-steps');
 }
 async function athomePlainRemove() {
-  var box = $('athome-plain-remove');
-  if (!box || box.value.trim() !== box.getAttribute('data-phrase')) return;
-  await athomeRunPost('/at-home/plaintext-copy/remove', { confirm: box.value.trim() }, 'athome-plain-steps');
+  var data = ATHOME_PLAIN.data || {};
+  if (!athomeProofState(data.coverage, Date.now()).complete) return;
+  var phrase = (data.confirm && data.confirm.encrypt_then_remove) || 'remove';
+  var ok = await athomeRunPost('/at-home/plaintext-copy/remove', { confirm: phrase }, 'athome-plain-steps');
+  if (ok) athomeLoadAll();
 }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { athomeStatusLabel, athomeDays, athomeGroupCode, athomeParseLines, athomeErrorText,
                      athomeChecklistHtml, athomeKeysHtml, athomeRestoreHtml, athomeStepHtml, athomeVerdictLabel,
-                     athomeText, athomeAttr, athomeKindLabel, athomePlainHtml, athomeActionHtml, athomeGB, athomeWaitingHtml, athomeKeysBlockHtml,
+                     athomeText, athomeAttr, athomeKindLabel, athomePlainHtml, athomeActionHtml, athomeGB, athomeProofState, athomePlainRemoveBlock, athomeWaitingHtml, athomeKeysBlockHtml,
                      athomeRestoreBlockHtml, athomeWaitingList };
 }
