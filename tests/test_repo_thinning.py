@@ -114,14 +114,16 @@ class Fake:
 @pytest.fixture(autouse=True)
 def _apply_unpaused(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """The pause is tested on its own; every other test exercises the real apply path."""
-    if "paused" not in request.node.name:
-        monkeypatch.setattr(rt, "APPLY_PAUSED", None)
+    monkeypatch.setattr(rt, "APPLY_PAUSED", None)
 
 
-def test_applying_is_paused_and_changes_nothing_until_the_coverage_check_is_rebuilt() -> None:
+def test_the_kill_switch_makes_every_apply_refuse_and_change_nothing(
+        monkeypatch: pytest.MonkeyPatch) -> None:
     fake = Fake()
     plan = rt.make_plan(TARGET, fake.deps())
     fake.calls.clear()
+    monkeypatch.setattr(rt, "APPLY_PAUSED", "applying a plan is paused until the coverage check is "
+                        "rebuilt; nothing was changed")
 
     failure = rt.apply_plan(TARGET, fake.deps(), plan, say=lambda t: None)
 
@@ -167,12 +169,39 @@ def test_dumps_thin_to_the_newest_of_each_day_then_each_week_and_only_real_dump_
     assert all(rt._DUMP_NAME.match(n) for n in drop)
 
 
-def test_the_cover_adds_the_snapshot_a_wal_file_would_otherwise_lose() -> None:
-    kept, lost = rt.cover_snapshots(SNAPS, set(TIER_KEEP), [(SNAPS[4]["time"], SNAPS[3]["time"])])
+def test_the_cover_adds_the_newest_snapshot_that_really_holds_a_file_nothing_kept_holds() -> None:
+    kept, lost = rt.cover_snapshots(SNAPS, set(TIER_KEEP), [{"s3", "s4"}])
 
-    assert lost == 0 and kept == TIER_KEEP | {"s3"}   # the newest snapshot that still holds it
-    same, none = rt.cover_snapshots(SNAPS, set(TIER_KEEP), [(SNAPS[2]["time"], SNAPS[0]["time"])])
-    assert same == TIER_KEEP and none == 0            # already covered: nothing added
+    assert lost == 0 and kept == TIER_KEEP | {"s3"}   # the newest of its holders
+    same, none = rt.cover_snapshots(SNAPS, set(TIER_KEEP), [{"s2", "s3"}])
+    assert same == TIER_KEEP and none == 0            # already held by a kept snapshot
+    _, nobody = rt.cover_snapshots(SNAPS, set(TIER_KEEP), [set(), {"gone"}])
+    assert nobody == 2                                # no holder at all cannot be covered
+
+
+def test_a_partial_kept_snapshot_inside_a_files_time_span_does_not_cover_it() -> None:
+    """The review's probe rv3b: a backdated partial snapshot (kept for ever) sits between the first
+    and last holder of a WAL file but does not hold it. A time-span check called that covered."""
+    snaps = [snap(0, 1), snap(1, 50), snap(2, 100, ["history-import"]), snap(3, 200)]
+    partial = "s2"
+    wal_holders = {"s1", "s3"}                         # the file lives in s1 and s3 only
+
+    kept, lost = rt.cover_snapshots(snaps, {"s0", partial}, [wal_holders])
+
+    assert lost == 0 and "s1" in kept                  # the newest real holder is added
+    assert not (wal_holders & {"s0", partial})
+
+
+def test_the_lost_files_of_a_forget_are_found_from_the_holder_sets() -> None:
+    lives = _lives()
+
+    assert rt.coverage_violations(lives, {"s3", "s4"}, set()) == [WAL_ONLY_IN_MIDDLE]
+    assert rt.coverage_violations(lives, {"s4"}, set()) == []       # s3 still holds it
+    dumps = set(DUMPS)
+    # dropped dumps need no holder
+    assert rt.coverage_violations(lives, {"s0", "s1", "s2"}, dumps) == []
+    assert "osiris-20261118-040000.dump" in rt.coverage_violations(
+        lives, {"s0", "s1", "s2"}, set())                      # a kept dump does
 
 
 def test_the_plan_forgets_only_what_the_cover_allows_and_drops_dumps_by_name() -> None:
@@ -283,7 +312,7 @@ def test_apply_refuses_an_unsafe_or_stale_plan_without_touching_anything() -> No
     plan.uncovered = 0
     plan.drop_dumps = ["wal_archive/0000.zst"]
     assert "not a dump file name" in (rt.apply_plan(TARGET, fake.deps(), plan) or "")
-    plan.drop_dumps = []
+    plan.drop_dumps, plan.drop_paths = [], []
     plan.remove = ["s0"]  # a stale plan that would now drop the newest
     assert "newest snapshot" in (rt.apply_plan(TARGET, fake.deps(), plan) or "")
     assert not any(c[0] in ("forget", "rewrite", "prune") and "--dry-run" not in c
@@ -425,3 +454,54 @@ async def test_the_weekly_run_also_refreshes_the_time_machine_list_and_survives_
     monkeypatch.setattr(time_machine_restic, "refresh_map", boom)
     code, said = await _run(home, Fake(), scheduled=True)
     assert code == 0 and any("RuntimeError" in s for s in said)
+
+
+def test_apply_recomputes_who_holds_every_file_inside_the_lock_and_refuses_a_lost_holder() -> None:
+    """The review's probe rv3c: a kept snapshot that held the only copy of a WAL file was forgotten
+    between the plan and the apply. The apply re-reads the repository and refuses."""
+    fake = Fake()
+    plan = rt.make_plan(TARGET, fake.deps())
+    assert plan.remove == ["s4"] and "s3" in plan.keep
+    changed = Fake(snaps=[s for s in SNAPS if s["id"] != "s3"])    # s3, the other holder, is gone
+
+    failure = rt.apply_plan(TARGET, changed.deps(), plan, say=lambda t: None)
+
+    assert failure and "would be left in no snapshot" in failure and WAL_ONLY_IN_MIDDLE in failure
+    assert not any(c[0] in ("forget", "rewrite", "prune") for c in changed.calls)
+    assert any(c[0] == "find" for c in changed.calls)              # it really re-read the repo
+
+
+def test_apply_refuses_when_a_planned_snapshot_has_gained_a_keep_tag() -> None:
+    fake = Fake()
+    plan = rt.make_plan(TARGET, fake.deps())
+    tagged = Fake(snaps=[{**s, "tags": ["history-import"]} if s["id"] == "s4" else s
+                         for s in SNAPS])
+
+    failure = rt.apply_plan(TARGET, tagged.deps(), plan, say=lambda t: None)
+
+    assert failure and "keep tag" in failure
+    assert not any(c[0] in ("forget", "rewrite", "prune") for c in tagged.calls)
+
+
+@pytest.mark.parametrize("path,names", [
+    ("/home/u/osiris-vault/osiris-20261001-040000.dump*", ["osiris-20261001-040000.dump"]),
+    ("/home/u/osiris-vault/osiris-20261001-0[0-9]0000.dump", ["osiris-20261001-040000.dump"]),
+    ("home/u/osiris-vault/osiris-20261001-040000.dump", ["osiris-20261001-040000.dump"]),
+    ("/home/u/osiris-vault/wal_archive/osiris-20261001-040000.dump",
+     ["osiris-20261001-040000.dump"]),
+    ("/home/u/osiris-vault/osiris-20261002-040000.dump", ["osiris-20261001-040000.dump"]),
+    ("/home/u/osiris-vault/000000010000000100000001.zst", ["000000010000000100000001.zst"]),
+])
+def test_a_dump_path_that_is_not_a_plain_vault_dump_is_refused(path: str, names: list[str]) -> None:
+    plan = rt.make_plan(TARGET, Fake().deps())
+    plan.drop_dumps, plan.drop_paths = names, [path]
+
+    assert rt.drop_path_problem(plan) is not None
+
+
+def test_the_plans_own_dump_paths_pass_and_a_length_mismatch_does_not() -> None:
+    plan = rt.make_plan(TARGET, Fake().deps())
+
+    assert rt.drop_path_problem(plan) is None
+    plan.drop_paths = plan.drop_paths[:-1]
+    assert rt.drop_path_problem(plan) is not None

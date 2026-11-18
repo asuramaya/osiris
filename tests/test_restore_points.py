@@ -39,12 +39,15 @@ def test_classify_picks_only_what_restoring_needs() -> None:
     home = "/home/u/osiris-vault"
     assert rp.classify(f"{home}/wal_archive/000000010000010B000000A6.zst") == (
         "wal", "000000010000010B000000A6.zst")
-    assert rp.classify(f"{home}/wal_archive/000000010000010B000000A6.00000028.backup") is None
     assert rp.classify(f"{home}/basebackups/osiris-basebackup-20261101-165136.tar.gz")[0] == "base"
     assert rp.classify(f"{home}/basebackups/osiris-basebackup-20261101-165136.tar.gz.verified") == (
         "verified", "osiris-basebackup-20261101-165136.tar.gz.verified")
     assert rp.classify(f"{home}/osiris-20261101-165136.dump")[0] == "dump"
     assert rp.classify(f"{home}/osiris-repo.bundle") is None
+    for aux in ("00000002.history", "000000010000010B000000A6.00000028.backup",
+                "000000010000010B000000A6.partial", "000000010000010B000000A6.zst.partial"):
+        assert rp.classify(f"{home}/wal_archive/{aux}") == ("wal_aux", aux)
+    assert rp.classify(f"{home}/wal_archive/readme.txt") is None
     assert rp.classify(f"{home}/osiris-recovery/soul.key.recovery.json") is None
 
 

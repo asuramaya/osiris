@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Exit 0: take a database dump now. Exit 1: skip this one (the NAS is more than 24 hours behind
-and a dump was taken in the last 24 hours). Any trouble reading anything exits 0: never toward
-skipping a dump. Used by osiris_backup.sh before pg_dump."""
+"""Exit 0: take a database dump now. Exit 10 (and ONLY 10): skip this one, the NAS is more than 24
+hours behind and a dump was taken in the last 24 hours. Any other exit code (a crash, a missing
+interpreter, a signal) and any trouble reading anything means take the dump: never toward skipping.
+Used by osiris_backup.sh before pg_dump."""
 from __future__ import annotations
 
 import sys
@@ -9,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+SKIP = 10
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -25,7 +28,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"osiris_dump_gate: could not decide ({type(exc).__name__}); taking the dump")
         return 0
     print(f"osiris_dump_gate: {why}")
-    return 0 if take else 1
+    return 0 if take else SKIP
 
 
 if __name__ == "__main__":

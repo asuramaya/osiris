@@ -48,7 +48,7 @@ def test_the_last_offload_end_reads_the_newest_and_cannot_fail_toward_skipping(
     assert oc.last_offload_end(_write(tmp_path, [1, 2])) is None
 
 
-def test_the_script_exits_one_only_when_away_with_a_recent_dump(
+def test_the_script_exits_ten_only_when_away_with_a_recent_dump(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -65,7 +65,7 @@ def test_the_script_exits_one_only_when_away_with_a_recent_dump(
     receipts.write_text(ended(timedelta(hours=2)))
     assert gate.main([str(vault)]) == 0                       # up to date
     receipts.write_text(ended(timedelta(days=3)))
-    assert gate.main([str(vault)]) == 1                       # away, one dump already today
+    assert gate.main([str(vault)]) == 10                      # away, one dump already today
     os.utime(dump, ((now - timedelta(hours=30)).timestamp(),) * 2)
     assert gate.main([str(vault)]) == 0                       # away, but none in 24 hours
     receipts.write_text("{broken")
@@ -79,3 +79,6 @@ def test_the_backup_script_takes_the_uncompressed_format_and_asks_the_gate_first
     assert "pg_dump -U osiris -d osiris -Fc -Z0" in text
     assert text.index("osiris_dump_gate.py") < text.index("pg_dump -U osiris")
     assert "osiris_disk_guard.py" in text
+    # ONLY the gate's own skip code (10) skips the dump; a crash or any other code takes it
+    assert "osiris_dump_gate.py\" \"$VAULT\"; [ $? -eq 10 ]" in text
+    assert gate.SKIP == 10

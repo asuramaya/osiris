@@ -37,7 +37,6 @@ Nothing is removed by surprise:
 Never raises to the caller: every refusal is a plain reason."""
 from __future__ import annotations
 
-import bisect
 import hashlib
 import json
 import os
@@ -60,11 +59,9 @@ DUMP_DAILY_DAYS = 30
 DUMP_SHARE_FREED = 0.86         # consecutive dumps share 13-15% of their chunks (measured)
 MAX_REPACK = "20G"
 MAX_UNUSED = "5%"
-# Applying a plan is PAUSED while the coverage check is rebuilt to read the snapshots that really
-# hold each file (it assumed every snapshot between a file's first and last holder holds it, which
-# a partial backdated snapshot breaks). Nothing is lost today; this keeps it so. Planning works.
-APPLY_PAUSED: str | None = ("applying a plan is paused until the coverage check is rebuilt; "
-                            "nothing was changed")
+# A kill switch: set to a sentence to make every apply (CLI and console) refuse with it, changing
+# nothing. Planning still works.
+APPLY_PAUSED: str | None = None
 PLAN_MAX_AGE = timedelta(hours=24)
 DRILL_MAX_AGE = timedelta(days=14)
 OFFLOAD_MAX_AGE = timedelta(days=3)
@@ -141,12 +138,15 @@ class Life:
     first: str     # time of the oldest snapshot holding it
     last: str      # time of the newest
     path: str
+    holders: set[str] = field(default_factory=set)   # the ids of EVERY snapshot that holds it
 
 
 def file_lifetimes(run: Callable[..., Any], snapshots: list[dict[str, Any]], *,
                    chunk: int = 20) -> dict[str, Life]:
-    """For every restore-relevant file (WAL, base backup and its marker, live-vault dump): its size
-    and which snapshots hold it (first and last), read a few snapshots at a time."""
+    """For every restore-relevant file (WAL and its history/label files, base backup and its marker,
+    live-vault dump): its size and the exact set of snapshots that hold it (from `restic find`, a
+    few snapshots at a time). Coverage is decided from these sets, never from a time span: a partial
+    snapshot inside the span does not hold what the span's ends hold."""
     from src.orchestrator import restore_points
 
     when = {str(s["id"]): str(s.get("time")) for s in snapshots}
@@ -161,7 +161,8 @@ def file_lifetimes(run: Callable[..., Any], snapshots: list[dict[str, Any]], *,
             raise RuntimeError("restic find failed: "
                                + ((proc.stderr or "").strip().splitlines()[-1:] or [""])[0][:300])
         for snap in json.loads(proc.stdout or "[]"):
-            at = when.get(str(snap.get("snapshot")), "")
+            sid = str(snap.get("snapshot"))
+            at = when.get(sid, "")
             for m in snap.get("matches") or []:
                 if m.get("type") != "file":
                     continue
@@ -172,9 +173,10 @@ def file_lifetimes(run: Callable[..., Any], snapshots: list[dict[str, Any]], *,
                 cur = lives.get(name)
                 if cur is None:
                     lives[name] = Life(kind, int(m.get("size") or 0), str(m.get("mtime")), at, at,
-                                       str(m.get("path")))
+                                       str(m.get("path")), {sid})
                 else:
                     cur.first, cur.last = min(cur.first, at), max(cur.last, at)
+                    cur.holders.add(sid)
     return lives
 
 
@@ -202,25 +204,35 @@ def dump_drop_list(lives: dict[str, Life], *, now: datetime,
 
 
 def cover_snapshots(snapshots: list[dict[str, Any]], kept_ids: set[str],
-                    intervals: list[tuple[str, str]]) -> tuple[set[str], int]:
-    """Add to `kept_ids` just enough snapshots that every (first, last) interval contains the time
-    of a kept snapshot. Returns (the new kept ids, how many intervals could not be covered)."""
-    by_time = sorted((str(s.get("time")), str(s["id"])) for s in snapshots)
-    times = [t for t, _ in by_time]
+                    holder_sets: list[set[str]]) -> tuple[set[str], int]:
+    """Add to `kept_ids` just enough snapshots that every file's holder set contains a kept
+    snapshot: a file with no kept holder gets its NEWEST holder added. Returns (the new kept ids,
+    how many files have no holder at all and so cannot be covered)."""
+    time_of = {str(s["id"]): str(s.get("time")) for s in snapshots}
     kept = set(kept_ids)
-    kept_times = sorted(t for t, i in by_time if i in kept)
     lost = 0
-    for first, last in sorted(intervals, key=lambda x: x[1]):
-        j = bisect.bisect_left(kept_times, first)
-        if j < len(kept_times) and kept_times[j] <= last:
-            continue
-        k = bisect.bisect_right(times, last) - 1
-        if k < 0 or times[k] < first:
+    for holders in sorted(holder_sets, key=len):       # the files with fewest holders choose first
+        live = {h for h in holders if h in time_of}
+        if not live:
             lost += 1
             continue
-        kept.add(by_time[k][1])
-        bisect.insort(kept_times, times[k])
+        if live & kept:
+            continue
+        kept.add(max(live, key=lambda h: (time_of[h], h)))
     return kept, lost
+
+
+def coverage_violations(lives: dict[str, Life], remove_ids: set[str],
+                        drop_dumps: set[str]) -> list[str]:
+    """The files (by name) that would have NO holder left if `remove_ids` were forgotten, among
+    every WAL file, base backup and marker, and every dump not meant to be dropped. Pure."""
+    out = []
+    for name, life in lives.items():
+        needed = life.kind in ("wal", "wal_aux", "base", "verified") or (
+            life.kind == "dump" and name not in drop_dumps)
+        if needed and not (life.holders - remove_ids):
+            out.append(name)
+    return sorted(out)
 
 
 def safety_problems(snapshots: list[dict[str, Any]], kept_ids: set[str],
@@ -256,17 +268,17 @@ def build_plan(snapshots: list[dict[str, Any]], policy_keep: list[dict[str, Any]
     drop = dump_drop_list(lives, now=now, weeks=weeks)
     drop_set = set(drop)
     tagged = {str(s["id"]) for s in snapshots if set(s.get("tags") or []) & set(KEEP_TAGS)}
-    intervals = [(v.first, v.last) for n, v in lives.items()
-                 if v.kind in ("wal", "base", "verified")
-                 or (v.kind == "dump" and n not in drop_set)]
+    needed = [v.holders for n, v in lives.items()
+              if v.kind in ("wal", "wal_aux", "base", "verified")
+              or (v.kind == "dump" and n not in drop_set)]
     kept_ids, uncovered = cover_snapshots(
-        snapshots, {str(s["id"]) for s in policy_keep} | tagged, intervals)
+        snapshots, {str(s["id"]) for s in policy_keep} | tagged, needed)
     removed = [s for s in snapshots if str(s["id"]) not in kept_ids]
     kept = [s for s in snapshots if str(s["id"]) in kept_ids]
-    # kept, untagged snapshots that hold a dropped dump get rewritten without it
-    spans = [(lives[n].first, lives[n].last) for n in drop]
+    # kept, untagged snapshots that really hold a dropped dump get rewritten without it
+    holding = set().union(*(lives[n].holders for n in drop)) if drop else set()
     rewrite = [str(s["id"]) for s in kept if str(s["id"]) not in tagged
-               and any(a <= str(s.get("time")) <= b for a, b in spans)]
+               and str(s["id"]) in holding]
     ids = [str(s["id"]) for s in removed]
     return Plan(
         id=fingerprint(ids + rewrite, policy_args, drop), at=now.isoformat(),
@@ -386,6 +398,24 @@ def make_plan(target: dict[str, Any], deps: Deps, *, weeks: int = 0, measure: bo
     return plan
 
 
+_GLOB = set("*?[]\\")
+
+
+def drop_path_problem(plan: Plan) -> str | None:
+    """Why the plan's dump paths are not safe to hand to `restic rewrite --exclude-file`, or None.
+    Every path must be absolute, free of pattern characters, sit directly in an osiris-vault
+    folder, and end in exactly one of the plan's own validated dump names. Pure."""
+    names = set(plan.drop_dumps)
+    if len(plan.drop_paths) != len(plan.drop_dumps):
+        return "the dump paths do not match the dump names"
+    for path in plan.drop_paths:
+        folder, _, base = path.rpartition("/")
+        if not path.startswith("/") or any(c in _GLOB for c in path) or base not in names \
+                or not _DUMP_NAME.match(base) or folder.rsplit("/", 1)[-1] != "osiris-vault":
+            return "a dump path in the plan is not a plain dump file in the vault"
+    return None
+
+
 def apply_plan(target: dict[str, Any], deps: Deps, plan: Plan, *,
                say: Callable[[str], None] = print) -> str | None:
     """Do exactly this plan: forget its snapshots, drop its dump files from the kept snapshots
@@ -399,6 +429,8 @@ def apply_plan(target: dict[str, Any], deps: Deps, plan: Plan, *,
         return "the plan would leave files uncovered"
     if any(not _DUMP_NAME.match(n) for n in plan.drop_dumps):
         return "the dump list holds something that is not a dump file name"
+    if (bad_path := drop_path_problem(plan)) is not None:
+        return bad_path
     url = str(target.get("path_or_url") or "")
     reason = preconditions(
         presence=deps.presence(target), drill=deps.drill_receipt(url),
@@ -416,6 +448,20 @@ def apply_plan(target: dict[str, Any], deps: Deps, plan: Plan, *,
         newest = max(snaps, key=lambda s: str(s.get("time")))["id"] if snaps else None
         if newest in plan.remove:
             return "the newest snapshot is in this plan; make a new plan"
+        if [s for s in snaps if str(s["id"]) in plan.remove
+                and set(s.get("tags") or []) & set(KEEP_TAGS)]:
+            return "a snapshot in this plan now carries a keep tag; make a new plan"
+        if set(plan.rewrite) & set(plan.remove):
+            return "the plan rewrites a snapshot it also forgets"
+        # THE LAST LINE, inside the lock and before anything is forgotten: read who holds every
+        # file NOW and refuse unless each WAL file, base backup and kept dump keeps a holder that
+        # is not being forgotten (the repository may have changed since the plan was made)
+        lives = file_lifetimes(deps.run, snaps)
+        gone = {i for i in plan.remove if i in present}
+        lost = coverage_violations(lives, gone, set(plan.drop_dumps))
+        if lost:
+            return (f"{len(lost)} file(s) would be left in no snapshot (for example {lost[0]}); "
+                    "nothing was changed, make a new plan")
         todo = [i for i in plan.remove if i in present]
         if todo:
             say(f"forgetting {len(todo)} snapshot(s)")
@@ -664,6 +710,12 @@ async def command(*, pool: Any, apply_id: str | None = None, scheduled: bool = F
     write_state({**read_state(), "last_run": run})
     if failure:
         say(f"repo-thin: stopped: {failure}.")
+        # a stop part-way may have forgotten some snapshots: keep the restore map and the Time
+        # Machine list honest about what the repository holds now
+        for later in (await asyncio.to_thread(refresh_points, target, deps),
+                      await asyncio.to_thread(refresh_time_machine, target, deps)):
+            if later:
+                say(f"repo-thin: a refresh could not be done: {later}.")
         return 1
     say(f"repo-thin: done: {len(plan.remove)} snapshot(s) forgotten and the repository pruned.")
     note = await asyncio.to_thread(refresh_points, target, deps)
