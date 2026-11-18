@@ -62,8 +62,11 @@ async def moments() -> dict[str, Any]:
     from src.orchestrator import time_machine_pitr as pitr
 
     found = await asyncio.to_thread(tm.list_moments)
+    from src.orchestrator import time_machine_restic as restic
+
     windows = await asyncio.to_thread(pitr.pitr_moments)
-    items = [{**_moment_dict(m), "available": True} for m in found] + windows
+    nas = await asyncio.to_thread(restic.restic_moments)
+    items = [{**_moment_dict(m), "available": True} for m in found] + windows + nas
     return {"moments": sorted(items, key=lambda i: str(i["when"]), reverse=True)}
 
 
@@ -84,13 +87,21 @@ async def start(moment_id: object, at: object = None) -> dict[str, Any]:
             return {"error": "The time to open must be text such as 2026-11-17T09:30:00Z."}
         moment = await asyncio.to_thread(
             lambda: tm.find_moment(moment_id.strip(), at=at or None))
+        if moment.kind == "restic":
+            from src.orchestrator import time_machine_restic as restic
+
+            item = next((i for i in await asyncio.to_thread(restic.restic_moments)
+                         if i["id"] == moment.id), None)
+            if item is not None and not item["available"]:
+                return {"error": f"{item['reason']} That backup is only on the NAS, so it can "
+                                 "only be opened at home."}
         rec = await asyncio.to_thread(tm.read_record)
         if rec is not None and rec.state != "failed":
             return {"error": f"A past moment is already {rec.state}. Tear it down first."}
         problem = tm.disk_problem(
             moment.size_bytes, await asyncio.to_thread(
                 lambda: tm.free_bytes(tm.docker_root())),
-            factor=tm.PITR_DISK_FACTOR if moment.kind == "pitr" else None)
+            factor={"pitr": tm.PITR_DISK_FACTOR, "restic": 4.0}.get(moment.kind))
         if problem:
             return {"error": problem[0].upper() + problem[1:] + "."}
         pid = await asyncio.to_thread(lambda: tm.spawn_run(moment.id, at=moment.at))

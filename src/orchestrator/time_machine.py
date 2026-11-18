@@ -61,6 +61,7 @@ SCRATCH_POSTGRES_ARGS = (
 
 STATE_TEXT = {
     "starting": "Starting a scratch database...",
+    "pulling": "Fetching that backup from the NAS over the home network (several minutes)...",
     "restoring": "Restoring that moment (about two minutes)...",
     "ready": "Ready to browse. It is removed automatically when time runs out.",
     "failed": "That moment could not be opened.",
@@ -94,6 +95,8 @@ class Moment:
     at: str | None = None            # point in time only: the moment picked inside the window
     window_from: str | None = None   # point in time only: the window this moment lives in
     window_to: str | None = None
+    snapshot: str | None = None      # NAS dump only: the restic snapshot that holds it
+    repo_path: str | None = None     # NAS dump only: its path inside that snapshot
 
 
 @dataclass
@@ -108,6 +111,7 @@ class Throwaway:
     extensions: int = 0
     state: str = "starting"     # starting | restoring | ready | failed
     error: str | None = None
+    scratch: str = ""               # a NAS dump's temporary copy, removed with the throwaway
     superuser_password: str = field(default="", repr=False)
     reader_password: str = field(default="", repr=False)
 
@@ -120,6 +124,7 @@ class Throwaway:
         d = asdict(self)
         d.pop("superuser_password", None)
         d.pop("reader_password", None)
+        d.pop("scratch", None)
         d["seconds_left"] = max(0, int(self.expires_at - time.time()))
         d["state_text"] = STATE_TEXT.get(self.state, self.state)
         return d
@@ -128,6 +133,14 @@ class Throwaway:
 # --- moments -----------------------------------------------------------------------------
 
 _DUMP_RE = re.compile(r"^osiris-(\d{8})-(\d{6})\.dump$")
+
+
+def dump_time(name: str) -> datetime | None:
+    """The time stamped in a dump's file name, or None when it is not one of ours."""
+    m = _DUMP_RE.match(name)
+    if not m:
+        return None
+    return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").astimezone(UTC)
 
 
 def list_moments(vault_dir: Path | None = None) -> list[Moment]:
@@ -157,6 +170,10 @@ def find_moment(moment_id: str, vault_dir: Path | None = None, *,
     for m in list_moments(vault_dir):
         if m.id == moment_id:
             return m
+    if moment_id.startswith("restic-"):
+        from src.orchestrator import time_machine_restic as restic
+
+        return restic.find_restic_moment(moment_id)
     if moment_id.startswith("pitr-"):
         from src.orchestrator import time_machine_pitr as pitr
 
@@ -284,6 +301,11 @@ def teardown(*, sh: Run = _default_run, record_path: Path | None = None) -> list
     for v in sorted(vols):
         sh(["docker", "volume", "rm", "-f", v], 60)
         removed.append(f"volume {v}")
+    if rec is not None and rec.scratch:
+        from src.orchestrator import time_machine_restic as restic
+
+        restic.remove_scratch(rec.scratch)
+        removed.append("scratch copy")
     _clear_record(record_path)
     return removed
 
@@ -351,16 +373,19 @@ def start(
     now: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep,
     free: Callable[[str], int] = free_bytes,
     on_phase: Callable[[Throwaway], None] | None = None,
+    pull: Callable[[Moment, Path], Path] | None = None,
 ) -> Throwaway:
     """Bring a throwaway up on `moment` and return it ready. Blocking (a restore takes
     minutes): a caller runs it in a worker and polls `status`. Any failure tears down
-    everything it made, then raises."""
-    if moment.kind not in ("dump", "pitr"):
+    everything it made, then raises. `pull` fetches a NAS dump into a scratch directory
+    (tests pass a fake)."""
+    if moment.kind not in ("dump", "pitr", "restic"):
         raise TimeMachineError(f"moment kind {moment.kind!r} is not supported yet")
-    source = Path(moment.path)
-    if not source.is_file():
-        what = "dump" if moment.kind == "dump" else "base backup"
-        raise TimeMachineError(f"the {what} for this moment is gone: {source.name}")
+    if moment.kind != "restic":
+        source = Path(moment.path)
+        if not source.is_file():
+            what = "dump" if moment.kind == "dump" else "base backup"
+            raise TimeMachineError(f"the {what} for this moment is gone: {source.name}")
     existing = read_record(record_path)
     if existing is not None and existing.state == "failed":
         _clear_record(record_path)          # a failed attempt only keeps its message
@@ -369,7 +394,7 @@ def start(
         raise TimeMachineError(
             f"a throwaway is already {existing.state} ({existing.container}); "
             "tear it down first")
-    factor = PITR_DISK_FACTOR if moment.kind == "pitr" else DISK_FACTOR
+    factor = {"pitr": PITR_DISK_FACTOR, "restic": 4.0}.get(moment.kind, DISK_FACTOR)
     problem = disk_problem(moment.size_bytes, free(docker_root(sh)), factor=factor)
     if problem:
         raise TimeMachineError(problem)
@@ -396,6 +421,17 @@ def start(
             from src.orchestrator import time_machine_pitr as pitr
 
             pitr.materialize(moment, rec, phase, sh=sh, now=now, sleep=sleep)
+        elif moment.kind == "restic":
+            from src.orchestrator import time_machine_restic as restic
+
+            scratch = restic.scratch_root() / f"osiris-tm-{tid}"
+            rec.scratch = str(scratch)
+            phase("pulling")
+            fetched = (pull or restic.pull)(moment, scratch)
+            local = Moment(**{**asdict(moment), "path": str(fetched)})
+            _materialize_dump(local, rec, phase, sh=sh, now=now, sleep=sleep)
+            restic.remove_scratch(scratch)          # the dump is in the database now
+            rec.scratch = ""
         else:
             _materialize_dump(moment, rec, phase, sh=sh, now=now, sleep=sleep)
         phase("ready")
