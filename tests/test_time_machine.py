@@ -51,7 +51,7 @@ class FakeDocker:
 def dump(tmp_path: Path) -> tm.Moment:
     p = tmp_path / "osiris-20261115-201856.dump"
     p.write_bytes(b"x" * 1000)
-    return tm.Moment("dump", "dump", "2026-11-15T20:18:56+00:00", str(p), 1000)
+    return tm.Moment(p.stem, "dump", "dump", "2026-11-15T20:18:56+00:00", str(p), 1000)
 
 
 def go(dump: tm.Moment, docker: FakeDocker, tmp_path: Path, **kw: object) -> tm.Throwaway:
@@ -155,13 +155,13 @@ def test_timeout_is_reported_and_cleaned(dump: tm.Moment, tmp_path: Path) -> Non
 
 
 def test_a_missing_dump_is_refused(tmp_path: Path) -> None:
-    gone = tm.Moment("dump", "x", "2026-01-01T00:00:00+00:00", str(tmp_path / "no.dump"), 5)
+    gone = tm.Moment("no", "dump", "x", "2026-01-01T00:00:00+00:00", str(tmp_path / "no.dump"), 5)
     with pytest.raises(tm.TimeMachineError, match="gone"):
         tm.start(gone, sh=FakeDocker(), record_path=tmp_path / "rec.json")
 
 
 def test_unsupported_moment_kind_is_refused(tmp_path: Path) -> None:
-    m = tm.Moment("pitr", "x", "2026-01-01T00:00:00+00:00", "/x", 5)
+    m = tm.Moment("p", "pitr", "x", "2026-01-01T00:00:00+00:00", "/x", 5)
     with pytest.raises(tm.TimeMachineError, match="not supported"):
         tm.start(m, sh=FakeDocker(), record_path=tmp_path / "rec.json")
 
@@ -230,3 +230,42 @@ def test_failed_record_is_reaped_before_its_ttl(dump: tm.Moment, tmp_path: Path)
 
 def test_free_bytes_walks_up_from_an_unreadable_directory(tmp_path: Path) -> None:
     assert tm.free_bytes(tmp_path / "no" / "such" / "dir") > 0
+
+
+def test_moments_have_a_stable_id_and_can_be_found(tmp_path: Path) -> None:
+    (tmp_path / "osiris-20261115-201856.dump").write_bytes(b"b")
+    (m,) = tm.list_moments(tmp_path)
+    assert m.id == "osiris-20261115-201856"
+    assert tm.find_moment("osiris-20261115-201856", tmp_path) == m
+    with pytest.raises(tm.TimeMachineError, match="no such moment"):
+        tm.find_moment("../../etc/passwd", tmp_path)
+
+
+def test_status_carries_plain_text_and_never_a_password(dump: tm.Moment, tmp_path: Path) -> None:
+    rec = go(dump, FakeDocker(), tmp_path)
+    pub = tm.status(record_path=tmp_path / "rec.json")
+    assert pub is not None and pub["state_text"].startswith("Ready")
+    assert rec.reader_password not in str(pub) and rec.superuser_password not in str(pub)
+    rec.state = "restoring"
+    assert rec.public()["state_text"].startswith("Restoring")
+
+
+@pytest.mark.asyncio
+async def test_the_worker_reaps_on_a_timer_and_skips_a_late_tick(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    import time as _time
+
+    from src.workers.arq_worker import WorkerSettings, time_machine_reap_heartbeat
+
+    calls: list[int] = []
+
+    def fake_reap(**_kw: object) -> list[str]:
+        calls.append(1)
+        return ["container osiris-tm-x"]
+
+    monkeypatch.setattr(tm, "reap", fake_reap)
+    assert await time_machine_reap_heartbeat({"score": _time.time() * 1000}) == 1
+    assert await time_machine_reap_heartbeat({"score": (_time.time() - 600) * 1000}) == 0
+    assert calls == [1]                                    # the late tick did not reap
+    names = {c.name for c in WorkerSettings.cron_jobs}
+    assert "cron:time_machine_reap_heartbeat" in names

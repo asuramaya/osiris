@@ -56,6 +56,13 @@ SCRATCH_POSTGRES_ARGS = (
     "-c", "synchronous_commit=off", "-c", "full_page_writes=off",
 )
 
+STATE_TEXT = {
+    "starting": "Starting a scratch database...",
+    "restoring": "Restoring that moment (about two minutes)...",
+    "ready": "Ready to browse. It is removed automatically when time runs out.",
+    "failed": "That moment could not be opened.",
+}
+
 Run = Callable[[list[str], float], "subprocess.CompletedProcess[str]"]
 
 
@@ -75,6 +82,7 @@ def state_path() -> Path:
 @dataclass(frozen=True)
 class Moment:
     """One point in the past the box can be restored to."""
+    id: str            # stable: the dump's file stem; start takes this
     kind: str          # "dump" (a vault dump); PITR and restic moments share this shape
     label: str         # what the operator sees
     when: str          # ISO time of the dump
@@ -107,6 +115,7 @@ class Throwaway:
         d.pop("superuser_password", None)
         d.pop("reader_password", None)
         d["seconds_left"] = max(0, int(self.expires_at - time.time()))
+        d["state_text"] = STATE_TEXT.get(self.state, self.state)
         return d
 
 
@@ -130,10 +139,17 @@ def list_moments(vault_dir: Path | None = None) -> list[Moment]:
         if size <= 0:
             continue
         when = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").astimezone(UTC)
-        found.append(Moment("dump", f"dump {when:%Y-%m-%d %H:%M}", when.isoformat(),
+        found.append(Moment(p.stem, "dump", f"dump {when:%Y-%m-%d %H:%M}", when.isoformat(),
                             str(p), size))
     found.sort(key=lambda x: x.when, reverse=True)
     return found
+
+
+def find_moment(moment_id: str, vault_dir: Path | None = None) -> Moment:
+    for m in list_moments(vault_dir):
+        if m.id == moment_id:
+            return m
+    raise TimeMachineError(f"no such moment: {moment_id!r}")
 
 
 # --- the one record ----------------------------------------------------------------------

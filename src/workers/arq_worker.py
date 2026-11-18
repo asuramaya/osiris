@@ -1599,6 +1599,22 @@ async def db_compaction_heartbeat(ctx: dict[str, Any]) -> int:
 _FALLBACK_STALE_TICK_SECS = 120.0  # a tick this late waited out a sleep or a stall: not a quiet box
 
 
+async def time_machine_reap_heartbeat(ctx: dict[str, Any]) -> int:
+    """Tear down an expired or failed past-moment throwaway, and sweep labelled leftovers no
+    record owns (a crashed start). Cheap: with nothing to remove it only lists labelled
+    containers and volumes. A tick more than two minutes late does nothing; the next one
+    does the work. Returns how many things it removed."""
+    from src.orchestrator import time_machine
+
+    score = ctx.get("score")
+    if isinstance(score, (int, float)) and time.time() - score / 1000.0 > _FALLBACK_STALE_TICK_SECS:
+        return 0
+    removed = await asyncio.to_thread(time_machine.reap)
+    if removed:
+        _log.info("time machine: removed %s", ", ".join(removed))
+    return len(removed)
+
+
 async def compaction_fallback_heartbeat(ctx: dict[str, Any]) -> int:
     """THE DAYTIME COMPACTION FALLBACK, from a light cron (operator ruling 2026-11-15): a box
     that is shut overnight never reaches the 03:00 window, so after two missed nights ONE daytime
@@ -2253,6 +2269,9 @@ class WorkerSettings:
              second={0}, timeout=7200),
         # THE DAYTIME COMPACTION FALLBACK: after two missed nights, one pg_repack run by day when
         # the box is quiet. A light check every 15 minutes; see compaction_fallback_heartbeat.
+        # past-moment throwaways (src/orchestrator/time_machine.py) live two hours at most
+        cron(watched(time_machine_reap_heartbeat, every=600), minute={3, 13, 23, 33, 43, 53},
+             second={20}, timeout=300),
         cron(watched(compaction_fallback_heartbeat, every=900), minute={5, 20, 35, 50},
              second={10}, timeout=7200),
         # CATCH-UP for the housekeeping, retention and cold-tier jobs above when the box slept
