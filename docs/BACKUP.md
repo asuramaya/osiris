@@ -241,6 +241,79 @@ See [`KEYS.md`](KEYS.md#the-restic-password) for the full custody mechanism behi
 restic-key init`/`status`. It's a completely separate secret from the soul-store encryption
 key. It protects the restic repository's own encryption, nothing about the vault on disk.
 
+## The Time Machine: look at a past moment, and bring one item back
+
+A backup you cannot look into is a hope. The Time Machine opens any past moment of the
+database in a separate, throwaway copy, lets you browse it, and, when you find something that
+has gone missing or been changed, copies that ONE item back into the live graph. It never
+overwrites history: a restore only adds new rows, and says where they came from.
+
+### Open a moment
+
+In Settings, Backups, "Browse a past moment" (or `osiris time-machine moments` to list them,
+and the console's `/time-machine/*` routes behind it). Pick a moment and start it; the status
+line says what it is doing and how long the throwaway has left. Only one is open at a time,
+it lives two hours (you can add two more hours once), and it removes itself.
+
+| Kind | What it is | Where it comes from | Expected wait |
+|------|-----------|---------------------|---------------|
+| Dump | The database as of one nightly (or extra) dump | This machine's vault | 2 to 4 minutes |
+| Dump (NAS) | An older dump that only the NAS still holds | The NAS, at home only | about 6 minutes |
+| Point in time | Any minute inside a window you pick, rebuilt from a base backup plus the log | This machine's vault | about 1.5 minutes |
+| Point in time (NAS) | The same, for an older window the vault no longer holds | The NAS, at home only | 9 to 15 minutes |
+
+The list shows which windows exist. A time that falls in a gap (no unbroken history was kept) is
+refused with the nearest times you can pick instead. NAS moments show "not available" with the
+reason when you are away from the home network, and they need the list of NAS backups to have
+been built (`osiris time-machine refresh` at home; the weekly thinning run keeps it fresh). The
+NAS is only ever read, and a copy is refused while a backup to it is running. It needs free disk:
+a few GB for a dump, up to about 40 GB for an older point in time.
+
+### Browse
+
+Everything is read-only. Search the items of that moment (a thread, a decision, an agent, a seat),
+or open one by its id (the first 6 or more characters are enough). An item shows every property
+it had, with the ones that were replaced greyed out, and the links in and out. Stored
+conversations can be read too (decrypted for you only while you look). Nothing you do here
+touches the live graph.
+
+### Plan a restore of one item
+
+Choose "Restore this item". Nothing is written yet: you get a plan, comparing that item then with
+the same item now:
+
+- **Copy**: a property the live item does not have. It would simply be added.
+- **Skip**: the live item already has the same value. Nothing to do.
+- **Conflict**: the live item has a different value from the same source, or a value from another
+  source that ties it exactly (same confidence, same time) but differs. Both need your choice,
+  because a restored row is written last and would otherwise quietly win a tie. The default for
+  every conflict is to keep what is live.
+- **Only live**: properties the item has now and did not then. They are never touched.
+- **Links**: a link is restored only when both ends exist live. A link that was retired since is
+  shown too, so you can choose to bring it back or not. Nothing is ever created just to hold a
+  link.
+- **Merged since**: if the item was merged into another since, the plan says so, and the
+  restore adds to the item it became.
+
+"Would become the displayed value" marks a copied property that would outrank what is live now:
+read those before you confirm.
+
+### Apply
+
+Apply needs the plan's **digest**, a short fingerprint of exactly what you were shown. If anything
+live changed since, it refuses and you look at a fresh plan: you never apply something you did not
+see. You choose keep or restore for each conflict and which links to bring back, then confirm.
+This is the one step that writes: it adds the chosen properties and links in one all-or-nothing
+step as you, adds a `restored_from` note on the item (which moment, when, what was copied, which
+conflicts you kept), and records a `restore` event. Running it again changes nothing. If it was
+a mistake, the rows it added are ordinary properties and can be retired like any other.
+
+### What it does not do
+
+It does not restore whole tables or conversations (those are browse-only), it never overwrites or
+deletes live history, and it is not reachable from anywhere but this machine. When the two hours
+are up the throwaway, its disk and any copy from the NAS are removed automatically.
+
 ## Restore drills
 
 Two checks exist, and they check different things:
