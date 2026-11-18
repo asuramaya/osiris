@@ -1,0 +1,9 @@
+[Unit]
+Description=Osiris Time Machine drill (daily ask at 11:20; it runs about once a month, and only at home)
+
+[Timer]
+OnCalendar=*-*-* 11:20:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -158,7 +158,8 @@ def test_items_are_ordered_cheapest_and_safest_first() -> None:
 
     assert [i["key"] for i in result["items"]] == [
         "envelope_drill", "envelope_code", "envelope_key", "nas_offload", "plaintext_copy",
-        "rollback_container", "scratch_dirs", "rebuild_probe", "prune_hold"]
+        "rollback_container", "scratch_dirs", "rebuild_probe", "prune_hold",
+        "time_machine_drill"]
     assert result["next"]["key"] == "envelope_drill"  # the first thing to do
     assert result["pending"] == 5 and result["done"] == 3
 
@@ -297,8 +298,8 @@ async def test_the_real_sources_read_the_live_shapes(
     result = at_home.checklist(src, now=NOW)
 
     assert src.plaintext_thread_open() is True  # the thread is open
-    assert [i["key"] for i in result["items"]][-5] == "plaintext_copy"
-    assert result["items"][-5]["status"] in ("blocked", "waiting")
+    assert [i["key"] for i in result["items"]][-6] == "plaintext_copy"
+    assert result["items"][-6]["status"] in ("blocked", "waiting")
 
 
 BOX = {"status": "exited", "image": "postgres:16", "size": 28672}

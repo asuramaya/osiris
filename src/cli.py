@@ -1362,6 +1362,27 @@ async def cmd_time_machine_refresh() -> int:
         await pool.close()
 
 
+async def cmd_time_machine_drill(*, kind: str | None, force: bool) -> int:
+    """osiris time-machine drill: the monthly proof that old history can still be opened."""
+    from src.config.dev_env import apply_dev_fallback
+    from src.config.settings import get_settings
+    from src.db.pool import create_pool
+    from src.orchestrator import time_machine_drill
+
+    apply_dev_fallback()
+    try:
+        pool = await create_pool(get_settings().database_url, min_size=1, max_size=2,
+                                 application_name="osiris-cli:time-machine-drill")
+    except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+        print(f"osiris time-machine: could not reach postgres: {exc}", file=sys.stderr)
+        return 1
+    try:
+        out = await time_machine_drill.run_drill(pool, kind=kind, force=force)
+    finally:
+        await pool.close()
+    return 0 if out.get("ok", True) else 1
+
+
 def cmd_time_machine(action: str, moment: str | None, at: str | None = None) -> int:
     """osiris time-machine <moments|status|teardown|run>: the command behind the console's past-
     moment panel. No database needed: it works on the throwaway's own record and containers."""
@@ -8939,13 +8960,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "Open a past moment (a vault dump) in a throwaway database, so the console can browse it "
         "and restore one item. `moments` lists what can be opened, `status` shows what is open, "
         "`teardown` removes it, `run <moment id>` opens one (the console starts this for you), "
-        "`refresh` rebuilds the list of backups held on the NAS (home network only)."),
+        "`refresh` rebuilds the list of backups held on the NAS (home network only), `drill` is "
+        "the monthly proof that old history can still be opened (it runs by itself at home)."),
         epilog="example: osiris time-machine moments\n"
                "example: osiris time-machine run osiris-20261115-201856")
     p_time_machine.add_argument(
-        "action", choices=["moments", "status", "teardown", "run", "refresh"])
+        "action", choices=["moments", "status", "teardown", "run", "refresh", "drill"])
     p_time_machine.add_argument("moment", nargs="?", default=None,
                                 help="run only: a moment id from `moments`")
+    p_time_machine.add_argument("--kind", choices=["dump", "pitr"], default=None,
+                                help="drill only: which check (default: alternate)")
+    p_time_machine.add_argument("--force", action="store_true",
+                                help="drill only: run now even if it is not due")
     p_time_machine.add_argument("--at", default=None,
                                 help="run only, for a point-in-time moment: the time to open, "
                                      "e.g. 2026-11-17T09:30:00Z")
@@ -10596,6 +10622,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "time-machine":
         if args.action == "refresh":
             return asyncio.run(cmd_time_machine_refresh())  # unbounded-wait-ok: CLI command
+        if args.action == "drill":
+            return asyncio.run(  # unbounded-wait-ok: CLI command
+                cmd_time_machine_drill(kind=args.kind, force=args.force))
         return cmd_time_machine(args.action, args.moment, args.at)
     if args.command == "at-home":
         return asyncio.run(cmd_at_home(  # unbounded-wait-ok: asyncio.run of a CLI command

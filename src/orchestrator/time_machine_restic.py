@@ -570,6 +570,37 @@ def _find_base(deps: Deps, base_name: str, window_from: datetime,
         "The NAS no longer holds the base backup for that window, so it cannot be opened.")
 
 
+def _default_deps() -> tuple[Deps, dict[str, Any]]:
+    """Deps for the saved NAS target and the repository password, or a refusal sentence."""
+    from src.orchestrator.restic_credential import ResticPasswordMissing, get_restic_password
+
+    target = (read_cache() or {}).get("target") or {}
+    if not target.get("path_or_url"):
+        raise tm.TimeMachineError("The list of NAS backups has not been built yet. Run "
+                                  "`osiris time-machine refresh` at home first.")
+    try:
+        return real_deps(target, get_restic_password()), target
+    except ResticPasswordMissing as exc:
+        raise tm.TimeMachineError(f"The backup repository's password could not be read: "
+                                  f"{exc}") from exc
+
+
+def base_size(base_name: str, window_from: datetime, deps: Deps | None = None) -> int | None:
+    """The size of a window's base backup on the NAS (a listing, read only), or None when no
+    snapshot holds it. The monthly drill uses it to stay inside its budget."""
+    if deps is None:
+        deps, _target = _default_deps()
+    proc = deps.run(["snapshots", "--json", "--no-lock"], timeout=LIST_TIMEOUT_SECS)
+    if proc.returncode != 0:
+        raise tm.TimeMachineError("Could not list the backup snapshots: " + _tail(proc.stderr))
+    snaps = [(t, str(x["id"])) for x in json.loads(proc.stdout or "[]")
+             if (t := parse_time(x.get("time")))]
+    try:
+        return _find_base(deps, base_name, window_from, snaps)[2]
+    except tm.TimeMachineError:
+        return None
+
+
 def pull_pitr(moment: tm.Moment, scratch: Path, progress: Callable[[str], None],
               deps: Deps | None = None, target: dict[str, Any] | None = None,
               free: Callable[[str], int] = tm.free_bytes) -> tuple[Path, Path]:
