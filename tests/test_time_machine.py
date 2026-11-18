@@ -161,7 +161,7 @@ def test_a_missing_dump_is_refused(tmp_path: Path) -> None:
 
 
 def test_unsupported_moment_kind_is_refused(tmp_path: Path) -> None:
-    m = tm.Moment("p", "pitr", "x", "2026-01-01T00:00:00+00:00", "/x", 5)
+    m = tm.Moment("p", "bogus", "x", "2026-01-01T00:00:00+00:00", "/x", 5)
     with pytest.raises(tm.TimeMachineError, match="not supported"):
         tm.start(m, sh=FakeDocker(), record_path=tmp_path / "rec.json")
 
@@ -290,7 +290,7 @@ def test_a_failed_start_leaves_its_reason_and_the_next_start_replaces_it(
 def test_the_detached_runner_records_why_it_failed(
         dump: tm.Moment, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OSIRIS_TIME_MACHINE_STATE", str(tmp_path / "rec.json"))
-    monkeypatch.setattr(tm, "find_moment", lambda _i, _v=None: dump)
+    monkeypatch.setattr(tm, "find_moment", lambda _i, _v=None, **_k: dump)
 
     def boom(*_a: object, **_k: object) -> None:
         raise tm.TimeMachineError("not enough disk for a throwaway restore")

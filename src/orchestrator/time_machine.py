@@ -46,6 +46,7 @@ TTL_SECS = 2 * 3600
 MAX_EXTENSIONS = 1
 FAILED_KEEP_SECS = 15 * 60       # a failed start's message stays readable this long
 DISK_FACTOR = 3.0
+PITR_DISK_FACTOR = 8.0      # a base backup is compressed; the data directory it unpacks to is not
 SCRATCH_MEMORY = "6g"
 RESTORE_TIMEOUT_SECS = 1800
 READY_WAIT_SECS = 60
@@ -88,8 +89,11 @@ class Moment:
     kind: str          # "dump" (a vault dump); PITR and restic moments share this shape
     label: str         # what the operator sees
     when: str          # ISO time of the dump
-    path: str          # where the dump file is
+    path: str          # where the dump file (or, for a point in time, the base backup) is
     size_bytes: int
+    at: str | None = None            # point in time only: the moment picked inside the window
+    window_from: str | None = None   # point in time only: the window this moment lives in
+    window_to: str | None = None
 
 
 @dataclass
@@ -147,10 +151,16 @@ def list_moments(vault_dir: Path | None = None) -> list[Moment]:
     return found
 
 
-def find_moment(moment_id: str, vault_dir: Path | None = None) -> Moment:
+def find_moment(moment_id: str, vault_dir: Path | None = None, *,
+                at: str | None = None) -> Moment:
+    """A moment by id. A point-in-time id needs `at` (the time picked inside its window)."""
     for m in list_moments(vault_dir):
         if m.id == moment_id:
             return m
+    if moment_id.startswith("pitr-"):
+        from src.orchestrator import time_machine_pitr as pitr
+
+        return pitr.find_pitr_moment(moment_id, at, vault_dir)
     raise TimeMachineError(f"no such moment: {moment_id!r}")
 
 
@@ -203,11 +213,12 @@ def docker_root(sh: Run = _default_run) -> str:
     return root or "/var/lib/docker"
 
 
-def disk_problem(size_bytes: int, free: int) -> str | None:
-    need = int(size_bytes * DISK_FACTOR)
+def disk_problem(size_bytes: int, free: int, *, factor: float | None = None) -> str | None:
+    factor = DISK_FACTOR if factor is None else factor
+    need = int(size_bytes * factor)
     if free < need:
         return (f"not enough disk for a throwaway restore: needs about {need // 2**30} GiB "
-                f"free (3x the dump), only {free // 2**30} GiB is free")
+                f"free ({factor:g}x the backup), only {free // 2**30} GiB is free")
     return None
 
 
@@ -290,6 +301,51 @@ def _labelled(sh: Run, kind: str) -> list[str]:
     return (out.stdout or "").split() if out.returncode == 0 else []
 
 
+def _materialize_dump(moment: Moment, rec: Throwaway, phase: Callable[[str], None], *,
+                      sh: Run, now: Callable[[], float],
+                      sleep: Callable[[float], None]) -> None:
+    """A vault dump into a fresh scratch database: start it, pg_restore, add the reader."""
+    image = image_name(sh)
+    _docker(sh, ["docker", "volume", "create", "--label", f"{LABEL}=1", rec.volume], 60,
+            "creating the scratch volume")
+    _docker(sh, [
+        "docker", "run", "-d", "--name", rec.container, "--label", f"{LABEL}=1",
+        "--memory", SCRATCH_MEMORY, "--memory-swap", SCRATCH_MEMORY,
+        "-p", f"127.0.0.1:{rec.port}:5432",
+        "-v", f"{rec.volume}:/var/lib/postgresql/data",
+        "-v", f"{moment.path}:/tm/restore.dump:ro",
+        "-e", "POSTGRES_USER=osiris", "-e", f"POSTGRES_PASSWORD={rec.superuser_password}",
+        "-e", "POSTGRES_DB=osiris", image, *SCRATCH_POSTGRES_ARGS], 120,
+        "starting the scratch database")
+    deadline = now() + READY_WAIT_SECS
+    while True:
+        ready = sh(["docker", "exec", rec.container, "pg_isready", "-h", "127.0.0.1",
+                    "-U", "osiris"], 15)
+        if ready.returncode == 0:
+            break
+        if now() > deadline:
+            raise TimeMachineError("the scratch database did not become ready in time")
+        sleep(1)
+
+    phase("restoring")
+    _docker(sh, ["docker", "exec", rec.container, "pg_restore", "-U", "osiris", "-d", "osiris",
+                 "--no-owner", "-j", "4", "/tm/restore.dump"], RESTORE_TIMEOUT_SECS,
+            "restoring the dump")
+    finish_scratch(sh, rec)
+
+
+def finish_scratch(sh: Run, rec: Throwaway) -> None:
+    """Prove the restored copy holds objects, then add the read-only role."""
+    count = _docker(sh, ["docker", "exec", rec.container, "psql", "-U", "osiris", "-d",
+                         "osiris", "-tAc", "SELECT count(*) FROM objects"], 60,
+                    "counting restored objects").strip()
+    if not count.isdigit() or int(count) < 1:
+        raise TimeMachineError("the restore produced no objects")
+    _docker(sh, ["docker", "exec", rec.container, "psql", "-U", "osiris", "-d", "osiris",
+                 "-v", "ON_ERROR_STOP=1", "-c", reader_role_sql(rec.reader_password)],
+            60, "creating the read-only role")
+
+
 def start(
     moment: Moment, *, sh: Run = _default_run, record_path: Path | None = None,
     now: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep,
@@ -299,11 +355,12 @@ def start(
     """Bring a throwaway up on `moment` and return it ready. Blocking (a restore takes
     minutes): a caller runs it in a worker and polls `status`. Any failure tears down
     everything it made, then raises."""
-    if moment.kind != "dump":
+    if moment.kind not in ("dump", "pitr"):
         raise TimeMachineError(f"moment kind {moment.kind!r} is not supported yet")
-    dump = Path(moment.path)
-    if not dump.is_file():
-        raise TimeMachineError(f"the dump for this moment is gone: {dump.name}")
+    source = Path(moment.path)
+    if not source.is_file():
+        what = "dump" if moment.kind == "dump" else "base backup"
+        raise TimeMachineError(f"the {what} for this moment is gone: {source.name}")
     existing = read_record(record_path)
     if existing is not None and existing.state == "failed":
         _clear_record(record_path)          # a failed attempt only keeps its message
@@ -312,7 +369,8 @@ def start(
         raise TimeMachineError(
             f"a throwaway is already {existing.state} ({existing.container}); "
             "tear it down first")
-    problem = disk_problem(moment.size_bytes, free(docker_root(sh)))
+    factor = PITR_DISK_FACTOR if moment.kind == "pitr" else DISK_FACTOR
+    problem = disk_problem(moment.size_bytes, free(docker_root(sh)), factor=factor)
     if problem:
         raise TimeMachineError(problem)
 
@@ -334,40 +392,12 @@ def start(
 
     try:
         phase("starting")
-        image = image_name(sh)
-        _docker(sh, ["docker", "volume", "create", "--label", f"{LABEL}=1", volume], 60,
-                "creating the scratch volume")
-        _docker(sh, [
-            "docker", "run", "-d", "--name", container, "--label", f"{LABEL}=1",
-            "--memory", SCRATCH_MEMORY, "--memory-swap", SCRATCH_MEMORY,
-            "-p", f"127.0.0.1:{rec.port}:5432",
-            "-v", f"{volume}:/var/lib/postgresql/data",
-            "-v", f"{dump}:/tm/restore.dump:ro",
-            "-e", "POSTGRES_USER=osiris", "-e", f"POSTGRES_PASSWORD={rec.superuser_password}",
-            "-e", "POSTGRES_DB=osiris", image, *SCRATCH_POSTGRES_ARGS], 120,
-            "starting the scratch database")
-        deadline = now() + READY_WAIT_SECS
-        while True:
-            ready = sh(["docker", "exec", container, "pg_isready", "-h", "127.0.0.1",
-                         "-U", "osiris"], 15)
-            if ready.returncode == 0:
-                break
-            if now() > deadline:
-                raise TimeMachineError("the scratch database did not become ready in time")
-            sleep(1)
+        if moment.kind == "pitr":
+            from src.orchestrator import time_machine_pitr as pitr
 
-        phase("restoring")
-        _docker(sh, ["docker", "exec", container, "pg_restore", "-U", "osiris", "-d", "osiris",
-                      "--no-owner", "-j", "4", "/tm/restore.dump"], RESTORE_TIMEOUT_SECS,
-                "restoring the dump")
-        count = _docker(sh, ["docker", "exec", container, "psql", "-U", "osiris", "-d",
-                              "osiris", "-tAc", "SELECT count(*) FROM objects"], 60,
-                        "counting restored objects").strip()
-        if not count.isdigit() or int(count) < 1:
-            raise TimeMachineError("the restore produced no objects")
-        _docker(sh, ["docker", "exec", container, "psql", "-U", "osiris", "-d", "osiris",
-                      "-v", "ON_ERROR_STOP=1", "-c", reader_role_sql(rec.reader_password)],
-                60, "creating the read-only role")
+            pitr.materialize(moment, rec, phase, sh=sh, now=now, sleep=sleep)
+        else:
+            _materialize_dump(moment, rec, phase, sh=sh, now=now, sleep=sleep)
         phase("ready")
         return rec
     except BaseException as exc:
@@ -448,13 +478,13 @@ def record_failure(moment: Moment, message: str, *, record_path: Path | None = N
     return rec
 
 
-def run_detached(moment_id: str, *, vault_dir: Path | None = None) -> int:
+def run_detached(moment_id: str, *, vault_dir: Path | None = None, at: str | None = None) -> int:
     """What `osiris time-machine run <moment id>` does, in its own process so a server or
     console restart cannot kill a restore half way: bring the throwaway up, and on failure
     leave the reason in the record. 0 when it came up, 1 when it did not."""
     moment: Moment | None = None
     try:
-        moment = find_moment(moment_id, vault_dir)
+        moment = find_moment(moment_id, vault_dir, at=at)
         start(moment)
         return 0
     except TimeMachineError as exc:
@@ -469,7 +499,8 @@ def run_detached(moment_id: str, *, vault_dir: Path | None = None) -> int:
         return 1
 
 
-def spawn_run(moment_id: str, *, popen: Callable[..., Any] = subprocess.Popen,
+def spawn_run(moment_id: str, *, at: str | None = None,
+              popen: Callable[..., Any] = subprocess.Popen,
               log_path: Path | None = None) -> int:
     """Start `run_detached` as a separate, session-detached process; returns its pid. Its
     output goes to a log file beside the record, never to a pipe nobody reads."""
@@ -478,7 +509,8 @@ def spawn_run(moment_id: str, *, popen: Callable[..., Any] = subprocess.Popen,
     root = Path(__file__).resolve().parents[2]
     with open(log, "ab") as fh:
         proc = popen(
-            [sys.executable, "-m", "src.cli", "time-machine", "run", moment_id],
+            [sys.executable, "-m", "src.cli", "time-machine", "run", moment_id,
+             *(["--at", at] if at else [])],
             cwd=str(root), stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
             start_new_session=True)
     return int(proc.pid)

@@ -1729,13 +1729,15 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     @app.post("/time-machine/start")
     async def time_machine_start_route(request: Request) -> JSONResponse:
-        """`{moment}` (a moment id): begin opening it. Answers at once; the restore runs on its
+        """`{moment, at?}` (a moment id; `at` is the time to open, for a point-in-time moment):
+        begin opening it. Answers at once; the restore runs on its
         own for about two minutes, so poll /time-machine/status."""
         from src.orchestrator import time_machine_console as tmc
 
         if (denied := _tm_guard(request)) is not None:
             return denied
-        return _envelope_reply(await tmc.start((await _envelope_body(request)).get("moment")))
+        body = await _envelope_body(request)
+        return _envelope_reply(await tmc.start(body.get("moment"), body.get("at")))
 
     @app.post("/time-machine/extend")
     async def time_machine_extend_route(request: Request) -> JSONResponse:
