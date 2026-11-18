@@ -60,6 +60,11 @@ DUMP_DAILY_DAYS = 30
 DUMP_SHARE_FREED = 0.86         # consecutive dumps share 13-15% of their chunks (measured)
 MAX_REPACK = "20G"
 MAX_UNUSED = "5%"
+# Applying a plan is PAUSED while the coverage check is rebuilt to read the snapshots that really
+# hold each file (it assumed every snapshot between a file's first and last holder holds it, which
+# a partial backdated snapshot breaks). Nothing is lost today; this keeps it so. Planning works.
+APPLY_PAUSED: str | None = ("applying a plan is paused until the coverage check is rebuilt; "
+                            "nothing was changed")
 PLAN_MAX_AGE = timedelta(hours=24)
 DRILL_MAX_AGE = timedelta(days=14)
 OFFLOAD_MAX_AGE = timedelta(days=3)
@@ -386,6 +391,8 @@ def apply_plan(target: dict[str, Any], deps: Deps, plan: Plan, *,
     """Do exactly this plan: forget its snapshots, drop its dump files from the kept snapshots
     that hold them, then prune (at most MAX_REPACK per run). A failure reason, or None. Everything
     is checked again first: a plan is only as good as the repository it was made against."""
+    if APPLY_PAUSED:
+        return APPLY_PAUSED
     if plan.problems:
         return "; ".join(plan.problems)
     if plan.uncovered:

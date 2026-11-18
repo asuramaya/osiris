@@ -111,6 +111,24 @@ class Fake:
             repo_bytes=lambda t: 600 * 10**9, now=lambda: NOW, parse=parse_time)
 
 
+@pytest.fixture(autouse=True)
+def _apply_unpaused(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pause is tested on its own; every other test exercises the real apply path."""
+    if "paused" not in request.node.name:
+        monkeypatch.setattr(rt, "APPLY_PAUSED", None)
+
+
+def test_applying_is_paused_and_changes_nothing_until_the_coverage_check_is_rebuilt() -> None:
+    fake = Fake()
+    plan = rt.make_plan(TARGET, fake.deps())
+    fake.calls.clear()
+
+    failure = rt.apply_plan(TARGET, fake.deps(), plan, say=lambda t: None)
+
+    assert failure and "paused" in failure
+    assert not any(c[0] in ("forget", "rewrite", "prune") for c in fake.calls)
+
+
 def test_the_tiers_are_calendar_windows_and_keep_tagged_snapshots() -> None:
     args = rt.Policy().args()
 
