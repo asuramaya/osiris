@@ -892,28 +892,33 @@ var REPAIRS_TARGETS = [
   { key: 'provenance_possible_upstream', hint: 'Backfill possible_upstream provenance edges onto historical Decision/Thread writes made before the live upstream detector existed.' },
 ];
 function renderRepairsPanel() {
+  // standalone (kept for direct calls): the same blocks, in the centred panel
   const container = $('result'); showPanel();
   $('entity-taxonomy-bar').style.display = 'none';
+  container.innerHTML = '<div style="padding:16px;max-width:900px;margin:0 auto">' +
+    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Repairs</h2>' +
+    repairsHtml() + '</div>';
+}
+// The repairs as wrapping blocks (one per target), so they fit the 430 px Settings column:
+// the Settings pane shows these under Advanced.
+function repairsHtml() {
   var rows = REPAIRS_TARGETS.map(function(t) {
     var applyCell = t.cliOnly
       ? '<span class="o-faint" title="' + esc(t.hint) + '">CLI-only</span>'
-      : '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
-        '<input id="repair-because-' + esc(t.key) + '" class="filter" style="width:150px;margin:0" ' +
+      : '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px">' +
+        '<input id="repair-because-' + esc(t.key) + '" class="filter" style="flex:1 1 140px;min-width:0;margin:0" ' +
         'placeholder="Reason for this change" oninput="repairUpdateButtonState(\'' + esc(t.key) + '\')" /> ' +
         '<label style="font-size:11px;white-space:nowrap"><input type="checkbox" id="repair-confirm-' + esc(t.key) +
         '" onchange="repairUpdateButtonState(\'' + esc(t.key) + '\')" /> Confirm</label> ' +
         '<button class="iconbtn" id="repair-btn-' + esc(t.key) + '" disabled onclick="applyRepair(\'' + esc(t.key) + '\')">Apply</button></div>';
-    return '<tr><td style="vertical-align:top"><code>' + esc(t.key) + '</code></td>' +
-      '<td class="o-faint" style="vertical-align:top">' + esc(t.hint) + '</td>' +
-      '<td style="vertical-align:top"><button class="iconbtn" onclick="dryRunRepair(\'' + esc(t.key) + '\')">Dry run</button></td>' +
-      '<td style="vertical-align:top">' + applyCell + '</td></tr>' +
-      '<tr><td colspan="4"><pre id="repair-out-' + esc(t.key) + '" class="o-faint" style="white-space:pre-wrap;margin:0 0 12px"></pre></td></tr>';
+    return '<div style="padding:8px 0;border-top:1px solid var(--border);overflow-wrap:anywhere">' +
+      '<div><code>' + esc(t.key) + '</code></div>' +
+      '<div class="o-faint" style="margin:2px 0 4px">' + esc(t.hint) + '</div>' +
+      '<div><button class="iconbtn" onclick="dryRunRepair(\'' + esc(t.key) + '\')">Dry run</button></div>' +
+      applyCell +
+      '<pre id="repair-out-' + esc(t.key) + '" class="o-faint" style="white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0 0"></pre></div>';
   }).join('');
-  container.innerHTML = '<div style="padding:16px;max-width:900px;margin:0 auto">' +
-    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Repairs</h2>' +
-    '<div class="o-faint" style="margin-bottom:8px" title="Dry run always writes nothing.">Backfill repairs.</div>' +
-    '<table class="ee-table ee-form"><thead><tr><th>Target</th><th>What it does</th><th></th><th></th></tr></thead><tbody>' +
-    rows + '</tbody></table></div>';
+  return '<div class="o-faint" style="margin-bottom:8px" title="Dry run always writes nothing.">Backfill repairs.</div>' + rows;
 }
 function repairUpdateButtonState(target) {
   var because = $('repair-because-' + target); var confirmBox = $('repair-confirm-' + target);
@@ -1471,32 +1476,96 @@ async function saveOffloadTargets() {
 // own failure/404 never blanks the rest of the pane, same "unavailable, not silent" law
 // compositions.py's own _fn_backup_status already holds per-section. Reached via CMD-K
 // ("Settings") and the header's own gear-icon link.
-async function renderSettingsPane() {
+async function renderSettingsPane(section) {
   const container = $('result'); showPanel();
   $('entity-taxonomy-bar').style.display = 'none';
   // the header and the left nav still said "Browse" over the Settings pane
   $('page-title').textContent = 'Settings';
   document.querySelectorAll('.lens-item').forEach(function(el) { el.classList.remove('sel'); });
+  if (typeof athomeClearCode === 'function') athomeClearCode();
   container.innerHTML =
-    '<div style="padding:16px;max-width:1100px;margin:0 auto">' +
+    '<div class="settings-pane" style="padding:16px;max-width:1100px;margin:0 auto">' +
     '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:12px">Settings</h2>' +
-    settingsSectionShell('appearance', 'Appearance') +
-    settingsSectionShell('key', 'Key') +
-    settingsSectionShell('offload', 'Backup &amp; Offload') +
-    settingsSectionShell('box', 'Readiness') +
-    settingsSectionShell('registry', 'Registry') +
-    settingsSectionShell('desk', 'Operator Desk') +
+    settingsSectionShell('waiting', 'Waiting on you', 'waiting', true) +
+    settingsSectionShell('setup', 'Setting up this computer', 'box') +
+    settingsSectionShell('vault', 'Vault keys', 'key', false, typeof athomeKeysBlockHtml === 'function' ? athomeKeysBlockHtml() : '') +
+    settingsSectionShell('backups', 'Backups', 'offload') +
+    settingsSectionShell('desk', 'Operator desk', 'desk') +
+    settingsSectionShell('appearance', 'Appearance', 'appearance') +
+    settingsSectionShell('advanced', 'Advanced', 'advanced') +
     '</div>';
+  settingsGroupsWire();
   renderSettingsSectionAppearance();
+  settingsRevealSection(section);
   await Promise.all([
-    renderSettingsSectionKey(), renderSettingsSectionOffload(),
-    renderSettingsSectionRegistry(), renderSettingsSectionDesk(), renderSettingsSectionBox(),
+    renderSettingsSectionWaiting(), renderSettingsSectionKey(), renderSettingsSectionOffload(),
+    renderSettingsSectionAdvanced(), renderSettingsSectionDesk(), renderSettingsSectionBox(),
   ]);
+  settingsRevealSection(section);
 }
-function settingsSectionShell(id, title) {
-  return '<section style="margin-bottom:28px;border-top:1px solid var(--border);padding-top:16px">' +
-    '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px">' +
-    title + '</h3><div id="settings-sec-' + id + '" class="o-faint">Loading…</div></section>';
+// Deep links: the palette entries and the readiness jumps land on one section of this pane.
+function openSettings(section) {
+  if ($('settings-group-waiting') && $('page-title').textContent === 'Settings') {
+    settingsRevealSection(section);
+    return Promise.resolve();
+  }
+  return renderSettingsPane(section);
+}
+function settingsRevealSection(section) {
+  var el = section ? $('settings-group-' + section) : null;
+  if (!el) return;
+  if (el.tagName === 'DETAILS') el.open = true;
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+// Sections open and close, and the pane remembers which in this browser. "Waiting on you" is
+// not one of them: it stays in view. Advanced starts closed.
+var SETTINGS_CLOSED_BY_DEFAULT = { advanced: true };
+function settingsOpenState() {
+  try { return JSON.parse(localStorage.getItem('osiris.settings.open') || '{}') || {}; }
+  catch (e) { return {}; }
+}
+function settingsGroupsWire() {
+  document.querySelectorAll('.settings-pane details[data-group]').forEach(function(d) {
+    d.addEventListener('toggle', function() {
+      try {
+        var st = settingsOpenState();
+        st[d.getAttribute('data-group')] = d.open;
+        localStorage.setItem('osiris.settings.open', JSON.stringify(st));
+      } catch (e) { /* remembering is a convenience only */ }
+    });
+  });
+}
+function settingsSectionShell(group, title, id, fixed, after) {
+  id = id || group;
+  var head = 'font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)';
+  var body = '<div id="settings-sec-' + id + '" class="o-faint">Loading…</div>' + (after || '');
+  if (fixed) {
+    return '<section id="settings-group-' + group + '" style="margin-bottom:28px;border-top:1px solid var(--border);padding-top:16px">' +
+      '<h3 style="' + head + ';margin-bottom:8px">' + title + '</h3>' + body + '</section>';
+  }
+  var st = settingsOpenState();
+  var open = group in st ? !!st[group] : !SETTINGS_CLOSED_BY_DEFAULT[group];
+  return '<details id="settings-group-' + group + '" data-group="' + group + '"' + (open ? ' open' : '') +
+    ' style="margin-bottom:28px;border-top:1px solid var(--border);padding-top:16px">' +
+    '<summary style="cursor:pointer;' + head + ';margin-bottom:8px">' + title + '</summary>' + body + '</details>';
+}
+// Waiting on you: a backup that is overdue, then the At home checklist (athome.js).
+async function renderSettingsSectionWaiting() {
+  var el = $('settings-sec-waiting');
+  if (!el) return;
+  el.className = '';
+  el.innerHTML = '<div id="settings-waiting-backup"></div>' +
+    (typeof athomeWaitingHtml === 'function' ? athomeWaitingHtml() : '');
+  if (typeof athomeLoadAll === 'function') await athomeLoadAll();
+}
+// Advanced: the settings registry and the repairs, closed until opened.
+async function renderSettingsSectionAdvanced() {
+  var el = $('settings-sec-advanced');
+  if (!el) return;
+  el.className = '';
+  el.innerHTML = '<h4 class="o-faint" style="margin:0 0 6px">Registry</h4><div id="settings-sec-registry"></div>' +
+    '<h4 class="o-faint" style="margin:18px 0 6px">Repairs</h4><div id="settings-sec-repairs">' + repairsHtml() + '</div>';
+  await renderSettingsSectionRegistry();
 }
 
 // --- APPEARANCE: light, dark, or follow the device. theme.js owns the choice (it applies it
@@ -1532,9 +1601,15 @@ async function renderSettingsSectionKey() {
 async function renderSettingsSectionOffload() {
   var container = $('settings-sec-offload');
   if (!container) return;
+  container.className = '';
   container.innerHTML =
+    '<div id="settings-backup-line" class="o-faint" style="margin-bottom:10px;overflow-wrap:anywhere">Loading backup history…</div>' +
     '<div id="settings-restic-credential" class="o-faint">Loading remote backup password…</div>' +
     '<div id="settings-offload-targets" style="margin-top:12px"></div>' +
+    (typeof athomeRestoreBlockHtml === 'function' ? athomeRestoreBlockHtml() : '') +
+    '<div id="settings-past-moment" style="margin-top:14px"><button class="iconbtn" disabled ' +
+    'title="Not available yet">Browse a past moment</button> ' +
+    '<span class="o-faint">Not available yet.</span></div>' +
     '<details class="adv-section"><summary>Advanced</summary><div style="margin-top:8px">' +
     '<button class="iconbtn" onclick="runOffloadTick()">Run offload now</button></div></details>' +
     '<div id="settings-backup-status" class="o-faint" style="margin-top:12px">Loading backup status…</div>';
@@ -1615,13 +1690,43 @@ async function renderBackupStatusSection() {
   } catch (e) {
     status = { error: 'backup status unavailable' };
   }
-  if (status.error) { out.textContent = status.error; return; }
+  if (status.error) { out.textContent = status.error; renderBackupHistory(null); return; }
   out.innerHTML = renderBackupStatusHtml(status);
+  renderBackupHistory(status.restore_points || null);
+}
+// One plain line of backup history: last backup, oldest point that can be restored, any gaps.
+// It reads status.restore_points (the same object GET /backup/restore-points returns) and says
+// nothing when it is absent. Before the restore map has ever been built (known false) only the
+// last backup is shown.
+function backupHistoryText(h) {
+  if (!h) return '';
+  var parts = [];
+  parts.push('Last backup: ' + (h.last_backup ? fmtWhen(h.last_backup) : 'never') + '.');
+  if (h.known === false) return parts.join(' ') + (h.text ? ' ' + h.text : '');
+  parts.push('Oldest point you can restore: ' + (h.oldest_restorable ? fmtWhen(h.oldest_restorable) : 'none yet') + '.');
+  var gaps = h.gaps || [];
+  parts.push(gaps.length
+    ? 'Gaps: ' + gaps.map(function(g) { return fmtWhen(g.from) + ' to ' + fmtWhen(g.to); }).join('; ') + '.'
+    : 'No gaps.');
+  if (h.stale) parts.push('This list is more than a week old.');
+  return parts.join(' ');
+}
+function renderBackupHistory(h) {
+  var line = $('settings-backup-line');
+  if (line) line.textContent = h ? backupHistoryText(h) : 'Backup history is not available yet.';
+  var wait = $('settings-waiting-backup');
+  if (wait) {
+    wait.innerHTML = h && h.overdue
+      ? '<div style="margin:0 0 12px;overflow-wrap:anywhere"><strong>A backup is overdue.</strong> ' +
+        esc(backupHistoryText(h)) + ' <button class="iconbtn" onclick="openSettings(\'backups\')">Open backups</button></div>'
+      : '';
+  }
 }
 function offloadKindLabel(k) {
   return k === 'local' ? 'Local drive' : 'Remote repository';
 }
 function renderBackupStatusHtml(status) {
+  var BLOCK = 'padding:6px 0;border-top:1px solid var(--border);overflow-wrap:anywhere';
   var timerRows = (status.timers || []).map(function(t) {
     var mismatch = t.configured_schedule && t.configured_schedule !== t.schedule;
     var configuredCell = t.configured_schedule
@@ -1630,26 +1735,24 @@ function renderBackupStatusHtml(status) {
            esc(t.configured_schedule) + '</span>'
          : esc(t.configured_schedule))
       : '<span class="o-faint">(default)</span>';
-    return '<tr><td>' + esc(t.label || t.unit) + '</td>' +
-      '<td><code>' + esc(t.schedule || '(none)') + '</code></td>' +
-      '<td>' + configuredCell + '</td>' +
-      '<td class="o-faint">' + esc(t.active_state || '') + '</td></tr>';
+    return '<div style="' + BLOCK + '"><div>' + esc(t.label || t.unit) + ' <span class="o-faint">' +
+      esc(t.active_state || '') + '</span></div>' +
+      '<div class="o-faint">Default <code>' + esc(t.schedule || '(none)') + '</code>, set to ' +
+      configuredCell + '</div></div>';
   }).join('');
   var targets = (status.offbox && status.offbox.offload_targets) || [];
   var targetRows = targets.map(function(t) {
     var presence = t.kind === 'local'
       ? (t.presence ? (t.presence.present ? '● connected' : '○ not connected') : '-')
       : '<span class="o-faint" title="Connection is not checked automatically for a remote repository">Not checked</span>';
-    return '<tr><td>' + esc(t.name) + '</td><td>' + esc(offloadKindLabel(t.kind)) + '</td><td>' + presence + '</td>' +
-      '<td class="o-faint">' + esc(t.last_successful_offload || 'never') + '</td>' +
-      '<td class="o-faint">' + esc(t.last_error || '') + '</td></tr>';
+    return '<div style="' + BLOCK + '"><div>' + esc(t.name) + ' <span class="o-faint">' +
+      esc(offloadKindLabel(t.kind)) + '</span> ' + presence + '</div>' +
+      '<div class="o-faint">Last successful offload: ' + esc(t.last_successful_offload || 'never') + '</div>' +
+      (t.last_error ? '<div class="o-faint">Last error: ' + esc(t.last_error) + '</div>' : '') + '</div>';
   }).join('');
   return '<div class="o-faint" style="margin-bottom:4px">As of ' + esc(fmtWhen(status.as_of)) + '</div>' +
-    '<table class="ee-table ee-form"><thead><tr><th>Backup schedule</th><th>Default</th><th>Set to</th>' +
-    '<th>Status</th></tr></thead><tbody>' + timerRows + '</tbody></table>' +
-    (targetRows ? '<table class="ee-table ee-form" style="margin-top:8px"><thead><tr><th>Target</th><th>Type</th>' +
-     '<th>Connection</th><th>Last successful offload</th><th>Last error</th></tr></thead><tbody>' +
-     targetRows + '</tbody></table>' : '');
+    '<h4 class="o-faint" style="margin:8px 0 2px">Backup schedule</h4>' + timerRows +
+    (targetRows ? '<h4 class="o-faint" style="margin:12px 0 2px">Targets</h4>' + targetRows : '');
 }
 
 // --- section 3: REGISTRY, the existing Settings-registry panel, embedded --------------
@@ -1959,6 +2062,8 @@ function readinessCopy(btn) {
 function readinessJump(targetId) {
   var el = $(targetId);
   if (!el) return;
+  var group = el.closest ? el.closest('details') : null;
+  if (group) group.open = true;
   el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   el.style.transition = 'background-color 0.3s';
   el.style.backgroundColor = 'var(--chip)';
@@ -2174,7 +2279,7 @@ const POWER_TOOLS = [
   { label: 'Go to Browse', hint: 'Entity explorer', cat: 'Navigation', run: () => switchSurface('browse') },
   { label: 'Go to Mailbox', hint: 'Messages', cat: 'Navigation', run: () => switchSurface('mailbox') },
   { label: 'Author composition…', hint: 'Save a new lens', cat: 'Compositions', run: () => authorComposition() },
-  { label: 'Repairs…', hint: 'The eight backfill repair verbs', cat: 'Admin', run: () => renderRepairsPanel() },
+  { label: 'Repairs…', hint: 'The backfill repair verbs, under Settings, Advanced', cat: 'Admin', run: () => openSettings('advanced') },
   // THE SETTINGS PANE consolidates the three formerly-separate "Key…"/"Offload
   // Targets…"/"Settings…" palette entries into ONE destination: Ctrl+K used to reach
   // Key…, Offload Targets… and Settings… as separate panels, now built as one console
@@ -2182,8 +2287,11 @@ const POWER_TOOLS = [
   // renderSettingsPanel) still exists and is still reachable directly (nothing deleted),
   // just no longer surfaced as its own separate palette row; the pane below embeds each
   // one's shared fetch+render (renderKeyInto/renderOffloadInto/renderSettingsInto) instead.
-  { label: 'Settings', hint: 'Encryption key, backup, readiness, configuration, and the operator desk', cat: 'Admin', run: () => renderSettingsPane() },
-  { label: 'At home…', hint: 'What waits on you: vault keys, a recovery code, the first offload, the restore test', cat: 'Admin', run: () => renderAtHomePanel() },
+  { label: 'Settings', hint: 'What waits on you, setup, vault keys, backups, the operator desk, appearance, advanced', cat: 'Admin', run: () => renderSettingsPane() },
+  { label: 'Vault keys…', hint: 'Settings: the keys that open the vault, a recovery code, a second key', cat: 'Admin', run: () => openSettings('vault') },
+  { label: 'Backups…', hint: 'Settings: last backup, offload targets, the restore test', cat: 'Admin', run: () => openSettings('backups') },
+  { label: 'Operator desk…', hint: 'Settings: proposals, the desk and merge candidates', cat: 'Admin', run: () => openSettings('desk') },
+  { label: 'At home…', hint: 'What waits on you: vault keys, a recovery code, the first offload, the restore test', cat: 'Admin', run: () => openSettings('waiting') },
 ];
 
 // THE COMPOSER SHELL: "run" used to mean "POST /compositions/{name}/run and dump the raw

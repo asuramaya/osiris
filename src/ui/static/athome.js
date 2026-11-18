@@ -228,28 +228,42 @@ function athomeSection(title, hint, innerId, bodyHtml) {
     '<div id="' + innerId + '">' + (bodyHtml || '') + '</div></section>';
 }
 
-async function renderAtHomePanel() {
-  var container = $('result'); showPanel();
-  $('entity-taxonomy-bar').style.display = 'none';
-  athomeClearCode();
-  container.innerHTML = '<div style="padding:16px;max-width:900px;margin:0 auto">' +
-    '<div style="display:flex;align-items:baseline;justify-content:space-between">' +
-    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin:0 0 4px">At home</h2>' +
-    '<button class="iconbtn" onclick="renderAtHomePanel()">Refresh</button></div>' +
-    '<div class="o-faint" style="margin-bottom:14px">What waits only on you being there. Nothing here changes anything until you press its button.</div>' +
-    athomeSection('What is waiting', 'In the order to do it. The same list as osiris at-home in a terminal.', 'athome-list', '<div class="o-empty">Loading…</div>') +
-    athomeSection('Vault keys', 'Each key that can open the vault. Prove a key to show it still works; it only updates its "last opened" date.', 'athome-keys', '<div class="o-empty">Loading…</div>') +
-    '<div id="athome-key-msg" class="o-faint" style="margin:-8px 0 10px"></div>' +
+// At home lives inside the Settings pane now: the checklist under "Waiting on you", the keys
+// under "Vault keys", the restore test under "Backups". These return those pieces of markup
+// (the ids are the ones the loaders and the actions below look for).
+function athomeWaitingHtml() {
+  return '<div class="o-faint" style="margin-bottom:8px">What waits only on you being there. Nothing here changes anything until you press its button.</div>' +
+    '<div id="athome-list"><div class="o-empty">Loading…</div></div>';
+}
+function athomeKeysBlockHtml() {
+  return '<div class="o-faint" style="margin:10px 0 8px">Each key that can open the vault. Prove a key to show it still works; it only updates its "last opened" date.</div>' +
+    '<div id="athome-keys"><div class="o-empty">Loading…</div></div>' +
+    '<div id="athome-key-msg" class="o-faint" style="margin:4px 0 10px"></div>' +
     '<div id="athome-code"></div>' +
-    '<div id="athome-key-actions" style="margin:0 0 22px">' +
+    '<div id="athome-key-actions" style="margin:0 0 8px">' +
       '<button class="iconbtn" onclick="athomeAddCode()">Add a recovery code</button> ' +
       '<button class="iconbtn" onclick="athomeShowAddKey()">Add a second key</button>' +
-      '<div id="athome-addkey" style="margin-top:8px"></div></div>' +
-    athomeSection('Restore test', 'The last time a copy was restored and checked.', 'athome-restore', '<div class="o-empty">Loading…</div>') +
-    '<div style="margin:-14px 0 22px"><button class="iconbtn" onclick="athomeRestoreRun()">Run the restore test now</button>' +
-    '<ol id="athome-restore-steps" style="margin:8px 0 0 18px"></ol></div>' +
-    '</div>';
-  athomeLoadAll();
+      '<div id="athome-addkey" style="margin-top:8px"></div></div>';
+}
+function athomeRestoreBlockHtml() {
+  return '<h4 class="o-faint" style="margin:14px 0 4px">Restore test</h4>' +
+    '<div class="o-faint" style="margin-bottom:6px">The last time a copy was restored and checked.</div>' +
+    '<div id="athome-restore"><div class="o-empty">Loading…</div></div>' +
+    '<div style="margin:6px 0 0"><button class="iconbtn" onclick="athomeRestoreRun()">Run the restore test now</button>' +
+    '<ol id="athome-restore-steps" style="margin:8px 0 0 18px"></ol></div>';
+}
+// "At home…" in the palette opens Settings at its Waiting on you section.
+function renderAtHomePanel() {
+  return typeof openSettings === 'function' ? openSettings('waiting') : Promise.resolve();
+}
+
+// Nothing pending: say so in one calm line and keep the checklist one click away.
+function athomeWaitingList(body) {
+  var items = (body && body.items) || [];
+  var pending = items.some(function (i) { return i.status === 'waiting' || i.status === 'blocked'; });
+  var html = athomeChecklistHtml(body);
+  return pending ? html
+    : '<details><summary>Nothing is waiting on you right now. Show the checklist.</summary>' + html + '</details>';
 }
 
 async function athomeLoadAll() {
@@ -260,7 +274,7 @@ async function athomeLoadAll() {
   var list = $('athome-list'), keys = $('athome-keys'), restore = $('athome-restore');
   if (list) list.innerHTML = results[0].status === 404 ? unavailable
     : (results[0].status >= 400 ? '<div class="o-empty">' + athomeText(athomeErrorText(results[0].body, 'The list could not be read.')) + '</div>'
-       : athomeChecklistHtml(results[0].body));
+       : athomeWaitingList(results[0].body));
   var plainItem = ((results[0].body && results[0].body.items) || []).find(function (i) { return i.key === 'plaintext_copy'; });
   ATHOME_PLAIN.item = plainItem || null;
   if ($('athome-plain')) athomePlainLoad();
@@ -700,5 +714,6 @@ async function athomePlainRemove() {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { athomeStatusLabel, athomeDays, athomeGroupCode, athomeParseLines, athomeErrorText,
                      athomeChecklistHtml, athomeKeysHtml, athomeRestoreHtml, athomeStepHtml, athomeVerdictLabel,
-                     athomeText, athomeAttr, athomeKindLabel, athomePlainHtml, athomeActionHtml, athomeGB };
+                     athomeText, athomeAttr, athomeKindLabel, athomePlainHtml, athomeActionHtml, athomeGB, athomeWaitingHtml, athomeKeysBlockHtml,
+                     athomeRestoreBlockHtml, athomeWaitingList };
 }

@@ -99,8 +99,8 @@ def test_no_banned_coinage_in_console_js_string_content() -> None:
 
 
 def test_the_box_was_renamed_readiness() -> None:
-    assert "settingsSectionShell('box', 'Readiness')" in _CONSOLE_JS
-    assert "settingsSectionShell('box', 'The Box')" not in _CONSOLE_JS
+    assert "settingsSectionShell('setup', 'Setting up this computer', 'box')" in _CONSOLE_JS
+    assert "'The Box'" not in _CONSOLE_JS
 
 
 # --- item 2: the Settings pane never opens a browser dialog ---------------------------
@@ -137,11 +137,8 @@ def test_registry_secret_replace_uses_an_inline_password_field() -> None:
 
 # --- item 3: layout order -- Readiness moved up near the top --------------------------
 
-def test_section_order_is_key_offload_readiness_registry_desk() -> None:
-    body = _CONSOLE_JS.split("async function renderSettingsPane() {", 1)[1][:1000]
-    key_at = body.index("settingsSectionShell('key'")
-    offload_at = body.index("settingsSectionShell('offload'")
-    box_at = body.index("settingsSectionShell('box'")
-    registry_at = body.index("settingsSectionShell('registry'")
-    desk_at = body.index("settingsSectionShell('desk'")
-    assert key_at < offload_at < box_at < registry_at < desk_at
+def test_section_order_is_waiting_setup_vault_backups_desk() -> None:
+    body = _CONSOLE_JS.split("async function renderSettingsPane(section) {", 1)[1][:2400]
+    at = [body.index("settingsSectionShell('" + k + "'") for k in
+          ("waiting", "setup", "vault", "backups", "desk", "appearance", "advanced")]
+    assert at == sorted(at)
