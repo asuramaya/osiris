@@ -30,7 +30,9 @@ class FakeNas:
     adds its own, from the file list the job wrote on the NAS."""
 
     DAYS = {"vault/a.sql": 1_756_000_000.0, "vault/b.dump": 1_756_100_000.0,
-            "checkout-backups/c.sql": 1_756_100_500.0}  # the second and third share a day
+            "checkout-backups/c.sql": 1_756_100_500.0,  # the second and third share a day and week
+            "vault/newer.dump": 1_757_000_000.0, "vault/older.dump": 1_755_900_000.0,
+            "vault/000000010000000000000001": 1_756_200_000.0}
 
     def __init__(self, plain: dict[str, int], snapshot: dict[str, int] | None = None) -> None:
         self.plain = dict(plain)
@@ -135,6 +137,11 @@ async def test_the_history_becomes_one_dated_snapshot_per_day_proved_by_path_and
     cover = deps.written[0]
     assert cover["only_files"] == 0 and cover["days"] == 2 and cover["tag"] == "history-import"
     assert cover["files_checked"] == 3 and len(cover["snapshots"]) == 2
+    # the policy: of the second week's two dumps only the newest (c.sql) is imported
+    assert cover["skipped"] == [{"path": "vault/b.dump", "size": 200}]
+    assert cover["skipped_files"] == 1 and cover["skipped_bytes"] == 200
+    assert any("left out: vault/b.dump" in s for s in said)
+    assert not any("vault/b.dump" in f for f in nas.listfile)  # it never went to the NAS's list
     assert at_home.read_coverage()["only_files"] == 0  # the checklist reads this very record
     assert any("day 1 of 2" in s and "50%" in s for s in said) and any("proved" in s for s in said)
     assert not nas.removed and not any("rm -rf" in c for c, _s in nas.commands)  # never removes
@@ -161,6 +168,25 @@ async def test_a_run_that_stopped_after_one_day_resumes_at_the_next(tmp_path: Pa
     rc, _said, _deps2 = await run_encrypt(nas, tmp_path, choice=plaintext_copy.ENCRYPT)
 
     assert rc == 0 and sum(" backup " in c for c, _s in nas.commands) == before + 1
+
+
+def test_the_policy_imports_the_newest_dump_of_each_week_and_everything_else() -> None:
+    day = 86_400.0
+    base = 1_756_000_000.0  # a Sunday: the next two days fall in the next ISO week
+    files = {
+        "vault/old-1.sql": (10, base), "vault/old-2.sql": (11, base + 2 * day),
+        "vault/new.sql": (12, base + 3 * day),  # newest of its week
+        "checkout-backups/new.sql": (12, base + 3 * day),  # its twin: same name and size
+        "vault/wal_archive/000000010000000000000001": (5, base + day),
+        "vault/basebackups/base.tar.gz": (7, base + day),
+        "vault/lone.dump": (9, base + 40 * day),  # alone in its week
+    }
+
+    imported, left_out = plaintext_copy.select_import(files)
+
+    assert left_out == ["vault/old-2.sql"]  # old-1 is the newest of the earlier week
+    assert set(imported) == set(files) - {"vault/old-2.sql"}
+    assert "checkout-backups/new.sql" in imported and "vault/new.sql" in imported
 
 
 def test_a_thinning_policy_keeps_every_history_import_snapshot() -> None:
@@ -191,13 +217,13 @@ async def test_a_file_missing_from_the_snapshot_stops_the_proof_and_is_recorded(
     tmp_path: Path,
 ) -> None:
     nas = FakeNas(PLAIN)
-    nas.drop = {"vault/b.dump"}
-    nas.shrink = {"vault/a.sql": 99}  # a size that differs is as missing as a name that does
+    nas.drop = {"vault/a.sql"}
+    nas.shrink = {"checkout-backups/c.sql": 299}  # a size that differs is as missing as a name
 
     rc, said, deps = await run_encrypt(nas, tmp_path, choice=plaintext_copy.ENCRYPT)
 
     assert rc == 1
-    assert deps.written[0]["only_files"] == 2 and deps.written[0]["only_bytes"] == 300
+    assert deps.written[0]["only_files"] == 2 and deps.written[0]["only_bytes"] == 400
     assert any("STOPPED" in s and "not in the snapshots" in s for s in said)
     assert not any(" check " in c for c, _s in nas.commands)  # it never reached the last step
 
@@ -237,7 +263,8 @@ async def run_remove(nas: FakeNas, tmp_path: Path, confirm: object, **kw: Any) -
 def _proved(tmp_path: Path, only: int = 0) -> None:
     (tmp_path / "cover.json").write_text(json.dumps(
         {"only_files": only, "only_bytes": 0, "snapshot": "abcdef01",
-         "snapshots": ["abcdef01"]}))
+         "snapshots": ["abcdef01"],
+         "skipped": [{"path": "vault/b.dump", "size": 200}]}))
 
 
 async def test_removal_needs_the_recorded_choice_and_its_exact_confirmation(
@@ -274,12 +301,12 @@ async def test_removal_after_a_backup_proves_again_and_removes_only_the_two_dire
 
 
 async def test_a_file_that_appeared_after_the_proof_stops_the_removal(tmp_path: Path) -> None:
-    nas = FakeNas({**PLAIN, "vault/new.dump": 400}, PLAIN)  # newer than the snapshot
+    nas = FakeNas({**PLAIN, "vault/newer.dump": 400}, PLAIN)  # newer than the snapshot
     _proved(tmp_path)
 
     rc, said = await run_remove(nas, tmp_path, "remove", choice=plaintext_copy.ENCRYPT)
 
-    assert rc == 1 and not nas.removed and "vault/new.dump" in said
+    assert rc == 1 and not nas.removed and "vault/newer.dump" in said
 
 
 async def test_removal_with_no_proof_on_record_does_nothing(tmp_path: Path) -> None:
@@ -303,6 +330,28 @@ async def test_delete_needs_its_choice_and_a_typed_sentence_and_skips_the_proof(
     rc, said = await run_remove(nas, tmp_path, plaintext_copy.CONFIRM_DELETE,
                                 choice=plaintext_copy.DELETE)
     assert rc == 0 and nas.removed
+
+
+async def test_a_dump_that_appeared_after_the_proof_stops_the_removal(tmp_path: Path) -> None:
+    for extra, words in (("vault/newer.dump", "not in the imported snapshots"),
+                         ("vault/older.dump", "did not list as left out")):
+        nas = FakeNas({**PLAIN, extra: 400}, PLAIN)
+        _proved(tmp_path)
+
+        rc, said = await run_remove(nas, tmp_path, "remove", choice=plaintext_copy.ENCRYPT)
+
+        assert rc == 1 and not nas.removed and words in said and extra in said
+
+
+async def test_the_dump_left_out_on_purpose_does_not_block_a_removal_that_listed_it(
+    tmp_path: Path,
+) -> None:
+    nas = FakeNas(PLAIN, {k: v for k, v in PLAIN.items() if k != "vault/b.dump"})
+    _proved(tmp_path)
+
+    rc, said = await run_remove(nas, tmp_path, "remove", choice=plaintext_copy.ENCRYPT)
+
+    assert rc == 0 and nas.removed and "left out on purpose" in said
 
 
 async def test_the_choice_is_recorded_as_an_operator_authorized_decision(
