@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 from src.orchestrator import time_machine as tm
@@ -447,3 +448,94 @@ def test_start_refuses_an_unreadable_record_instead_of_overwriting_it(
     assert not p.exists()
     assert tm.start(dump, sh=d, record_path=p, sleep=lambda _s: None,
                     free=lambda _p: 10**12).state == "ready"
+
+
+def _runner(tmp_path: Path, *tail: str) -> Any:
+    import sys
+
+    return subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)", *tail],
+        start_new_session=True)
+
+
+def test_teardown_stops_the_runner_that_is_still_opening_it(tmp_path: Path) -> None:
+    import time as _time
+
+    p = tmp_path / "rec.json"
+    proc = _runner(tmp_path, "time-machine", "run", "osiris-20261115-201856")
+    try:
+        tm._runner_pid_path(p).write_text(str(proc.pid))
+        removed = tm.teardown(sh=FakeDocker(), record_path=p)
+        assert "the opening process" in removed
+        for _ in range(50):
+            if proc.poll() is not None:
+                break
+            _time.sleep(0.1)
+        assert proc.poll() is not None                       # it was ended
+        assert not tm._runner_pid_path(p).exists()
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_teardown_never_touches_a_process_that_is_not_our_runner(tmp_path: Path) -> None:
+    p = tmp_path / "rec.json"
+    stranger = _runner(tmp_path)                             # same shape, but not our command
+    try:
+        tm._runner_pid_path(p).write_text(str(stranger.pid))
+        assert "the opening process" not in tm.teardown(sh=FakeDocker(), record_path=p)
+        assert stranger.poll() is None                       # still running
+        assert not tm._runner_pid_path(p).exists()
+        tm._runner_pid_path(p).write_text("not a pid")
+        tm.teardown(sh=FakeDocker(), record_path=p)          # garbage in the file is harmless
+    finally:
+        stranger.kill()
+        stranger.wait()
+
+
+def test_the_runner_stops_what_it_started_below_it(tmp_path: Path) -> None:
+    import sys
+    import time as _time
+
+    p = tmp_path / "rec.json"
+    # the runner starts a child in a session of its own (as a copy from the NAS does)
+    code = ("import subprocess, sys, time; "
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'], "
+            "start_new_session=True); time.sleep(120)")
+    runner = subprocess.Popen([sys.executable, "-c", code, "time-machine", "run", "x"],
+                              start_new_session=True)
+    try:
+        _time.sleep(1.0)
+        kids = tm._descendants(runner.pid)
+        assert kids, "the runner's child was not found"
+        tm._runner_pid_path(p).write_text(str(runner.pid))
+        tm.teardown(sh=FakeDocker(), record_path=p)
+        _time.sleep(0.5)
+        assert runner.poll() is not None
+        assert all(not Path(f"/proc/{k}").exists() or
+                   Path(f"/proc/{k}/stat").read_text().split(")")[1].split()[0] == "Z"
+                   for k in kids)
+    finally:
+        runner.kill()
+        runner.wait()
+
+
+def test_spawn_run_records_the_runner_pid_beside_the_record(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OSIRIS_TIME_MACHINE_STATE", str(tmp_path / "rec.json"))
+
+    class P:
+        pid = 4242
+
+    tm.spawn_run("osiris-20261115-201856", popen=lambda *_a, **_k: P(),
+                 log_path=tmp_path / "x.log")
+    assert tm._runner_pid_path().read_text() == "4242"
+
+
+def test_a_runner_that_clears_up_after_itself_never_stops_itself(tmp_path: Path) -> None:
+    import os as _os
+
+    p = tmp_path / "rec.json"
+    tm._runner_pid_path(p).write_text(str(_os.getpid()))        # this very process
+    assert tm.stop_runner(p) is False
+    assert not tm._runner_pid_path(p).exists()                   # and the file is cleared
