@@ -23,6 +23,28 @@ def _split(dsn: str) -> tuple[str, str]:
     return head, db
 
 
+def _clone_database(head: str, template: str, name: str) -> None:
+    """CREATE DATABASE ... TEMPLATE needs the template idle. A connection of this worker's own
+    database can still be draining from the previous test, so wait for it: end any other
+    backend on the template (it is this worker's own leftover; nothing else uses it) and
+    retry a few times before giving up."""
+    import time
+
+    with psycopg.connect(f"{head}/test", autocommit=True) as admin:
+        for attempt in range(8):
+            admin.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()", (template,))
+            try:
+                admin.execute(sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
+                    sql.Identifier(name), sql.Identifier(template)))
+                return
+            except psycopg.errors.ObjectInUse:
+                if attempt == 7:
+                    raise
+                time.sleep(0.5)
+
+
 @pytest_asyncio.fixture
 async def moment(pg_dsn: str) -> AsyncIterator[Actions]:
     """A second database cloned from the test one, standing in for a restored past moment
@@ -30,9 +52,7 @@ async def moment(pg_dsn: str) -> AsyncIterator[Actions]:
     have no other connections."""
     head, db = _split(pg_dsn)
     name = f"tm_moment_{uuid.uuid4().hex[:8]}"
-    with psycopg.connect(f"{head}/test", autocommit=True) as admin:
-        admin.execute(sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
-            sql.Identifier(name), sql.Identifier(db)))
+    _clone_database(head, db, name)
     pool = await create_pool(f"{head}/{name}")
     from src.ontology.catalog import is_known_object_type, seed_catalog
 
