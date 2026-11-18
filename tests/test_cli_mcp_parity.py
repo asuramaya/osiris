@@ -120,6 +120,10 @@ NO_MCP_EQUIVALENT = {
         ", one tick runs real restic subprocess backups against real infrastructure "
         "(the docked drive, the NAS over sftp), meant as osiris-offload.timer's own "
         "ExecStart or a human's own by-hand run, not an ordinary agent-callable verb.",
+    "time-machine": "the operator's past-moment panel: opens a throwaway database from a backup "
+        "and, from the console, restores one item into the live graph. Operator-only by "
+        "design (an agent restoring into the live graph is exactly what it refuses); the "
+        "command only starts, shows and removes the throwaway.",
     "at-home": "a read-only checklist of jobs that wait on the operator being physically present "
         "or giving their word; its desk line is what reaches an agent, and it is not an "
         "agent-callable verb.",

@@ -1702,6 +1702,123 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         body = await _envelope_body(request)
         return await _plaintext_stream(p, "remove", body.get("confirm"))
 
+    # THE TIME MACHINE's routes (src/orchestrator/time_machine_console.py): open a past moment in
+    # a throwaway database, browse it read-only, and restore ONE item from it into the live graph.
+    # Operator-only like the key routes: loopback, no-store, hand-parsed bodies, a sentence for
+    # every error, and no agent tool for any of it. `apply` is the only write.
+    def _tm_guard(request: Request) -> JSONResponse | None:
+        host = request.client.host if request.client else ""
+        if host in ("127.0.0.1", "::1", "localhost", "testclient"):
+            return None
+        return _envelope_reply({"error": "the time machine only answers on the machine it "
+                                         "runs on"}, 403)
+
+    @app.get("/time-machine/moments")
+    async def time_machine_moments_route(request: Request) -> JSONResponse:
+        """The past moments that can be opened, newest first."""
+        from src.orchestrator import time_machine_console as tmc
+
+        return _tm_guard(request) or _envelope_reply(await tmc.moments())
+
+    @app.get("/time-machine/status")
+    async def time_machine_status_route(request: Request) -> JSONResponse:
+        """The open throwaway (state, plain text, time left) or null. Poll this."""
+        from src.orchestrator import time_machine_console as tmc
+
+        return _tm_guard(request) or _envelope_reply(await tmc.status())
+
+    @app.post("/time-machine/start")
+    async def time_machine_start_route(request: Request) -> JSONResponse:
+        """`{moment}` (a moment id): begin opening it. Answers at once; the restore runs on its
+        own for about two minutes, so poll /time-machine/status."""
+        from src.orchestrator import time_machine_console as tmc
+
+        if (denied := _tm_guard(request)) is not None:
+            return denied
+        return _envelope_reply(await tmc.start((await _envelope_body(request)).get("moment")))
+
+    @app.post("/time-machine/extend")
+    async def time_machine_extend_route(request: Request) -> JSONResponse:
+        """Add one more two hours to the open throwaway. Once only."""
+        from src.orchestrator import time_machine_console as tmc
+
+        return _tm_guard(request) or _envelope_reply(await tmc.extend())
+
+    @app.post("/time-machine/teardown")
+    async def time_machine_teardown_route(request: Request) -> JSONResponse:
+        """Remove the throwaway and everything it made."""
+        from src.orchestrator import time_machine_console as tmc
+
+        return _tm_guard(request) or _envelope_reply(await tmc.teardown())
+
+    @app.get("/time-machine/browse/types")
+    async def time_machine_types_route(request: Request) -> JSONResponse:
+        from src.orchestrator import time_machine_console as tmc
+
+        return _tm_guard(request) or _envelope_reply(await tmc.types())
+
+    @app.get("/time-machine/browse/objects")
+    async def time_machine_objects_route(
+        request: Request, type: str | None = None, q: str | None = None,
+        limit: int = 50, offset: int = 0,
+    ) -> JSONResponse:
+        """Objects of that moment, newest first; `q` searches (literal, case blind)."""
+        from src.orchestrator import time_machine_console as tmc
+
+        return _tm_guard(request) or _envelope_reply(
+            await tmc.objects(type_=type, q=q, limit=limit, offset=offset))
+
+    @app.get("/time-machine/browse/object/{ref}")
+    async def time_machine_object_route(ref: str, request: Request) -> JSONResponse:
+        """One object: its assertions (the superseded ones marked) and links both ways. `ref`
+        is a uuid, a hex id prefix (6+), or the exact canonical."""
+        from src.orchestrator import time_machine_console as tmc
+
+        return _tm_guard(request) or _envelope_reply(await tmc.detail(ref))
+
+    @app.get("/time-machine/browse/sessions")
+    async def time_machine_sessions_route(
+        request: Request, q: str | None = None, limit: int = 50, offset: int = 0,
+    ) -> JSONResponse:
+        from src.orchestrator import time_machine_console as tmc
+
+        return _tm_guard(request) or _envelope_reply(
+            await tmc.sessions(q=q, limit=limit, offset=offset))
+
+    @app.get("/time-machine/browse/session/{anchor_sid}/lines")
+    async def time_machine_lines_route(
+        anchor_sid: str, request: Request, tail: int = 100, harness: str = "claude-code",
+    ) -> JSONResponse:
+        """The last `tail` lines (max 1000) of one stored session, decrypted for reading."""
+        from src.orchestrator import time_machine_console as tmc
+
+        return _tm_guard(request) or _envelope_reply(
+            await tmc.lines(anchor_sid, tail=tail, harness=harness))
+
+    @app.post("/time-machine/plan")
+    async def time_machine_plan_route(
+        request: Request, p: asyncpg.Pool = Depends(get_pool),
+    ) -> JSONResponse:
+        """`{ref}`: what restoring that item would do. Writes nothing. Carries a `digest`."""
+        from src.orchestrator import time_machine_console as tmc
+
+        if (denied := _tm_guard(request)) is not None:
+            return denied
+        return _envelope_reply(await tmc.plan(p, (await _envelope_body(request)).get("ref")))
+
+    @app.post("/time-machine/apply")
+    async def time_machine_apply_route(
+        request: Request, p: asyncpg.Pool = Depends(get_pool),
+    ) -> JSONResponse:
+        """`{ref, digest, resolutions?, links?, note?}`: restore that item as the operator.
+        `digest` is the one the plan showed; `resolutions` maps each conflict to keep or
+        restore (default keep); `links` lists the planned links to bring back (default all)."""
+        from src.orchestrator import time_machine_console as tmc
+
+        if (denied := _tm_guard(request)) is not None:
+            return denied
+        return _envelope_reply(await tmc.apply(p, await _envelope_body(request)))
+
     @app.get("/soul-key/status")
     async def soul_key_status_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
         """Return the status of the encryption key that protects the data

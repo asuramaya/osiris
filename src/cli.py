@@ -19,6 +19,8 @@ rather than re-deriving it:
   osiris offload-runner tick        THE OPPORTUNISTIC OFFLOAD RUNNER: one pass syncing the
                                      vault via restic to every present, enabled offload
                                      target, meant as osiris-offload.timer's own ExecStart
+  osiris time-machine <moments|status|teardown|run ID>   open a past backup moment in a
+                                     throwaway database for the console to browse and restore
   osiris at-home [--json]            what is waiting only on you being there, cheapest and
                                      safest first, with the exact command for each
   osiris repo-thin [--apply ID]      Time Machine style thinning of the NAS repository: shows
@@ -1339,6 +1341,30 @@ async def cmd_restic_key(
 
 
 # --- offload-runner ------------------------------------------------------------------------
+
+def cmd_time_machine(action: str, moment: str | None) -> int:
+    """osiris time-machine <moments|status|teardown|run>: the command behind the console's past-
+    moment panel. No database needed: it works on the throwaway's own record and containers."""
+    from src.orchestrator import time_machine as tm
+
+    if action == "moments":
+        for m in tm.list_moments():
+            print(f"{m.id}  {m.label}  {m.size_bytes / 2**30:.1f} GiB")
+        return 0
+    if action == "status":
+        st = tm.status()
+        print("nothing is open" if st is None else
+              f"{st['state']}: {st['state_text']} ({st['seconds_left']} s left)")
+        return 0
+    if action == "teardown":
+        removed = tm.teardown()
+        print("removed " + ", ".join(removed) if removed else "nothing to remove")
+        return 0
+    if not moment:
+        print("osiris time-machine run: say which moment (see `osiris time-machine moments`)")
+        return 2
+    return tm.run_detached(moment)
+
 
 async def cmd_at_home(
     *, as_json: bool = False, notify: bool = False, pool: asyncpg.Pool | None = None,
@@ -8542,9 +8568,10 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         declare-machine-identity, correct-agent-house (deprecated alias
                         for correct-agent-project, one release only)
   operate               deploy, migrate, seed, soul-key, restic-key, offload-runner,
-                        nas-first-offload, envelope-drill, at-home, repo-thin, bootstrap, retention,
-                        rematerialize, rebuild-transcript, fleet-reconcile, fleet-prune,
-                        backfill, graph-migrate, layout
+                        nas-first-offload, envelope-drill, at-home, repo-thin,
+                        time-machine, bootstrap, retention, rematerialize,
+                        rebuild-transcript, fleet-reconcile, fleet-prune, backfill,
+                        graph-migrate, layout
 
 When osiris resume says a session's history is from another Claude account, the session is
 continued from osiris's own copy. To carry it into another harness instead, run
@@ -8877,6 +8904,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_offload_runner.add_argument("--json", action="store_true", dest="as_json",
                                   help="machine-readable: one compact JSON line")
 
+    p_time_machine = sub.add_parser("time-machine", description=_d(
+        "Open a past moment (a vault dump) in a throwaway database, so the console can browse it "
+        "and restore one item. `moments` lists what can be opened, `status` shows what is open, "
+        "`teardown` removes it, `run <moment id>` opens one (the console starts this for you)."),
+        epilog="example: osiris time-machine moments\n"
+               "example: osiris time-machine run osiris-20261115-201856")
+    p_time_machine.add_argument("action", choices=["moments", "status", "teardown", "run"])
+    p_time_machine.add_argument("moment", nargs="?", default=None,
+                                help="run only: a moment id from `moments`")
     p_at_home = sub.add_parser("at-home", description=_d(
         "What is waiting only on you being there (on the home network, a security key in "
         "hand, or your word), cheapest and safest first, each with its live status and the "
@@ -10521,6 +10557,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "restic-key":
         return asyncio.run(cmd_restic_key(
             args.action, path=args.path, backend=args.backend, as_json=args.as_json))
+    if args.command == "time-machine":
+        return cmd_time_machine(args.action, args.moment)
     if args.command == "at-home":
         return asyncio.run(cmd_at_home(  # unbounded-wait-ok: asyncio.run of a CLI command
             as_json=args.as_json, notify=args.notify))
