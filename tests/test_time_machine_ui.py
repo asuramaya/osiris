@@ -54,7 +54,22 @@ def test_nothing_is_written_on_load_and_apply_is_the_only_restore() -> None:
 def test_polling_runs_only_while_a_moment_is_opening_and_stops_when_the_screen_is_gone() -> None:
     body = _JS.split("function tmSchedulePoll() {", 1)[1].split("\n}\n", 1)[0]
     assert "if (!$('tm-root')) return;" in body
-    assert "'starting' || st === 'restoring'" in body and "4000" in body
+    # every working state is polled (the NAS kinds also go through "pulling"), not a fixed list
+    assert "st && st !== 'failed'" in body and "4000" in body
+    assert "'starting' || st === 'restoring'" not in body
+
+
+def test_a_pulling_moment_shows_its_progress_text_and_a_cancel() -> None:
+    html = str(_node("a.tmStatusHtml({state:'pulling',state_text:'pulling base 2.1/3.8 GB',"
+                     "seconds_left:7000,moment:{label:'NAS dump'}})"))
+    assert "pulling base 2.1/3.8 GB" in html and "Cancel" in html
+
+
+def test_the_time_box_minimum_rounds_up_and_the_maximum_down() -> None:
+    at = "'2026-11-17T10:00:30Z'"
+    assert _node(f"a.tmLocalBox({at}, true) > a.tmLocalBox({at})")
+    whole = "'2026-11-17T10:00:00Z'"
+    assert _node(f"a.tmLocalBox({whole}, true) === a.tmLocalBox({whole})")
 
 
 def test_a_moment_that_needs_a_time_gets_a_picker_and_the_time_goes_up_in_utc() -> None:

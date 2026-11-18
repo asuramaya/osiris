@@ -53,9 +53,10 @@ function tmUtc(localValue) {
   return d.toISOString().replace(/\.\d+Z$/, 'Z');
 }
 // The same, the other way: a UTC time for a date-time box, which reads local time.
-function tmLocalBox(iso) {
+function tmLocalBox(iso, roundUp) {
   var d = new Date(iso);
   if (isNaN(d.getTime())) return '';
+  if (roundUp && (d.getSeconds() || d.getMilliseconds())) { d.setSeconds(0, 0); d.setMinutes(d.getMinutes() + 1); }
   var p = function (n) { return String(n).padStart(2, '0'); };
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
@@ -79,7 +80,7 @@ function tmMomentHtml(m, idx) {
     picker = '<div style="margin:4px 0"><label class="o-faint">Time to open (your local time), between ' +
       tmText(tmWhen(m.window_from)) + ' and ' + tmText(tmWhen(m.window_to)) + ': ' +
       '<input type="datetime-local" id="tm-at-' + idx + '" value="' + tmAttr(tmLocalBox(m.window_to)) +
-      '" min="' + tmAttr(tmLocalBox(m.window_from)) + '" max="' + tmAttr(tmLocalBox(m.window_to)) +
+      '" min="' + tmAttr(tmLocalBox(m.window_from, true)) + '" max="' + tmAttr(tmLocalBox(m.window_to)) +
       '" style="max-width:100%"' + (ok ? '' : ' disabled') + ' /></label></div>';
   }
   return '<div style="padding:8px 0;border-top:1px solid var(--border);' + TM_WRAP + '">' +
@@ -137,8 +138,10 @@ function tmSchedulePoll() {
   clearTimeout(TM.timer);
   if (!$('tm-root')) return;  // the screen is gone: stop asking
   var st = TM.status && TM.status.state;
-  if (st === 'starting' || st === 'restoring') TM.timer = setTimeout(tmRefreshStatus, 4000);
-  else if (st === 'ready') TM.timer = setTimeout(tmRefreshStatus, 30000);
+  // every state that is still working (starting, pulling from the NAS, restoring, replaying) is
+  // polled every 4 seconds; an open moment every 30 seconds; a failed or absent one not at all
+  if (st === 'ready') TM.timer = setTimeout(tmRefreshStatus, 30000);
+  else if (st && st !== 'failed') TM.timer = setTimeout(tmRefreshStatus, 4000);
 }
 function tmStatusHtml(t) {
   var head = '<div style="' + TM_WRAP + '"><strong>' + tmText((t.moment && t.moment.label) || 'A past moment') + '</strong></div>';
@@ -186,7 +189,7 @@ function tmBrowseHtml(rows, total, types) {
   var more = rows && rows.length && TM.offset + rows.length < total
     ? '<div style="margin-top:8px"><button class="iconbtn" onclick="tmMoreRows()">Show more</button></div>' : '';
   return '<div style="margin:8px 0"><button class="iconbtn' + (TM.type === '' ? ' sel' : '') + '" data-type="" onclick="tmPickType(this)">All</button> ' + chips + '</div>' +
-    '<div style="margin:8px 0"><input id="tm-q" class="filter" placeholder="Search this moment (exact words)" style="width:100%;margin:0 0 4px" value="' + tmAttr(TM.q) +
+    '<div style="margin:8px 0"><input id="tm-q" class="filter" placeholder="Search this moment (any words, any case)" style="width:100%;margin:0 0 4px" value="' + tmAttr(TM.q) +
     '" onkeydown="if(event.key===\'Enter\')tmSearch()" /> <button class="iconbtn" onclick="tmSearch()">Search</button> ' +
     '<button class="iconbtn" onclick="tmShowSessions()">Stored conversations</button></div>' +
     '<div class="o-faint">' + tmText(total == null ? '' : total + ' item(s)') + '</div>' +
@@ -234,7 +237,7 @@ function tmDetailHtml(d) {
       tmText((l.other || {}).canonical) + (l.active === false ? ' (no longer active)' : '') + '</div>';
   };
   return '<div style="' + TM_WRAP + '"><code>' + tmText(o.type) + '</code> <strong>' + tmText(o.canonical) + '</strong></div>' +
-    '<div class="o-faint">' + tmText(o.status || '') + (o.merged_into ? ', merged into another item since' : '') + ', made ' + tmText(tmWhen(o.created_at)) + '</div>' +
+    '<div class="o-faint">' + tmText(o.status || '') + (o.merged_into ? ', merged into another item (as of this moment)' : '') + ', made ' + tmText(tmWhen(o.created_at)) + '</div>' +
     '<div style="margin:8px 0"><button class="iconbtn" onclick="tmBack()">Back to the list</button> ' +
     '<button class="iconbtn" onclick="tmPlan()">Restore this item…</button></div>' +
     '<h4 class="o-faint" style="margin:10px 0 2px">Properties then</h4>' + (assertions || '<div class="o-empty">None.</div>') +
