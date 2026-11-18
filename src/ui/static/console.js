@@ -1738,6 +1738,9 @@ function thinningText(h, now) {
 // one click. The routes answer on the console's own computer; before they exist the block says nothing.
 function thinningApprovalHtml(d, nowMs) {
   var plan = d && d.plan;
+  // a plan the last run already applied is done, not waiting (the record keeps it until a new one)
+  var last = d && d.last_run;
+  if (plan && last && !last.failure && (last.plan_id === plan.id || new Date(last.at) >= new Date(plan.at))) plan = null;
   var fresh = ' <button class="iconbtn" onclick="thinningFreshPlan()">Make a fresh plan</button> <span class="o-faint">Takes about 4 minutes.</span>';
   if (!plan || !plan.text) {
     return '<div class="o-faint">No tidy-up of old backups is waiting for approval.' + fresh + '</div>';

@@ -692,6 +692,8 @@ function athomePlainHtml(d, item) {
       ' file(s) (' + athomeText(athomeGB(cov.only_bytes)) + ' GB) are only in the old copy and not yet in the backup.</div>' : '');
   var choice = d.choice && d.choice.choice;
   var confirm = d.confirm || {};
+  // before the choice is made, still show what the old copy holds that the backup left out
+  if (choice !== 'encrypt_then_remove' && cov && (cov.skipped || []).length) head += athomeSkippedHtml(cov);
   var chosen = choice ? '<div class="o-faint" style="margin-bottom:6px">Your choice so far: ' +
     athomeText(ATHOME_CHOICE_WORDS[choice] || choice) + '.</div>' : '';
   var buttons =
