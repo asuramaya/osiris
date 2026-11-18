@@ -152,7 +152,7 @@ def _value(raw: Any) -> Any:
         return raw
 
 
-def _text_capped(value: Any) -> Any:
+def text_capped(value: Any) -> Any:
     if isinstance(value, str) and len(value) > VALUE_TEXT_MAX:
         return value[:VALUE_TEXT_MAX] + f"… [{len(value) - VALUE_TEXT_MAX} more characters]"
     return value
@@ -175,7 +175,7 @@ async def object_detail(conn: Any, ref: str) -> dict[str, Any] | None:
         "SELECT id, name, value, source_id, confidence, observed_at, supersedes, created_at "
         "FROM assertions WHERE object_id = $1 ORDER BY id", oid)
     assertions = [{
-        "id": int(a["id"]), "name": a["name"], "value": _text_capped(_value(a["value"])),
+        "id": int(a["id"]), "name": a["name"], "value": text_capped(_value(a["value"])),
         "source_id": a["source_id"], "confidence": float(a["confidence"]),
         "observed_at": a["observed_at"].isoformat(),
         "supersedes": int(a["supersedes"]) if a["supersedes"] is not None else None,
