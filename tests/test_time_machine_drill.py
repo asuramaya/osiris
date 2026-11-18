@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -83,10 +84,13 @@ def test_it_takes_the_oldest_window_that_fits_and_skips_the_big_ones() -> None:
         asked.append(base)
         return sizes.get(base)
 
-    mid, at, est = dr.pick_pitr(windows, size_of) or ("", "", 0)
+    mid, at, est, skipped = dr.pick_pitr(windows, size_of) or ("", "", 0, [])
     assert mid == "pitr-osiris-basebackup-20261018-205720"          # not the 46 GB one
     assert asked[0].endswith("20261005-092933.tar.gz") and len(asked) == 2   # oldest first
     assert at.startswith("2026-10-2") and est <= dr.MAX_DRILL_BYTES
+    # the skipped window is named with its size, so the operator can see why it is not drilled
+    assert [s["base"] for s in skipped] == ["osiris-basebackup-20261005-092933.tar.gz"]
+    assert skipped[0]["base_bytes"] == 46 * GIB and "over the 12 GiB budget" in skipped[0]["why"]
     assert dr.pick_pitr([], size_of) is None
     assert dr.pick_pitr(windows, lambda b, a: None) is None          # nothing could be sized
     assert dr.pick_pitr([{"from": "x", "to": "y"}], size_of) is None
@@ -352,3 +356,32 @@ async def test_when_no_window_fits_the_budget_it_is_a_plain_skip_and_nothing_is_
                              base_size=lambda b, a: 46 * GIB)
     assert "small enough for a monthly check" in out["skipped"] and started == []
     assert not dr.read_receipt().get("last_error")
+
+
+@pytest.mark.asyncio
+async def test_the_receipt_says_which_windows_were_not_drilled_and_why(
+        world: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncpg
+
+    monkeypatch.setattr(tm, "teardown", lambda **_k: [])
+    (Path(os.environ["OSIRIS_RESTORE_POINTS_FILE"])).write_text(json.dumps({"windows": [
+        _win("2026-10-05T15:10:54+00:00", "2026-10-13T14:45:10+00:00", "20261005-092933", 34760),
+        _win("2026-10-19T02:01:38+00:00", "2026-11-01T23:15:07+00:00", "20261018-205720", 2281)],
+        "gaps": []}))
+    sizes = {"osiris-basebackup-20261005-092933.tar.gz": 46 * GIB,
+             "osiris-basebackup-20261018-205720.tar.gz": int(3.8 * GIB)}
+    when = datetime(2026, 10, 21, 2, 1, 38, tzinfo=UTC)
+    pool = _Pool(assertion=when - timedelta(minutes=1))
+
+    async def make(*_a: Any, **_k: Any) -> _Pool:
+        return pool
+
+    monkeypatch.setattr(asyncpg, "create_pool", make)
+    out = await dr.run_drill(None, kind="pitr", now=NOW, say=lambda _t: None,
+                             start=lambda m: _fake_rec(), base_size=lambda b, a: sizes[b])
+    assert out["ok"] is True
+    r = dr.read_receipt()
+    assert [w["base_bytes"] for w in r["windows_not_drilled"]] == [46 * GIB]
+    assert r["history"][0]["windows_not_drilled"][0]["why"].startswith("over the 12 GiB")
+    line = dr.status_line({**r, "last_passed_at": NOW.isoformat()}, now=NOW)
+    assert "too big" in line["text"] and "Oct 05-Oct 13 (base 46 GB)" in line["text"]

@@ -109,8 +109,17 @@ def status_line(receipt: dict[str, Any], *, now: datetime | None = None) -> dict
     if days > OVERDUE_DAYS:
         return {"state": "overdue", "text": f"The monthly Time Machine check last passed {days} "
                 "days ago; it only runs at home."}
+    left_out = receipt.get("windows_not_drilled") or []
+    note = ""
+    if left_out:
+        words = ", ".join(
+            f"{parse_time(w.get('from')):%b %d}-{parse_time(w.get('to')):%b %d}"
+            + (f" (base {w['base_bytes'] / 2**30:.0f} GB)" if w.get("base_bytes") else "")
+            for w in left_out if parse_time(w.get("from")) and parse_time(w.get("to")))
+        if words:
+            note = f" Not checked monthly because they are too big: {words}."
     return {"state": "passed", "text": f"The monthly Time Machine check passed {days} day(s) "
-            f"ago ({kind} opened from the NAS)."}
+            f"ago ({kind} opened from the NAS).{note}"}
 
 
 # --- choosing what to open -------------------------------------------------------------------
@@ -143,23 +152,32 @@ def plan_window(window: dict[str, Any], base_bytes: int) -> tuple[str, int] | No
     return (a + timedelta(seconds=ahead)).isoformat(), int(base_bytes + ahead * rate)
 
 
-def pick_pitr(windows: list[dict[str, Any]],
-              size_of: Callable[[str, datetime], int | None]) -> tuple[str, str, int] | None:
-    """(moment id, time, estimated bytes) for the OLDEST window whose base backup plus the log up
-    to a time near its start fits the budget: the stretch thinning is most likely to have hurt,
-    without ever pulling a huge one."""
+def pick_pitr(windows: list[dict[str, Any]], size_of: Callable[[str, datetime], int | None],
+              ) -> tuple[str, str, int, list[dict[str, Any]]] | None:
+    """(moment id, time, estimated bytes, the windows skipped on the way) for the OLDEST window
+    whose base backup plus the log up to a time near its start fits the budget: the stretch
+    thinning is most likely to have hurt, without ever pulling a huge one. The skipped windows
+    (too big, or not held on the NAS) are returned so the receipt can say what is NOT being
+    drilled and why."""
     spans = []
     for w in windows:
         a, b = parse_time(w.get("from")), parse_time(w.get("to"))
         if a and b and b > a and w.get("base"):
             spans.append((a, w))
+    skipped: list[dict[str, Any]] = []
     for a, w in sorted(spans, key=lambda x: x[0]):
         size = size_of(str(w["base"]), a)
+        note = {"base": str(w["base"]), "from": w.get("from"), "to": w.get("to"),
+                "base_bytes": size}
         if size is None:
+            skipped.append({**note, "why": "its base backup is not on the NAS"})
             continue
         planned = plan_window(w, size)
         if planned:
-            return "pitr-" + str(w["base"]).removesuffix(".tar.gz"), planned[0], planned[1]
+            return ("pitr-" + str(w["base"]).removesuffix(".tar.gz"), planned[0], planned[1],
+                    skipped)
+        skipped.append({**note, "why": f"over the {MAX_DRILL_BYTES // 2**30} GiB budget "
+                                       f"(base {size / 2**30:.1f} GiB)"})
     return None
 
 
@@ -229,6 +247,7 @@ async def run_drill(live_pool: Any, *, kind: str | None = None, force: bool = Fa
         return {"skipped": "not due"}
     kind = kind or next_kind(receipt)
     est = 0
+    over_budget: list[dict[str, Any]] = []
     if kind not in KINDS:
         return {"skipped": f"unknown kind {kind!r}"}
 
@@ -260,7 +279,7 @@ async def run_drill(live_pool: Any, *, kind: str | None = None, force: bool = Fa
         if pick is None:
             return skip("no point-in-time window is small enough for a monthly check "
                         f"(budget {MAX_DRILL_BYTES // 2**30} GiB) or none is known yet")
-        est = pick[2]
+        est, over_budget = pick[2], pick[3]
         moment = await asyncio.to_thread(lambda: pitr.find_pitr_moment(pick[0], pick[1]))
     del cache
     say(f"time-machine drill: opening {moment.label} ({kind})")
@@ -296,12 +315,16 @@ async def run_drill(live_pool: Any, *, kind: str | None = None, force: bool = Fa
              "label": moment.label, "ok": error is None, "seconds": seconds}
     if est:
         entry["estimated_bytes"] = est
+    if over_budget:
+        entry["windows_not_drilled"] = over_budget
     if error:
         entry["error"] = error
     history = ([entry, *(receipt.get("history") or [])])[:HISTORY_KEPT]
     new = {**receipt, "last_attempt_at": now.isoformat(), "last_kind": kind,
            "last_moment": moment.id, "last_seconds": seconds, "history": history}
     new.pop("last_skipped", None)
+    if kind == "pitr":
+        new["windows_not_drilled"] = over_budget
     if error is None:
         new.update({"last_passed_at": now.isoformat(), "last_error": None})
     else:
