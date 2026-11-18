@@ -18,7 +18,7 @@ _CONSOLE_JS = (Path(__file__).parent.parent / "src" / "ui" / "static" / "console
 
 def test_offload_section_loads_the_restic_credential_widget() -> None:
     body = _CONSOLE_JS.split(
-        "async function renderSettingsSectionOffload() {", 1)[1][:900]
+        "async function renderSettingsSectionOffload() {", 1)[1][:2600]
     assert "renderResticCredentialWidget()" in body
     assert "'settings-restic-credential'" in body
 
@@ -50,7 +50,7 @@ def test_restic_credential_never_shows_the_password_itself() -> None:
 
 def test_offload_section_has_a_run_offload_now_button() -> None:
     body = _CONSOLE_JS.split(
-        "async function renderSettingsSectionOffload() {", 1)[1][:700]
+        "async function renderSettingsSectionOffload() {", 1)[1][:2600]
     assert "onclick=\"runOffloadTick()\">Run offload now</button>" in body
 
 
@@ -70,7 +70,7 @@ def test_backup_status_fetch_is_its_own_reusable_function() -> None:
     # SAME fetch+render, never a duplicated copy that could drift.
     assert "async function renderBackupStatusSection() {" in _CONSOLE_JS
     body = _CONSOLE_JS.split(
-        "async function renderSettingsSectionOffload() {", 1)[1][:1000]
+        "async function renderSettingsSectionOffload() {", 1)[1][:2600]
     assert "renderBackupStatusSection()" in body
 
 

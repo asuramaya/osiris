@@ -236,7 +236,7 @@ def test_pages_load_the_theme_before_the_stylesheet(name: str, src: str) -> None
 
 
 def test_settings_offers_the_three_choices() -> None:
-    assert "settingsSectionShell('appearance', 'Appearance')" in _CONSOLE
+    assert "settingsSectionShell('appearance', 'Appearance', 'appearance')" in _CONSOLE
     assert "THEME_CHOICES = [['system', 'Match this device']," in _CONSOLE
     assert "['light', 'Light'], ['dark', 'Dark']]" in _CONSOLE
     assert "OsirisTheme.set(mode)" in _CONSOLE
