@@ -7,10 +7,19 @@ there, so deleting it loses history unless it is first backed up into the restic
 is encrypted). Three choices, recorded as an operator-authorized decision:
 
   keep                 leave it; nothing runs.
-  encrypt_then_remove  back it up into the restic repository, prove the backup holds every file
-                       (path and size), and only then, on a second explicit confirm, remove it.
+  encrypt_then_remove  convert it into the repository's timeline (below), prove the snapshots
+                       hold every file (path and size), and only then, on a second explicit
+                       confirm, remove it.
   delete               remove it knowing the history that only it holds is lost; a typed
                        confirmation, and only after this choice was recorded.
+
+CONVERTED, NOT JUST COPIED. The files are grouped by the day they were made (UTC) and each day
+becomes its own snapshot dated that day (`restic backup --time`, the day's files only, from a
+file list), under the hostname the real backups use and tagged `history-import` and
+`import-day:<day>`: `restic snapshots` then shows the September dumps and the base backup on their
+true dates, as if the backup had been running then. The tag is protected from any thinning
+(src/orchestrator/restic_tags.py). A day already in the repository is skipped, so a stopped run
+resumes at the first day not yet added.
 
 HOW THE BACKUP RUNS. restic is installed on the NAS and the repository is a local directory there,
 so the backup runs ON the NAS over ssh, reading local disk: no 280 GB crosses the network and
@@ -40,6 +49,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from src.orchestrator.restic_tags import HISTORY_IMPORT_TAG as BACKUP_TAG
+
 KEEP, ENCRYPT, DELETE = "keep", "encrypt_then_remove", "delete"
 CHOICES = (KEEP, ENCRYPT, DELETE)
 SOURCE_ROOT = "/mnt/Bunker/Vault/osiris-vault"
@@ -49,7 +60,8 @@ CONFIRM_REMOVE = "remove"
 CONFIRM_DELETE = "delete the old plaintext copy"
 _CHOICE_ENV = "OSIRIS_AT_HOME_PLAINTEXT_CHOICE_FILE"
 _DEFAULT_CHOICE = "~/.local/state/osiris/plaintext_choice.json"
-BACKUP_TAG = "plaintext-copy"
+DAY_TAG_PREFIX = "import-day:"
+LIST_FILE = "/tmp/osiris-history-import.list"
 _PROGRESS_EVERY_SECONDS = 15.0
 _CHECK_SUBSET = "1%"
 
@@ -200,25 +212,41 @@ def _drain(
     return lines, int(result.get("rc", 1)), str(result.get("err", ""))
 
 
-def plaintext_listing(deps: Deps, host: str) -> dict[str, int] | None:
-    """Every regular file in the two directories as {relative path: size}, or None when the NAS
-    could not say."""
+def plaintext_files(deps: Deps, host: str) -> dict[str, tuple[int, float]] | None:
+    """Every regular file in the two directories as {relative path: (size, modified time)}, or None
+    when the NAS could not say. A name with a tab or newline in it is not listed faithfully, so
+    the listing refuses (None) rather than guess."""
     dirs = " ".join(SOURCE_DIRS)
-    lines, rc, _err = _drain(deps, host, _in_root(f"find {dirs} -type f -printf '%p\\t%s\\n'"))
+    find = f"find {dirs} -type f -printf '%p\\t%s\\t%T@\\n'"
+    lines, rc, _err = _drain(deps, host, _in_root(find))
     if rc != 0:
         return None
-    out: dict[str, int] = {}
+    out: dict[str, tuple[int, float]] = {}
     for line in lines:
-        path, _, size = line.rpartition("\t")
-        if path and size.isdigit():
-            out[path] = int(size)
+        parts = line.split("\t")
+        if len(parts) != 3 or not parts[1].isdigit():
+            return None
+        try:
+            out[parts[0]] = (int(parts[1]), float(parts[2]))
+        except ValueError:
+            return None
     return out
 
 
+def plaintext_listing(deps: Deps, host: str) -> dict[str, int] | None:
+    """The same, as {relative path: size}."""
+    files = plaintext_files(deps, host)
+    return None if files is None else {p: sz for p, (sz, _t) in files.items()}
+
+
 def snapshot_listing(deps: Deps, host: str, repo: str, password: bytes,
-                     snapshot: str) -> dict[str, int] | None:
-    """The files one snapshot holds under the two directories, as {relative path: size}."""
-    lines, rc, _err = _drain(deps, host, _restic(repo, "ls", "--json", "--no-lock", snapshot),
+                     snapshots: str | list[str]) -> dict[str, int] | None:
+    """The files the named snapshots hold under the two directories, as {relative path: size}
+    (the union, when several are named)."""
+    ids = [snapshots] if isinstance(snapshots, str) else list(snapshots)
+    if not ids:
+        return {}
+    lines, rc, _err = _drain(deps, host, _restic(repo, "ls", "--json", "--no-lock", *ids),
                              password + b"\n")
     if rc != 0:
         return None
@@ -267,8 +295,9 @@ async def _route_proof(deps: Deps, target: dict[str, Any], stop: Callable[[int, 
 async def encrypt(
     target: dict[str, Any], password: bytes, deps: Deps, *, say: Callable[[str], None],
 ) -> int:
-    """Back the plaintext copy up into the repository and prove the backup holds every file. 0 when
-    it does, 1 at the first step that did not."""
+    """Turn the plaintext copy into backdated snapshots in the repository, so the history shows in
+    `restic snapshots` on the days it was made, and prove they hold every file. 0 when they do,
+    1 at the first step that did not. It never removes anything."""
     url = str(target.get("path_or_url") or "")
     host, repo = ssh_host(url), repo_path_on_box(url)
 
@@ -291,42 +320,48 @@ async def encrypt(
         if not locked:
             return stop(1, "an offload or restore test is running right now.",
                         "wait a few minutes (the timers take about 15 minutes) and run this again.")
-        # 2. what there is to back up
-        plain = await asyncio.to_thread(plaintext_listing, deps, host)
-        if plain is None:
-            return stop(2, "the NAS did not list the plaintext copy.",
+        # 2. what there is to back up, by the day it was made
+        files = await asyncio.to_thread(plaintext_files, deps, host)
+        if files is None:
+            return stop(2, "the NAS did not list the plaintext copy (or a file name could not be "
+                           "read faithfully).",
                         "check the NAS is on and reachable, then run this again.")
-        if not plain:
-            say(f"[2/{TOTAL}] the plaintext copy is empty: there is nothing to back up.")
-        else:
-            say(f"[2/{TOTAL}] the plaintext copy holds {len(plain)} files, "
-                f"{_fmt_gb(sum(plain.values()))}.")
-        # 3. the backup, on the NAS
-        say(f"[3/{TOTAL}] backing it up on the NAS into the repository (it reads local disk, so "
-            "nothing crosses the network; restic skips what it already stored, so a stop here "
-            "can be run again).")
-        snap, fail = await asyncio.to_thread(_backup, deps, host, repo, password, say)
-        if fail or snap is None:
-            return stop(3, f"the backup did not finish ({fail or 'no snapshot was reported'}).",
-                        "run this again: restic resumes from what it already copied.")
-        say(f"[3/{TOTAL}] the backup finished: snapshot {snap}.")
+        plain = {p: sz for p, (sz, _t) in files.items()}
+        days = group_by_day(files)
+        say(f"[2/{TOTAL}] the plaintext copy holds {len(plain)} files, "
+            f"{_fmt_gb(sum(plain.values()))}, from {len(days)} different days.")
+        # 3. one snapshot per day, dated that day, on the NAS
+        say(f"[3/{TOTAL}] adding one snapshot per day, dated the day the files were made, on the "
+            "NAS itself (it reads local disk, so nothing crosses the network; days already "
+            "added are skipped, so a stop here can be run again).")
+        snaps, fail = await asyncio.to_thread(_import_history, deps, host, repo, password,
+                                              days, say)
+        if fail or snaps is None:
+            return stop(3, f"the import did not finish ({fail or 'no snapshot was reported'}).",
+                        "run this again: it resumes at the first day not yet added.")
+        say(f"[3/{TOTAL}] the history is in the repository: {len(snaps)} snapshots, "
+            f"{min(days)} to {max(days)}.")
         # 4. the proof
-        held = await asyncio.to_thread(snapshot_listing, deps, host, repo, password, snap)
+        held = await asyncio.to_thread(snapshot_listing, deps, host, repo, password,
+                                       sorted(snaps.values()))
         if held is None:
-            return stop(4, f"the repository would not list snapshot {snap}.",
+            return stop(4, "the repository would not list the imported snapshots.",
                         "run this again; if it repeats, read `restic ls` on the NAS by hand.")
         verdict = compare(plain, held.items())
+        newest = snaps[max(snaps)]
         deps.write_coverage({
             "only_files": verdict["only_files"], "only_bytes": verdict["only_bytes"],
             "files_checked": verdict["files"], "bytes_checked": verdict["bytes"],
-            "snapshot": snap, "checked_at": deps.now().isoformat(),
-            "method": "plaintext listing on the NAS compared to the new snapshot, path and size"})
+            "snapshot": newest, "snapshots": sorted(snaps.values()), "days": len(snaps),
+            "tag": BACKUP_TAG, "checked_at": deps.now().isoformat(),
+            "method": "plaintext listing on the NAS compared to the imported snapshots, "
+                      "path and size"})
         if verdict["only_files"]:
             return stop(4, f"{verdict['only_files']} file(s) are in the plaintext copy and not in "
-                           f"the snapshot (first: {verdict['only'][0]}).",
+                           f"the snapshots (first: {verdict['only'][0]}).",
                         "do not remove anything; run this again and read the first name.")
         say(f"[4/{TOTAL}] proved: all {verdict['files']} files ({_fmt_gb(verdict['bytes'])}) are "
-            f"in snapshot {snap}, path and size. Nothing is only in the plaintext copy.")
+            f"in the {len(snaps)} snapshots, path and size. Nothing is only in the plaintext copy.")
         # 5. the repository still reads back
         say(f"[5/{TOTAL}] reading back a sample of the repository's data to check it is whole "
             "(a few minutes).")
@@ -338,40 +373,109 @@ async def encrypt(
                         "the backup is stored but NOT proved readable; do not remove the "
                         "plaintext copy until this passes.")
         say(f"[5/{TOTAL}] the repository check passed.")
-    say("done: the backup holds everything in the plaintext copy. Removing it is a separate "
-        "step that waits for your confirmation.")
+    say("done: the history is in the backup, on the days it was made, and it holds everything in "
+        "the plaintext copy. Removing the copy is a separate step that waits for your "
+        "confirmation.")
     return 0
 
 
-def _backup(deps: Deps, host: str, repo: str, password: bytes,
-            say: Callable[[str], None]) -> tuple[str | None, str | None]:
-    """Run restic backup on the NAS; (snapshot id, None) or (None, why). Progress is said about
-    every 15 seconds."""
-    command = _in_root(_restic(repo, "backup", "--json", "--tag", BACKUP_TAG, *SOURCE_DIRS))
-    result: dict[str, Any] = {}
-    snap: str | None = None
-    last = 0.0
+def group_by_day(files: dict[str, tuple[int, float]]) -> dict[str, dict[str, Any]]:
+    """The files by the UTC day they were last modified: {day: {"files": [paths], "at": the
+    newest modified time that day as "YYYY-MM-DD HH:MM:SS"}}. The snapshot is dated its day's
+    newest file, as if the backup had run just after it was written."""
+    days: dict[str, dict[str, Any]] = {}
+    for path, (_size, mtime) in sorted(files.items()):
+        when = datetime.fromtimestamp(mtime, UTC)
+        day = days.setdefault(when.strftime("%Y-%m-%d"), {"files": [], "t": 0.0})
+        day["files"].append(path)
+        day["t"] = max(float(day["t"]), mtime)
+    return {d: {"files": v["files"],
+                "at": datetime.fromtimestamp(v["t"], UTC).strftime("%Y-%m-%d %H:%M:%S")}
+            for d, v in days.items()}
+
+
+def _existing_imports(deps: Deps, host: str, repo: str,
+                      password: bytes) -> tuple[dict[str, str], str] | None:
+    """The days already imported ({day: snapshot id}, from the per-day tag) and the host name the
+    real backups use, or None when the repository would not list."""
+    lines, rc, _err = _drain(deps, host, _restic(repo, "snapshots", "--json", "--no-lock"),
+                             password + b"\n")
+    if rc != 0:
+        return None
+    try:
+        rows = json.loads("".join(lines) or "[]")
+    except ValueError:
+        return None
+    done: dict[str, str] = {}
+    names: dict[str, int] = {}
+    for row in rows if isinstance(rows, list) else []:
+        tags = list(row.get("tags") or [])
+        if BACKUP_TAG in tags:
+            for t in tags:
+                if t.startswith(DAY_TAG_PREFIX):
+                    sid = str(row.get("short_id") or row.get("id", ""))[:8]
+                    done[t[len(DAY_TAG_PREFIX):]] = sid
+        elif row.get("hostname"):
+            names[row["hostname"]] = names.get(row["hostname"], 0) + 1
+    name = max(names, key=lambda n: names[n]) if names else "osiris"
+    return done, name
+
+
+def _import_history(
+    deps: Deps, host: str, repo: str, password: bytes, days: dict[str, dict[str, Any]],
+    say: Callable[[str], None],
+) -> tuple[dict[str, str] | None, str | None]:
+    """Add one snapshot per day (the day's files only, dated that day, tagged `history-import` and
+    `import-day:<day>`, under the hostname the real backups use so it sits in their timeline).
+    Returns ({day: snapshot id} for every day, None) or (None, why). A day already in the
+    repository is skipped, which is what makes a stopped run resumable."""
+    import shlex
     import time
 
-    for line in deps.stream(host, command, password + b"\n", result):
-        try:
-            msg = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(msg, dict):
-            continue
-        kind = msg.get("message_type")
-        if kind == "summary":
-            snap = str(msg.get("snapshot_id") or "")[:8] or snap
-        elif kind == "status" and time.monotonic() - last >= _PROGRESS_EVERY_SECONDS:
-            last = time.monotonic()
-            pct = float(msg.get("percent_done") or 0) * 100
-            say(f"        progress: {pct:.0f}% ({_fmt_gb(float(msg.get('bytes_done') or 0))} of "
-                f"{_fmt_gb(float(msg.get('total_bytes') or 0))})")
-    rc = int(result.get("rc", 1))
-    if rc not in (0, 3):  # 3: some files unreadable; the snapshot exists and the proof counts
-        return None, str(result.get("err") or f"restic exited {rc}")
-    return snap, None
+    known = _existing_imports(deps, host, repo, password)
+    if known is None:
+        return None, "the repository would not list its snapshots"
+    snaps, hostname = dict(known[0]), known[1]
+    todo = [d for d in sorted(days) if d not in snaps]
+    last = 0.0
+    for n, day in enumerate(todo, 1):
+        listing = "".join(f"{SOURCE_ROOT}/{p}\n" for p in days[day]["files"]).encode()
+        wrote = _drain(deps, host, f"umask 077 && cat > {LIST_FILE}", listing)
+        if wrote[1] != 0:
+            return None, f"could not write the file list on the NAS ({wrote[2] or 'no reason'})"
+        command = ("TZ=UTC " + _restic(
+            repo, "backup", "--json", "--tag", BACKUP_TAG, "--tag", DAY_TAG_PREFIX + day,
+            "--host", shlex.quote(hostname), "--time", shlex.quote(days[day]["at"]),
+            "--files-from-verbatim", LIST_FILE))
+        result: dict[str, Any] = {}
+        snap: str | None = None
+        for line in deps.stream(host, command, password + b"\n", result):
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("message_type") == "summary":
+                snap = str(msg.get("snapshot_id") or "")[:8] or snap
+            elif (msg.get("message_type") == "status"
+                  and time.monotonic() - last >= _PROGRESS_EVERY_SECONDS):
+                last = time.monotonic()
+                pct = float(msg.get("percent_done") or 0) * 100
+                say(f"        day {n} of {len(todo)} ({day}): {pct:.0f}% "
+                    f"({_fmt_gb(float(msg.get('bytes_done') or 0))} of "
+                    f"{_fmt_gb(float(msg.get('total_bytes') or 0))})")
+        rc = int(result.get("rc", 1))
+        if rc not in (0, 3):  # 3: some files unreadable; the snapshot exists and the proof counts
+            _drain(deps, host, f"rm -f {LIST_FILE}")
+            return None, f"{day}: " + str(result.get("err") or f"restic exited {rc}")
+        if not snap:
+            _drain(deps, host, f"rm -f {LIST_FILE}")
+            return None, f"{day}: restic reported no snapshot"
+        snaps[day] = snap
+        say(f"        day {n} of {len(todo)} ({day}): added snapshot {snap}.")
+    _drain(deps, host, f"rm -f {LIST_FILE}")
+    return {d: snaps[d] for d in days}, None
 
 
 # ---- removing --------------------------------------------------------------------------------
@@ -413,7 +517,7 @@ async def remove(
             return stop("an offload or restore test is running right now.",
                         "wait a few minutes and try again.")
         if mode == ENCRYPT:
-            cover = _read_coverage_snapshot()
+            cover = _read_coverage_snapshots()
             if cover is None:
                 return stop("no backup of this copy is recorded as proved.",
                             "run the backup first.")
@@ -425,9 +529,10 @@ async def remove(
             verdict = compare(plain, held.items())
             if verdict["only_files"]:
                 return stop(f"{verdict['only_files']} file(s) are in the plaintext copy and not in "
-                            f"snapshot {cover} (first: {verdict['only'][0]}).",
+                            f"the imported snapshots (first: {verdict['only'][0]}).",
                             "nothing was removed; run the backup again.")
-            say(f"checked just now: all {verdict['files']} files are in snapshot {cover}.")
+            say(f"checked just now: all {verdict['files']} files are in the {len(cover)} "
+                f"imported snapshots.")
         say("removing the two directories on the NAS (nothing else is touched).")
         dirs = " ".join(SOURCE_DIRS)
         tests = " && ".join(f"test -d {d} && test ! -L {d}" for d in SOURCE_DIRS)
@@ -442,15 +547,15 @@ async def remove(
     return 0
 
 
-def _read_coverage_snapshot() -> str | None:
-    """The snapshot the last proof named, only when that proof found nothing left over."""
+def _read_coverage_snapshots() -> list[str] | None:
+    """The snapshots the last proof named, only when that proof found nothing left over."""
     from src.orchestrator import at_home
 
     cover = at_home.read_coverage()
     if cover is None or int(cover.get("only_files") or 0) != 0:
         return None
-    snap = cover.get("snapshot")
-    return str(snap) if snap else None
+    snaps = cover.get("snapshots") or ([cover["snapshot"]] if cover.get("snapshot") else [])
+    return [str(x) for x in snaps] or None
 
 
 async def close_thread(pool: Any) -> None:

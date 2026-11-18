@@ -25,28 +25,54 @@ HELPERS = Path(__file__).parent.parent / "helpers"
 
 
 class FakeNas:
-    """Answers the few commands the job sends, and remembers each one (and its stdin)."""
+    """Answers the few commands the job sends, and remembers each one with its stdin. When
+    `snapshot` is given it is what a snapshot already in the repository holds; each new backup
+    adds its own, from the file list the job wrote on the NAS."""
+
+    DAYS = {"vault/a.sql": 1_756_000_000.0, "vault/b.dump": 1_756_100_000.0,
+            "checkout-backups/c.sql": 1_756_100_500.0}  # the second and third share a day
 
     def __init__(self, plain: dict[str, int], snapshot: dict[str, int] | None = None) -> None:
         self.plain = dict(plain)
-        self.snapshot = dict(plain) if snapshot is None else dict(snapshot)
+        self.snaps: dict[str, dict[str, int]] = {}
+        if snapshot is not None:
+            self.snaps["abcdef01"] = dict(snapshot)
+        self.rows: list[dict[str, Any]] = [
+            {"short_id": "11112222", "hostname": "precision", "tags": None}] * 3
         self.commands: list[tuple[str, bytes | None]] = []
         self.removed = False
         self.check_rc = 0
+        self.listfile: list[str] = []
+        self.drop: set[str] = set()  # files a snapshot silently fails to hold
+        self.shrink: dict[str, int] = {}  # files a snapshot holds at a different size
 
     def stream(self, host: str, command: str, stdin: bytes | None,
                result: dict[str, Any]) -> Iterator[str]:
         self.commands.append((command, stdin))
         result["rc"], result["err"] = 0, ""
         if "find " in command:
-            yield from (f"{p}\t{s}" for p, s in self.plain.items())
+            for p, sz in self.plain.items():
+                yield f"{p}\t{sz}\t{self.DAYS.get(p, 1_756_000_000.0)}"
+        elif "cat > " in command:
+            self.listfile = [x for x in (stdin or b"").decode().splitlines() if x]
+        elif " snapshots " in command:
+            yield json.dumps(self.rows)
         elif " backup " in command:
+            sid = f"snap{len(self.snaps) + 1:04d}"
+            tags = [command.split("--tag ")[i + 1].split()[0] for i in (0, 1)]
+            self.snaps[sid] = {f[len(ROOT) + 1:]: self.plain[f[len(ROOT) + 1:]]
+                               for f in self.listfile}
+            self.rows = [*self.rows, {"short_id": sid, "hostname": "precision", "tags": tags}]
             yield json.dumps({"message_type": "status", "percent_done": 0.5,
                               "bytes_done": 1e9, "total_bytes": 2e9})
-            yield json.dumps({"message_type": "summary", "snapshot_id": "abcdef0123456789"})
+            yield json.dumps({"message_type": "summary", "snapshot_id": sid + "6789"})
         elif " ls " in command:
-            for p, s in self.snapshot.items():
-                yield json.dumps({"type": "file", "path": f"{ROOT}/{p}", "size": s})
+            ids = command.split("--no-lock ")[1].split()
+            for sid in ids:
+                for p, sz in self.snaps[sid].items():
+                    if p not in self.drop:
+                        yield json.dumps({"type": "file", "path": f"{ROOT}/{p}",
+                                          "size": self.shrink.get(p, sz)})
         elif " check " in command:
             result["rc"], result["err"] = self.check_rc, "pack is damaged" if self.check_rc else ""
         elif "rm -rf" in command:
@@ -89,20 +115,59 @@ async def run_encrypt(nas: FakeNas, tmp_path: Path, **kw: Any) -> tuple[int, lis
     return rc, said, deps
 
 
-async def test_the_backup_runs_on_the_nas_and_is_proved_by_path_and_size(tmp_path: Path) -> None:
+async def test_the_history_becomes_one_dated_snapshot_per_day_proved_by_path_and_size(
+    tmp_path: Path,
+) -> None:
     nas = FakeNas(PLAIN)
 
     rc, said, deps = await run_encrypt(nas, tmp_path, choice=plaintext_copy.ENCRYPT)
 
     assert rc == 0
-    backup = next(c for c, _s in nas.commands if " backup " in c)
-    assert "restic -r /mnt/Bunker/Vault/osiris-restic/repo" in backup  # the repo as the NAS sees it
-    assert backup.endswith("vault checkout-backups")  # only the two fixed directories
+    backups = [c for c, _s in nas.commands if " backup " in c]
+    assert len(backups) == 2  # two different days
+    first = backups[0]
+    assert "restic -r /mnt/Bunker/Vault/osiris-restic/repo" in first  # the repo as the NAS sees it
+    assert first.startswith("TZ=UTC ") and "--tag history-import" in first
+    assert "--tag import-day:2025-08-24" in first and "--host precision" in first
+    assert "--time '2025-08-24 01:46:40'" in first  # the day's newest file, in UTC
+    assert "--files-from-verbatim /tmp/osiris-history-import.list" in first
+    assert "--time '2025-08-25 05:41:40'" in backups[1]
     cover = deps.written[0]
-    assert cover["only_files"] == 0 and cover["snapshot"] == "abcdef01"
-    assert cover["files_checked"] == 3
+    assert cover["only_files"] == 0 and cover["days"] == 2 and cover["tag"] == "history-import"
+    assert cover["files_checked"] == 3 and len(cover["snapshots"]) == 2
     assert at_home.read_coverage()["only_files"] == 0  # the checklist reads this very record
-    assert any("progress: 50%" in s for s in said) and any("proved" in s for s in said)
+    assert any("day 1 of 2" in s and "50%" in s for s in said) and any("proved" in s for s in said)
+    assert not nas.removed and not any("rm -rf" in c for c, _s in nas.commands)  # never removes
+    assert any(c == "rm -f /tmp/osiris-history-import.list" for c, _s in nas.commands)
+
+
+async def test_a_second_run_skips_the_days_already_in_the_repository(tmp_path: Path) -> None:
+    nas = FakeNas(PLAIN)
+    await run_encrypt(nas, tmp_path, choice=plaintext_copy.ENCRYPT)
+    before = sum(" backup " in c for c, _s in nas.commands)
+
+    rc, said, deps = await run_encrypt(nas, tmp_path, choice=plaintext_copy.ENCRYPT)
+
+    assert rc == 0 and sum(" backup " in c for c, _s in nas.commands) == before  # none added
+    assert deps.written[0]["only_files"] == 0 and deps.written[0]["days"] == 2
+
+
+async def test_a_run_that_stopped_after_one_day_resumes_at_the_next(tmp_path: Path) -> None:
+    nas = FakeNas(PLAIN)
+    await run_encrypt(nas, tmp_path, choice=plaintext_copy.ENCRYPT)
+    nas.rows = nas.rows[:-1]  # the second day's snapshot never landed
+    before = sum(" backup " in c for c, _s in nas.commands)
+
+    rc, _said, _deps2 = await run_encrypt(nas, tmp_path, choice=plaintext_copy.ENCRYPT)
+
+    assert rc == 0 and sum(" backup " in c for c, _s in nas.commands) == before + 1
+
+
+def test_a_thinning_policy_keeps_every_history_import_snapshot() -> None:
+    from src.orchestrator import restic_tags
+
+    assert restic_tags.forget_protect_args() == ["--keep-tag", "history-import"]
+    assert plaintext_copy.BACKUP_TAG in restic_tags.PROTECTED_TAGS
 
 
 async def test_the_password_goes_only_on_stdin_never_in_a_command_or_a_line_said(
@@ -116,23 +181,24 @@ async def test_the_password_goes_only_on_stdin_never_in_a_command_or_a_line_said
     assert all(secret not in c for c, _s in nas.commands)
     assert all(secret not in s for s in said)
     assert secret not in json.dumps(deps.written)
-    with_stdin = [c for c, s in nas.commands if s is not None]
+    with_stdin = [c for c, s in nas.commands if s is not None and "cat > " not in c]
     assert with_stdin and all("--password-file /dev/stdin" in c for c in with_stdin)
-    assert all(s == PASSWORD + b"\n" for _c, s in nas.commands if s is not None)
+    assert all(s == PASSWORD + b"\n" for c, s in nas.commands
+               if s is not None and "cat > " not in c)  # the file list is no secret
 
 
 async def test_a_file_missing_from_the_snapshot_stops_the_proof_and_is_recorded(
     tmp_path: Path,
 ) -> None:
-    held = {k: v for k, v in PLAIN.items() if k != "vault/b.dump"}
-    held["vault/a.sql"] = 99  # a size that differs is as missing as a name that does
-    nas = FakeNas(PLAIN, held)
+    nas = FakeNas(PLAIN)
+    nas.drop = {"vault/b.dump"}
+    nas.shrink = {"vault/a.sql": 99}  # a size that differs is as missing as a name that does
 
     rc, said, deps = await run_encrypt(nas, tmp_path, choice=plaintext_copy.ENCRYPT)
 
     assert rc == 1
     assert deps.written[0]["only_files"] == 2 and deps.written[0]["only_bytes"] == 300
-    assert any("STOPPED" in s and "not in the snapshot" in s for s in said)
+    assert any("STOPPED" in s and "not in the snapshots" in s for s in said)
     assert not any(" check " in c for c, _s in nas.commands)  # it never reached the last step
 
 
@@ -170,13 +236,14 @@ async def run_remove(nas: FakeNas, tmp_path: Path, confirm: object, **kw: Any) -
 
 def _proved(tmp_path: Path, only: int = 0) -> None:
     (tmp_path / "cover.json").write_text(json.dumps(
-        {"only_files": only, "only_bytes": 0, "snapshot": "abcdef01"}))
+        {"only_files": only, "only_bytes": 0, "snapshot": "abcdef01",
+         "snapshots": ["abcdef01"]}))
 
 
 async def test_removal_needs_the_recorded_choice_and_its_exact_confirmation(
     tmp_path: Path,
 ) -> None:
-    nas = FakeNas(PLAIN)
+    nas = FakeNas(PLAIN, PLAIN)
     _proved(tmp_path)
 
     rc, said = await run_remove(nas, tmp_path, "remove", choice=plaintext_copy.KEEP)
@@ -193,7 +260,7 @@ async def test_removal_needs_the_recorded_choice_and_its_exact_confirmation(
 async def test_removal_after_a_backup_proves_again_and_removes_only_the_two_directories(
     tmp_path: Path,
 ) -> None:
-    nas = FakeNas(PLAIN)
+    nas = FakeNas(PLAIN, PLAIN)
     _proved(tmp_path)
 
     rc, said = await run_remove(nas, tmp_path, "Remove", choice=plaintext_copy.ENCRYPT)
@@ -216,7 +283,7 @@ async def test_a_file_that_appeared_after_the_proof_stops_the_removal(tmp_path: 
 
 
 async def test_removal_with_no_proof_on_record_does_nothing(tmp_path: Path) -> None:
-    nas = FakeNas(PLAIN)
+    nas = FakeNas(PLAIN, PLAIN)
     for only in (None, 5):
         if only is not None:
             _proved(tmp_path, only)
