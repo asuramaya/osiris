@@ -219,12 +219,16 @@ def test_teardown_never_touches_the_live_container_or_volume(tmp_path: Path) -> 
     assert "osiris-tm-aa" not in d.containers and "osiris-tm-vol-aa" not in d.volumes
 
 
-def test_failed_record_is_reaped_before_its_ttl(dump: tm.Moment, tmp_path: Path) -> None:
+def test_failed_record_is_kept_briefly_then_reaped_before_its_ttl(
+        dump: tm.Moment, tmp_path: Path) -> None:
     d = FakeDocker()
     rec = go(dump, d, tmp_path)
     rec.state = "failed"
     tm._write_record(rec, tmp_path / "rec.json")
     tm.reap(sh=d, record_path=tmp_path / "rec.json", now=lambda: rec.started_at + 1)
+    assert tm.read_record(tmp_path / "rec.json") is not None       # its message stays readable
+    tm.reap(sh=d, record_path=tmp_path / "rec.json",
+            now=lambda: rec.started_at + tm.FAILED_KEEP_SECS + 1)
     assert not d.containers and tm.read_record(tmp_path / "rec.json") is None
 
 
@@ -269,3 +273,45 @@ async def test_the_worker_reaps_on_a_timer_and_skips_a_late_tick(
     assert calls == [1]                                    # the late tick did not reap
     names = {c.name for c in WorkerSettings.cron_jobs}
     assert "cron:time_machine_reap_heartbeat" in names
+
+
+def test_a_failed_start_leaves_its_reason_and_the_next_start_replaces_it(
+        dump: tm.Moment, tmp_path: Path) -> None:
+    p = tmp_path / "rec.json"
+    tm.record_failure(dump, "the restore did not finish", record_path=p)
+    st = tm.status(record_path=p)
+    assert st and st["state"] == "failed" and st["error"] == "the restore did not finish"
+    assert "password" not in str(st)
+    rec = tm.start(dump, sh=FakeDocker(), record_path=p, sleep=lambda _s: None,
+                   free=lambda _p: 10**12)
+    assert rec.state == "ready"
+
+
+def test_the_detached_runner_records_why_it_failed(
+        dump: tm.Moment, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OSIRIS_TIME_MACHINE_STATE", str(tmp_path / "rec.json"))
+    monkeypatch.setattr(tm, "find_moment", lambda _i, _v=None: dump)
+
+    def boom(*_a: object, **_k: object) -> None:
+        raise tm.TimeMachineError("not enough disk for a throwaway restore")
+
+    monkeypatch.setattr(tm, "start", boom)
+    assert tm.run_detached("x") == 1
+    st = tm.status()
+    assert st and st["state"] == "failed" and "not enough disk" in st["error"]
+
+
+def test_spawn_run_detaches_and_logs_to_a_file(tmp_path: Path) -> None:
+    seen: dict[str, object] = {}
+
+    class P:
+        pid = 4242
+
+    def fake_popen(cmd: list[str], **kw: object) -> P:
+        seen["cmd"], seen["kw"] = cmd, kw
+        return P()
+
+    pid = tm.spawn_run("osiris-20261115-201856", popen=fake_popen, log_path=tmp_path / "x.log")
+    assert pid == 4242
+    assert seen["cmd"][-3:] == ["time-machine", "run", "osiris-20261115-201856"]  # type: ignore[index]
+    assert seen["kw"]["start_new_session"] is True                                # type: ignore[index]

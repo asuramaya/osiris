@@ -434,6 +434,8 @@ NEEDS_SAFE_INVOCATION: dict[str, str] = {
                       "restic subprocess calls against configured offload_targets rows "
                       "with no dry-run flag: same devops-bootstrap class as "
                       "smoke/deploy/seed",
+    "time-machine": "starts and removes a real throwaway database container from a real "
+                    "backup dump: needs docker, the vault and several GiB of disk",
     "at-home": "reads the live envelope, the NAS route and receipts on this box; read-only but "
                "needs the real system and its home-network state",
     "repo-thin": "talks to the real NAS repository over the home LAN (a dry run by default; "

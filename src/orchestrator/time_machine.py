@@ -26,6 +26,7 @@ import secrets
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -43,6 +44,7 @@ VAULT_DIR = Path.home() / "osiris-vault"
 
 TTL_SECS = 2 * 3600
 MAX_EXTENSIONS = 1
+FAILED_KEEP_SECS = 15 * 60       # a failed start's message stays readable this long
 DISK_FACTOR = 3.0
 SCRATCH_MEMORY = "6g"
 RESTORE_TIMEOUT_SECS = 1800
@@ -303,6 +305,9 @@ def start(
     if not dump.is_file():
         raise TimeMachineError(f"the dump for this moment is gone: {dump.name}")
     existing = read_record(record_path)
+    if existing is not None and existing.state == "failed":
+        _clear_record(record_path)          # a failed attempt only keeps its message
+        existing = None
     if existing is not None:
         raise TimeMachineError(
             f"a throwaway is already {existing.state} ({existing.container}); "
@@ -407,11 +412,15 @@ def extend(*, record_path: Path | None = None, now: Callable[[], float] = time.t
 
 def reap(*, sh: Run = _default_run, record_path: Path | None = None,
          now: Callable[[], float] = time.time) -> list[str]:
-    """Tear down an expired or failed throwaway, and sweep labelled leftovers that no
-    record owns. Cheap and idempotent: the worker calls it on a timer. A live, unexpired
-    throwaway is left alone, and so is its own container and volume."""
+    """Tear down an expired throwaway (a failed one after FAILED_KEEP_SECS), and sweep
+    labelled leftovers that no record owns. Cheap and idempotent: the worker calls it on a
+    timer. A live, unexpired throwaway is left alone, and so is its own container and
+    volume."""
     rec = read_record(record_path)
-    if rec is not None and rec.state != "failed" and now() < rec.expires_at:
+    keep = rec is not None and (
+        now() < rec.started_at + FAILED_KEEP_SECS if rec.state == "failed"
+        else now() < rec.expires_at)
+    if rec is not None and keep:
         owned = {rec.container, rec.volume}
         stray = [n for n in _labelled(sh, "container") + _labelled(sh, "volume")
                  if n not in owned and (n.startswith(NAME_PREFIX) or n.startswith(VOLUME_PREFIX))]
@@ -425,3 +434,51 @@ def reap(*, sh: Run = _default_run, record_path: Path | None = None,
                 removed.append(f"container {n}")
         return removed
     return teardown(sh=sh, record_path=record_path)
+
+
+def record_failure(moment: Moment, message: str, *, record_path: Path | None = None,
+                   now: Callable[[], float] = time.time) -> Throwaway:
+    """Keep why a start failed where the console polls, as a record in state "failed" (no
+    container behind it). The next start replaces it and the reaper clears it."""
+    t0 = now()
+    rec = Throwaway(
+        id=secrets.token_hex(4), container="", volume="", port=0, moment=asdict(moment),
+        started_at=t0, expires_at=t0 + TTL_SECS, state="failed", error=message)
+    _write_record(rec, record_path)
+    return rec
+
+
+def run_detached(moment_id: str, *, vault_dir: Path | None = None) -> int:
+    """What `osiris time-machine run <moment id>` does, in its own process so a server or
+    console restart cannot kill a restore half way: bring the throwaway up, and on failure
+    leave the reason in the record. 0 when it came up, 1 when it did not."""
+    moment: Moment | None = None
+    try:
+        moment = find_moment(moment_id, vault_dir)
+        start(moment)
+        return 0
+    except TimeMachineError as exc:
+        if moment is not None and "already" not in str(exc):
+            record_failure(moment, str(exc))
+        print(f"time machine: {exc}")
+        return 1
+    except Exception as exc:  # noqa: BLE001 - the console shows a sentence, never a traceback
+        if moment is not None:
+            record_failure(moment, f"{type(exc).__name__}: {exc}")
+        print(f"time machine: {type(exc).__name__}: {exc}")
+        return 1
+
+
+def spawn_run(moment_id: str, *, popen: Callable[..., Any] = subprocess.Popen,
+              log_path: Path | None = None) -> int:
+    """Start `run_detached` as a separate, session-detached process; returns its pid. Its
+    output goes to a log file beside the record, never to a pipe nobody reads."""
+    log = log_path or state_path().with_suffix(".log")
+    log.parent.mkdir(parents=True, exist_ok=True)
+    root = Path(__file__).resolve().parents[2]
+    with open(log, "ab") as fh:
+        proc = popen(
+            [sys.executable, "-m", "src.cli", "time-machine", "run", moment_id],
+            cwd=str(root), stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
+            start_new_session=True)
+    return int(proc.pid)
