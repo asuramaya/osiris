@@ -20,7 +20,7 @@ import contextlib
 import json
 import os
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -141,6 +141,32 @@ def refresh(target: dict[str, Any], deps: Deps) -> dict[str, Any]:
             "dumps": sorted(best.values(), key=lambda e: e["name"], reverse=True)}
     _write_cache(body)
     return body
+
+
+def refresh_map(target: dict[str, Any], run: Callable[..., Any], *,
+                presence: Callable[[dict[str, Any]], dict[str, Any]] | None = None) -> str | None:
+    """Rebuild the saved map of NAS dumps from a restic runner the caller already has (the
+    weekly repo-thin run calls this right after its own restore-map refresh, so there is one
+    NAS reader and one timer). Read only: every restic call here is a listing with
+    `--no-lock`. It needs the home-network proof itself, so a caller that did not check still
+    cannot read the NAS from away. Returns a failure sentence, or None when the map is fresh;
+    never raises."""
+    if presence is None:
+        from src.orchestrator.network_presence import lan_presence
+
+        presence = lan_presence
+
+    @contextlib.contextmanager
+    def no_lock() -> Iterator[bool]:
+        yield True                      # a listing takes no lock, so there is none to hold
+
+    try:
+        refresh(target, Deps(run=run, presence=presence, hold_lock=no_lock))
+    except tm.TimeMachineError as exc:
+        return str(exc)
+    except Exception as exc:  # noqa: BLE001 - the weekly run must not stop on a listing
+        return f"{type(exc).__name__}: {exc}"
+    return None
 
 
 def _tail(text: str | None) -> str:

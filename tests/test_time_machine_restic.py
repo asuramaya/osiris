@@ -223,3 +223,36 @@ async def test_the_console_refuses_a_nas_dump_away_from_home(
     listing = (await tmc.moments())["moments"]
     nas = [m for m in listing if m["kind"] == "restic"]
     assert nas and all(m["available"] is False for m in nas)
+
+
+def test_refresh_map_is_the_weekly_runs_one_call(repo: dict[str, Any]) -> None:
+    deps = _deps(repo)
+    assert tr.refresh_map(repo["target"], deps.run, presence=lambda _t: HOME) is None
+    assert [d["name"] for d in (tr.read_cache() or {})["dumps"]] == [B, A]
+    seen: list[list[str]] = []
+
+    def spy(args: list[str], *, timeout: float, text: bool = True) -> Any:
+        seen.append(args)
+        return deps.run(args, timeout=timeout, text=text)
+
+    tr.refresh_map(repo["target"], spy, presence=lambda _t: HOME)
+    assert seen and all("--no-lock" in a for a in seen)            # listings only, no lock taken
+    assert {a[0] for a in seen} == {"snapshots", "find"}
+
+
+def test_refresh_map_needs_the_home_proof_and_never_raises(repo: dict[str, Any]) -> None:
+    deps = _deps(repo)
+    called: list[int] = []
+
+    def must_not_run(*_a: Any, **_k: Any) -> Any:
+        called.append(1)
+
+    away = tr.refresh_map(repo["target"], must_not_run, presence=lambda _t: {"present": False})
+    assert away and "home network" in away and called == []
+    assert tr.refresh_map(repo["target"], deps.run, presence=lambda _t: 1 / 0) is not None
+
+    def broken(args: list[str], *, timeout: float, text: bool = True) -> Any:
+        return subprocess.CompletedProcess(args, 1, "", "repository is locked")
+
+    out = tr.refresh_map(repo["target"], broken, presence=lambda _t: HOME)
+    assert out and "locked" in out
