@@ -37,7 +37,8 @@ if ! "$REPO/.venv/bin/python" "$REPO/scripts/osiris_disk_guard.py" "$VAULT"; the
     "DISK GUARD: refusing to write a new full pg_dump into $VAULT — not enough free space " \
 "for another dump the size of the last one plus margin. Run scripts/osiris_prune_ladder.py " \
 "for a dry-run of what could be pruned; nothing is deleted automatically." || true
-elif ! "$REPO/.venv/bin/python" "$REPO/scripts/osiris_dump_gate.py" "$VAULT"; then
+elif "$REPO/.venv/bin/python" "$REPO/scripts/osiris_dump_gate.py" "$VAULT"; [ $? -eq 10 ]; then
+  # ONLY exit code 10 skips; any other code (a crash, a missing interpreter) takes the dump
   # away from the NAS (more than 24 h behind) the vault holds every dump until the NAS confirms
   # it: at most one a day then. WAL and base backups carry on below, so rewind is unaffected.
   echo "osiris_backup: skipping this dump (away from the NAS, one dump a day)" >&2

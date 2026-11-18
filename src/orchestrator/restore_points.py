@@ -27,6 +27,10 @@ CHUNK = 20                       # snapshots per `restic find` call (bounds memo
 # a base finishing this long before a run's first segment still belongs to that run
 BASE_SLACK = timedelta(hours=2)
 _WAL = re.compile(r"^([0-9A-F]{8})([0-9A-F]{8})([0-9A-F]{8})(\.zst)?$")
+# the files beside the segments that a rewind also needs: timeline history, base backup labels and
+# the partial segment of a switched timeline
+_WAL_AUX = re.compile(r"^([0-9A-F]{8}\.history|[0-9A-F]{24}\.[0-9A-F]{8}\.backup"
+                      r"|[0-9A-F]{24}(\.zst)?\.partial)$")
 _BASE = re.compile(r"^osiris-basebackup-\d{8}-\d{6}\.tar\.gz$")
 _DUMP = re.compile(r"^osiris-\d{8}-\d{6}\.(dump|sql)$")
 
@@ -48,10 +52,13 @@ def _when(raw: Any) -> datetime | None:
 
 
 def classify(path: str) -> tuple[str, str] | None:
-    """(kind, name) for a vault file that matters to restoring: wal, base, verified or dump."""
+    """(kind, name) for a vault file that matters to restoring: wal (and wal_aux: history, label and
+    partial files), base, verified or dump."""
     name = path.rsplit("/", 1)[-1]
     if "/wal_archive/" in path and _WAL.match(name):
         return "wal", name
+    if "/wal_archive/" in path and _WAL_AUX.match(name):
+        return "wal_aux", name
     if "/basebackups/" in path and _BASE.match(name):
         return "base", name
     if "/basebackups/" in path and name.endswith(".tar.gz.verified"):
